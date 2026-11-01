@@ -135,7 +135,7 @@ Difficulty determines what fraction of blocks include minting rewards:
 
 In Phase 1 (halving period), difficulty is calibrated to achieve near-100% minting success, giving predictable emission following the halving schedule.
 
-In Phase 2 (tail emission), difficulty becomes the primary lever for targeting 2% net inflation.
+In Phase 2 (tail emission), difficulty still targets block time only (the node has no inflation-targeting controller); the tail rate comes from the per-block reward, recomputed from cumulative issuance (2.5% gross per 6,307,200 blocks, #1699).
 
 ## Slot-Based Block Production
 

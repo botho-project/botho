@@ -53,6 +53,17 @@
 //!
 //! ## Phase 2: Stability (Years 10+)
 //!
+//! > **Node parity note (#1699).** The example numbers in this header are the
+//! > generic 60 s library default, not mainnet (see
+//! > [`mainnet_policy_mirror`]). And the node does NOT fix the tail reward or
+//! > target inflation with difficulty: it recomputes the tail reward every
+//! > block from cumulative gross issuance
+//! > ([`MonetaryPolicy::block_reward_at`]), so gross issuance compounds at
+//! > `tail_inflation_bps + expected_fee_burn_rate_bps` per policy-year, and
+//! > its difficulty controller targets block time only. The
+//! > [`DifficultyController`] here now follows both rules. The original
+//! > design notes are kept below for context.
+//!
 //! - Block reward is fixed (set at transition based on supply)
 //! - Difficulty adjusts to achieve target NET inflation (2%)
 //! - Block time floats within bounds (45-90 seconds)
@@ -81,7 +92,7 @@
 /// Monetary policy configuration.
 ///
 /// All monetary values are denominated in picocredits (10^-12 BTH).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MonetaryPolicy {
     // === Phase 1: Halving ===
@@ -342,6 +353,96 @@ impl MonetaryPolicy {
         reward.max(1) as u64
     }
 
+    /// The block reward at `height` given the cumulative gross issuance
+    /// `total_mined` *before* that block — the exact rule the node applies.
+    ///
+    /// Mirrors `botho::block::calculate_block_reward(height, total_mined)`
+    /// (which validators call with `ChainState::total_mined`, the running sum
+    /// of every minting reward, NOT reduced by fee burns):
+    ///
+    /// - Phase 1 (`height < tail_emission_start_height()`): the halving reward,
+    ///   independent of supply.
+    /// - Phase 2: [`Self::calculate_tail_reward_u128`] of `total_mined`,
+    ///   **recomputed every block**. Because each tail reward is added back
+    ///   into `total_mined`, the tail compounds: gross issuance grows by
+    ///   `(tail_inflation_bps + expected_fee_burn_rate_bps)` per policy-year
+    ///   (2.5% for mainnet), not by a fixed per-block amount (#1699).
+    ///
+    /// A drift guard in `botho` (`ledger::emission_parity_tests`) pins this to
+    /// the node over 20 policy-years.
+    pub fn block_reward_at(&self, height: u64, total_mined: u128) -> u64 {
+        if self.is_halving_phase(height) {
+            self.halving_reward(height).unwrap_or(1)
+        } else {
+            self.calculate_tail_reward_u128(total_mined)
+        }
+    }
+
+    /// Cumulative gross issuance (picocredits) after the block at `height` has
+    /// been applied, with the node's height convention: genesis (height 0)
+    /// mints nothing and every block `h >= 1` mints
+    /// [`Self::block_reward_at`]`(h, issuance through h - 1)`.
+    ///
+    /// This is the value the node stores as `ChainState::total_mined` at that
+    /// tip. Phase 1 is summed in closed form; the tail is iterated block by
+    /// block because the reward changes every block (it is a function of the
+    /// running total). Cost is O(tail blocks) — about 6.3M iterations per
+    /// mainnet policy-year of tail.
+    pub fn cumulative_issuance_at(&self, height: u64) -> u128 {
+        self.issuance_at_checkpoints(&[height])[0]
+    }
+
+    /// [`Self::cumulative_issuance_at`] for several heights in one pass.
+    ///
+    /// `checkpoints` may be in any order; the result is in the same order.
+    pub fn issuance_at_checkpoints(&self, checkpoints: &[u64]) -> Vec<u128> {
+        let mut order: Vec<usize> = (0..checkpoints.len()).collect();
+        order.sort_by_key(|&i| checkpoints[i]);
+        let mut out = vec![0u128; checkpoints.len()];
+
+        let tail_start = self.tail_emission_start_height();
+        let mut height = 0u64; // last applied block
+        let mut total = 0u128;
+        for i in order {
+            let target = checkpoints[i];
+            if target > height {
+                // Phase-1 part in closed form.
+                if height + 1 < tail_start {
+                    let last = target.min(tail_start - 1);
+                    total += self.halving_issuance_between(height + 1, last);
+                    height = last;
+                }
+                // Tail part, block by block (reward depends on the total).
+                while height < target {
+                    height += 1;
+                    total += self.block_reward_at(height, total) as u128;
+                }
+            }
+            out[i] = total;
+        }
+        out
+    }
+
+    /// Sum of halving rewards for heights `first..=last` (all in Phase 1).
+    fn halving_issuance_between(&self, first: u64, last: u64) -> u128 {
+        if first > last || self.halving_interval == 0 {
+            return 0;
+        }
+        let h = self.halving_interval;
+        let mut total = 0u128;
+        for epoch in (first / h)..=(last / h) {
+            if epoch >= self.halving_count as u64 {
+                break;
+            }
+            let lo = first.max(epoch * h);
+            let hi = last.min((epoch + 1) * h - 1);
+            if lo <= hi {
+                total += (hi - lo + 1) as u128 * (self.initial_reward >> epoch) as u128;
+            }
+        }
+        total
+    }
+
     /// Blocks per year at target block time.
     pub fn target_blocks_per_year(&self) -> u64 {
         let secs_per_year: u64 = 365 * 24 * 3600;
@@ -351,6 +452,77 @@ impl MonetaryPolicy {
     /// Epochs per year at target block time.
     pub fn target_epochs_per_year(&self) -> u64 {
         self.target_blocks_per_year() / self.difficulty_adjustment_interval
+    }
+}
+
+/// Node constants the emission model mirrors (#1699).
+///
+/// `cluster-tax` cannot depend on `botho`, so these are copies. Each one is
+/// drift-guarded by `botho`'s `ledger::emission_parity_tests`, which fails CI
+/// if the node's value changes without this copy following.
+pub mod node_constants {
+    /// Share of every block's transaction fees (base fee **and** the
+    /// demurrage charge, which is collected as part of the fee) that the node
+    /// destroys, in permille. The rest (800‰) goes to the lottery pool and is
+    /// paid back out. Mirrors `1000 - pool_fraction_permille` of the node's
+    /// canonical lottery config (`ledger::lottery_v2::canonical_config`).
+    pub const FEE_BURN_SHARE_PERMILLE: u32 = 200;
+
+    /// The time-based difficulty controller's target inter-block time
+    /// (`botho::block::difficulty::TARGET_BLOCK_TIME_SECS`). The node targets
+    /// block **time**, in both phases; it has no inflation-targeting
+    /// controller (M5, #554).
+    pub const TARGET_BLOCK_TIME_SECS: u64 = 5;
+
+    /// Consensus floor on block time
+    /// (`ConsensusConfig::MIN_BLOCK_TIME_SECS`).
+    pub const MIN_BLOCK_TIME_SECS: u64 = 3;
+
+    /// Idle ceiling on block time (`dynamic_timing::MAX_BLOCK_TIME`).
+    pub const MAX_BLOCK_TIME_SECS: u64 = 40;
+
+    /// The load-paced block-time tiers `(tx_rate_threshold, block_time_secs)`
+    /// (`dynamic_timing::BLOCK_TIME_LEVELS`). Blocks are produced at the tier
+    /// matching the recent transaction rate, so wall-clock emission depends
+    /// on load: one policy-year (6,307,200 blocks) lasts 0.6 calendar years at
+    /// 3 s blocks and 8 calendar years at 40 s blocks.
+    pub const BLOCK_TIME_LEVELS: [(f64, u64); 5] =
+        [(20.0, 3), (5.0, 5), (1.0, 10), (0.2, 20), (0.0, 40)];
+
+    /// Block time the node's load pacing selects for a sustained `tx_rate`
+    /// (tx/s), as `dynamic_timing::compute_block_time` does.
+    pub fn block_time_for_tx_rate(tx_rate: f64) -> u64 {
+        for (threshold, secs) in BLOCK_TIME_LEVELS {
+            if tx_rate >= threshold {
+                return secs;
+            }
+        }
+        MAX_BLOCK_TIME_SECS
+    }
+}
+
+/// A copy of the canonical mainnet schedule, `botho::monetary::mainnet_policy`
+/// (ratified #351: 50 BTH, ~1-year halvings x 5, 2% tail calibrated with a
+/// 0.5% assumed fee burn, 5 s reference blocks).
+///
+/// For simulations that need the node's real policy. Drift-guarded in
+/// `botho` (`ledger::emission_parity_tests`): any change to the node's policy
+/// fails CI until this copy is updated. This is NOT a place to change the
+/// policy — the ratified parameters live in the node.
+pub fn mainnet_policy_mirror() -> MonetaryPolicy {
+    const SECS_PER_YEAR: u64 = 365 * 24 * 60 * 60;
+    const BLOCKS_PER_YEAR: u64 = SECS_PER_YEAR / 5;
+    MonetaryPolicy {
+        initial_reward: 50_000_000_000_000,
+        halving_interval: BLOCKS_PER_YEAR,
+        halving_count: 5,
+        tail_inflation_bps: 200,
+        target_block_time_secs: 5,
+        min_block_time_secs: 3,
+        max_block_time_secs: 60,
+        difficulty_adjustment_interval: BLOCKS_PER_YEAR / 365,
+        max_difficulty_adjustment_bps: 2500,
+        expected_fee_burn_rate_bps: 50,
     }
 }
 
@@ -394,6 +566,13 @@ pub struct MonetaryState {
 
     /// Number of difficulty adjustments made.
     pub adjustment_count: u64,
+
+    /// Cumulative gross issuance: the initial supply plus every block reward,
+    /// never reduced by burns. The sim's analogue of the node's
+    /// `ChainState::total_mined`, which is what the node's tail reward is
+    /// computed from (#1699). `u128` like the node's.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub gross_issued: u128,
 }
 
 impl MonetaryState {
@@ -413,6 +592,8 @@ impl MonetaryState {
             total_rewards_emitted: 0,
             total_fees_burned: 0,
             adjustment_count: 0,
+
+            gross_issued: initial_supply as u128,
         }
     }
 
@@ -468,13 +649,18 @@ impl DifficultyController {
         }
     }
 
-    /// Get the current block reward.
+    /// Get the reward for the next block.
+    ///
+    /// Node parity (#1699): the next block has node height
+    /// `state.height + 1` (genesis mints nothing), and its reward is
+    /// [`MonetaryPolicy::block_reward_at`] of the cumulative gross issuance —
+    /// in the tail this is recomputed every block, exactly as the node's
+    /// `calculate_block_reward(height, total_mined)` does. (It used to be
+    /// fixed once at the phase transition, from supply *net* of burns, which
+    /// understated post-tail issuance.)
     pub fn block_reward(&self) -> u64 {
-        if let Some(tail) = self.state.tail_reward {
-            tail
-        } else {
-            self.policy.halving_reward(self.state.height).unwrap_or(1)
-        }
+        self.policy
+            .block_reward_at(self.state.height + 1, self.state.gross_issued)
     }
 
     /// Record a fee burn.
@@ -495,12 +681,13 @@ impl DifficultyController {
         self.state.total_supply += reward;
         self.state.total_rewards_emitted += reward;
         self.state.epoch_rewards_emitted += reward;
+        self.state.gross_issued += reward as u128;
 
-        // Check for phase transition
-        if self.state.tail_reward.is_none() && !self.policy.is_halving_phase(self.state.height) {
-            // Transition to Phase 2
-            self.state.tail_reward =
-                Some(self.policy.calculate_tail_reward(self.state.total_supply));
+        // Informational: the tail reward the *next* block will pay, once the
+        // next block is in Phase 2. It changes every block (node parity,
+        // #1699); `block_reward()` is the authority.
+        if !self.policy.is_halving_phase(self.state.height + 1) {
+            self.state.tail_reward = Some(self.block_reward());
         }
 
         // Check for difficulty adjustment
@@ -512,12 +699,18 @@ impl DifficultyController {
     }
 
     /// Adjust difficulty at epoch boundary.
+    ///
+    /// Node parity (#1699): the node's only difficulty controller
+    /// (`botho::block::difficulty::EmissionController`, M5 #554) targets
+    /// **block time** (`TARGET_BLOCK_TIME_SECS` = 5 s) in both phases. It has
+    /// no inflation target; the tail's monetary behaviour comes entirely from
+    /// the supply-dependent reward. So Phase 2 uses the same block-time
+    /// adjustment as Phase 1. The node adjusts per block with a [0.5x, 2x]
+    /// clamp, this controller per epoch with a rate clamp — same target,
+    /// coarser kernel. The former inflation-targeting Phase-2 controller is
+    /// kept below as [`Self::monetary_adjustment`] (unused).
     fn adjust_difficulty(&mut self, current_time: u64) {
-        let new_difficulty = if self.policy.is_halving_phase(self.state.height) {
-            self.traditional_adjustment(current_time)
-        } else {
-            self.monetary_adjustment(current_time)
-        };
+        let new_difficulty = self.traditional_adjustment(current_time);
 
         // Apply new difficulty and reset epoch
         self.state.difficulty = new_difficulty;
@@ -549,7 +742,15 @@ impl DifficultyController {
         self.apply_bounded_adjustment(proposed)
     }
 
-    /// Monetary-aware difficulty adjustment (Phase 2): target net inflation.
+    /// LEGACY (superseded, #1699): monetary-aware Phase-2 adjustment that
+    /// targets net inflation.
+    ///
+    /// The node never ran this — its controller targets block time in both
+    /// phases (M5, #554) — so the simulator no longer uses it either. Kept
+    /// (CLAUDE.md: stash rather than delete) and exercised by a unit test so
+    /// it can be recovered if an inflation-targeting controller is ever
+    /// proposed.
+    #[allow(dead_code)]
     fn monetary_adjustment(&self, current_time: u64) -> u64 {
         let elapsed = current_time.saturating_sub(self.state.epoch_start_time);
         let blocks = self.state.blocks_in_epoch();
@@ -924,24 +1125,54 @@ mod tests {
         }
         let baseline_difficulty = controller.state.difficulty;
 
-        // Now simulate high fee burns (more than expected)
-        // This should cause difficulty to decrease (faster blocks needed)
+        // Node parity (#1699): fee burns do NOT move difficulty. The node's
+        // controller targets block time in both phases; only timing does.
         controller.record_fee_burn(50_000); // Very large burn (50% of supply!)
 
         // Mine another epoch at correct timing
         for i in 21..=30 {
             controller.process_block(i * 10);
         }
+        assert_eq!(
+            controller.state.difficulty, baseline_difficulty,
+            "Phase-2 difficulty must ignore fee burns (block-time target only)"
+        );
 
-        // With massive fee burns and low net emission, difficulty should decrease
-        // to speed up block production and increase gross emission
-        // Note: adjustment is bounded, so it may not be a huge decrease
+        // Slow blocks in the tail ease difficulty, exactly as in Phase 1.
+        for i in 31..=40 {
+            controller.process_block(300 + (i - 30) * 20); // 2x target
+        }
         assert!(
             controller.state.difficulty < baseline_difficulty,
-            "Difficulty should decrease with high fee burns: {} vs baseline {}",
+            "slow tail blocks should lower difficulty: {} vs {}",
             controller.state.difficulty,
             baseline_difficulty
         );
+    }
+
+    /// The superseded inflation-targeting Phase-2 kernel still computes what
+    /// it used to (kept for recovery, #1699): a burn-induced emission deficit
+    /// proposes a lower difficulty.
+    #[test]
+    fn test_legacy_monetary_adjustment_still_targets_inflation() {
+        let policy = MonetaryPolicy {
+            initial_reward: 100,
+            halving_interval: 10,
+            halving_count: 1,
+            target_block_time_secs: 10,
+            difficulty_adjustment_interval: 10,
+            max_difficulty_adjustment_bps: 5000,
+            expected_fee_burn_rate_bps: 100,
+            ..MonetaryPolicy::fast_test()
+        };
+        let mut controller = DifficultyController::new(policy, 100_000, 1000, 0);
+        for i in 1..=15 {
+            controller.process_block(i * 10);
+        }
+        let before = controller.state.difficulty;
+        controller.record_fee_burn(50_000);
+        let proposed = controller.monetary_adjustment(150);
+        assert!(proposed < before, "{proposed} vs {before}");
     }
 
     #[test]
@@ -1123,17 +1354,88 @@ mod tests {
         let epoch_start_difficulty = controller.state.difficulty;
         controller.record_fee_burn(100_000); // Massive burn
 
-        // Mine through an epoch
+        // Mine through an epoch at the target block time (fast_test: 1 s).
         for i in 11..=15 {
-            controller.process_block(i * 10);
+            controller.process_block(100 + (i - 10));
         }
 
-        // In deflation: difficulty should decrease to speed up blocks
-        assert!(
-            controller.state.difficulty < epoch_start_difficulty,
-            "Difficulty should decrease in deflation: {} vs {}",
-            controller.state.difficulty,
-            epoch_start_difficulty
+        // Node parity (#1699): deflation does not move difficulty — the node
+        // has no inflation controller. Net supply falls; difficulty holds.
+        assert_eq!(controller.state.difficulty, epoch_start_difficulty);
+        assert!(controller.state.net_supply_change() < 0);
+        // Tail rewards keep being paid from gross issuance, not net supply.
+        assert!(controller.block_reward() >= 1);
+    }
+
+    // === Node parity: per-block tail recompute (#1699) ===
+
+    #[test]
+    fn block_reward_at_matches_phase_rules() {
+        let p = mainnet_policy_mirror();
+        let h = p.halving_interval;
+        assert_eq!(p.block_reward_at(1, 0), 50_000_000_000_000);
+        assert_eq!(p.block_reward_at(h - 1, 0), 50_000_000_000_000);
+        assert_eq!(p.block_reward_at(h, 0), 25_000_000_000_000);
+        assert_eq!(p.block_reward_at(5 * h - 1, 0), 50_000_000_000_000 >> 4);
+        // Tail: a pure function of total_mined (2.5% / blocks-per-year).
+        let s = 611_010_000u128 * 1_000_000_000_000;
+        assert_eq!(p.block_reward_at(5 * h, s), p.calculate_tail_reward_u128(s));
+        assert_eq!(p.block_reward_at(9 * h, s), p.calculate_tail_reward_u128(s));
+    }
+
+    #[test]
+    fn cumulative_issuance_matches_block_by_block_sum() {
+        // Small schedule so a naive per-block loop is cheap.
+        let p = MonetaryPolicy {
+            initial_reward: 1_000_000_000_000,
+            halving_interval: 1_000,
+            halving_count: 3,
+            target_block_time_secs: 31_536, // 1_000 blocks per "year"
+            ..MonetaryPolicy::default()
+        };
+        let mut total = 0u128;
+        let mut naive = vec![0u128];
+        for h in 1..=10_000u64 {
+            total += p.block_reward_at(h, total) as u128;
+            naive.push(total);
+        }
+        let checkpoints = [0u64, 1, 999, 1_000, 2_999, 3_000, 3_001, 5_000, 10_000];
+        let fast = p.issuance_at_checkpoints(&checkpoints);
+        for (i, &c) in checkpoints.iter().enumerate() {
+            assert_eq!(fast[i], naive[c as usize], "height {c}");
+            assert_eq!(p.cumulative_issuance_at(c), naive[c as usize]);
+        }
+        // Unordered checkpoints come back in input order.
+        assert_eq!(
+            p.issuance_at_checkpoints(&[5_000, 1]),
+            vec![naive[5_000], naive[1]]
+        );
+        // The tail compounds: the last tail reward exceeds the first.
+        assert!(p.block_reward_at(10_000, naive[9_999]) > p.block_reward_at(3_000, naive[2_999]));
+    }
+
+    #[test]
+    fn controller_tail_is_recomputed_from_gross_issuance() {
+        let p = MonetaryPolicy {
+            initial_reward: 1_000_000_000_000,
+            halving_interval: 100,
+            halving_count: 2,
+            target_block_time_secs: 315_360, // 100 blocks per "year"
+            difficulty_adjustment_interval: 1_000_000,
+            ..MonetaryPolicy::default()
+        };
+        let mut c = DifficultyController::new(p.clone(), 0, 1000, 0);
+        for h in 1..=1_000u64 {
+            c.process_block(h);
+            // Burns reduce net supply but not the gross base of the reward.
+            if h % 10 == 0 {
+                c.record_fee_burn(1_000);
+            }
+        }
+        assert_eq!(c.state.gross_issued, p.cumulative_issuance_at(1_000));
+        assert_eq!(
+            c.state.total_supply as u128,
+            p.cumulative_issuance_at(1_000) - 100 * 1_000
         );
     }
 

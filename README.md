@@ -65,7 +65,7 @@ Bitcoin's security budget will eventually depend entirely on transaction fees. B
 
 - Initial reward: 50 BTH per block
 - ~1-year halving schedule (5 halvings over ~5 years)
-- Perpetual tail emission targeting 2% net annual inflation; the per-block tail reward is supply-dependent (~1.9 BTH/block at the ~611M Phase-1 supply, growing as supply grows)
+- Perpetual tail emission at a 2.5% gross annual rate (designed as 2% net of an assumed 0.5% fee burn; realized net inflation is ~2.1–2.5% (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699)); the per-block tail reward is recomputed each block from cumulative issuance (~2.4 BTH/block at the ~611M Phase-1 supply, growing as supply grows)
 
 This guarantees minters are always incentivized to secure the network, without relying on ever-increasing transaction volume.
 
@@ -120,7 +120,7 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 | Monetary baseline | 5 seconds (for emission calculations) |
 | Difficulty adjustment | Every block, from observed block time (0.5x–2x per step) |
 | Phase 1 supply | ~611 million BTH (~5 years of halvings) |
-| Tail emission | Supply-dependent, ~1.9 BTH/block at the ~611M tail-onset supply (2% net annual inflation) |
+| Tail emission | Supply-dependent, ~2.4 BTH/block gross at the ~611M tail-onset supply (2.5% gross/yr; realized net ~2.1–2.5%) |
 | Native unit | BTH (12 decimal places; 1 BTH = 10¹² picocredits) |
 
 Block timing adapts to network activity: busy networks produce faster blocks (5s under high load, down to 3s at very high load), idle networks produce slower blocks (40s). This creates natural inflation dampening—less activity means less emission.

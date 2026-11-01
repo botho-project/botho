@@ -37,6 +37,11 @@
 //! population is used for every schedule.
 
 use crate::{
+    consensus_fee::{
+        consensus_fee_breakdown, consensus_tx_size_bytes, ClaimedClass, ConsensusFeeInputs,
+        ConsensusFeeParams, FeeModelMode,
+    },
+    monetary::{mainnet_policy_mirror, node_constants},
     simulation::{
         run_simulation, Agent, AgentId, MerchantAgent, Metrics, MinterAgent, RetailUserAgent,
         SimulationConfig, WhaleAgent, WhaleStrategy,
@@ -147,6 +152,14 @@ pub fn candidate_schedules() -> Vec<Schedule> {
                 ..base.clone()
             },
         },
+        // Reference row (#1699): the schedule the node actually runs, ratified
+        // in #351 after this sweep. Not a candidate — included so every
+        // figure in this report exists for the live policy too.
+        Schedule {
+            id: "M",
+            label: "canonical mainnet (ratified #351; reference, not a candidate)",
+            policy: mainnet_policy_mirror(),
+        },
     ]
 }
 
@@ -166,40 +179,23 @@ pub fn phase1_supply_picocredits(policy: &MonetaryPolicy) -> u128 {
     total
 }
 
-/// Cumulative supply (picocredits) emitted by the end of block `height` under
+/// Cumulative supply (picocredits) issued by the end of block `height` under
 /// the real-world schedule, including tail emission after Phase 1.
+///
+/// Node parity (#1699): this is exactly the node's `ChainState::total_mined`
+/// at that tip ([`MonetaryPolicy::cumulative_issuance_at`]): genesis mints
+/// nothing, and in the tail the reward is **recomputed every block** from the
+/// running gross total, so the tail compounds at
+/// `tail_inflation_bps + expected_fee_burn_rate_bps` (2.5%) per policy-year.
+/// The previous version fixed the tail reward once from the Phase-1 total,
+/// which understated post-tail supply (by ~0.03% after one tail year and
+/// ~5.8% by policy-year 20). A `botho` drift guard
+/// (`ledger::emission_parity_tests`) checks this against
+/// `calculate_block_reward` over 20 policy-years.
+///
+/// Cost: closed form in Phase 1, O(tail blocks) after it.
 pub fn cumulative_supply_at(policy: &MonetaryPolicy, height: u64) -> u128 {
-    let tail_start = policy.tail_emission_start_height();
-    if height <= tail_start {
-        // Still in Phase 1: sum rewards block-by-block, but exploit that the
-        // reward is constant within a halving epoch.
-        let mut total = 0u128;
-        let h = policy.halving_interval;
-        if h == 0 {
-            return 0;
-        }
-        let full_epochs = (height / h).min(policy.halving_count as u64);
-        let r0 = policy.initial_reward as u128;
-        for halving in 0..full_epochs {
-            total += h as u128 * (r0 >> halving);
-        }
-        // Partial epoch.
-        let consumed = full_epochs * h;
-        if consumed < height && full_epochs < policy.halving_count as u64 {
-            let rem = (height - consumed) as u128;
-            total += rem * (r0 >> full_epochs);
-        }
-        total
-    } else {
-        let phase1 = phase1_supply_picocredits(policy);
-        // Tail reward is calibrated from supply at transition. Phase-1 supply
-        // in picocredits exceeds u64::MAX for every candidate schedule, so
-        // this MUST go through the u128 entry point — clamping to u64 would
-        // silently compute a wildly wrong tail reward (#694).
-        let tail_reward = policy.calculate_tail_reward_u128(phase1) as u128;
-        let tail_blocks = (height - tail_start) as u128;
-        phase1 + tail_blocks * tail_reward
-    }
+    policy.cumulative_issuance_at(height)
 }
 
 /// Fraction of total Phase-1 supply minted within the first `frac` of
@@ -231,17 +227,26 @@ pub fn pct_issued_by_year(policy: &MonetaryPolicy, year: u64) -> f64 {
         return 0.0;
     }
     // Cap Phase-1 portion at 100%; tail emission beyond that is reported
-    // separately as steady-state inflation.
-    let p1_at =
-        cumulative_supply_at(policy, height.min(policy.tail_emission_start_height())) as f64;
+    // separately as steady-state inflation. The last Phase-1 block is
+    // `tail_start - 1` (node heights; genesis mints nothing).
+    let last_phase1 = policy.tail_emission_start_height().saturating_sub(1);
+    let p1_at = cumulative_supply_at(policy, height.min(last_phase1)) as f64;
     (p1_at / total) * 100.0
 }
 
-/// Steady-state annual inflation (%) once tail emission is in effect.
+/// Steady-state annual inflation (%) once tail emission is in effect, per
+/// **policy-year** (`BLOCKS_PER_YEAR` blocks; a calendar year only at 5 s
+/// blocks).
 ///
-/// Equals `tail_reward * blocks_per_year / supply_at_transition`, which is the
-/// gross tail emission rate. The net rate is lower by the fee-burn rate; the
-/// policy targets `tail_inflation_bps` net, so we report both.
+/// Returns `(gross, policy_assumed_net)`:
+/// - `gross = tail_reward * blocks_per_year / supply_at_transition` — the
+///   calibrated gross rate, `tail_inflation_bps + expected_fee_burn_rate_bps`.
+///   Because the node recomputes the reward every block from gross issuance it
+///   compounds slightly above this ([`compounded_gross_tail_pct`]).
+/// - `policy_assumed_net = tail_inflation_bps` — the "2% net" figure. It is net
+///   only if fee burns really remove `expected_fee_burn_rate_bps` of supply per
+///   year; at realistic fee volumes they remove far less (see
+///   [`node_parity_report`]), so realised net inflation is close to `gross`.
 pub fn steady_state_inflation_pct(policy: &MonetaryPolicy) -> (f64, f64) {
     let supply = phase1_supply_picocredits(policy);
     if supply == 0 {
@@ -256,6 +261,15 @@ pub fn steady_state_inflation_pct(policy: &MonetaryPolicy) -> (f64, f64) {
     (gross_pct, net_pct)
 }
 
+/// Gross tail growth per policy-year (%) with the node's per-block recompute:
+/// `(1 + g / B)^B - 1` for calibrated gross rate `g` and `B` blocks per
+/// policy-year. Analytic; [`node_parity_report`] measures it exactly.
+pub fn compounded_gross_tail_pct(policy: &MonetaryPolicy) -> f64 {
+    let g = (policy.tail_inflation_bps + policy.expected_fee_burn_rate_bps) as f64 / 10_000.0;
+    let b = policy.target_blocks_per_year().max(1) as f64;
+    ((1.0 + g / b).powf(b) - 1.0) * 100.0
+}
+
 /// Analytic monetary metrics for one schedule, all at real-world scale.
 #[derive(Clone, Debug)]
 pub struct MonetaryMetrics {
@@ -268,6 +282,8 @@ pub struct MonetaryMetrics {
     pub pct_issued_y5: f64,
     pub steady_state_gross_pct: f64,
     pub steady_state_net_pct: f64,
+    /// Gross tail growth per policy-year including per-block compounding.
+    pub compounded_gross_pct: f64,
 }
 
 /// Compute the analytic monetary metrics for a schedule.
@@ -284,7 +300,314 @@ pub fn monetary_metrics(schedule: &Schedule) -> MonetaryMetrics {
         pct_issued_y5: pct_issued_by_year(policy, 5),
         steady_state_gross_pct: gross,
         steady_state_net_pct: net,
+        compounded_gross_pct: compounded_gross_tail_pct(policy),
     }
+}
+
+// ===========================================================================
+// Node-parity track (#1699): the live policy as the node executes it
+// ===========================================================================
+
+/// Inputs to [`node_parity_report`].
+#[derive(Clone, Debug)]
+pub struct NodeParityParams {
+    /// Policy-years to iterate exactly (20 in the published report; tests use
+    /// fewer — each tail year is ~6.3M per-block iterations).
+    pub horizon_policy_years: u64,
+    /// Sustained transaction rates (tx/s) at which to evaluate fee burn and
+    /// calendar-time emission.
+    pub tx_rates: Vec<f64>,
+}
+
+impl Default for NodeParityParams {
+    fn default() -> Self {
+        Self {
+            horizon_policy_years: 20,
+            tx_rates: vec![0.1, 0.5, 2.0, 5.0, 20.0, 100.0],
+        }
+    }
+}
+
+/// Supply at the end of one policy-year, exactly as the node accumulates it.
+#[derive(Clone, Debug)]
+pub struct ParityYear {
+    pub policy_year: u64,
+    /// `ChainState::total_mined` at height `policy_year * BLOCKS_PER_YEAR`.
+    pub gross_issued_bth: f64,
+    /// What the pre-#1699 sim reported (tail reward fixed once at onset).
+    pub fixed_tail_model_bth: f64,
+    /// Growth over the previous policy-year (%), `None` for year 1.
+    pub growth_pct: Option<f64>,
+}
+
+/// Fee burn and calendar-time emission at one sustained transaction rate.
+#[derive(Clone, Debug)]
+pub struct LoadPoint {
+    pub tx_rate: f64,
+    /// Block time the node's load pacing selects at this rate.
+    pub block_time_secs: u64,
+    /// Calendar years per policy-year (`block_time / 5`).
+    pub calendar_years_per_policy_year: f64,
+    /// Calendar years from genesis to tail onset at this load.
+    pub calendar_years_to_tail: f64,
+    /// Gross tail issuance per calendar year, % of tail-onset supply.
+    pub gross_pct_per_calendar_year: f64,
+    /// Base-fee burn per calendar year, % of tail-onset supply.
+    pub base_fee_burn_pct_per_calendar_year: f64,
+    /// `gross - base_fee_burn`, ignoring the demurrage burn term.
+    pub net_pct_per_calendar_year: f64,
+}
+
+/// The emission model checked against the node's rules, for the live policy.
+#[derive(Clone, Debug)]
+pub struct NodeParityReport {
+    pub policy: MonetaryPolicy,
+    pub years: Vec<ParityYear>,
+    /// Tail reward at onset and at the end of the horizon (BTH/block).
+    pub tail_reward_onset_bth: f64,
+    pub tail_reward_end_bth: f64,
+    /// Analytic per-block-compounded gross growth (%/policy-year).
+    pub compounded_gross_pct: f64,
+    /// Fee a typical 1-input/2-output CLSAG tx pays: consensus floor only,
+    /// and with the default relay minimum (what a wallet pays).
+    pub typical_tx_size_bytes: usize,
+    pub typical_fee_consensus_pico: u64,
+    pub typical_fee_relay_pico: u64,
+    /// Share of fees destroyed (permille), the rest goes to the lottery.
+    pub fee_burn_share_permille: u32,
+    /// Sustained tx/s at the relay minimum for base-fee burns to remove the
+    /// policy's assumed `expected_fee_burn_rate_bps` of tail-onset supply per
+    /// calendar year.
+    pub tx_rate_for_assumed_burn: f64,
+    /// Upper bound on demurrage-driven burn (%/yr of supply): every coin at
+    /// the maximum cluster factor, settled once a year, 20% of it burned.
+    pub demurrage_burn_upper_bound_pct: f64,
+    pub load_points: Vec<LoadPoint>,
+}
+
+/// Run the node-parity track for the live policy ([`mainnet_policy_mirror`]).
+///
+/// Everything here is the node's own arithmetic: issuance from
+/// [`MonetaryPolicy::block_reward_at`] block by block, fees from
+/// [`crate::consensus_fee_model`] (#1728), the 20% burn share and the
+/// load-paced block-time tiers from [`node_constants`]. Calendar figures
+/// assume blocks run at the load-paced tier (the time-based difficulty
+/// controller eases toward its 5 s target but cannot make blocks faster than
+/// load pacing allows; whether it saturates at `MAX_DIFFICULTY` on the live
+/// testnet is a separate measurement, #1699).
+pub fn node_parity_report(params: &NodeParityParams) -> NodeParityReport {
+    let policy = mainnet_policy_mirror();
+    let bpy = policy.target_blocks_per_year();
+    let pico = PICOCREDITS_PER_BTH as f64;
+    let tail_start = policy.tail_emission_start_height();
+
+    // --- Issuance, exactly, at each policy-year end ---
+    let heights: Vec<u64> = (1..=params.horizon_policy_years).map(|y| y * bpy).collect();
+    let issued = policy.issuance_at_checkpoints(&heights);
+    let onset_total = policy.cumulative_issuance_at(tail_start - 1);
+    let fixed_tail = policy.calculate_tail_reward_u128(onset_total) as u128;
+    let mut years = Vec::new();
+    for (i, &h) in heights.iter().enumerate() {
+        let fixed = if h < tail_start {
+            issued[i]
+        } else {
+            onset_total + (h - tail_start + 1) as u128 * fixed_tail
+        };
+        years.push(ParityYear {
+            policy_year: i as u64 + 1,
+            gross_issued_bth: issued[i] as f64 / pico,
+            fixed_tail_model_bth: fixed as f64 / pico,
+            growth_pct: (i > 0).then(|| (issued[i] as f64 / issued[i - 1] as f64 - 1.0) * 100.0),
+        });
+    }
+    let end_total = *issued.last().unwrap_or(&onset_total);
+    let tail_reward_end = policy.calculate_tail_reward_u128(end_total.max(onset_total));
+
+    // --- Fees via the shared consensus fee model (#1728) ---
+    let size = consensus_tx_size_bytes(1, 2, 0);
+    let fee_inputs = ConsensusFeeInputs {
+        size,
+        n_out: 2,
+        n_memo: 0,
+        claimed: ClaimedClass::Factor(1_000), // 1x: ordinary coins
+        floor: 1_000,
+        elapsed: 0,
+        height: tail_start,
+        output_sum: PICOCREDITS_PER_BTH as u64,
+    };
+    let consensus = consensus_fee_breakdown(
+        &fee_inputs,
+        &ConsensusFeeParams::from_policy(&policy, FeeModelMode::ConsensusOnly),
+    );
+    let relay = consensus_fee_breakdown(
+        &fee_inputs,
+        &ConsensusFeeParams::from_policy(&policy, FeeModelMode::ConsensusPlusRelayMin),
+    );
+    let burn_share = node_constants::FEE_BURN_SHARE_PERMILLE as f64 / 1_000.0;
+    let secs_per_year = (365 * 24 * 3600) as f64;
+    let onset = onset_total as f64;
+    let burn_pct_per_tx_per_sec = relay.fee as f64 * burn_share * secs_per_year / onset * 100.0;
+    let assumed_burn_pct = policy.expected_fee_burn_rate_bps as f64 / 100.0;
+    let tx_rate_for_assumed_burn = assumed_burn_pct / burn_pct_per_tx_per_sec;
+
+    // Demurrage upper bound: one max-factor BTH held a full policy-year.
+    let demurrage = consensus_fee_breakdown(
+        &ConsensusFeeInputs {
+            claimed: ClaimedClass::Factor(crate::demurrage::MAX_FACTOR_SCALED),
+            floor: crate::demurrage::MAX_FACTOR_SCALED,
+            elapsed: bpy,
+            ..fee_inputs
+        },
+        &ConsensusFeeParams::from_policy(&policy, FeeModelMode::ConsensusOnly),
+    );
+    let demurrage_burn_upper_bound_pct = demurrage.demurrage as f64 / pico * burn_share * 100.0;
+
+    // --- Calendar-time emission per load tier ---
+    let gross_policy_pct =
+        policy.calculate_tail_reward_u128(onset_total) as f64 * bpy as f64 / onset * 100.0;
+    let load_points = params
+        .tx_rates
+        .iter()
+        .map(|&tx_rate| {
+            let bt = node_constants::block_time_for_tx_rate(tx_rate);
+            let cal_per_policy = bt as f64 / policy.target_block_time_secs as f64;
+            let gross = gross_policy_pct / cal_per_policy;
+            let burn = burn_pct_per_tx_per_sec * tx_rate;
+            LoadPoint {
+                tx_rate,
+                block_time_secs: bt,
+                calendar_years_per_policy_year: cal_per_policy,
+                calendar_years_to_tail: tail_start as f64 / bpy as f64 * cal_per_policy,
+                gross_pct_per_calendar_year: gross,
+                base_fee_burn_pct_per_calendar_year: burn,
+                net_pct_per_calendar_year: gross - burn,
+            }
+        })
+        .collect();
+
+    NodeParityReport {
+        years,
+        tail_reward_onset_bth: fixed_tail as f64 / pico,
+        tail_reward_end_bth: tail_reward_end as f64 / pico,
+        compounded_gross_pct: compounded_gross_tail_pct(&policy),
+        typical_tx_size_bytes: size,
+        typical_fee_consensus_pico: consensus.fee,
+        typical_fee_relay_pico: relay.fee,
+        fee_burn_share_permille: node_constants::FEE_BURN_SHARE_PERMILLE,
+        tx_rate_for_assumed_burn,
+        demurrage_burn_upper_bound_pct,
+        load_points,
+        policy,
+    }
+}
+
+/// Render [`NodeParityReport`] as Markdown (data + neutral observations; the
+/// ratified parameters are not up for change here).
+pub fn node_parity_markdown(r: &NodeParityReport) -> String {
+    let mut s = String::new();
+    s.push_str("## Node parity: the live policy as the node executes it (#1699)\n\n");
+    s.push_str(
+        "Issuance below is the node's `ChainState::total_mined`, computed block by block with \
+the node's reward rule (`calculate_block_reward`: halving reward in Phase 1, tail reward \
+**recomputed every block** from cumulative gross issuance in Phase 2). A drift guard in \
+`botho` checks it against the node over 20 policy-years. A *policy-year* is \
+6,307,200 blocks — one calendar year only at 5 s blocks.\n\n",
+    );
+    s.push_str(
+        "| Policy-year | Gross issued (BTH) | Growth vs prior year | Old fixed-tail model (BTH) | \
+Old model understates by |\n",
+    );
+    s.push_str(
+        "|------------:|-------------------:|---------------------:|---------------------------:|\
+-------------------------:|\n",
+    );
+    for y in &r.years {
+        if !(y.policy_year <= 7 || y.policy_year % 5 == 0) {
+            continue;
+        }
+        s.push_str(&format!(
+            "| {} | {:.2}M | {} | {:.2}M | {:.2}% |\n",
+            y.policy_year,
+            y.gross_issued_bth / 1e6,
+            y.growth_pct
+                .map(|g| format!("{g:.3}%"))
+                .unwrap_or_else(|| "—".to_string()),
+            y.fixed_tail_model_bth / 1e6,
+            (y.gross_issued_bth / y.fixed_tail_model_bth - 1.0) * 100.0,
+        ));
+    }
+    s.push('\n');
+    s.push_str(&format!(
+        "- Tail reward: {:.4} BTH/block at onset, {:.4} BTH/block at the end of policy-year {}. \
+It grows with gross issuance; tail growth is {:.3}%/policy-year with per-block compounding \
+(calibrated rate {}+{} bps).\n",
+        r.tail_reward_onset_bth,
+        r.tail_reward_end_bth,
+        r.years.last().map(|y| y.policy_year).unwrap_or(0),
+        r.compounded_gross_pct,
+        r.policy.tail_inflation_bps,
+        r.policy.expected_fee_burn_rate_bps,
+    ));
+    s.push_str(&format!(
+        "- Fees (shared consensus fee model, #1728): a typical 1-input/2-output transaction \
+({} bytes) has a consensus floor of {} pico; with the default relay minimum it pays {} pico \
+(0.0001 BTH). The node burns {}‰ of fees (the rest funds the lottery).\n",
+        r.typical_tx_size_bytes,
+        r.typical_fee_consensus_pico,
+        r.typical_fee_relay_pico,
+        r.fee_burn_share_permille,
+    ));
+    s.push_str(&format!(
+        "- The tail reward is calibrated as {} bps net + {} bps assumed fee burn. For base fees \
+to burn {} bps of tail-onset supply per year, the network would need **~{:.0} tx/s sustained** \
+at the relay minimum.\n",
+        r.policy.tail_inflation_bps,
+        r.policy.expected_fee_burn_rate_bps,
+        r.policy.expected_fee_burn_rate_bps,
+        r.tx_rate_for_assumed_burn,
+    ));
+    s.push_str(&format!(
+        "- Demurrage is collected as part of the fee, so 20% of it is burned too. Upper bound: \
+{:.2}%/yr of supply, only if every coin sat at the maximum cluster factor and settled \
+yearly. Factor-1 coins pay none.\n\n",
+        r.demurrage_burn_upper_bound_pct,
+    ));
+    s.push_str(
+        "| Sustained load (tx/s) | Block time | Calendar yr per policy-yr | Calendar yr to tail | \
+Gross tail %/calendar yr | Base-fee burn %/calendar yr | Net (excl. demurrage) |\n",
+    );
+    s.push_str(
+        "|----------------------:|-----------:|--------------------------:|--------------------:|\
+-------------------------:|----------------------------:|----------------------:|\n",
+    );
+    for p in &r.load_points {
+        s.push_str(&format!(
+            "| {} | {} s | {:.1} | {:.1} | {:.3}% | {:.5}% | {:.3}% |\n",
+            p.tx_rate,
+            p.block_time_secs,
+            p.calendar_years_per_policy_year,
+            p.calendar_years_to_tail,
+            p.gross_pct_per_calendar_year,
+            p.base_fee_burn_pct_per_calendar_year,
+            p.net_pct_per_calendar_year,
+        ));
+    }
+    s.push('\n');
+    s.push_str(
+        "Neutral observations:\n\n\
+- Per policy-year, realised net tail inflation is the ~2.5% gross rate minus a base-fee burn \
+that is negligible at any load the timing tiers anticipate, minus at most the demurrage-burn \
+bound above: between ~2.1% and ~2.5%, near the top in practice. The \"2% net\" figure holds \
+only if burns reach the assumed 0.5%/yr.\n\
+- In calendar time, emission and the run-up to tail scale with block time: blocks are \
+load-paced (3–40 s), so \"5 years to tail\" is 3 years at sustained ≥20 tx/s and 40 years \
+when idle.\n\
+- The calendar columns assume blocks run at the load-paced tier. Whether the 5 s difficulty \
+target eases to `MAX_DIFFICULTY` at low load on the live network is a testnet measurement, \
+not modelled here.\n\
+- These are inputs to a human decision. The ratified parameters (#351) are unchanged.\n",
+    );
+    s
 }
 
 // ===========================================================================
@@ -599,13 +922,14 @@ pub fn to_csv(results: &[ScheduleResult]) -> String {
         "schedule,label,total_supply_bth,time_to_tail_years,early_share_10pct,early_share_25pct,\
 pct_issued_y1,pct_issued_y2,pct_issued_y5,steady_state_gross_pct,steady_state_net_pct,\
 initial_gini,final_gini,final_top_1_pct,final_top_10_pct,subsidy_emitted,fees_recycled,\
-subsidy_fraction,velocity_tx_per_year,turnover_per_supply,sim_total_blocks,final_phase\n",
+subsidy_fraction,velocity_tx_per_year,turnover_per_supply,sim_total_blocks,final_phase,\
+compounded_gross_pct\n",
     );
     for r in results {
         let m = &r.monetary;
         let d = &r.distribution;
         csv.push_str(&format!(
-            "{},\"{}\",{:.0},{:.3},{:.4},{:.4},{:.2},{:.2},{:.2},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.1},{:.2},{},{}\n",
+            "{},\"{}\",{:.0},{:.3},{:.4},{:.4},{:.2},{:.2},{:.2},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.1},{:.2},{},{},{:.4}\n",
             r.id,
             r.label,
             m.total_supply_bth,
@@ -628,6 +952,7 @@ subsidy_fraction,velocity_tx_per_year,turnover_per_supply,sim_total_blocks,final
             d.turnover_per_supply,
             d.sim_total_blocks,
             d.final_phase,
+            m.compounded_gross_pct,
         ));
     }
     csv
@@ -685,15 +1010,15 @@ agent RNG is seeded from agent IDs, so the run is reproducible.\n\n",
     // --- Monetary table ---
     s.push_str("## Monetary metrics (analytic, real-world scale)\n\n");
     s.push_str(
-        "| Schedule | Derived supply (BTH) | Time-to-tail (yr) | Early share (first 10%) | Early share (first 25%) | % issued by Y1 | % issued by Y2 | % issued by Y5 | Steady-state gross/yr | Steady-state net/yr |\n",
+        "| Schedule | Derived supply (BTH) | Time-to-tail (policy-yr) | Early share (first 10%) | Early share (first 25%) | % issued by Y1 | % issued by Y2 | % issued by Y5 | Tail gross/policy-yr (calibrated) | Tail gross/policy-yr (compounded) | Policy-assumed net/yr |\n",
     );
     s.push_str(
-        "|----------|----------------------|-------------------|-------------------------|-------------------------|----------------|----------------|----------------|-----------------------|---------------------|\n",
+        "|----------|----------------------|--------------------------|-------------------------|-------------------------|----------------|----------------|----------------|-----------------------------------|-----------------------------------|-----------------------|\n",
     );
     for r in results {
         let m = &r.monetary;
         s.push_str(&format!(
-            "| {} | {:.3e} | {:.2} | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.2}% | {:.2}% |\n",
+            "| {} | {:.3e} | {:.2} | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.2}% | {:.3}% | {:.2}% |\n",
             r.id,
             m.total_supply_bth,
             m.time_to_tail_years,
@@ -703,10 +1028,17 @@ agent RNG is seeded from agent IDs, so the run is reproducible.\n\n",
             m.pct_issued_y2,
             m.pct_issued_y5,
             m.steady_state_gross_pct,
+            m.compounded_gross_pct,
             m.steady_state_net_pct,
         ));
     }
     s.push('\n');
+    s.push_str(
+        "*Policy-assumed net* subtracts the policy's assumed 0.5%/yr fee burn (`expected_fee_burn_rate_bps`). \
+At realistic fee volumes the burn is far smaller, so realised net inflation is close to the gross \
+column; see the node-parity section. Years are policy-years (6,307,200 blocks), calendar years \
+only at 5 s blocks.\n\n",
+    );
 
     // --- Distribution table ---
     s.push_str("## Distribution & MoE metrics (agent-based, horizon-scaled)\n\n");
@@ -852,6 +1184,14 @@ real-world security-budget claim.\n",
         avg_subsidy_frac,
     ));
 
+    // Fee-accounting caveat (#1699): the agent-based runner removes every fee
+    // from supply, whereas the node burns 20% and returns 80% via the lottery.
+    s.push_str(
+        "- The agent-based track books every fee as removed from supply (`fees_recycled`). The \
+node burns only 20% of fees and pays 80% back out through the lottery, so the track overstates \
+supply removal by fees; its block rewards do follow the node's per-block tail recompute.\n",
+    );
+
     // Gini direction note (factual).
     s.push_str(
         "- Final Gini and top-share figures are reported per schedule above; compare them \
@@ -883,9 +1223,11 @@ mod tests {
     #[test]
     fn grid_has_five_schedules() {
         let g = candidate_schedules();
-        assert_eq!(g.len(), 5);
+        assert_eq!(g.len(), 6);
         assert_eq!(g[0].id, "S1");
         assert_eq!(g[4].id, "S5");
+        assert_eq!(g[5].id, "M");
+        assert_eq!(g[5].policy, mainnet_policy_mirror());
     }
 
     #[test]
@@ -979,9 +1321,9 @@ mod tests {
             snapshot_frequency: 20,
         };
         let results = run_sweep(&params);
-        assert_eq!(results.len(), 5);
+        assert_eq!(results.len(), 6);
         let csv = to_csv(&results);
-        assert!(csv.lines().count() >= 6); // header + 5 rows
+        assert!(csv.lines().count() >= 7); // header + 6 rows
         let md = to_markdown(&results, &params);
         // Must NOT recommend a schedule.
         let lower = md.to_lowercase();
@@ -1005,5 +1347,77 @@ mod tests {
         let a = to_csv(&run_sweep(&params));
         let b = to_csv(&run_sweep(&params));
         assert_eq!(a, b, "sweep output must be deterministic");
+    }
+
+    #[test]
+    fn mainnet_reference_supply_is_611m() {
+        let m = candidate_schedules()
+            .into_iter()
+            .find(|s| s.id == "M")
+            .unwrap();
+        let mm = monetary_metrics(&m);
+        assert!((mm.total_supply_bth - 611_010_000.0).abs() < 1.0);
+        assert!((mm.time_to_tail_years - 5.0).abs() < 1e-9);
+        assert!((mm.steady_state_gross_pct - 2.5).abs() < 0.001);
+        assert!(mm.compounded_gross_pct > 2.53 && mm.compounded_gross_pct < 2.54);
+    }
+
+    #[test]
+    fn cumulative_supply_uses_node_height_convention() {
+        let p = mainnet_policy_mirror();
+        let r0 = p.initial_reward as u128;
+        // Genesis mints nothing; block 1 mints the initial reward.
+        assert_eq!(cumulative_supply_at(&p, 0), 0);
+        assert_eq!(cumulative_supply_at(&p, 1), r0);
+        // Phase 1 ends at tail_start - 1 with the derived supply minus the
+        // genesis slot.
+        let last = p.tail_emission_start_height() - 1;
+        assert_eq!(
+            cumulative_supply_at(&p, last),
+            phase1_supply_picocredits(&p) - r0
+        );
+        // First tail block pays 2.5%/yr of total_mined.
+        let first_tail = cumulative_supply_at(&p, last + 1) - cumulative_supply_at(&p, last);
+        assert_eq!(
+            first_tail,
+            p.calculate_tail_reward_u128(phase1_supply_picocredits(&p) - r0) as u128
+        );
+    }
+
+    #[test]
+    fn node_parity_report_short_horizon() {
+        // 6 policy-years = 1 tail year (~6.3M iterations).
+        let r = node_parity_report(&NodeParityParams {
+            horizon_policy_years: 6,
+            tx_rates: vec![0.1, 5.0, 20.0],
+        });
+        assert_eq!(r.years.len(), 6);
+        let y5 = &r.years[4];
+        let y6 = &r.years[5];
+        // Height 5*BPY is the first tail block: Phase 1 (611,010,000 BTH less
+        // the 50 BTH genesis slot) plus one ~2.42 BTH tail reward.
+        assert!(
+            (y5.gross_issued_bth - 611_009_952.42).abs() < 0.01,
+            "{}",
+            y5.gross_issued_bth
+        );
+        // One tail year compounds slightly above 2.5%.
+        let g = y6.growth_pct.unwrap();
+        assert!(g > 2.5 && g < 2.54, "tail growth {g}");
+        assert!(y6.gross_issued_bth > y6.fixed_tail_model_bth);
+        // Fees: relay minimum dominates the consensus floor for ordinary txs.
+        assert_eq!(r.typical_fee_relay_pico, crate::RELAY_MIN_TX_FEE);
+        assert!(r.typical_fee_consensus_pico < r.typical_fee_relay_pico);
+        // The assumed 0.5% burn needs thousands of tx/s.
+        assert!(r.tx_rate_for_assumed_burn > 4_000.0 && r.tx_rate_for_assumed_burn < 6_000.0);
+        // Demurrage-burn bound: 20% of the 2% max-factor rate.
+        assert!((r.demurrage_burn_upper_bound_pct - 0.4).abs() < 0.01);
+        // Load pacing: 0.1 tx/s -> 40 s blocks -> 8x calendar stretch.
+        assert_eq!(r.load_points[0].block_time_secs, 40);
+        assert!((r.load_points[0].calendar_years_to_tail - 40.0).abs() < 1e-9);
+        assert_eq!(r.load_points[2].block_time_secs, 3);
+        let md = node_parity_markdown(&r);
+        assert!(md.contains("Node parity"));
+        assert!(!md.to_lowercase().contains("we recommend"));
     }
 }

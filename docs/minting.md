@@ -124,11 +124,12 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 | Tail reward | Supply-dependent: ~1.9 BTH per block at the ~611M tail-onset supply, growing with supply (at 5s blocks) |
 | Fee burn offset | ~0.5% expected |
 
-The tail reward is **not a fixed constant** — it is recomputed from circulating
-supply each block to target 2% net annual inflation. The gross per-block reward
-is `supply × (2% + 0.5% expected burns) / 6,307,200`; at the ~611M tail-onset
-supply this is ~2.4 BTH/block gross (~1.9 BTH/block net), and it scales upward as
-supply grows.
+The tail reward is **not a fixed constant** — it is recomputed each block from
+cumulative gross issuance (`total_mined`, not reduced by burns). The gross
+per-block reward is `total_mined × (2% + 0.5% assumed burns) / 6,307,200`; at the
+~611M tail-onset supply this is ~2.4 BTH/block, and it scales upward as supply
+grows, compounding at ~2.53% per 6,307,200 blocks. The 0.5% burn is a calibration
+assumption: realized net inflation is ~2.1–2.5% (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699).
 
 **Why tail emission?**
 - Ensures minters always have incentive to secure the network
@@ -303,7 +304,7 @@ A peer required for your quorum went offline.
 | Number of halvings | 5 |
 | Phase 1 supply | ~611 million BTH (~5 years) |
 | Tail emission | Supply-dependent (~1.9 BTH/block at ~611M tail-onset supply) |
-| Tail inflation target | 2% net |
+| Tail inflation | 2.5% gross (2% net design; realized net ~2.1–2.5%) |
 | Difficulty adjustment | Every block, time-based (0.5x–2x per step) |
 | Gossip port | 7100 |
 | RPC port | 7101 |

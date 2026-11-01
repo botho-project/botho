@@ -4688,7 +4688,8 @@ mod cli {
         quick: bool,
     ) {
         use bth_cluster_tax::simulation::emission_sweep::{
-            run_sweep, to_csv, to_markdown, SweepParams,
+            node_parity_markdown, node_parity_report, run_sweep, to_csv, to_markdown,
+            NodeParityParams, SweepParams,
         };
         use std::path::Path;
 
@@ -4730,8 +4731,18 @@ mod cli {
 
         let results = run_sweep(&params);
 
+        // Node-parity track (#1699): the live policy, block by block, 20
+        // policy-years (~95M tail iterations; quick mode stops after one tail
+        // year).
+        let parity = node_parity_report(&NodeParityParams {
+            horizon_policy_years: if quick { 6 } else { 20 },
+            ..NodeParityParams::default()
+        });
+
         // Print the markdown report to stdout for immediate inspection.
-        let markdown = to_markdown(&results, &params);
+        let mut markdown = to_markdown(&results, &params);
+        markdown.push('\n');
+        markdown.push_str(&node_parity_markdown(&parity));
         println!("{markdown}");
 
         // Write artifacts.
