@@ -62,18 +62,21 @@ const SNAPSHOT_V2_DOMAIN: &[u8] = b"botho.snapshot.2";
 const OUTPOINT_LEN: usize = 36;
 
 /// Hard ceiling on the total decompressed size of a V2 snapshot's sections
-/// and tip block: twice the ledger's LMDB map (`LEDGER_MAP_SIZE`, 1 GiB, so
-/// 2 GiB today). Every section's output is additionally capped by its
+/// and tip block: 2 GiB. Every section's output is additionally capped by its
 /// declared row count (see [`UtxoSnapshotV2::section_caps`]), so a forged or
 /// corrupt file can never make decompression allocate more than this,
-/// whatever its compression ratio. The ceiling is DERIVED from the map size
-/// (#1664 review): a snapshot's decompressed rows hold no more than the
-/// source ledger's data, which fits in the map, so growing the map raises the
-/// ceiling with it and never makes an honest snapshot unloadable.
-pub const MAX_SNAPSHOT_DECOMPRESSED: u64 = 2 * super::store::LEDGER_MAP_SIZE as u64;
-
-// The ceiling must stay strictly above the map it is sized from.
-const _: () = assert!(MAX_SNAPSHOT_DECOMPRESSED > super::store::LEDGER_MAP_SIZE as u64);
+/// whatever its compression ratio.
+///
+/// Until #1535 this was derived as twice the ledger's LMDB map (#1664
+/// review), when that map was 1 GiB. #1535 raised the map to 64 GiB of
+/// address space, and deriving from it would have let a crafted snapshot
+/// declare (and decompress into) 128 GiB of memory. The ceiling is therefore
+/// pinned at its former 2 GiB value. A snapshot's decompressed rows are the
+/// UTXO set and its indexes, not the block history that dominates the ledger
+/// file, so 2 GiB is far above any snapshot an honest ledger produces today;
+/// revisit it (and #1664's derivation argument) if the live UTXO set ever
+/// approaches it.
+pub const MAX_SNAPSHOT_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Decompressed-size cap of the tip block (the stored-block bound of the
 /// strict ledger decoder, 16 MiB).
