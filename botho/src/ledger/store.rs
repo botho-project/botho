@@ -1,3 +1,23 @@
+//! LMDB-backed ledger store.
+//!
+//! # LMDB locking on macOS (#1725, #1811)
+//!
+//! On Apple targets botho builds heed with the `posix-sem` feature (see the
+//! `target_vendor = "apple"` table in `botho/Cargo.toml`), so LMDB uses POSIX
+//! semaphores instead of its Apple default, SysV semaphores. The SysV key comes
+//! from `ftok(lock.mdb)`, which keeps only the low 16 bits of the lock file's
+//! inode. Two environments on one host can therefore share a semaphore set,
+//! and closing either one removes it (`IPC_RMID`), breaking the other's write
+//! locks with EINVAL. POSIX semaphore names hash the full device and inode.
+//! Linux uses pthread mutexes and is unaffected.
+//!
+//! The two schemes do not interoperate. LMDB records the lock type in the lock
+//! file, so a process built the other way (for example a Homebrew `mdb_stat` or
+//! `mdb_copy`, which use SysV on macOS) cannot open a ledger that a macOS node
+//! holds open: it fails with `MDB_VERSION_MISMATCH` rather than locking
+//! unsafely. Once every process has closed the environment, the next opener
+//! reinitializes the lock region, so either build can open it again.
+
 #[cfg(test)]
 #[path = "store/block_validation_tests.rs"]
 mod block_validation_tests;
@@ -72,8 +92,9 @@ pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024;
 /// Map size of ledgers opened by `Ledger::open` / `open_for_network`.
 ///
 /// Unit-test builds keep the former 1 GiB map: the lib suite opens hundreds
-/// of LMDB environments concurrently, and raising each one's reservation 64x
-/// would only add pressure to the parallel-open flakes tracked in #1725. A
+/// of LMDB environments concurrently, and there is no need to reserve 64x
+/// more address space for each one. (The #1725 parallel-open failures were
+/// SysV semaphore collisions on macOS, not map size; see the module docs.) A
 /// dedicated test opens a ledger at the full [`LEDGER_MAP_SIZE`].
 #[cfg(not(test))]
 const OPEN_MAP_SIZE: usize = LEDGER_MAP_SIZE;

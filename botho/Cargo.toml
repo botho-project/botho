@@ -213,17 +213,25 @@ rand_chacha = { workspace = true }
 serial_test = { workspace = true }
 statrs = "0.19"
 
-# Test builds on Apple hosts only (#1725): switch LMDB from SysV to POSIX
-# semaphores. On Apple, LMDB keys each environment's SysV semaphore set with
-# `ftok(lock.mdb)`, which keeps only the low 16 bits of the inode. The lib suite
-# opens hundreds of temp-dir ledgers at once, so two environments regularly get
-# the same key and share one set. When one closes, it removes the set
-# (`IPC_RMID`), and the other's next write txn fails with EINVAL (os error 22).
-# POSIX semaphore names hash the full device and inode, so they do not collide.
-# This is a dev-dependency, so with resolver 2 it does not reach `cargo build` /
-# release binaries. Production keeps LMDB's default locking, and Linux (pthread
-# mutexes) is unaffected.
-[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+# Apple hosts (#1725, #1811): switch LMDB from SysV to POSIX semaphores in
+# every build (normal, dev, release), not only tests. On Apple, LMDB keys each
+# environment's SysV semaphore set with `ftok(lock.mdb)`, which keeps only the
+# low 16 bits of the inode. Two environments whose lock files share those bits
+# share one set, and when one closes it removes the set (`IPC_RMID`), so the
+# other's next write txn fails with EINVAL (os error 22). The lib suite hit this
+# constantly (hundreds of temp-dir ledgers open at once); a macOS node next to
+# another LMDB environment could hit it too. POSIX semaphore names hash the full
+# device and inode, so they do not collide.
+#
+# Cross-process compatibility: botho is the only workspace member that opens
+# LMDB. LMDB encodes the lock type in the lock-file format, so a SysV build and a
+# POSIX build cannot hold the same environment open at the same time; the second
+# opener gets MDB_VERSION_MISMATCH (fails closed). Switching sequentially is
+# fine: the first opener of an environment reinitializes the lock region. See
+# the module docs in `src/ledger/store.rs`.
+#
+# Linux uses pthread mutexes and is unaffected; this table does not apply there.
+[target.'cfg(target_vendor = "apple")'.dependencies]
 heed = { version = "0.22", features = ["posix-sem"] }
 
 [[bench]]
