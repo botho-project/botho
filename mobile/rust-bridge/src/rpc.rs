@@ -145,20 +145,27 @@ impl NodeRpc {
     }
 
     /// All outputs in `[start, end]` flattened across blocks.
+    ///
+    /// The node clamps one `chain_getOutputs` call to 1000 blocks (#1656), so
+    /// this pages ([`page_blocks`]); the wallet's `[0, tip]` scan would
+    /// otherwise silently stop at block 999 and miss later funds.
     pub async fn get_outputs(&self, start: u64, end: u64) -> Result<Vec<RpcOutput>, String> {
-        let result = self
-            .call(
-                "chain_getOutputs",
-                json!({ "start_height": start, "end_height": end }),
-            )
-            .await?;
-
-        let blocks = result
-            .as_array()
-            .ok_or_else(|| "chain_getOutputs did not return an array".to_string())?;
+        let blocks = page_blocks(start, end, |from| async move {
+            let result = self
+                .call(
+                    "chain_getOutputs",
+                    json!({ "start_height": from, "end_height": end }),
+                )
+                .await?;
+            result
+                .as_array()
+                .cloned()
+                .ok_or_else(|| "chain_getOutputs did not return an array".to_string())
+        })
+        .await?;
 
         let mut outputs = Vec::new();
-        for block in blocks {
+        for block in &blocks {
             if let Some(arr) = block.get("outputs").and_then(|o| o.as_array()) {
                 for out in arr {
                     if let Ok(parsed) = serde_json::from_value::<RpcOutput>(out.clone()) {
@@ -197,6 +204,39 @@ impl NodeRpc {
     }
 }
 
+/// Collect the `chain_getOutputs` blocks of `[start, end]` page by page
+/// (#1656). `fetch(from)` requests `[from, end]`; the node serves a dense
+/// prefix (at most its per-call cap, never past the tip). Resume at the last
+/// served `height` + 1 until `end` is reached or a page is empty (past the
+/// tip). A page that does not advance is an error, never an infinite loop.
+pub async fn page_blocks<F, Fut>(start: u64, end: u64, mut fetch: F) -> Result<Vec<Value>, String>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<Value>, String>>,
+{
+    let mut blocks = Vec::new();
+    let mut next = start;
+    while next <= end {
+        let page = fetch(next).await?;
+        let Some(last) = page.last() else { break };
+        let last = last
+            .get("height")
+            .and_then(|h| h.as_u64())
+            .ok_or_else(|| "chain_getOutputs block missing height".to_string())?;
+        if last < next {
+            return Err(format!(
+                "chain_getOutputs page from {next} ended at {last}: no progress"
+            ));
+        }
+        blocks.extend(page);
+        if last >= end {
+            break;
+        }
+        next = last + 1;
+    }
+    Ok(blocks)
+}
+
 /// Recover the transparent u64 amount from an `amountCommitment` hex string
 /// (stored as little-endian bytes, matching the node's transparent-amount
 /// model).
@@ -206,5 +246,58 @@ pub fn amount_from_commitment(hex_str: &str) -> u64 {
             u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
         }
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node with blocks `0..=tip` that serves at most `cap` per call.
+    fn capped_page(tip: u64, cap: u64, from: u64, end: u64) -> Vec<Value> {
+        (from..=end.min(from.saturating_add(cap - 1)))
+            .take_while(|h| *h <= tip)
+            .map(|h| json!({"height": h, "outputs": []}))
+            .collect()
+    }
+
+    fn heights(blocks: &[Value]) -> Vec<u64> {
+        blocks
+            .iter()
+            .map(|b| b["height"].as_u64().unwrap())
+            .collect()
+    }
+
+    /// #1656: the wallet's `[0, tip]` scan against a node that clamps each
+    /// call to 1000 blocks returns every block exactly once.
+    #[tokio::test]
+    async fn page_blocks_covers_the_range_across_the_server_cap() {
+        let tip = 2_500u64;
+        let calls = std::cell::Cell::new(0);
+        let blocks = page_blocks(0, tip, |from| {
+            calls.set(calls.get() + 1);
+            let page = capped_page(tip, 1000, from, tip);
+            async move { Ok(page) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(heights(&blocks), (0..=tip).collect::<Vec<_>>());
+        assert_eq!(calls.get(), 3);
+
+        // Past the tip: stops at the first empty page.
+        let blocks = page_blocks(2_498, 9_999, |from| {
+            let page = capped_page(tip, 2, from, 9_999);
+            async move { Ok(page) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(heights(&blocks), vec![2_498, 2_499, 2_500]);
+
+        // A non-advancing page is an error, not a hang.
+        assert!(page_blocks(10, 20, |_| async {
+            Ok(vec![json!({"height": 3, "outputs": []})])
+        })
+        .await
+        .is_err());
     }
 }

@@ -221,7 +221,8 @@ class DepositScanner:
 
         deposits = []
 
-        # Scan in batches
+        # Scan in batches (at most 1000 blocks per chain_getOutputs call;
+        # the node clamps longer ranges)
         for start in range(self.last_height + 1, current_height + 1, 100):
             end = min(start + 99, current_height)
             outputs = self.rpc('chain_getOutputs', {
