@@ -27,7 +27,7 @@ are listed below. The full tables, including the per-rank histograms, are in
 
 | producer | picker | how the real input is exposed |
 |---|---|---|
-| node ledger/wallet, detached signer | `select_decoys_for_input` | edge clamp (#1692): youngest in 100% of rings at ages 1k–5k, oldest in 100% at 100k–1M; midrange guess 85.5% under the gamma spend model |
+| node ledger/wallet, detached signer | `select_decoys_for_input` | edge clamp (#1692): youngest in 100% of rings at ages 1k–5k, oldest in 100% at 100k–1M; midrange guess 85.3% under the gamma spend model |
 | `botho-wallet` CLI | `select_rpc_decoy_pool` | the band is centred on the real age, so the real input is the median member: midrange guess about 50% (95% at age 100) |
 | web wallet, Snap, claim links | `decoys.ts` `selectDecoysForInput` (#1735) | same centred band as the CLI (#1755): midrange guess 49–52% (94.7% at age 100). Before #1735 the chain-ordered window made it the youngest member in 100% of rings |
 | node and CLI (outputs) | plaintext inherited cluster tags | cluster fingerprint 99.7% — upper estimate (every output tagged); about 55% when half are untagged. Web outputs carry empty tags (5.0%, uniform) |
@@ -45,7 +45,7 @@ close to decisive.
   `decoys.ts` `selectDecoysForInput` (#1735).
   `botho/tests/privacy_sim_route_parity.rs` pins the two native ports to the
   production functions (same candidates and same seeded RNG give the same
-  ring) and replays the rings #1735 recorded from the real `send.ts` with a
+  ring, including the #1786 tie-break shuffle in the node picker) and replays the rings #1735 recorded from the real `send.ts` with a
   seeded mulberry32 (`scripts/research/ct-economics/web-selection.json`)
   through the web port, which must reproduce them exactly. CI runs it in
   `workspace-build.yml`. The pre-#1735 chain-ordered window survives as the
@@ -82,10 +82,10 @@ nearest the midrange of the ring's ages.
 | node | 100 | 0.0% | 0.0% | 100.0% (r10) | 50.0% | 99.8% |
 | node | 1000 | 100.0% | 0.0% | 100.0% (r1) | 0.0% | 99.8% |
 | node | 5000 | 100.0% | 0.0% | 100.0% (r1) | 0.0% | 99.6% |
-| node | 30000 | 0.0% | 22.1% | 34.7% (r19) | 59.7% | 99.7% |
+| node | 30000 | 0.0% | 22.1% | 34.7% (r19) | 59.6% | 99.7% |
 | node | 100000 | 0.0% | 100.0% | 100.0% (r20) | 0.0% | 99.7% |
 | node | 1000000 | 0.0% | 100.0% | 100.0% (r20) | 0.0% | 99.7% |
-| node | gamma-spend | 4.8% | 4.6% | 4.6% (r20) | 85.5% | 99.8% |
+| node | gamma-spend | 4.8% | 4.8% | 5.1% (r5) | 85.3% | 99.7% |
 | cli | 100 | 0.0% | 0.0% | 49.9% (r10) | 95.1% | 99.7% |
 | cli | 1000 | 0.0% | 0.0% | 18.1% (r11) | 53.4% | 99.7% |
 | cli | 5000 | 0.0% | 0.0% | 17.8% (r11) | 49.7% | 99.8% |

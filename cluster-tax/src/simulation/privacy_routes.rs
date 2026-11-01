@@ -141,10 +141,13 @@ fn node_gamma() -> Result<Gamma<f64>, RouteError> {
 /// default spend distribution (the configuration every production caller
 /// uses; `record_spend` has no caller).
 ///
-/// Phase 1 draws a gamma target age per slot, clamps it into the ±10% band and
-/// takes the nearest unused in-band candidate (first in `candidates` order on
-/// ties). Phase 2 fills any shortfall with the nearest-aged eligible
-/// candidates. Returns the selected keys in selection order.
+/// After the insufficient-candidates check the eligible set is shuffled once
+/// with `rng` (#1771 / #1786), so equal-distance ties are a uniform draw rather
+/// than resolved in candidate order. Phase 1 then draws a gamma target age per
+/// slot, clamps it into the ±10% band and takes the nearest unused in-band
+/// candidate (first in shuffled order on ties). Phase 2 fills any shortfall
+/// with the nearest-aged eligible candidates (stable sort over the shuffled
+/// order). Returns the selected keys in selection order.
 pub fn node_select_decoys_for_input<R: Rng>(
     candidates: &[RouteCandidate],
     count: usize,
@@ -152,7 +155,7 @@ pub fn node_select_decoys_for_input<R: Rng>(
     real_input_age: u64,
     rng: &mut R,
 ) -> Result<Vec<[u8; 32]>, RouteError> {
-    let eligible: Vec<&RouteCandidate> = candidates
+    let mut eligible: Vec<&RouteCandidate> = candidates
         .iter()
         .filter(|c| c.age_blocks >= MIN_DECOY_AGE_BLOCKS && !exclude_keys.contains(&c.key))
         .collect();
@@ -163,6 +166,11 @@ pub fn node_select_decoys_for_input<R: Rng>(
             available: eligible.len(),
         });
     }
+
+    // #1771 / #1786: randomize the tie-break with one shuffle of the eligible
+    // set, at the same position (and so the same RNG-stream offset) as
+    // production.
+    eligible.shuffle(rng);
 
     let gamma = node_gamma()?;
     let (min_age, max_age) = age_similarity_band(real_input_age);
@@ -224,17 +232,30 @@ pub fn node_select_decoys_for_input<R: Rng>(
 /// Fast path for [`node_select_decoys_for_input`] over an age-sorted pool.
 ///
 /// `band` must be exactly the eligible (non-excluded) candidates whose age lies
-/// in `age_similarity_band(real_input_age)`, **sorted by ascending age**, in
-/// the same relative order they have in the full candidate list (true whenever
-/// the full list is itself age-sorted). `eligible_total` is the number of
-/// eligible candidates in the full list.
+/// in `age_similarity_band(real_input_age)`, **sorted by ascending age**.
+/// `eligible_total` is the number of eligible candidates in the full list.
 ///
 /// When the band can supply all `count` decoys, phase 1 never exhausts and the
-/// result — including RNG consumption and tie-breaking — is identical to the
-/// literal port on the full list, but each slot costs a binary search instead
-/// of a scan over the whole UTXO set. Returns `None` when that precondition
-/// does not hold (degenerate or under-filled band); the caller must then run
-/// the literal port. Equivalence is pinned by a unit test.
+/// result is **distribution-equivalent** (not bit-identical) to the literal
+/// port on the full list: each slot draws the same gamma target, clamps it into
+/// the band and takes an unused in-band candidate at minimum distance, but each
+/// slot costs a binary search instead of a scan over the whole UTXO set.
+///
+/// Since #1771 / #1786 the literal port shuffles the whole eligible set once
+/// per ring and breaks distance ties by shuffled order. Reproducing that RNG
+/// stream would mean shuffling every eligible output (1.2M on the default
+/// chain) for every ring. Instead, the fast path gives each band member a
+/// lazily drawn i.i.d. random priority, fixed for the ring, and breaks ties by
+/// lowest priority. The shuffle's restriction to the band is a uniformly random
+/// relative order, independent of the gamma draws, and i.i.d. continuous
+/// priorities induce exactly that order. So the joint distribution of the
+/// selected ring (including selection order and correlated tie outcomes across
+/// slots) is the same as the literal port's. A `u64` priority collision is
+/// broken by index, which is a deviation of order 2^-64 per comparison.
+///
+/// Returns `None` when the precondition does not hold (degenerate or
+/// under-filled band); the caller must then run the literal port.
+/// Equivalence is pinned by a statistical unit test.
 pub fn node_select_decoys_banded<R: Rng>(
     band: &[RouteCandidate],
     eligible_total: usize,
@@ -263,58 +284,90 @@ pub fn node_select_decoys_banded<R: Rng>(
     };
 
     let mut used: Vec<usize> = Vec::with_capacity(count);
+    let mut priorities: Vec<(usize, u64)> = Vec::new();
     for _ in 0..count {
         let target_age: f64 = gamma.sample(rng);
         let t = (target_age as u64).clamp(min_age, max_age);
-        let idx = nearest_unused(band, &used, t);
+        let idx = nearest_unused(band, &used, t, &mut priorities, rng);
         used.push(idx);
     }
     Some(Ok(used.into_iter().map(|i| band[i].key).collect()))
 }
 
-/// Index of the unused band member nearest to `t`, breaking distance ties
-/// toward the earliest index (matching `Iterator::min_by_key`).
-fn nearest_unused(band: &[RouteCandidate], used: &[usize], t: u64) -> usize {
+/// Index of an unused band member nearest to `t`. Among all unused members at
+/// the minimum distance (ages `t - d` and `t + d`), the one with the lowest
+/// per-ring random priority wins; priorities are drawn from `rng` on first use
+/// and remembered in `priorities` for the rest of the ring (see
+/// [`node_select_decoys_banded`] for why this matches the #1786 shuffle).
+fn nearest_unused<R: Rng>(
+    band: &[RouteCandidate],
+    used: &[usize],
+    t: u64,
+    priorities: &mut Vec<(usize, u64)>,
+    rng: &mut R,
+) -> usize {
     let p = band.partition_point(|c| c.age_blocks < t);
 
     let mut r = p;
     while r < band.len() && used.contains(&r) {
         r += 1;
     }
-    let right = (r < band.len()).then_some(r);
+    let right_age = (r < band.len()).then(|| band[r].age_blocks);
 
-    let mut left = None;
+    let mut left_age = None;
     let mut l = p;
     while l > 0 {
         l -= 1;
         if !used.contains(&l) {
-            left = Some(l);
+            left_age = Some(band[l].age_blocks);
             break;
         }
     }
 
-    let leftmost_unused_with_age = |age: u64| {
-        let mut i = band.partition_point(|c| c.age_blocks < age);
-        while used.contains(&i) {
-            i += 1;
-        }
-        i
+    let d = match (left_age, right_age) {
+        (Some(la), Some(ra)) => (t - la).min(ra - t),
+        (Some(la), None) => t - la,
+        (None, Some(ra)) => ra - t,
+        (None, None) => unreachable!("band holds at least `count` members"),
     };
 
-    match (left, right) {
-        (Some(li), Some(ri)) => {
-            let dl = t - band[li].age_blocks;
-            let dr = band[ri].age_blocks - t;
-            if dl <= dr {
-                leftmost_unused_with_age(band[li].age_blocks)
-            } else {
-                ri
-            }
-        }
-        (Some(li), None) => leftmost_unused_with_age(band[li].age_blocks),
-        (None, Some(ri)) => ri,
-        (None, None) => unreachable!("band holds at least `count` members"),
+    // Every unused member at distance exactly `d`.
+    let mut group: Vec<usize> = Vec::new();
+    let mut push_age = |age: u64| {
+        let lo = band.partition_point(|c| c.age_blocks < age);
+        let hi = band.partition_point(|c| c.age_blocks <= age);
+        group.extend((lo..hi).filter(|i| !used.contains(i)));
+    };
+    if let Some(a) = t.checked_sub(d) {
+        push_age(a);
     }
+    if d > 0 {
+        push_age(t + d);
+    }
+    debug_assert!(!group.is_empty());
+    if group.len() == 1 {
+        return group[0];
+    }
+
+    let mut best = group[0];
+    let mut best_priority = u64::MAX;
+    let mut first = true;
+    for i in group {
+        let pr = match priorities.iter().find(|(j, _)| *j == i) {
+            Some(&(_, pr)) => pr,
+            None => {
+                let pr = rng.next_u64();
+                priorities.push((i, pr));
+                pr
+            }
+        };
+        if first || pr < best_priority {
+            best = i;
+            best_priority = pr;
+            first = false;
+        }
+    }
+    best
 }
 
 // ============================================================================
@@ -1292,64 +1345,139 @@ mod tests {
         assert_eq!(age_similarity_band(5), (10, 5));
     }
 
-    /// The banded fast path must be bit-identical to the literal port —
-    /// including RNG consumption and first-in-order tie breaks — on age-sorted
-    /// pools with gaps and duplicate ages.
-    #[test]
-    fn banded_node_path_equals_literal_port() {
-        let mut gen = StdRng::seed_from_u64(1700);
-        let mut checked = 0;
-        for trial in 0..60u64 {
-            // Pool with gaps (step 0..=3) and duplicates (step 0).
-            let mut ages = Vec::new();
-            let mut age = 10 + gen.random_range(0..5u64);
-            let len = 200 + gen.random_range(0..400usize);
-            for _ in 0..len {
-                ages.push(age);
-                age += gen.random_range(0..4u64);
+    /// Age-sorted pool whose distinct ages step by `1..=max_step` and each
+    /// carry `1..=max_mult` outputs, so same-age ties are common.
+    fn tie_heavy_pool(
+        gen: &mut StdRng,
+        first_age: u64,
+        last_age: u64,
+        max_step: u64,
+        max_mult: u64,
+    ) -> Vec<RouteCandidate> {
+        let mut out = Vec::new();
+        let mut age = first_age;
+        while age <= last_age {
+            for _ in 0..gen.random_range(1..=max_mult) {
+                out.push(RouteCandidate {
+                    key: k(out.len() as u64),
+                    age_blocks: age,
+                });
             }
-            let all: Vec<RouteCandidate> = ages
-                .iter()
-                .enumerate()
-                .map(|(i, &a)| RouteCandidate {
-                    key: k(i as u64 + trial * 10_000),
-                    age_blocks: a,
-                })
-                .collect();
-            let real_idx = gen.random_range(0..all.len());
-            let real = all[real_idx];
-            let (lo, hi) = age_similarity_band(real.age_blocks);
+            age += gen.random_range(1..=max_step);
+        }
+        out
+    }
+
+    /// Since #1786 the literal node port breaks distance ties with a shuffle
+    /// of the whole eligible set, so the banded fast path can no longer match
+    /// its RNG stream; it must instead be distribution-equivalent. Check this
+    /// statistically on tie-heavy pools: for every (slot, candidate) cell, the
+    /// frequency with which the candidate is picked at that slot must agree
+    /// between the two paths within several binomial sigmas (Z = 5 on top of
+    /// a 3/N slack; 20k seeded rings per path). Checking every slot, not just
+    /// inclusion, also pins selection order. A first-index tie break (the
+    /// pre-#1786 behaviour) fails this test at slot 0. The test cannot tell
+    /// the per-ring remembered priorities apart from fresh per-slot uniform
+    /// tie breaks, because on these pools the two differ only for rare
+    /// `t - d` / `t + d` ties that recur across slots; the remembered
+    /// priorities are exact by construction (see `node_select_decoys_banded`).
+    ///
+    /// Two scenarios: an edge-clamped band (real age 1000, gamma targets clamp
+    /// to the top edge, so the picks are decided almost entirely by same-age
+    /// ties) and a midrange band (real age 8000, straddling the gamma mode).
+    #[test]
+    fn banded_node_path_is_distribution_equivalent_to_literal_port() {
+        const TRIALS: u64 = 20_000;
+        // Pooled two-proportion test: |p1 - p2| <= Z * sigma + slack.
+        const Z: f64 = 5.0;
+        let mut gen = StdRng::seed_from_u64(1700);
+
+        for (real_age, first, last, max_step, max_mult) in [
+            (1_000u64, 880u64, 1_120u64, 6u64, 4u64),
+            (8_000, 7_150, 8_850, 40, 3),
+        ] {
+            let mut all = tie_heavy_pool(&mut gen, first, last, max_step, max_mult);
+            let real_key = k(1_000_000);
+            all.push(RouteCandidate {
+                key: real_key,
+                age_blocks: real_age,
+            });
+            all.sort_by_key(|c| c.age_blocks);
+            let (lo, hi) = age_similarity_band(real_age);
             let band: Vec<RouteCandidate> = all
                 .iter()
-                .filter(|c| c.key != real.key && c.age_blocks >= lo && c.age_blocks <= hi)
+                .filter(|c| c.key != real_key && c.age_blocks >= lo && c.age_blocks <= hi)
                 .copied()
                 .collect();
-            let eligible_total = all
-                .iter()
-                .filter(|c| c.key != real.key && c.age_blocks >= MIN_DECOY_AGE_BLOCKS)
-                .count();
-            for seed in 0..5u64 {
-                let fast = node_select_decoys_banded(
-                    &band,
-                    eligible_total,
-                    DECOY_COUNT,
-                    real.age_blocks,
-                    &mut StdRng::seed_from_u64(seed),
-                );
-                let literal = node_select_decoys_for_input(
-                    &all,
-                    DECOY_COUNT,
-                    &[real.key],
-                    real.age_blocks,
-                    &mut StdRng::seed_from_u64(seed),
-                );
-                if let Some(fast) = fast {
-                    assert_eq!(fast, literal, "trial {trial} seed {seed}");
-                    checked += 1;
+            assert!(band.len() >= DECOY_COUNT);
+            let eligible_total = all.len() - 1;
+            let slot_of: HashMap<[u8; 32], usize> =
+                all.iter().enumerate().map(|(i, c)| (c.key, i)).collect();
+
+            // counts[slot][candidate]
+            let tally = |fast: bool| {
+                let mut counts = vec![vec![0u64; all.len()]; DECOY_COUNT];
+                for trial in 0..TRIALS {
+                    let seed = if fast { 1 << 32 } else { 0 } + trial;
+                    let mut rng = StdRng::seed_from_u64(seed);
+                    let ring = if fast {
+                        node_select_decoys_banded(
+                            &band,
+                            eligible_total,
+                            DECOY_COUNT,
+                            real_age,
+                            &mut rng,
+                        )
+                        .expect("band fills the ring")
+                        .unwrap()
+                    } else {
+                        node_select_decoys_for_input(
+                            &all,
+                            DECOY_COUNT,
+                            &[real_key],
+                            real_age,
+                            &mut rng,
+                        )
+                        .unwrap()
+                    };
+                    assert_eq!(ring.iter().collect::<HashSet<_>>().len(), DECOY_COUNT);
+                    for (slot, key) in ring.iter().enumerate() {
+                        counts[slot][slot_of[key]] += 1;
+                    }
+                }
+                counts
+            };
+            let literal = tally(false);
+            let fast = tally(true);
+
+            let n = TRIALS as f64;
+            let mut worst = 0.0f64;
+            let mut tie_cells = 0;
+            for slot in 0..DECOY_COUNT {
+                for c in 0..all.len() {
+                    let (a, b) = (literal[slot][c] as f64 / n, fast[slot][c] as f64 / n);
+                    let p = (a + b) / 2.0;
+                    let sigma = (p * (1.0 - p) * 2.0 / n).sqrt();
+                    let excess = (a - b).abs() - (Z * sigma + 3.0 / n);
+                    worst = worst.max((a - b).abs() / sigma.max(1.0 / n));
+                    assert!(
+                        excess <= 0.0,
+                        "real age {real_age}, slot {slot}, candidate {c} (age {}): \
+                         literal {a:.4} vs fast {b:.4} (sigma {sigma:.4})",
+                        all[c].age_blocks
+                    );
+                    if a > 0.05 && a < 0.95 {
+                        tie_cells += 1;
+                    }
                 }
             }
+            // The scenario must actually exercise randomized outcomes.
+            assert!(
+                tie_cells > 10,
+                "real age {real_age}: only {tie_cells} mixed cells"
+            );
+            eprintln!("real age {real_age}: worst |z| = {worst:.2}, mixed cells {tie_cells}");
         }
-        assert!(checked > 100, "fast path exercised only {checked} times");
     }
 
     /// The `web-pre-1735` port reproduces every ring the pre-#1735 `send.ts`
