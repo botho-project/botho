@@ -523,9 +523,6 @@ impl RpcState {
         self
     }
 
-    /// Wire in the shared minter-health handle so `minting_getStatus` and
-    /// `node_getStatus` can surface live hashrate and the stuck-miner flag
-    /// (#538). `commands::run` calls this with `Node::minter_health`.
     /// Set the minting thread count reported by `node_getStatus.mintingThreads`
     /// and `minting_getStatus.threads`. The node runtime passes the same
     /// `effective_mint_threads(config.minting.threads)` value the miner uses
@@ -535,6 +532,9 @@ impl RpcState {
         self
     }
 
+    /// Wire in the shared minter-health handle so `minting_getStatus` and
+    /// `node_getStatus` can surface live hashrate and the stuck-miner flag
+    /// (#538). `commands::run` calls this with `Node::minter_health`.
     pub fn with_minter_health(mut self, minter_health: Arc<RwLock<Option<MinterHealth>>>) -> Self {
         self.minter_health = Some(minter_health);
         self
