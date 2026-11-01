@@ -202,11 +202,8 @@ impl Node {
         // RandomX dataset (#568) all threads share ONE ~2 GB dataset (not the
         // `N × 2 GB` that OOM-halted the live testnet, #539), and the count is
         // clamped to avoid oversubscribing a many-core box.
-        let threads = if self.config.minting.threads == 0 {
-            minter::default_mint_threads(num_cpus::get())
-        } else {
-            self.config.minting.threads as usize
-        };
+        // Shared with the RPC layer's reported thread count (#1436).
+        let threads = minter::effective_mint_threads(self.config.minting.threads);
 
         info!(
             "Starting minting with {} threads (one shared ~2 GB RandomX dataset \

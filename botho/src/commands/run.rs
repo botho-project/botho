@@ -923,6 +923,11 @@ async fn run_async_with_shutdown(
         ws_broadcaster.clone(),
     )
     .with_rpc_rate_limit(&config.rpc)
+    // Report the same thread count the miner spawns (after `--mint-threads`
+    // is applied to `config.minting.threads`), not the raw CPU count (#1436).
+    .with_minting_threads(crate::node::minter::effective_mint_threads(
+        config.minting.threads,
+    ))
     .with_quorum(config.network.quorum.clone())
     // Operator read surface (#707, P4.2). Absent [rpc.operator] ⇒ None ⇒ the
     // operator_* RPCs stay OFF and the node behaves exactly as today.

@@ -54,6 +54,31 @@ pub fn default_mint_threads(detected_cpus: usize) -> usize {
     detected_cpus.clamp(1, MAX_AUTO_MINT_THREADS)
 }
 
+/// Resolve the effective number of minting threads from the configured
+/// `minting.threads` value (after CLI overrides such as `--mint-threads`).
+///
+/// `0` means auto-detect and routes through [`default_mint_threads`] with the
+/// host CPU count; any other value is used verbatim (an explicit operator
+/// choice bypasses the auto clamp).
+///
+/// This is the single source of truth for the thread count: the miner
+/// (`Node::start_minting`) spawns exactly this many workers, and the RPC
+/// layer reports this same value in `node_getStatus.mintingThreads` and
+/// `minting_getStatus.threads` (#1436) instead of the raw CPU count.
+pub fn effective_mint_threads(configured: u32) -> usize {
+    effective_mint_threads_with_cpus(configured, num_cpus::get())
+}
+
+/// [`effective_mint_threads`] with an injectable CPU count, so the auto path
+/// is testable independently of the host it runs on.
+pub fn effective_mint_threads_with_cpus(configured: u32, detected_cpus: usize) -> usize {
+    if configured == 0 {
+        default_mint_threads(detected_cpus)
+    } else {
+        configured as usize
+    }
+}
+
 /// Genesis / initial minting difficulty target for **RandomX**.
 ///
 /// The PoW check is `pow_value(hash) < difficulty` (see [`pow::pow_value`] and
@@ -1209,6 +1234,32 @@ mod tests {
         assert_eq!(
             default_mint_threads(MAX_AUTO_MINT_THREADS + 1),
             MAX_AUTO_MINT_THREADS
+        );
+    }
+
+    /// #1436: the effective thread count is the configured value when
+    /// explicit and the clamped auto default when `0`, never the raw CPU
+    /// count on hosts above the clamp.
+    #[test]
+    fn test_effective_mint_threads() {
+        // Explicit values pass through verbatim, regardless of CPU count.
+        assert_eq!(effective_mint_threads_with_cpus(1, 28), 1);
+        assert_eq!(effective_mint_threads_with_cpus(3, 2), 3);
+        // Explicit values above the auto clamp are honoured (operator choice).
+        let above = (MAX_AUTO_MINT_THREADS + 4) as u32;
+        assert_eq!(effective_mint_threads_with_cpus(above, 2), above as usize);
+        // Auto (0) uses the clamped default.
+        assert_eq!(effective_mint_threads_with_cpus(0, 2), 2);
+        assert_eq!(effective_mint_threads_with_cpus(0, 0), 1);
+        assert_eq!(
+            effective_mint_threads_with_cpus(0, 128),
+            MAX_AUTO_MINT_THREADS
+        );
+        // The host-detecting wrapper agrees with the injectable form.
+        assert_eq!(effective_mint_threads(1), 1);
+        assert_eq!(
+            effective_mint_threads(0),
+            default_mint_threads(num_cpus::get())
         );
     }
 

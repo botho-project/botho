@@ -358,7 +358,9 @@ impl RpcState {
             ledger: Arc::new(RwLock::new(ledger)),
             mempool: Arc::new(RwLock::new(mempool)),
             minting_active: Arc::new(RwLock::new(false)),
-            minting_threads: num_cpus::get(),
+            // Overridden by `with_minting_threads` in the node runtime (#1436);
+            // default to the clamped auto value, never the raw CPU count.
+            minting_threads: crate::node::minter::effective_mint_threads(0),
             peer_count: Arc::new(RwLock::new(0)),
             scp_peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
@@ -405,7 +407,9 @@ impl RpcState {
             ledger,
             mempool,
             minting_active,
-            minting_threads: num_cpus::get(),
+            // Overridden by `with_minting_threads` in the node runtime (#1436);
+            // default to the clamped auto value, never the raw CPU count.
+            minting_threads: crate::node::minter::effective_mint_threads(0),
             peer_count,
             scp_peer_count,
             start_time: std::time::Instant::now(),
@@ -450,7 +454,9 @@ impl RpcState {
             ledger: Arc::new(RwLock::new(ledger)),
             mempool: Arc::new(RwLock::new(mempool)),
             minting_active: Arc::new(RwLock::new(false)),
-            minting_threads: num_cpus::get(),
+            // Overridden by `with_minting_threads` in the node runtime (#1436);
+            // default to the clamped auto value, never the raw CPU count.
+            minting_threads: crate::node::minter::effective_mint_threads(0),
             peer_count: Arc::new(RwLock::new(0)),
             scp_peer_count: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
@@ -514,6 +520,15 @@ impl RpcState {
     /// Set the stable node identity surfaced by `node_getIdentity` (#500).
     pub fn with_identity(mut self, identity: NodeIdentity) -> Self {
         self.identity = identity;
+        self
+    }
+
+    /// Set the minting thread count reported by `node_getStatus.mintingThreads`
+    /// and `minting_getStatus.threads`. The node runtime passes the same
+    /// `effective_mint_threads(config.minting.threads)` value the miner uses
+    /// to spawn workers, so the RPC reflects the real configuration (#1436).
+    pub fn with_minting_threads(mut self, threads: usize) -> Self {
+        self.minting_threads = threads;
         self
     }
 
@@ -5193,6 +5208,77 @@ mod tests {
         assert_eq!(result["synced"], json!(true));
         assert_eq!(result["syncStatus"], json!("synced"));
         assert_eq!(result["syncProgress"].as_f64().unwrap(), 100.0);
+    }
+
+    /// #1436: the reported minting thread count must be the miner's effective
+    /// configured count (wired via `with_minting_threads`), not the raw CPU
+    /// count, in BOTH `node_getStatus.mintingThreads` and
+    /// `minting_getStatus.threads`; `mintingThreads` stays 0 when inactive.
+    #[tokio::test]
+    async fn test_minting_threads_reflects_configured_count() {
+        use crate::{ledger::Ledger, mempool::Mempool, node::minter};
+
+        fn fresh_state() -> RpcState {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            std::mem::forget(dir);
+            RpcState::new(
+                ledger,
+                Mempool::new(),
+                Network::Testnet,
+                None,
+                None,
+                vec![],
+                Arc::new(WsBroadcaster::new(16)),
+            )
+        }
+
+        // Default (no override): the clamped auto value, never raw CPU count.
+        let state = fresh_state();
+        assert_eq!(
+            state.minting_threads,
+            minter::default_mint_threads(num_cpus::get())
+        );
+
+        // `--mint-threads 1`, plus a value that differs from the CPU count.
+        let distinct = num_cpus::get() + 3;
+        for configured in [1u32, distinct as u32] {
+            let expected = minter::effective_mint_threads(configured);
+            assert_eq!(expected, configured as usize);
+            let state = fresh_state().with_minting_threads(expected);
+            *state.minting_active.write().unwrap() = true;
+
+            let minting = handle_minting_status(json!(1), &state)
+                .await
+                .result
+                .unwrap();
+            assert_eq!(
+                minting["threads"],
+                json!(expected),
+                "minting_getStatus.threads"
+            );
+            let node = handle_node_status(json!(1), &state).await.result.unwrap();
+            assert_eq!(
+                node["mintingThreads"],
+                json!(expected),
+                "node_getStatus.mintingThreads"
+            );
+
+            // Inactive: node_getStatus reports 0 threads.
+            *state.minting_active.write().unwrap() = false;
+            let node = handle_node_status(json!(1), &state).await.result.unwrap();
+            assert_eq!(node["mintingThreads"], json!(0));
+        }
+
+        // Auto (0) reports the clamped default.
+        let auto = minter::effective_mint_threads(0);
+        let state = fresh_state().with_minting_threads(auto);
+        *state.minting_active.write().unwrap() = true;
+        let node = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(
+            node["mintingThreads"],
+            json!(minter::default_mint_threads(num_cpus::get()))
+        );
     }
 
     /// #538: the stuck-miner flag must surface in BOTH `minting_getStatus`
