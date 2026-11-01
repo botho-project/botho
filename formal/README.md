@@ -77,19 +77,23 @@ a mirrored Rust file changed.
 
 - **Sorry gate** (`scripts/check-sorry.sh`) fails if `lake build` warns that a
   declaration uses `sorry`. It also fails if the source scan finds `sorry`,
-  `sorryAx`, `admit` or `native_decide` outside comments and strings.
+  `sorryAx`, `admit` or `native_decide` (bare or `_root_.`-qualified) outside
+  comments, string literals, raw strings (`r#"..."#`) and char literals.
   `native_decide` trusts the compiler, so it is allowed only on a line marked
   `-- formal-gate: allow native_decide`, and the compiler-trust axioms it
   introduces (such as `Lean.ofReduceBool`) must also be on the allow-list.
 - **Axiom gate** (`scripts/check-axioms.sh`) compiles `Theorems.lean` and
   parses every `#print axioms` result. It fails on `sorryAx`, on any axiom not
   in `axioms-allowlist.txt`, on an empty manifest, or when the number of
-  results does not match the number of `#print axioms` lines.
+  results does not match the number of `#print axioms` lines. It anchors on
+  Lean's full result-line format, so primed names like `foo'` parse.
 - **Self-test** (`scripts/selftest-gates.sh`) copies the tree, injects a
   `sorry`, an `admit`, a `native_decide`, a bogus axiom, a `sorryAx` and an
   empty manifest, and asserts that the matching gate fails each time. It also
   checks that the clean tree passes and that the tokens are ignored inside
-  comments and strings.
+  comments, strings, raw strings and char literals. Since #1724 it also covers
+  `sorry` hidden after a `'"'` char literal or an `r#"a"b"#` raw string, a
+  `_root_.sorryAx` term, and primed theorem names in the axiom gate.
 
 ## Adding a theorem
 

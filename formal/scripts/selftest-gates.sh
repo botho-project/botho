@@ -93,6 +93,76 @@ EOF
 expect pass "sorry/admit in comments and strings, allow-marked native_decide" \
   sorry_gate --no-build "$d"
 
+# Sorry gate (#1724): a char literal '"' must not open a phantom string that
+# hides the code after it.
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+def Botho.selftest_quote : Char := '"'
+theorem Botho.selftest_after_char : 1 = 2 := by
+  sorry
+EOF
+expect fail "sorry after a '\"' char literal (scan only)" sorry_gate --no-build "$d"
+
+# Sorry gate (#1724): a raw string containing `"` must not desynchronise the
+# string tracking (one and two `#`).
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+def Botho.selftest_raw : String := r#"a"b"#
+theorem Botho.selftest_after_raw : 1 = 2 := by
+  sorry
+EOF
+expect fail "sorry after r#\"a\"b\"# raw string (scan only)" sorry_gate --no-build "$d"
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+def Botho.selftest_raw2 : String := r##"a"#b"##
+theorem Botho.selftest_after_raw2 : 1 = 2 := by
+  sorry
+EOF
+expect fail "sorry after r##\"a\"#b\"## raw string (scan only)" sorry_gate --no-build "$d"
+
+# Sorry gate (#1724): the qualified `_root_.sorryAx` is caught like the bare name.
+d="$(fresh_copy)"
+printf '\ntheorem Botho.selftest_root_sorryAx : 1 = 2 := _root_.sorryAx _ false\n' \
+  >>"$d/Botho/Basic.lean"
+expect fail "_root_.sorryAx term (scan only)" sorry_gate --no-build "$d"
+
+# Negative control (#1724): forbidden tokens inside raw strings and char
+# literals, and primed identifiers next to them, do not trip the scan.
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+def Botho.selftest_raw_ok : String := r##"sorry "# admit"##
+def Botho.selftest_raw0_ok : String := r"sorry \ admit"
+def Botho.selftest_chars_ok : List Char := ['"', '\'', '\x41', 'α', 's']
+theorem Botho.selftest_primed_ok' (h' : 1 = 1) : 1 = 1 := h'
+EOF
+expect pass "sorry/admit in raw strings, char literals and primed names" \
+  sorry_gate --no-build "$d"
+expect pass "raw-string/char-literal control tree still builds" sorry_gate --no-scan "$d"
+
+# Axiom gate (#1724): theorem names ending in `'` parse (one and two primes).
+d="$(fresh_copy)"
+cat >>"$d/Theorems.lean" <<'EOF'
+
+theorem Botho.selftest_primed' : 1 + 1 = 2 := rfl
+theorem Botho.selftest_primed'' : ∀ p : Prop, p ∨ ¬p := Classical.em
+#print axioms Botho.selftest_primed'
+#print axioms Botho.selftest_primed''
+EOF
+expect pass "primed theorem names parse in the axiom gate" axiom_gate "$d"
+
+# Axiom gate (#1724): a primed theorem that reaches sorryAx still fails.
+d="$(fresh_copy)"
+cat >>"$d/Theorems.lean" <<'EOF'
+
+theorem Botho.selftest_primed_sorry' : 1 = 2 := sorry
+#print axioms Botho.selftest_primed_sorry'
+EOF
+expect fail "primed theorem depending on sorryAx" axiom_gate "$d"
+
 # Axiom gate: a bogus axiom used by a manifest theorem fails.
 d="$(fresh_copy)"
 cat >>"$d/Theorems.lean" <<'EOF'
