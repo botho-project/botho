@@ -280,7 +280,7 @@ function makeSendRpc(call: ReturnType<typeof makeJsonRpc>): SendRpc {
     getChainHeight: async () =>
       (await call<{ chainHeight: number }>('node_getStatus', {})).chainHeight,
     getOutputs: async (start, end) => {
-      const blocks = await call<Array<{ outputs: RawOutput[] }>>(
+      const blocks = await call<Array<{ height?: number; outputs: RawOutput[] }>>(
         'chain_getOutputs',
         { start_height: start, end_height: end },
       );
@@ -302,6 +302,8 @@ function makeSendRpc(call: ReturnType<typeof makeJsonRpc>): SendRpc {
             // spends V2 payouts client-side (#1645).
             ...(o.lottery === true ? { lottery: true } : {}),
             ...(o.lotteryContext != null ? { lotteryContext: o.lotteryContext } : {}),
+            // Block height for age-band ring-decoy selection (#1693).
+            ...(typeof b.height === 'number' ? { height: b.height } : {}),
           }),
         ),
       );
