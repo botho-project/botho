@@ -50,7 +50,7 @@ def main():
         if m['compile_exit']: raise RuntimeError('compile failed or exceeded 900 seconds')
         a = select_artifact(out/'cargo.jsonl'); m['artifact'] = a
         binary = Path(a['executable']); m['executable_sha256'] = digest(binary)
-        command = [str(binary), 'reinvestment::', '--nocapture']; m['matrix_command'] = command
+        command = [str(binary), 'reinvestment::', '--include-ignored', '--nocapture']; m['matrix_command'] = command
         env['CT_REINVESTMENT_OUTPUT'] = str(out/'raw.json')
         start = time.monotonic()
         m['matrix_exit'] = bounded(command, out/'matrix.log', out/'matrix-stderr.log', env, 180)

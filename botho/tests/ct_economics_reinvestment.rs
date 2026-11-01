@@ -153,6 +153,7 @@ mod reinvestment {
         assert_eq!(scarce, before);
     }
     #[test]
+    #[ignore = "collector: requires CT_REINVESTMENT_OUTPUT; run via ct-reinvestment.yml (collect.py passes --include-ignored)"]
     fn eight_histories_and_one_replay() {
         let config: Value = serde_json::from_str(include_str!(
             "../../scripts/research/ct-reinvestment/config.json"

@@ -145,7 +145,7 @@ def load(directory):
     assert '3 passed; 0 failed; 0 ignored' in (directory / 'matrix.log').read_text()
     for file, expected in m['raw_hashes'].items(): assert digest(directory / file) == expected, file
     a = select_artifact(directory / 'cargo.jsonl'); assert a == m['artifact']
-    assert m['matrix_command'] == [a['executable'], 'reinvestment::', '--nocapture']
+    assert m['matrix_command'] == [a['executable'], 'reinvestment::', '--include-ignored', '--nocapture']
     assert re.fullmatch('[0-9a-f]{64}', m['executable_sha256'])
     return validate_data(json.loads((directory / 'raw.json').read_text()))
 

@@ -122,6 +122,7 @@ fn policy_awards(
 }
 
 #[test]
+#[ignore = "collector: requires PAYOUT_BASELINE_JSON; run via payout-policy.yml (collect.py passes --include-ignored)"]
 fn fixed_six_histories_source_review_draft() {
     let baseline: Value = serde_json::from_slice(
         &std::fs::read(

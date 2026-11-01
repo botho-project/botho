@@ -213,7 +213,9 @@ jobs:
   consensus-integration:
     name: Consensus Integration Tests
     runs-on: ubuntu-latest
-    if: github.event.inputs.test_suite == 'all'
+    # Nightly as well as `all` dispatches (#1573): manual-only gating left the
+    # progressive-fee InvalidSignature failures (#1669) invisible on main.
+    if: github.event_name == 'schedule' || github.event.inputs.test_suite == 'all'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
