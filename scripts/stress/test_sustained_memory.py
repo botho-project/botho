@@ -307,6 +307,39 @@ class SustainedMemoryTests(unittest.TestCase):
             analyze(self.plan, samples(self.plan)[:20])["status"], "failed"
         )
 
+    def test_thresholds_can_be_tightened_and_are_reported(self):
+        rows = samples(self.plan, 5)
+        self.assertEqual(analyze(self.plan, rows)["status"], "passed")
+        self.plan["slope_limit_mib_per_hour"] = 2
+        for row in rows:
+            row["manifest_sha256"] = manifest_digest(self.plan)
+        result = analyze(self.plan, rows)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["thresholds"]["slope_mib_per_hour"], 2)
+        self.assertEqual(result["thresholds"]["net_growth_mib"], 64)
+
+    def test_tightened_net_growth_fails_a_plateau_above_it(self):
+        self.plan["net_growth_limit_mib"] = 8
+        rows = samples(self.plan)
+        for row in rows:
+            elapsed = row["observed_at_unix_s"] - self.plan["started_at_unix_s"]
+            if elapsed >= 1800 + 3600:
+                row["rss_bytes"] += 12 * MIB
+        self.assertEqual(analyze(self.plan, rows)["status"], "failed")
+
+    def test_thresholds_cannot_be_relaxed_to_admit_old_leak(self):
+        for key, value in (
+            ("slope_limit_mib_per_hour", 50),
+            ("net_growth_limit_mib", 1024),
+            ("slope_limit_mib_per_hour", 0),
+            ("net_growth_limit_mib", True),
+        ):
+            with self.subTest(key=key, value=value):
+                plan = manifest()
+                plan[key] = value
+                with self.assertRaises(ValueError):
+                    validate_manifest(plan)
+
     def test_windows_cannot_be_shortened(self):
         self.plan["phases"][1]["duration_s"] = 300
         with self.assertRaises(ValueError):

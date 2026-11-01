@@ -123,6 +123,13 @@ def sample(
             raise ValueError("process changed during sampling")
     except (OSError, ValueError, KeyError, IndexError) as error:
         row["errors"].append(f"process observation: {error}")
+    # Keep the runner's own RPC diagnostics even when the observation is
+    # otherwise unusable; they explain why the row is incomplete.
+    reported = observation.get("errors", []) if isinstance(observation, dict) else []
+    if isinstance(reported, list):
+        row["errors"].extend(str(error) for error in reported)
+    else:
+        row["errors"].append("RPC observation: errors must be a list")
     try:
         timestamp = observation["observed_at_unix_s"]
         if (
@@ -136,7 +143,6 @@ def sample(
         for key in ("chain_height", "chain_hash", "confirmed_transfers", "mining"):
             row[key] = observation[key]
         row["rpc_observed_at_unix_s"] = timestamp
-        row["errors"].extend(observation.get("errors", []))
     except (ValueError, KeyError, TypeError) as error:
         row["errors"].append(f"RPC observation: {error}")
     row["sample_duration_s"] = now() - started

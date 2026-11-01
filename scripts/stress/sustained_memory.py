@@ -11,6 +11,10 @@ import statistics
 MIB = 1024 * 1024
 SLOPE_LIMIT = 10.0
 NET_LIMIT = 64.0
+THRESHOLD_DEFAULTS = {
+    "slope_limit_mib_per_hour": SLOPE_LIMIT,
+    "net_growth_limit_mib": NET_LIMIT,
+}
 IDENTITY = (
     "campaign_id",
     "source_revision",
@@ -135,7 +139,17 @@ def validate_manifest(plan):
     for key in ("rss_plus_swap_limit_bytes", "cgroup_memory_plus_swap_limit_bytes"):
         if key in plan and (not number(plan[key]) or plan[key] <= 0):
             raise ValueError(f"invalid {key}")
+    for key, default in THRESHOLD_DEFAULTS.items():
+        # Thresholds are part of the hashed manifest and may only be
+        # tightened here. Relaxing one (e.g. far enough to admit the old
+        # 49 MiB/hour retention) needs a separately reviewed code change.
+        if key in plan and (not number(plan[key]) or not 0 < plan[key] <= default):
+            raise ValueError(f"{key} must be positive and at most {default}")
     return plan
+
+
+def thresholds(plan):
+    return {key: plan.get(key, default) for key, default in THRESHOLD_DEFAULTS.items()}
 
 
 def profile_phases(workload):
@@ -412,6 +426,9 @@ def inspect_node(plan, node, observations, failures, incomplete):
     measured = [
         r for r in rows if stages[1][1] <= r["observed_at_unix_s"] <= stages[1][2]
     ]
+    limits = thresholds(plan)
+    slope_limit = limits["slope_limit_mib_per_hour"]
+    net_limit = limits["net_growth_limit_mib"]
     measurement_complete = measurement_is_complete(plan, node, observations, measured)
     result["measurement_complete"] = measurement_complete
     if len(measured) >= 2:
@@ -423,8 +440,8 @@ def inspect_node(plan, node, observations, failures, incomplete):
             result[label] = stats
             complete = not any(reason.startswith(name + ":") for reason in incomplete)
             if measurement_complete and (
-                stats["slope_mib_per_hour"] > SLOPE_LIMIT + 1e-6
-                or stats["net_growth_mib"] > NET_LIMIT
+                stats["slope_mib_per_hour"] > slope_limit + 1e-6
+                or stats["net_growth_mib"] > net_limit
             ):
                 failures.add(f"{name}: {label} sustained growth exceeded")
             for phase, left, right in stages[2:]:
@@ -436,7 +453,7 @@ def inspect_node(plan, node, observations, failures, incomplete):
                     result["stages"].setdefault(phase, {})[
                         label + "_baseline_growth_mib"
                     ] = retained
-                    if complete and retained > NET_LIMIT:
+                    if complete and retained > net_limit:
                         failures.add(
                             f"{name}: {label} cycle retained growth exceeded fixed baseline"
                         )
@@ -487,7 +504,10 @@ def analyze(plan, observations):
         "incomplete_reasons": sorted(incomplete),
         "nodes": results,
         "same_height_comparisons": len(compared),
-        "thresholds": {"slope_mib_per_hour": SLOPE_LIMIT, "net_growth_mib": NET_LIMIT},
+        "thresholds": {
+            "slope_mib_per_hour": thresholds(plan)["slope_limit_mib_per_hour"],
+            "net_growth_mib": thresholds(plan)["net_growth_limit_mib"],
+        },
         "limitations": [
             "Sampled same-height hashes do not establish absence of forks.",
             "Same-host processes do not establish equivalent dedicated-host performance.",
