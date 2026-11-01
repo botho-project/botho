@@ -19,7 +19,7 @@ Sim source: `cluster-tax/src/simulation/downgrade_overcharge_sweep.rs` (determin
 > there are more chances for a wealthy decoy to land in a background spender's ring, so the FP
 > rate at a given contamination level is roughly 1.3–1.8× higher. That strengthens the case for
 > the wallet-layer factor band; it does not change the recommendation. The ring-11 figures are
-> kept in §7 for comparison. To reproduce them, run `honest-overcharge-sweep --ring-size 11`
+> kept in §7 for comparison. To reproduce them, run `honest-overcharge-sweep --ring-size 11` <!-- stale-literal-ok: deliberate ring-11 reproduction command -->
 > (the output equals the ring-11 golden file published by #1794).
 
 ---
