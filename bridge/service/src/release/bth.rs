@@ -36,10 +36,15 @@
 //!   ring decoys (ordinary rows only: never a lottery row, #1450 / #1642), and
 //!   build + CLSAG-sign a tx paying a FRESH one-time stealth output to the
 //!   recipient (ADR 0004) with change back to the reserve. The signed tx is
-//!   self-verified against the node's verifier before it is returned.
+//!   self-verified against the node's verifier before it is returned. The tx's
+//!   `created_at_height` is the confirmed tip at assembly time, and a tip whose
+//!   inclusion window crosses an import-epoch boundary is refused as retryable,
+//!   so the recipient's import tag always names the including block's epoch
+//!   (#1740).
 //! - **`broadcast`**: submit the bincode wire bytes via `tx_submit`; idempotent
 //!   (an "already known" / duplicate-key-image rejection of our OWN recorded tx
-//!   is success on resume).
+//!   is success on resume). A recorded tx whose height is above the confirmed
+//!   tip, or already stale for the next block, is not relayed (#1740).
 //! - **`check_confirmation`**: poll `getTransaction` for the configured depth
 //!   (`release_confirmations_required`; 0 = SCP externalization finality).
 //!
@@ -54,7 +59,7 @@
 
 use async_trait::async_trait;
 use bth_bridge_core::{BridgeOrder, BthConfig, ReleaseAuthorization};
-use bth_transaction_clsag::MIN_TX_FEE;
+use bth_transaction_clsag::{Transaction, MIN_TX_FEE};
 use ed25519_dalek::{Signature, VerifyingKey};
 use tracing::{debug, info, warn};
 
@@ -63,8 +68,8 @@ use crate::{
     bth_keys::ReserveKeys,
     bth_rpc::{BthNodeRpc, RpcError, TxInclusion},
     bth_scan::{
-        build_release_tx, decode_recipient_address, is_decoy_class, scan_reserve_output,
-        OwnedOutput, ReleaseInput,
+        build_release_tx, check_release_height_for_relay, decode_recipient_address, is_decoy_class,
+        release_created_at_height, scan_reserve_output, OwnedOutput, ReleaseInput,
     },
 };
 
@@ -517,7 +522,15 @@ impl Releaser for BthReleaser {
 
         // 4-5, 7. Build + CLSAG-sign: fresh stealth recipient output, change
         // back to the reserve, self-verified against the node's verifier.
-        let created_at_height = rpc.chain_tip().await?;
+        //
+        // The tx's created_at_height (and so the import-epoch tag on the
+        // recipient output) is derived from the confirmed tip here, at
+        // assembly time, never from the order or a queue (#1740). A tip whose
+        // inclusion window would cross an import-epoch boundary is refused as
+        // retryable: nothing is recorded, the order stays BurnConfirmed, and a
+        // later pass builds it once the tip is inside the new epoch.
+        let chain_tip = rpc.chain_tip().await?;
+        release_created_at_height(chain_tip).map_err(|e| ReleaseError::Rpc(e.to_string()))?;
         // Pass the reserve's ML-KEM secret (when a PQ seed is configured) so a
         // hybrid reserve input can be spent via hybrid one-time-key recovery
         // (issue #972). A classical-only reserve passes `None`, and a hybrid
@@ -528,7 +541,7 @@ impl Releaser for BthReleaser {
             amount,
             RELEASE_FEE,
             &inputs,
-            created_at_height,
+            chain_tip,
             reserve.kem_keypair(),
             &mut bth_util_from_random::OsRng,
         )
@@ -553,6 +566,18 @@ impl Releaser for BthReleaser {
                 "BTH release RPC not configured".to_string(),
             ));
         };
+        // Relay-time height check (#1740): never relay a release whose
+        // created_at_height is above the confirmed tip (the builder never
+        // produces one, so the recorded bytes are foreign or tampered) or that
+        // the next block would reject as stale. Both errors are retryable and
+        // leave the order ReleasePending.
+        let tx: Transaction = bincode::deserialize(&prepared.raw)
+            .map_err(|e| ReleaseError::Config(format!("recorded release tx decode failed: {e}")))?;
+        let tip = rpc.chain_tip().await?;
+        check_release_height_for_relay(tx.created_at_height, tip).map_err(|e| {
+            ReleaseError::Rpc(format!("refusing to relay {}: {e}", prepared.tx_hash))
+        })?;
+
         let tx_hex = hex::encode(&prepared.raw);
         match rpc.submit_tx(&tx_hex).await {
             Ok(node_hash) => {
