@@ -33,9 +33,10 @@
 //!   honest over-charge) build 11-member rings; consensus requires 20.
 //! - `m2.rs` (legacy `m2-cumulative` / `m2-decay`) and the `lottery-experiment`
 //!   CLI assume 20 s blocks (4,320/day); `m2_production` is the at-node run.
-//! - The node's own decoy gamma assumes 2-minute blocks (720/day) while the
-//!   chain targets 5 s blocks. The sims mirror the node, so this is a node
-//!   question, tracked in #1692, not sim drift.
+//!
+//! The node's decoy gamma used to assume 2-minute blocks (720/day). Since #1692
+//! it derives blocks/day from the monetary policy block time, and
+//! [`decoy_gamma_blocks_per_day_follows_policy`] pins node and sims to it.
 
 use bth_cluster_tax::{
     consensus_fee::{
@@ -262,8 +263,20 @@ fn intentional_divergences_are_still_the_documented_values() {
 
     assert_eq!(m2::M2_BLOCKS_PER_DAY, 4_320);
     assert_ne!(m2::M2_BLOCKS_PER_DAY, node_blocks_per_year() / 365);
+}
 
-    // Node gamma assumes 2-minute blocks (#1692); the sims mirror the node.
-    assert_eq!(privacy_routes::NODE_BLOCKS_PER_DAY, 720.0);
+/// #1692: the decoy gamma's blocks/day (and its ~2-year age cap) come from the
+/// mainnet policy block time, in the node and in both privacy sims.
+#[test]
+fn decoy_gamma_blocks_per_day_follows_policy() {
+    use botho::decoy_selection as node;
+    let policy_per_day = 24 * 60 * 60 / botho::monetary::mainnet_policy().target_block_time_secs;
+    assert_eq!(node::BLOCKS_PER_DAY, policy_per_day);
+    assert_eq!(node::BLOCKS_PER_DAY, node_blocks_per_year() / 365);
+    assert_eq!(
+        privacy_routes::NODE_BLOCKS_PER_DAY,
+        node::BLOCKS_PER_DAY as f64
+    );
     assert_eq!(privacy::BLOCKS_PER_DAY, privacy_routes::NODE_BLOCKS_PER_DAY);
+    assert_eq!(node::MAX_DECOY_AGE_BLOCKS, 2 * 365 * node::BLOCKS_PER_DAY);
 }

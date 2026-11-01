@@ -38,6 +38,16 @@
 //!
 //! Note: Ring size 20 is larger than Monero's 16, providing stronger sender
 //! privacy.
+//!
+//! ## Per-input ring placement (#1692 / #1755)
+//!
+//! The ring producers (`GammaDecoySelector::select_decoys_for_input`, the
+//! `botho-wallet` CLI and the web/Snap picker) do NOT gamma-weight decoys for a
+//! known real input. They draw a random-offset age window of width ±10%
+//! ([`draw_age_similarity_window`]) that contains the real input's age at a
+//! uniformly random position, and sample decoys uniformly inside it, so the
+//! real input's age rank in the ring is uniform. The gamma model below still
+//! backs [`GammaDecoySelector::select_decoys`] and the anonymity estimators.
 
 use rand::{seq::SliceRandom, Rng, RngExt};
 use rand_distr::{Distribution, Gamma};
@@ -213,17 +223,26 @@ impl ClusterTags {
     }
 }
 
-/// Blocks per day (assuming 2-minute block time)
-const BLOCKS_PER_DAY: f64 = 720.0;
+/// Seconds per day.
+const SECS_PER_DAY: u64 = 24 * 60 * 60;
+
+/// Blocks per day at the mainnet monetary policy's target block time
+/// (`crate::monetary::mainnet_policy().target_block_time_secs`, 5 s →
+/// 17,280/day). Derived, not restated, so the gamma spend model's day-based
+/// parameters track the chain's actual block time (#1692; it used to assume
+/// 2-minute blocks, 720/day).
+pub const BLOCKS_PER_DAY: u64 =
+    SECS_PER_DAY / crate::monetary::mainnet_policy().target_block_time_secs;
 
 /// Minimum age in blocks for decoy consideration (must be confirmed).
 /// `pub` so `tests/sim_code_parity.rs` can pin the wallet and sim copies
 /// (#1702).
 pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
 
-/// Maximum age to consider for gamma sampling (prevents extreme outliers)
-/// ~2 years in blocks. `pub` for `tests/sim_code_parity.rs` (#1702).
-pub const MAX_DECOY_AGE_BLOCKS: u64 = 525_600;
+/// Maximum age to consider for gamma sampling (prevents extreme outliers):
+/// ~2 years in blocks at [`BLOCKS_PER_DAY`]. `pub` for
+/// `tests/sim_code_parity.rs` (#1702).
+pub const MAX_DECOY_AGE_BLOCKS: u64 = 2 * 365 * BLOCKS_PER_DAY;
 
 /// Number of recent spends to track for distribution estimation
 const SPEND_HISTORY_SIZE: usize = 10_000;
@@ -262,28 +281,97 @@ const DEFAULT_GAMMA_SCALE_DAYS: f64 = 1.61;
 ///
 /// ±10% is the widest empirically-safe band (1.077 ≤ 1.15). We adopt ±10% as
 /// the policy: it maximizes the eligible decoy pool (and hence anonymity) among
-/// the #314-safe bands. Because `@max` reads the single oldest member, the
-/// realized over-charge is bounded above by `max_ring_age / real_age`, which
-/// this band caps at ≤1.10 by construction — strictly inside the #314 bound.
+/// the #314-safe bands.
 ///
-/// The gamma/OSPEAD age distribution is still applied WITHIN the band, so the
-/// realistic recent-biased spend shape is preserved among age-similar decoys.
+/// # Random-offset placement (#1692 / #1755, operator ruling 2026-11-01)
+///
+/// The band's total width stays `2 × spread` (20% of the real age), but its
+/// POSITION is drawn per ring so the real input sits at a uniformly random
+/// point inside it ([`draw_age_similarity_window`]), and decoys are drawn
+/// uniformly from the candidates inside it. A band centred on the real input
+/// makes the real input the median-age ring member under any symmetric in-band
+/// draw (#1755), and the old gamma-target-clamped-into-the-band draw made it
+/// the youngest or oldest member at most ages (#1692). With the offset band,
+/// all ring members are exchangeable given the window, so over a pool of
+/// locally uniform age density the real input's age rank is uniform.
+///
+/// Over-charge under `@max`: the realized over-charge is bounded by
+/// `max_ring_age / real_age`, which the offset window caps at
+/// `1 + 2 × spread` = 1.20 for a single ring (real input at the window's young
+/// edge), versus 1.10 for the centred band. The #314 tolerance is checked on
+/// the aggregate honest over-charge (`cluster-tax-sim decoy-quantile-sweep
+/// --ring-size 20 --honest-jitter-bps 1000 --honest-band-offset`): 1.0825 at
+/// ring 20, against 1.0855 for the centred band; about 19% of individual
+/// honest spends exceed 1.15.
 pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
 
-/// Compute the inclusive `[min_age, max_age]` decoy-age band around a real
+/// Half-width `delta = real_age × spread` of the age band, in blocks.
+fn age_similarity_delta(real_input_age: u64) -> u64 {
+    (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64
+}
+
+/// Compute the inclusive `[min_age, max_age]` decoy-age band CENTRED on a real
 /// input's age under the [`AGE_SIMILARITY_SPREAD_BPS`] policy.
+///
+/// This is the window at offset `delta`
+/// (`age_similarity_window(real, age_similarity_window_width(real) / 2)`).
+/// Since #1692 the pickers do NOT use the centred band: they draw the window
+/// position at random with [`draw_age_similarity_window`]. It is kept as the
+/// reference band of the shared web/native fixture and of the research sims.
 ///
 /// The lower bound is additionally floored at [`MIN_DECOY_AGE_BLOCKS`] so
 /// decoys are always confirmed. A degenerate real age (below the confirmation
 /// floor) can produce `min_age > max_age`, in which case no candidate is
 /// in-band and callers fall back to nearest-age selection.
 pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
-    let delta = (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64;
+    let delta = age_similarity_delta(real_input_age);
     let min_age = real_input_age
         .saturating_sub(delta)
         .max(MIN_DECOY_AGE_BLOCKS);
     let max_age = real_input_age.saturating_add(delta);
     (min_age, max_age)
+}
+
+/// Total width `W = 2 × delta` of the decoy age window, in blocks. The window
+/// spans `W + 1` block ages and contains the real input's age at every offset.
+pub fn age_similarity_window_width(real_input_age: u64) -> u64 {
+    2 * age_similarity_delta(real_input_age)
+}
+
+/// The inclusive `[min_age, max_age]` decoy-age window at `offset` blocks
+/// below the real input's age: `[real − offset, real − offset + W]`, lower
+/// bound floored at [`MIN_DECOY_AGE_BLOCKS`]. `offset` is clamped to
+/// `0..=W`; `offset = 0` puts the real input at the window's young edge,
+/// `offset = W` at its old edge, and `offset = W / 2` is
+/// [`age_similarity_band`]. Degenerate (`min_age > max_age`) exactly when
+/// the real age is below the confirmation floor.
+pub fn age_similarity_window(real_input_age: u64, offset: u64) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    let offset = offset.min(width);
+    let start = real_input_age - offset;
+    (start.max(MIN_DECOY_AGE_BLOCKS), start + width)
+}
+
+/// Draw the random-offset decoy-age window for one ring (#1692): the offset
+/// is uniform in `0..=W`, so the real input's age is uniform among the
+/// window's `W + 1` ages. One draw (`rng.random_range(0..=W)`) per ring.
+pub fn draw_age_similarity_window<R: Rng + ?Sized>(real_input_age: u64, rng: &mut R) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    let offset = rng.random_range(0..=width);
+    age_similarity_window(real_input_age, offset)
+}
+
+/// Union of every window [`draw_age_similarity_window`] can return:
+/// `[real − W, real + W]` (lower bound floored at [`MIN_DECOY_AGE_BLOCKS`]).
+/// A decoy chosen from a window always lies inside it.
+pub fn age_similarity_envelope(real_input_age: u64) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    (
+        real_input_age
+            .saturating_sub(width)
+            .max(MIN_DECOY_AGE_BLOCKS),
+        real_input_age.saturating_add(width),
+    )
 }
 
 /// Fixed-point scale for cluster factors (1000 = 1.0×, 6000 = 6.0×). Matches
@@ -412,9 +500,9 @@ impl OutputCandidate {
         self
     }
 
-    /// Age in days (approximate, assuming 2-minute blocks).
+    /// Age in days at the mainnet target block time ([`BLOCKS_PER_DAY`]).
     pub fn age_days(&self) -> f64 {
-        self.age_blocks as f64 / BLOCKS_PER_DAY
+        self.age_blocks as f64 / BLOCKS_PER_DAY as f64
     }
 
     /// Compute cluster similarity with another candidate.
@@ -451,7 +539,7 @@ impl SpendDistribution {
         Self {
             spend_ages: VecDeque::with_capacity(SPEND_HISTORY_SIZE),
             gamma_shape: DEFAULT_GAMMA_SHAPE,
-            gamma_scale_blocks: DEFAULT_GAMMA_SCALE_DAYS * BLOCKS_PER_DAY,
+            gamma_scale_blocks: DEFAULT_GAMMA_SCALE_DAYS * BLOCKS_PER_DAY as f64,
             has_observations: false,
         }
     }
@@ -726,34 +814,45 @@ impl GammaDecoySelector {
         log_weight.exp().max(1e-10)
     }
 
-    /// Select decoys age-similar to the real input, sampled within the
-    /// [`AGE_SIMILARITY_SPREAD_BPS`] band using the gamma spend distribution.
+    /// Select decoys age-similar to the real input from a random-offset age
+    /// window (#1692 / #1755).
+    ///
+    /// # Placement rule (shared by every ring producer)
+    ///
+    /// One window of width `W = 2 × spread × real_age` is drawn per ring with
+    /// [`draw_age_similarity_window`], so the real input's age is uniform
+    /// inside it, and decoys are drawn uniformly without replacement from the
+    /// eligible candidates inside it. The CLI wallet
+    /// (`botho-wallet` `select_rpc_decoys_from_history`) and the web/Snap
+    /// picker (`web/packages/wasm-signer/src/decoys.ts`) use the same rule.
+    /// The gamma spend distribution is NOT applied here: any age weighting
+    /// inside the window would make the real input's rank non-uniform.
     ///
     /// # Consensus-economic role (issue #596)
     ///
     /// Under the `ring_elapsed_quantile@max` demurrage kernel (#577-B1 / PR
     /// #595) the charge is driven by the OLDEST ring member's age. A decoy much
-    /// older than the real input therefore over-charges an honest spender. This
-    /// method bounds every selected decoy's age to `age_similarity_band(real)`
-    /// (±10% by policy), keeping the realized over-charge under `@max` at
-    /// ≤1.10 — inside the #314 ≤15% tolerance. The gamma/OSPEAD age weighting
-    /// is still applied WITHIN the band, so the realistic recent-biased
-    /// spend shape is preserved among the age-similar candidates.
+    /// older than the real input therefore over-charges an honest spender. The
+    /// window bounds every in-window decoy to at most `1 + 2 × spread` (1.20×)
+    /// the real age; the aggregate honest over-charge stays inside the #314
+    /// tolerance (see [`AGE_SIMILARITY_SPREAD_BPS`]).
     ///
     /// # Liveness fallback
     ///
-    /// If the in-band pool cannot supply `count` decoys (sparse chain / unusual
+    /// If the window cannot supply `count` decoys (sparse chain / unusual
     /// real age), the remaining slots are filled with the NEAREST-aged eligible
-    /// candidates. This preserves transaction liveness while still minimizing
-    /// the realized max ring age — and hence the honest over-charge — to the
-    /// tightest value the available pool allows, rather than reverting to the
-    /// unbounded global-gamma sample that motivated this issue.
+    /// candidates to the real input. This preserves transaction liveness while
+    /// still minimizing the realized max ring age — and hence the honest
+    /// over-charge — to the tightest value the available pool allows.
     ///
-    /// # Tie-breaking (#1771)
+    /// # Randomness and tie-breaking (#1771)
     ///
-    /// Equal-distance candidates are chosen uniformly at random using `rng`,
-    /// independent of the order of `candidates` (and hence of DB key /
-    /// `tx_hash` order). Production callers must pass a CSPRNG (`OsRng`).
+    /// The eligible set is shuffled once with `rng`, then the window is drawn.
+    /// Phase 1 takes the first `count` in-window candidates in shuffled order
+    /// (a uniform sample), and phase 2 stable-sorts the rest by distance, so
+    /// equal-distance ties are uniform too. Neither depends on the order of
+    /// `candidates` (DB key / `tx_hash` order). Production callers must pass a
+    /// CSPRNG (`OsRng`).
     pub fn select_decoys_for_input<R: Rng>(
         &self,
         candidates: &[OutputCandidate],
@@ -777,73 +876,48 @@ impl GammaDecoySelector {
             });
         }
 
-        // Randomize the tie-break (#1771). Both phases below pick by distance
-        // only: phase 1 via `min_by_key` (first minimum wins) and phase 2 via a
-        // stable `sort_by_key` (ties keep input order). Without this shuffle,
-        // equal-distance ties resolve in CANDIDATE order, which callers derive
-        // from DB key order (`tx_hash || index`). An attacker who grinds output
-        // hashes to sort first would then capture every tie — and with many
-        // equal-age outputs, every decoy slot. Shuffling with the caller's
-        // CSPRNG makes each tie a uniform draw, independent of candidate order
-        // and of `tx_hash`/`UtxoId` bytes. It changes WHICH equal-distance
-        // candidate is chosen, never the distance itself, so the age band and
-        // liveness-fallback guarantees are untouched.
+        // Randomize the selection order (#1771). Phase 1 takes in-window
+        // candidates in this order, and phase 2 uses a stable sort by
+        // distance (ties keep this order). Without the shuffle, ties and the
+        // in-window choice would follow CANDIDATE order, which callers derive
+        // from DB key order (`tx_hash || index`). An attacker who grinds
+        // output hashes to sort first would then capture every decoy slot.
+        // Shuffling with the caller's CSPRNG makes every choice independent of
+        // candidate order and of `tx_hash`/`UtxoId` bytes.
         eligible.shuffle(rng);
 
-        let gamma = Gamma::new(
-            self.distribution.gamma_shape,
-            self.distribution.gamma_scale_blocks,
-        )
-        .map_err(|_| DecoySelectionError::InvalidDistribution)?;
-
-        // Age-similarity band around the real input's age (#596).
-        let (min_age, max_age) = age_similarity_band(real_input_age);
+        // Random-offset age window (#1692 / #1755): the real input's age is
+        // uniform inside it.
+        let (min_age, max_age) = draw_age_similarity_window(real_input_age, rng);
 
         let mut selected = Vec::with_capacity(count);
         let mut used_keys = exclude_keys.to_vec();
 
-        // Phase 1: draw from WITHIN the band. Sample a target age from the gamma
-        // spend distribution, clamp it into the band, and pick the nearest-aged
-        // in-band candidate. This keeps the realistic within-band distribution.
+        // Phase 1: a uniform sample without replacement from the window (the
+        // first `count` in-window candidates of the shuffled set).
         //
-        // Skip phase 1 entirely when the band is degenerate (`min_age > max_age`).
-        // `age_similarity_band` produces this for a real input younger than
-        // `MIN_DECOY_AGE_BLOCKS`: the lower bound is floored at the confirmation
-        // depth while the upper bound tracks the (young) real age, so no candidate
-        // can ever be in-band. Its doc comment promises callers fall back to
-        // nearest-age selection here — this is that fallback. Entering the loop
-        // would hit `u64::clamp(min_age, max_age)`, which panics when
-        // `min_age > max_age` (issue #611). No gamma sample is drawn in the
-        // degenerate case; selection remains deterministic for a given RNG seed.
+        // A real input younger than `MIN_DECOY_AGE_BLOCKS` gives a degenerate
+        // window (`min_age > max_age`, issue #611): nothing is in-window and
+        // phase 2 fills the ring.
         if min_age <= max_age {
-            for _ in 0..count {
-                let target_age: f64 = gamma.sample(rng);
-                let target_age_blocks = (target_age as u64).clamp(min_age, max_age);
-
-                let best = eligible
-                    .iter()
-                    .filter(|c| {
-                        c.age_blocks >= min_age
-                            && c.age_blocks <= max_age
-                            && !used_keys.contains(&c.output.target_key)
-                    })
-                    .min_by_key(|c| {
-                        (c.age_blocks as i64 - target_age_blocks as i64).unsigned_abs()
-                    });
-
-                if let Some(candidate) = best {
-                    selected.push(candidate.output.clone());
-                    used_keys.push(candidate.output.target_key);
-                } else {
-                    // Band exhausted; remaining slots handled by the fallback below.
+            for candidate in &eligible {
+                if selected.len() >= count {
                     break;
                 }
+                if candidate.age_blocks < min_age
+                    || candidate.age_blocks > max_age
+                    || used_keys.contains(&candidate.output.target_key)
+                {
+                    continue;
+                }
+                selected.push(candidate.output.clone());
+                used_keys.push(candidate.output.target_key);
             }
         }
 
         // Phase 2 (liveness fallback): fill any remaining slots with the
         // nearest-aged eligible candidates so over-charge stays as small as the
-        // pool allows even when the band cannot be fully satisfied.
+        // pool allows even when the window cannot be fully satisfied.
         if selected.len() < count {
             let mut leftovers: Vec<&&OutputCandidate> = eligible
                 .iter()
@@ -1479,15 +1553,16 @@ mod tests {
     fn test_gamma_weighting_prefers_realistic_ages() {
         let selector = GammaDecoySelector::new();
 
-        // With default parameters (mean ~30 days = ~21600 blocks),
-        // ages around that range should have higher weight than extremes
-        let weight_young = selector.weight_for_age(100); // 3 hours
-        let weight_medium = selector.weight_for_age(21600); // 30 days
-        let weight_old = selector.weight_for_age(525600); // 2 years
+        // With default parameters (mean ~31 days at the policy block time),
+        // ages around that range should have higher weight than extremes.
+        // Ages are in days × BLOCKS_PER_DAY (#1692: 5 s blocks, not 2 min).
+        let weight_young = selector.weight_for_age(100); // minutes
+        let weight_medium = selector.weight_for_age(30 * BLOCKS_PER_DAY); // 30 days
+        let weight_old = selector.weight_for_age(MAX_DECOY_AGE_BLOCKS); // 2 years
 
         eprintln!("Weight at 100 blocks: {}", weight_young);
-        eprintln!("Weight at 21600 blocks: {}", weight_medium);
-        eprintln!("Weight at 525600 blocks: {}", weight_old);
+        eprintln!("Weight at 30 days: {}", weight_medium);
+        eprintln!("Weight at 2 years: {}", weight_old);
 
         // Medium-aged outputs should be preferred
         assert!(weight_medium > weight_young);
@@ -1706,6 +1781,35 @@ mod tests {
             );
         }
 
+        // Random-offset windows (#1692): the placement rule both pickers draw.
+        let windows = fixture["windows"].as_array().unwrap();
+        assert!(!windows.is_empty());
+        for v in windows {
+            let real = v["realAge"].as_u64().unwrap();
+            let offset = v["offset"].as_u64().unwrap();
+            assert_eq!(
+                age_similarity_window_width(real),
+                v["width"].as_u64().unwrap(),
+                "width for {real}"
+            );
+            let (min_age, max_age) = age_similarity_window(real, offset);
+            assert_eq!(
+                min_age,
+                v["minAge"].as_u64().unwrap(),
+                "minAge for {real}@{offset}"
+            );
+            assert_eq!(
+                max_age,
+                v["maxAge"].as_u64().unwrap(),
+                "maxAge for {real}@{offset}"
+            );
+            assert_eq!(
+                min_age > max_age,
+                v["degenerate"].as_bool().unwrap(),
+                "degenerate flag for {real}@{offset}"
+            );
+        }
+
         // Fallback vectors: the selected SET is RNG-independent, so the native
         // selector must produce exactly the ages the web picker is pinned to.
         let current_height = 100_000;
@@ -1746,39 +1850,44 @@ mod tests {
         }
     }
 
-    /// The core #596 guarantee: for an honest spender, the realized demurrage
-    /// over-charge under the `ring_elapsed_quantile@max` kernel (PR #595) stays
-    /// within the #314 tolerance (≤15%). The age-similarity band caps it at
-    /// ≤1.10 by construction even when the candidate pool contains decoys far
-    /// older than the real input.
+    /// The #596 guarantee under the random-offset window (#1692): for an
+    /// honest spender, the realized demurrage over-charge under the
+    /// `ring_elapsed_quantile@max` kernel (PR #595) is capped per ring at
+    /// `1 + 2 × spread` (1.20) by construction, even when the candidate pool
+    /// contains decoys far older than the real input, and the AGGREGATE
+    /// over-charge (Σ realized / Σ true, the metric the #314 tolerance and the
+    /// `decoy-quantile-sweep` gate use) stays within 1.15.
     #[test]
     fn test_honest_overcharge_under_max_within_314_bound() {
         use bth_cluster_tax::demurrage::{demurrage_charge, ring_elapsed_quantile};
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
 
         const BLOCKS_PER_YEAR: u64 = 6_307_200; // 5s blocks
         const RATE_BPS: u32 = 200; // 2%/yr
         const VALUE: u64 = 1_000_000;
         // Worst case for demurrage magnitude: full 6x cluster factor.
         const FACTOR: u64 = 6_000;
+        // Ring size 20: the consensus minimum.
+        const DECOYS: usize = 19;
 
         let selector = GammaDecoySelector::new();
-        let current_height = 1_000_000u64;
-        let real_input_age = 21_600u64; // ~30 days
+        let current_height = 10_000_000u64;
+        let real_input_age = 1_000_000u64; // ~58 days at 5s blocks
 
-        // Candidate pool spanning a WIDE age range, from far younger to ~2.8x
-        // the real age — decoys that would over-charge the honest spender under
-        // @max if the band were not enforced.
+        // Dense pool spanning far younger to ~2.5x the real age — decoys that
+        // would over-charge the honest spender under @max if the window were
+        // not enforced.
         let mut candidates = Vec::new();
-        for i in 0..300u64 {
+        for i in 0..2_500u64 {
             let mut key = [0u8; 32];
-            key[0] = (i % 251) as u8;
-            key[1] = (i / 251) as u8;
-            let age = 1_000 + i * 200; // 1000 .. 60800 blocks
+            key[..8].copy_from_slice(&i.to_le_bytes());
+            let age = 1_000 + i * 1_000; // 1k .. 2.5M blocks
             candidates.push(make_candidate(key, age, current_height));
         }
 
         let mut real_key = [0u8; 32];
-        real_key[0] = 254;
+        real_key[31] = 254;
         let exclude = vec![real_key];
 
         // Demurrage on the spender's TRUE holding age.
@@ -1786,23 +1895,20 @@ mod tests {
             demurrage_charge(VALUE, FACTOR, real_input_age, RATE_BPS, BLOCKS_PER_YEAR);
         assert!(true_charge > 0);
 
-        let mut rng = rand::rng();
+        let mut rng = ChaCha8Rng::seed_from_u64(0x1692);
         let mut worst_overcharge = 1.0f64;
+        let (mut realized_sum, mut true_sum) = (0u128, 0u128);
 
-        for _ in 0..300 {
+        for _ in 0..2_000 {
             let decoys = selector
-                .select_decoys_for_input(&candidates, 10, &exclude, real_input_age, &mut rng)
+                .select_decoys_for_input(&candidates, DECOYS, &exclude, real_input_age, &mut rng)
                 .expect("age-similar selection should succeed with a dense pool");
 
             // Reconstruct ring members as (value, creation_height): the real
             // input plus the selected decoys.
             let mut members: Vec<(u64, u64)> = vec![(VALUE, current_height - real_input_age)];
             for d in &decoys {
-                let age = candidates
-                    .iter()
-                    .find(|c| c.output.target_key == d.target_key)
-                    .expect("decoy must come from the candidate pool")
-                    .age_blocks;
+                let age = u64::from_le_bytes(d.target_key[..8].try_into().unwrap()) * 1_000 + 1_000;
                 members.push((VALUE, current_height - age));
             }
 
@@ -1812,42 +1918,160 @@ mod tests {
                 demurrage_charge(VALUE, FACTOR, max_elapsed, RATE_BPS, BLOCKS_PER_YEAR);
             let overcharge = charge_max as f64 / true_charge as f64;
             worst_overcharge = worst_overcharge.max(overcharge);
+            realized_sum += charge_max as u128;
+            true_sum += true_charge as u128;
         }
+        let aggregate = realized_sum as f64 / true_sum as f64;
 
         eprintln!(
-            "worst honest over-charge under ring_elapsed_quantile@max: {:.4}",
-            worst_overcharge
+            "honest over-charge under ring_elapsed_quantile@max: aggregate {aggregate:.4}, \
+             worst ring {worst_overcharge:.4}"
         );
 
-        // #314 bound (≤15%).
+        // #314 tolerance (≤15%) on the aggregate.
         assert!(
-            worst_overcharge <= 1.15,
-            "over-charge {worst_overcharge} breaches the #314 tolerance"
+            aggregate <= 1.15,
+            "aggregate over-charge {aggregate} breaches the #314 tolerance"
         );
-        // ±10% band caps it at ≤1.10 by construction (small slack for integer
-        // rounding in demurrage_charge).
+        // The window caps a single ring at 1 + 2 × spread = 1.20 by
+        // construction (small slack for integer rounding in demurrage_charge).
+        let cap = 1.0 + 2.0 * AGE_SIMILARITY_SPREAD_BPS as f64 / 10_000.0;
         assert!(
-            worst_overcharge <= 1.101,
-            "over-charge {worst_overcharge} exceeds the ±10% band ceiling"
+            worst_overcharge <= cap + 0.001,
+            "over-charge {worst_overcharge} exceeds the window ceiling {cap}"
         );
     }
 
-    /// Selection must never pick a decoy outside the age band when the band has
-    /// enough candidates to fill the ring.
+    /// Positions of the real input's age among a ring's ages: the number of
+    /// decoys strictly younger, plus a uniformly random share of equal-age
+    /// decoys (equal ages are indistinguishable to an observer). 0 = youngest.
+    fn real_age_rank<R: Rng>(real_age: u64, decoy_ages: &[u64], rng: &mut R) -> usize {
+        let younger = decoy_ages.iter().filter(|&&a| a < real_age).count();
+        let equal = decoy_ages.iter().filter(|&&a| a == real_age).count();
+        younger + rng.random_range(0..=equal)
+    }
+
+    /// #1692 acceptance: over a dense pool, the real input's age rank within
+    /// its ring of 20 is uniform (χ² p > 0.01, df 19) at every real age from
+    /// 100 to 1M blocks. Before #1692 the edge-clamped gamma draw made the real
+    /// input the youngest member at 1k/5k and the oldest at 100k/1M; a band
+    /// centred on the real input would make it the median member (#1755).
+    #[test]
+    fn real_input_age_rank_is_uniform_at_all_ages() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        const DECOYS: usize = 19;
+        const RINGS: usize = 4_000;
+        // χ² critical value, df 19, p = 0.01.
+        const CHI2_CRIT_DF19_P01: f64 = 36.191;
+
+        let selector = GammaDecoySelector::new();
+        let current_height = 2_000_000u64;
+        for real_age in [100u64, 1_000, 5_000, 30_000, 100_000, 1_000_000] {
+            // Dense pool covering the envelope of every possible window plus
+            // margin, at locally uniform density: about 1000 candidates per
+            // window width, several outputs per age when the window is narrow.
+            let width = age_similarity_window_width(real_age);
+            let (lo, hi) = age_similarity_envelope(real_age);
+            let (lo, hi) = (
+                lo.saturating_sub(width).max(MIN_DECOY_AGE_BLOCKS),
+                hi + width,
+            );
+            let step = (width / 1_000).max(1);
+            let per_age = (1_000 / (width + 1)).max(1);
+            let mut candidates = Vec::new();
+            let mut id = 0u64;
+            let mut age = lo;
+            while age <= hi {
+                for _ in 0..per_age {
+                    let mut key = [0u8; 32];
+                    key[..8].copy_from_slice(&id.to_le_bytes());
+                    key[8..16].copy_from_slice(&age.to_le_bytes());
+                    candidates.push(make_candidate(key, age, current_height));
+                    id += 1;
+                }
+                age += step;
+            }
+
+            let mut rng = ChaCha8Rng::seed_from_u64(0x1692 ^ real_age);
+            let mut hist = [0usize; DECOYS + 1];
+            for _ in 0..RINGS {
+                let decoys = selector
+                    .select_decoys_for_input(&candidates, DECOYS, &[], real_age, &mut rng)
+                    .expect("dense pool fills the ring");
+                let ages: Vec<u64> = decoys
+                    .iter()
+                    .map(|o| u64::from_le_bytes(o.target_key[8..16].try_into().unwrap()))
+                    .collect();
+                hist[real_age_rank(real_age, &ages, &mut rng)] += 1;
+            }
+            let expected = RINGS as f64 / (DECOYS + 1) as f64;
+            let chi2: f64 = hist
+                .iter()
+                .map(|&o| (o as f64 - expected).powi(2) / expected)
+                .sum();
+            eprintln!("real age {real_age}: rank χ² = {chi2:.1}, histogram {hist:?}");
+            assert!(
+                chi2 < CHI2_CRIT_DF19_P01,
+                "real age {real_age}: rank histogram {hist:?} is not uniform (χ² = {chi2:.1})"
+            );
+        }
+    }
+
+    /// The random-offset window always contains the real age, has width
+    /// `2 × spread`, and its offset spans the whole envelope.
+    #[test]
+    fn test_age_similarity_window_bounds() {
+        let real = 21_600u64;
+        let width = age_similarity_window_width(real);
+        assert_eq!(width, 4_320);
+        assert_eq!(age_similarity_window(real, 0), (21_600, 25_920));
+        assert_eq!(age_similarity_window(real, width), (17_280, 21_600));
+        assert_eq!(
+            age_similarity_window(real, width / 2),
+            age_similarity_band(real)
+        );
+        // Offsets past the width clamp to the old-edge window.
+        assert_eq!(age_similarity_window(real, width + 9), (17_280, 21_600));
+        assert_eq!(age_similarity_envelope(real), (17_280, 25_920));
+        // Below the confirmation floor the window is degenerate.
+        let (lo, hi) = age_similarity_window(9, 0);
+        assert!(lo > hi);
+        // Near the floor the lower bound clamps but the window keeps the real age.
+        assert_eq!(age_similarity_window(11, 2), (10, 11));
+
+        let mut rng = rand::rng();
+        for real in [10u64, 11, 50, 1_000, 1_000_000] {
+            let (env_lo, env_hi) = age_similarity_envelope(real);
+            for _ in 0..200 {
+                let (lo, hi) = draw_age_similarity_window(real, &mut rng);
+                assert!(lo <= real && real <= hi, "{real}: [{lo}, {hi}]");
+                assert!(env_lo <= lo && hi <= env_hi);
+                assert!(hi - lo <= age_similarity_window_width(real));
+            }
+        }
+    }
+
+    /// Selection must never pick a decoy outside a single random-offset window
+    /// containing the real age when the window has enough candidates to fill
+    /// the ring: every decoy lies in the envelope, and the whole ring
+    /// (real input included) spans at most the window width.
     #[test]
     fn test_age_similar_selection_stays_in_band() {
         let selector = GammaDecoySelector::new();
         let current_height = 1_000_000u64;
         let real_input_age = 21_600u64;
-        let (min_age, max_age) = age_similarity_band(real_input_age);
+        let (env_lo, env_hi) = age_similarity_envelope(real_input_age);
+        let width = age_similarity_window_width(real_input_age);
 
-        // Dense in-band pool plus far-out decoys that must never be chosen.
+        // Dense pool plus far-out decoys that must never be chosen.
         let mut candidates = Vec::new();
-        for i in 0..300u64 {
+        for i in 0..1_200u64 {
             let mut key = [0u8; 32];
             key[0] = (i % 251) as u8;
             key[1] = (i / 251) as u8;
-            let age = 1_000 + i * 200;
+            let age = 1_000 + i * 50;
             candidates.push(make_candidate(key, age, current_height));
         }
 
@@ -1856,8 +2080,9 @@ mod tests {
 
         for _ in 0..100 {
             let decoys = selector
-                .select_decoys_for_input(&candidates, 10, &exclude, real_input_age, &mut rng)
+                .select_decoys_for_input(&candidates, 19, &exclude, real_input_age, &mut rng)
                 .expect("selection should succeed");
+            let mut ages = vec![real_input_age];
             for d in &decoys {
                 let age = candidates
                     .iter()
@@ -1865,10 +2090,16 @@ mod tests {
                     .unwrap()
                     .age_blocks;
                 assert!(
-                    age >= min_age && age <= max_age,
-                    "decoy age {age} outside band [{min_age}, {max_age}]"
+                    age >= env_lo && age <= env_hi,
+                    "decoy age {age} outside envelope [{env_lo}, {env_hi}]"
                 );
+                ages.push(age);
             }
+            let span = ages.iter().max().unwrap() - ages.iter().min().unwrap();
+            assert!(
+                span <= width,
+                "ring age span {span} exceeds window width {width}"
+            );
         }
     }
 
@@ -2073,14 +2304,17 @@ mod tests {
     #[test]
     fn test_effective_anonymity_with_clusters() {
         let selector = GammaDecoySelector::new();
-        let current_height = 100_000;
+        let current_height = 2_000_000;
+        // Near the gamma spend model's mode (~29 days at the policy block
+        // time), where age alone leaves the ring members comparably plausible.
+        let base_age = 29 * BLOCKS_PER_DAY;
 
         // Real input with cluster 1
         let real_tags = ClusterTags::single(1);
         let mut real_key = [0u8; 32];
         real_key[0] = 255;
         let real_input =
-            make_candidate_with_tags(real_key, 5000, current_height, real_tags.clone());
+            make_candidate_with_tags(real_key, base_age, current_height, real_tags.clone());
 
         // Ring where all members have similar clusters (ring size 20)
         let similar_ring: Vec<OutputCandidate> = (0u64..20)
@@ -2088,7 +2322,7 @@ mod tests {
                 let mut key = [0u8; 32];
                 key[0] = i as u8;
                 let tags = ClusterTags::from_pairs(&[(1, 900_000 + (i as u32) * 5_000)]);
-                make_candidate_with_tags(key, 5000 + i * 100, current_height, tags)
+                make_candidate_with_tags(key, base_age + i * 100, current_height, tags)
             })
             .collect();
 

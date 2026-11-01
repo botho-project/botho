@@ -23,7 +23,7 @@ use bth_util_from_random::OsRng;
 use rand::{seq::SliceRandom, Rng};
 
 use crate::{
-    decoy_selection::{age_similarity_band, MIN_DECOY_AGE_BLOCKS},
+    decoy_selection::{draw_age_similarity_window, MIN_DECOY_AGE_BLOCKS},
     rpc_pool::{BlockOutputs, RpcPool, TxOutput as RpcTxOutput},
 };
 
@@ -155,7 +155,14 @@ pub fn canonical_rpc_history(blocks: &[BlockOutputs]) -> Vec<BlockOutputs> {
         .collect()
 }
 
-/// Prepare the live age band only after resolving canonical target identities.
+/// Prepare the live age window only after resolving canonical target
+/// identities.
+///
+/// The window is the random-offset age window shared with the node and web
+/// pickers (#1692 / #1755): one `draw_age_similarity_window` draw per ring
+/// places the real input's age uniformly inside a window 20% of the real age
+/// wide, and decoys are a uniform sample of the canonical outputs inside it.
+/// The window is drawn from `rng` before the pool is shuffled.
 pub fn select_rpc_decoys_from_history<R: Rng + ?Sized>(
     blocks: &[BlockOutputs],
     current_height: u64,
@@ -167,7 +174,7 @@ pub fn select_rpc_decoys_from_history<R: Rng + ?Sized>(
     if real_input_age < MIN_DECOY_AGE_BLOCKS {
         return Err(anyhow!("Input is too new to spend privately"));
     }
-    let (min_age, max_age) = age_similarity_band(real_input_age);
+    let (min_age, max_age) = draw_age_similarity_window(real_input_age, rng);
     let window: Vec<_> = canonical_rpc_history(blocks)
         .into_iter()
         .filter(|block| {
@@ -256,7 +263,7 @@ pub fn sample_prepared_rpc_decoy_pool<R: Rng + ?Sized>(
     if pool.len() < count {
         return Err(anyhow!(
             "Not enough age-similar decoy outputs on-chain to build a ring. \
-             Need {}, found {} in the ±10% age band [{}, {}] blocks. \
+             Need {}, found {} in the age window [{}, {}] blocks. \
              The chain needs more confirmed outputs of similar age.",
             count,
             pool.len(),
@@ -313,12 +320,14 @@ mod tests {
         let mut blocks = vec![genesis];
         // Nineteen real outputs plus the old genesis placeholder: requesting
         // twenty decoys must fail, not silently fill the ring with genesis.
-        for height in 1..=19 {
-            blocks.push(BlockOutputs {
-                height,
-                outputs: vec![random_rpc_output(50_000_000_000_000)],
-            });
-        }
+        // They sit at the real input's age (height 1, age 219), which every
+        // random-offset age window contains (#1692).
+        blocks.push(BlockOutputs {
+            height: 1,
+            outputs: (0..19)
+                .map(|_| random_rpc_output(50_000_000_000_000))
+                .collect(),
+        });
         let canonical = canonical_rpc_history(&blocks);
         assert_eq!(canonical[0].height, 0);
         assert!(canonical[0].outputs.is_empty());

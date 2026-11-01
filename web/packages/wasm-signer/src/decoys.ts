@@ -10,20 +10,23 @@
  * This module ports the native policy from `botho/src/decoy_selection.rs`:
  *
  * - candidates younger than {@link MIN_DECOY_AGE_BLOCKS} are never decoys;
- * - each decoy is drawn from the {@link ageSimilarityBand} around the real
- *   input's age (±{@link AGE_SIMILARITY_SPREAD_BPS} bps, lower bound floored at
- *   the confirmation minimum), identical integer bps math to the Rust
- *   `age_similarity_band` — a shared fixture
+ * - each ring draws ONE random-offset age window
+ *   ({@link drawAgeSimilarityWindow}, #1692 / #1755): width 20% of the real
+ *   input's age (2 × {@link AGE_SIMILARITY_SPREAD_BPS} bps), positioned so the
+ *   real input's age is uniform inside it, lower bound floored at the
+ *   confirmation minimum. Identical integer math to the Rust
+ *   `age_similarity_window`; a shared fixture
  *   (`test/fixtures/decoy-age-band.json`) is checked by BOTH the vitest suite
- *   and a Rust unit test so the two cannot drift;
- * - when the band cannot supply enough members (sparse chain or a degenerate
- *   band) the remaining slots are filled with the nearest-aged eligible
- *   candidates, exactly as `GammaDecoySelector::select_decoys_for_input` does;
- * - in-band sampling is uniform without replacement driven by a CSPRNG
- *   (`crypto.getRandomValues` with rejection sampling — never `Math.random`).
- *
- * Gamma/OSPEAD weighting inside the band is a native refinement not ported
- * here; band + uniform CSPRNG is the required minimum (Curator plan, #1693).
+ *   and a Rust unit test so the two cannot drift. A window centred on the real
+ *   input (the pre-#1692 {@link ageSimilarityBand}) made the real input the
+ *   median-age ring member;
+ * - decoys are a uniform sample without replacement from the window, driven by
+ *   a CSPRNG (`crypto.getRandomValues` with rejection sampling — never
+ *   `Math.random`). The node, CLI and web pickers all use this rule;
+ * - when the window cannot supply enough members (sparse chain or a degenerate
+ *   window) the remaining slots are filled with the nearest-aged eligible
+ *   candidates to the real input, exactly as
+ *   `GammaDecoySelector::select_decoys_for_input` does.
  *
  * This is WALLET POLICY only. The node validates ring well-formedness, not how
  * members were chosen, so nothing here changes consensus or ring size.
@@ -63,6 +66,54 @@ export function ageSimilarityBand(realInputAge: number): [number, number] {
   return [Number(min), Number(max)]
 }
 
+/**
+ * Total width `W = 2 × delta` of the decoy age window (blocks). Port of the
+ * Rust `age_similarity_window_width`.
+ */
+export function ageSimilarityWindowWidth(realInputAge: number): number {
+  if (!Number.isSafeInteger(realInputAge) || realInputAge < 0) {
+    throw new Error(`Invalid real input age: ${realInputAge}`)
+  }
+  const delta = (BigInt(realInputAge) * BigInt(AGE_SIMILARITY_SPREAD_BPS)) / 10_000n
+  return Number(2n * delta)
+}
+
+/**
+ * Inclusive `[minAge, maxAge]` decoy-age window `offset` blocks below the real
+ * input's age: `[real − offset, real − offset + W]`, `offset` clamped to
+ * `0..=W`, lower bound floored at {@link MIN_DECOY_AGE_BLOCKS}. A byte-for-byte
+ * port of the Rust `age_similarity_window` (#1692). `offset = W / 2` is
+ * {@link ageSimilarityBand}. Degenerate (`minAge > maxAge`) exactly when the
+ * real age is below the confirmation floor.
+ */
+export function ageSimilarityWindow(realInputAge: number, offset: number): [number, number] {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new Error(`Invalid window offset: ${offset}`)
+  }
+  const width = BigInt(ageSimilarityWindowWidth(realInputAge))
+  let o = BigInt(offset)
+  if (o > width) o = width
+  const start = BigInt(realInputAge) - o
+  const min = start < BigInt(MIN_DECOY_AGE_BLOCKS) ? BigInt(MIN_DECOY_AGE_BLOCKS) : start
+  const max = start + width
+  if (max > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`Real input age ${realInputAge} is too large for an age window`)
+  }
+  return [Number(min), Number(max)]
+}
+
+/**
+ * Union of every window {@link drawAgeSimilarityWindow} can return:
+ * `[real − W, real + W]` (lower bound floored at the confirmation minimum).
+ */
+export function ageSimilarityEnvelope(realInputAge: number): [number, number] {
+  const width = ageSimilarityWindowWidth(realInputAge)
+  return [
+    Math.max(realInputAge - width, MIN_DECOY_AGE_BLOCKS),
+    ageSimilarityWindow(realInputAge, 0)[1],
+  ]
+}
+
 /** Source of cryptographically secure random bytes. */
 export type RandomFill = (bytes: Uint32Array) => Uint32Array
 
@@ -93,6 +144,40 @@ export function randomIndex(n: number, fill: RandomFill = defaultRandomFill): nu
     const v = buf[0]
     if (v < limit) return v % n
   }
+}
+
+/**
+ * Uniform integer in `[0, n)` for any safe-integer `n >= 1`. Bounds up to `2^32` use
+ * {@link randomIndex} (one 32-bit draw per attempt); larger bounds draw a
+ * 53-bit value from two 32-bit words (`(w0 >>> 11) × 2^32 + w1`) with
+ * rejection sampling, so there is no modulo bias.
+ */
+export function randomInteger(n: number, fill: RandomFill = defaultRandomFill): number {
+  if (!Number.isSafeInteger(n) || n < 1) {
+    throw new Error(`randomInteger: invalid bound ${n}`)
+  }
+  if (n <= 0x1_0000_0000) return randomIndex(n, fill)
+  const range = 2 ** 53
+  const limit = range - (range % n)
+  const buf = new Uint32Array(2)
+  for (;;) {
+    fill(buf)
+    const v = (buf[0] >>> 11) * 0x1_0000_0000 + buf[1]
+    if (v < limit) return v % n
+  }
+}
+
+/**
+ * Draw the random-offset decoy-age window for one ring (#1692): the offset is
+ * uniform in `0..=W` (one {@link randomInteger} draw of bound `W + 1`), so the
+ * real input's age is uniform among the window's ages.
+ */
+export function drawAgeSimilarityWindow(
+  realInputAge: number,
+  fill: RandomFill = defaultRandomFill,
+): [number, number] {
+  const width = ageSimilarityWindowWidth(realInputAge)
+  return ageSimilarityWindow(realInputAge, randomInteger(width + 1, fill))
 }
 
 /** In-place Fisher-Yates shuffle driven by {@link randomIndex}. */
@@ -134,9 +219,10 @@ export function outputAge(output: Pick<ChainOutput, 'height' | 'targetKey'>, cha
  * Select `count` decoys for one real input of age `realInputAge`.
  *
  * `pool` must already exclude every real input, lottery rows and placeholder
- * keys; this function applies the confirmation floor, the age band and the
- * nearest-age fallback. Throws `Not enough decoys on chain …` when fewer than
- * `count` eligible (confirmed) candidates exist.
+ * keys; this function applies the confirmation floor, the random-offset age
+ * window (drawn after the eligibility check) and the nearest-age fallback.
+ * Throws `Not enough decoys on chain …` when fewer than `count` eligible
+ * (confirmed) candidates exist.
  */
 export function selectDecoysForInput(
   pool: ChainOutput[],
@@ -158,7 +244,9 @@ export function selectDecoysForInput(
     )
   }
 
-  const [minAge, maxAge] = ageSimilarityBand(realInputAge)
+  // Random-offset window (#1692 / #1755): the real input's age is uniform
+  // inside it.
+  const [minAge, maxAge] = drawAgeSimilarityWindow(realInputAge, fill)
   const inBand: AgedCandidate[] = []
   const outOfBand: AgedCandidate[] = []
   for (const c of eligible) {
@@ -166,7 +254,7 @@ export function selectDecoysForInput(
     else outOfBand.push(c)
   }
 
-  // Phase 1: uniform sample WITHOUT replacement from the band (partial
+  // Phase 1: uniform sample WITHOUT replacement from the window (partial
   // Fisher-Yates over a copy, CSPRNG-driven).
   const selected: AgedCandidate[] = []
   const take = Math.min(count, inBand.length)
