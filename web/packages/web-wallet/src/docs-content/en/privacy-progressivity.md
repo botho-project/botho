@@ -130,7 +130,7 @@ Every eligible output has the same chance of being drawn.
 Neither value nor cluster factor enters the draw.
 ```
 
-Four winners are drawn per block from outputs that are at least 720 blocks old and worth at least 1 µBTH, within a 10,000-block window (at most 10,000 candidates, from a seeded offset). The pool (80% of fees, plus anything carried forward) pays out the lesser of what is available and a per-block cap.
+Four winners are drawn per block from outputs that are at least 720 blocks old and worth at least 1 µBTH, within a 10,000-block window (at most 10,000 candidates, from a seeded offset). The pool (80% of fees, plus the block's lottery emission share of the block reward (0% in the bootstrap epoch, then 10% more per halving, capped at 50%), plus anything carried forward) pays out the lesser of what is available and a per-block cap.
 
 Progressivity lives on the *intake* side: progressive fees and demurrage fill the pool. The earlier value ÷ cluster-factor weighting was retired. Because the draw is uniform, splitting a position into many outputs can currently improve your odds ([#1682](https://github.com/botho-project/botho/issues/1682)); this and related questions ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) are open decisions.
 

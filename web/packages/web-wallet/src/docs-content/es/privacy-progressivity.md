@@ -130,7 +130,7 @@ Toda salida elegible tiene la misma probabilidad de ser elegida.
 Ni el valor ni el factor de clúster intervienen en el sorteo.
 ```
 
-En cada bloque se eligen cuatro ganadores entre las salidas con al menos 720 bloques de antigüedad y un valor de al menos 1 µBTH, dentro de una ventana de 10 000 bloques (como máximo 10 000 candidatos, a partir de un desplazamiento derivado de una semilla). El fondo (80 % de las comisiones más lo arrastrado) paga el menor entre lo disponible y un límite por bloque.
+En cada bloque se eligen cuatro ganadores entre las salidas con al menos 720 bloques de antigüedad y un valor de al menos 1 µBTH, dentro de una ventana de 10 000 bloques (como máximo 10 000 candidatos, a partir de un desplazamiento derivado de una semilla). El fondo (80 % de las comisiones, más la cuota de emisión de lotería de la recompensa del bloque (0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado) paga el menor entre lo disponible y un límite por bloque.
 
 La progresividad está en el lado de la *entrada*: las comisiones progresivas y el demurrage llenan el fondo. Se retiró la ponderación anterior valor ÷ factor de clúster. Como el sorteo es uniforme, dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)); esta y otras cuestiones relacionadas ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) son decisiones abiertas.
 

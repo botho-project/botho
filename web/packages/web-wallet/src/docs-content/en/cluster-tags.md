@@ -99,7 +99,7 @@ One drawing runs per block. Winners are drawn **uniformly** among eligible outpu
 
 - **Eligibility:** at least 720 blocks old, worth at least 1 µBTH (10^6 picoBTH), and inside the most recent 10,000-block window. At most 10,000 eligible candidates are considered per draw, starting from a seeded offset.
 - **Winners:** 4 per drawing, chosen without replacement using a seed bound to proof-of-work.
-- **Payout:** the pool is the 80% fee share plus anything carried forward from earlier blocks; each drawing pays out the lesser of what is available and the per-block cap, and the remainder carries forward.
+- **Payout:** the pool is the 80% fee share, plus the block's lottery emission share (a slice of the block reward routed to the pool instead of the miner: 0% in the bootstrap epoch, then 10% more per halving, capped at 50%), plus anything carried forward from earlier blocks; each drawing pays out the lesser of what is available and the per-block cap, and the remainder carries forward.
 
 Progressivity now comes from the *intake* side (progressive fees and demurrage), not from the draw. Some economics of the draw are still open decisions: splitting a position into many outputs can currently improve your odds ([#1682](https://github.com/botho-project/botho/issues/1682)), and past winners compound their share ([#1690](https://github.com/botho-project/botho/issues/1690)); see also [#1689](https://github.com/botho-project/botho/issues/1689) and [#1691](https://github.com/botho-project/botho/issues/1691). Treat this section as describing the mechanism as built.
 

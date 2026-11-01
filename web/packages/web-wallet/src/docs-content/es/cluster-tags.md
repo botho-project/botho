@@ -99,7 +99,7 @@ En cada bloque se realiza un sorteo. Los ganadores se eligen de forma **uniforme
 
 - **Elegibilidad:** al menos 720 bloques de antigüedad, valor de al menos 1 µBTH (10^6 picoBTH) y dentro de la ventana reciente de 10 000 bloques. Se consideran como máximo 10 000 candidatos elegibles por sorteo, a partir de un desplazamiento derivado de una semilla.
 - **Ganadores:** 4 por sorteo, elegidos sin reemplazo con una semilla vinculada a la prueba de trabajo.
-- **Pago:** el fondo es la parte del 80 % de las comisiones más lo arrastrado de bloques anteriores; cada sorteo paga el menor entre lo disponible y el límite por bloque, y el resto se arrastra.
+- **Pago:** el fondo es la parte del 80 % de las comisiones, más la cuota de emisión de lotería del bloque (una parte de la recompensa del bloque que se destina al fondo en lugar de al minero: 0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado de bloques anteriores; cada sorteo paga el menor entre lo disponible y el límite por bloque, y el resto se arrastra.
 
 La progresividad proviene ahora del lado de la *entrada* (comisiones progresivas y demurrage), no del sorteo. Parte de la economía del sorteo sigue siendo una decisión abierta: dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)) y los ganadores anteriores acumulan su cuota ([#1690](https://github.com/botho-project/botho/issues/1690)); véanse también [#1689](https://github.com/botho-project/botho/issues/1689) y [#1691](https://github.com/botho-project/botho/issues/1691). Esta sección describe el mecanismo tal como está construido.
 
