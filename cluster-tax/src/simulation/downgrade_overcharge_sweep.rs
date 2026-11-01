@@ -94,6 +94,7 @@ use crate::{
     },
     ClusterFactorCurve,
 };
+use bth_transaction_types::RING_SIZE;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -278,8 +279,10 @@ pub fn honest_archetypes() -> Vec<HonestArchetype> {
 pub struct HonestSweepParams {
     /// Number of honest spends drawn per (contamination) evaluation.
     pub n_spends: usize,
-    /// Ring size (real input + decoys), matching the leak test's 11-member
-    /// ring.
+    /// Ring size (real input + decoys). Defaults to the node's ring size
+    /// ([`RING_SIZE`], equal to consensus `MIN_RING_SIZE` = 20). The sweep
+    /// originally ran at ring 11 (the leak test's ring); it was re-run at
+    /// ring 20 on 2026-11-01 (#1796).
     pub ring_size: usize,
     /// The wealthy cluster's tagged wealth in BTH (drives the 5.745× floor).
     pub wealthy_cluster_wealth_bth: u64,
@@ -298,7 +301,7 @@ impl Default for HonestSweepParams {
     fn default() -> Self {
         Self {
             n_spends: 20_000,
-            ring_size: 11,
+            ring_size: RING_SIZE,
             wealthy_cluster_wealth_bth: 10_000_000,
             bg_decoy_value_bth: (10, 2_000),
             wealthy_decoy_value_bth: (5_000, 100_000),
@@ -639,8 +642,9 @@ fn evaluate_exploit(
 // ===========================================================================
 //
 // §4.5 showed the ONLY honest over-charge channel is a wealthy decoy
-// contaminating a background spender's value-weighted ring floor (8.3% FP at 1%
-// contamination). The wallet-layer fix mirrors the shipped
+// contaminating a background spender's value-weighted ring floor (14.3% FP at
+// 1% contamination with ring 20; 8.3% at the original ring 11). The
+// wallet-layer fix mirrors the shipped
 // `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) age band in
 // `botho/src/decoy_selection.rs`: draw only decoys whose cluster factor is
 // within a band around the real input's factor, so a background (1×) spender
@@ -653,8 +657,9 @@ fn evaluate_exploit(
 // constraint is the band's UPPER edge staying below the nearest wealthy class.
 
 /// The pathological raw decoy contamination the factor band is stress-tested
-/// against: 5% wealthy decoys (the §4.5 level that produced a 34% FP rate with
-/// NO band filter). A good band must drive that back to ~0.
+/// against: 5% wealthy decoys (the §4.5 level that produced a 52% FP rate
+/// at ring 20, 34% at ring 11, with NO band filter). A good band must drive
+/// that back to ~0.
 pub const FACTOR_BAND_CONTAMINATION_BPS: u32 = 500;
 
 /// Candidate factor-similarity band widths (basis points of multiplicative

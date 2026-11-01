@@ -248,21 +248,24 @@ const DEFAULT_GAMMA_SCALE_DAYS: f64 = 1.61;
 ///
 /// PR #595's sensitivity sweep measured the honest over-charge under `@max` as
 /// a function of the ring's decoy age-spread, against the #314 tolerance
-/// (≤15%):
+/// (≤15%). It ran at ring 11; it was re-run at the node's ring size of 20 on
+/// 2026-11-01 (#1796, `simulation::decoy_quantile_sweep`), with the same
+/// verdict:
 ///
-/// | honest decoy age-spread | honest over-charge | within #314 tol (≤15%) |
-/// |-------------------------|--------------------|------------------------|
-/// | ±5%                     | 1.039              | yes                    |
-/// | ±10%                    | 1.077              | yes                    |
-/// | ±20%                    | 1.158              | no                     |
-/// | ±35%                    | 1.277              | no                     |
-/// | ±50%                    | 1.388              | no                     |
+/// | honest decoy age-spread | over-charge, ring 11 | over-charge, ring 20 | within #314 tol (≤15%) |
+/// |-------------------------|----------------------|----------------------|------------------------|
+/// | ±5%                     | 1.039                | 1.043                | yes                    |
+/// | ±10%                    | 1.077                | 1.086                | yes                    |
+/// | ±20%                    | 1.158                | 1.171                | no                     |
+/// | ±35%                    | 1.277                | 1.299                | no                     |
+/// | ±50%                    | 1.388                | 1.426                | no                     |
 ///
-/// ±10% is the widest empirically-safe band (1.077 ≤ 1.15). We adopt ±10% as
-/// the policy: it maximizes the eligible decoy pool (and hence anonymity) among
-/// the #314-safe bands. Because `@max` reads the single oldest member, the
-/// realized over-charge is bounded above by `max_ring_age / real_age`, which
-/// this band caps at ≤1.10 by construction — strictly inside the #314 bound.
+/// ±10% is the widest empirically-safe band (1.086 ≤ 1.15 at ring 20). We
+/// adopt ±10% as the policy: it maximizes the eligible decoy pool (and hence
+/// anonymity) among the #314-safe bands. Because `@max` reads the single
+/// oldest member, the realized over-charge is bounded above by
+/// `max_ring_age / real_age`, which this band caps at ≤1.10 by construction —
+/// strictly inside the #314 bound.
 ///
 /// The gamma/OSPEAD age distribution is still applied WITHIN the band, so the
 /// realistic recent-biased spend shape is preserved among age-similar decoys.
@@ -306,8 +309,8 @@ pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
 /// ring floor is exact. A single high-value **wealthy decoy** in a background
 /// spender's ring inflates the value-weighted floor above 1× and spuriously
 /// trips the downgrade charge (the honest-overcharge channel quantified in
-/// `docs/research/demurrage-downgrade-overcharge.md` §4.5: 8.3% false positives
-/// at just 1% contamination).
+/// `docs/research/demurrage-downgrade-overcharge.md` §4.5: 14.3% false
+/// positives at just 1% contamination with ring 20; 8.3% at ring 11).
 ///
 /// This band closes that channel at the wallet layer, exactly as
 /// [`AGE_SIMILARITY_SPREAD_BPS`] closes the age-dilution channel for the

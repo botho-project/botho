@@ -662,8 +662,10 @@ mod cli {
             #[arg(long, default_value = "10")]
             adversary_whales: usize,
 
-            /// Ring size (1 real input + ring_size-1 decoys)
-            #[arg(long, default_value = "11")]
+            /// Ring size (1 real input + ring_size-1 decoys); defaults to the
+            /// node's ring size (`bth_transaction_types::RING_SIZE`, 20).
+            /// Pass `--ring-size 11` to reproduce the original #577 gate.
+            #[arg(long, default_value_t = bth_transaction_types::RING_SIZE)]
             ring_size: usize,
 
             /// Simulated rounds (each round ~= one year of holding)
