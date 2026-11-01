@@ -164,41 +164,44 @@ where $v_i$ is the value of input $i$ and $\vec{t}_i$ is its tag vector.
 \textbf{Example}: Combining a 70 BTH UTXO (100\% cluster A) with a 30 BTH
 UTXO (100\% cluster B) produces output tags: $\{(A, 0.7), (B, 0.3)\}$.
 
-\subsubsection{Age-Based Tag Decay}
+\subsubsection{Tag Decay (Wallet Policy, as Built)}
+\label{sec:tag-decay}
 
-To encourage circulation and prevent wash trading, tags decay over time.
-However, decay only applies when UTXOs meet an age threshold:
+Tags are meant to fade as coins circulate, so that genuine commerce moves a
+coin toward the background factor. As built, decay is a \emph{wallet} rule,
+not a consensus rule:
 
-\begin{equation}
-\vec{t}'_i = \begin{cases}
-0.95 \cdot \vec{t}_i & \text{if age}(\text{UTXO}_i) \geq T_{\min} \\
-\vec{t}_i & \text{otherwise}
-\end{cases}
-\end{equation}
+\begin{itemize}
+  \item \textbf{Stock wallets} (the node wallet and the CLI wallet) apply a
+    flat 5\% decay on every transfer when they compute output tags, via
+    value-weighted blending of the inputs followed by
+    \begin{equation}
+    \vec{t}'_{\text{out}} = 0.95 \cdot \vec{t}_{\text{out}}
+    \end{equation}
+    (\path{DEFAULT_CLUSTER_DECAY_RATE} $= 50{,}000$ ppm,
+    \path{botho/src/wallet.rs},
+    \path{botho-wallet/src/transaction.rs}). There is no age gate: a
+    weight halves after $\ln 0.5 / \ln 0.95 \approx 13.5$ transfers, however
+    quickly they are made.
+  \item \textbf{Consensus} applies no decay
+    (\path{CONSENSUS_TAG_DECAY_RATE} $= 0$,
+    \path{botho/src/ledger/store.rs}). Block validation only rejects
+    \emph{inflation}: for each cluster, the outputs may not claim more tag
+    mass than the per-ring maximum of the inputs
+    (\path{check_cluster_tag_inheritance},
+    \path{store.rs}). Smaller or empty output tags are accepted, so a
+    modified wallet can drop a coin's tags in one transaction. Its only
+    consensus cost is the class-downgrade charge of
+    Section~\ref{sec:demurrage-class-transition}. This is the as-built
+    behaviour, pending \#1687.
+\end{itemize}
 
-where $T_{\min} = 720$ blocks ($\approx$ 1 hour at the 5\,s reference block
-time, and correspondingly longer when the network runs slower).
-
-\textbf{Wash Trading Resistance}: Since new outputs must wait $T_{\min}$
-before decay applies again, the binding constraint is age, not transaction
-count: at the 5\,s reference a holder can trigger at most one decay event per
-hour (24/day), so rapid self-transfers achieve no decay.
-
-\begin{table}[h]
-\centering
-\caption{Tag decay limits (at the 5\,s reference; $\times$0.95 per event, one
-event per 720 blocks)}
-\label{tab:decay-limits}
-\begin{tabular}{@{}lcc@{}}
-\toprule
-\textbf{Attack} & \textbf{Decay Events} & \textbf{Maximum Decay} \\
-\midrule
-Rapid wash (1 minute) & 0 & 0\% \\
-Patient wash (1 day) & 24 & 71\% \\
-Patient wash (1 week) & 168 & $\approx$100\% \\
-\bottomrule
-\end{tabular}
-\end{table}
+Earlier drafts of this section specified an \emph{age-gated} decay (decay
+only when the spent UTXO is at least 720 blocks old, bounding a wash trader to
+one decay event per 720 blocks). That rule exists as a library model
+(\path{cluster-tax/src/age_decay.rs}) but has no production caller, and the
+event rates quoted for it (24/day at 5\,s blocks, 12/day at 10\,s blocks)
+describe a rule the network does not run.
 
 \subsubsection{Cluster Wealth Accumulation}
 \label{sec:cluster-wealth}
@@ -253,18 +256,37 @@ $\gtrsim$1{,}000{,}000 BTH & $\approx$5.2$\times$ -- 6.0$\times$ \\
 
 \subsubsection{Ring Signature Tag Propagation}
 
-Ring signatures hide which input is real among $n$ decoys. To prevent fee
-evasion via low-factor decoy selection, tags propagate \textit{conservatively}:
+Ring signatures hide which input is real among $n$ ring members, but every
+member's tag vector is public. As built, the consensus fee floor
+(\path{consensus_fee_floor},
+\path{botho/src/ledger/store/validation.rs}) uses tags in three
+places:
 
 \begin{enumerate}
-  \item All ring members' tag vectors are publicly known
-  \item Fee is calculated using the \textit{maximum} cluster factor among
-    ring members
-  \item Output tags propagate from the real input (verified via ZK proof
-    but not revealed)
+  \item \textbf{Size fee factor}: the cluster factor of the size-based fee is
+    computed from the spender's \emph{output} tags, weighted by output value
+    against the committed per-cluster wealth
+    (\path{effective_cluster_wealth_from_outputs},
+    \path{validation.rs}).
+  \item \textbf{Ring floor for demurrage}: the demurrage factor is floored at
+    the \emph{value-weighted centroid} of the ring members' effective
+    cluster wealth, mapped through the factor curve
+    (\path{ring_centroid_floored_factor}, \path{validation.rs};
+    \path{ring_centroid_implied_factor},
+    \path{cluster-tax/src/demurrage.rs}). It is a mean, not the maximum
+    factor among ring members. Because the spender chooses the decoys,
+    high-value low-factor decoys can pull the floor down (as built, pending
+    \#1686).
+  \item \textbf{Inflation guard}: output tags may not claim more per-cluster
+    mass than the per-ring maximum of the inputs
+    (Section~\ref{sec:tag-decay}).
 \end{enumerate}
 
-This ensures attackers cannot reduce fees by choosing low-factor decoys.
+Output tags are written by the wallet from the \emph{real} inputs and are
+published in plaintext; no zero-knowledge proof binds them to the real input.
+An observer can therefore match output tags against ring members' tags,
+which weakens ring privacy (as built, pending \#1756). Committed tag vectors
+with ZK inheritance proofs are a design target, not implemented.
 
 \subsubsection{Sybil Resistance Analysis}
 
@@ -275,9 +297,11 @@ The cluster tag system resists common attacks:
     inherit the parent's cluster attribution unchanged.
   \item \textbf{Creating multiple addresses}: All outputs from the same
     cluster share the same factor.
-  \item \textbf{Wash trading}: Age-based gating limits decay to $\sim$24
-    events per day maximum (at the 5\,s reference; fewer when blocks are
-    slower).
+  \item \textbf{Wash trading}: Not rate-limited by consensus. Stock wallets
+    decay tags 5\% per transfer, and consensus accepts dropped tags, so the
+    binding cost of shedding a high factor is the class-downgrade charge
+    (Section~\ref{sec:demurrage-class-transition}), not time (as built,
+    pending \#1687; that charge is zero in epoch~0, pending \#1685).
   \item \textbf{Mixing through exchanges}: Reduces cluster concentration
     over time, but requires actual economic activity (legitimate use case).
 \end{itemize}
@@ -380,6 +404,16 @@ Self-transfers through $n$ intermediate addresses incur strictly greater
 fees than direct transfer, with overhead $\Omega(n \cdot s_{\text{tx}} \cdot b \cdot f)$.
 \end{corollary}
 
+\textbf{Premises (as built).} Step~1 assumes outputs carry the inherited
+tags. Consensus enforces only that they claim no \emph{more} cluster mass than
+the inputs (Section~\ref{sec:tag-decay}), so the theorem and corollary hold
+for wallets that write inherited tags; a modified wallet may write empty tags
+and pay only the class-downgrade charge (pending \#1687, \#1686, \#1685). The
+size-fee model $b \cdot s \cdot \phi$ is the consensus floor; at today's
+constants the flat relay minimum of $10^{8}$ pico-BTH per transaction exceeds
+it for ordinary transactions, so the factor term rarely binds in practice
+(pending \#1688, \#1684).
+
 \subsection{Validation Rules}
 
 A private transaction is valid if and only if:
@@ -410,10 +444,22 @@ A private transaction is valid if and only if:
   \item \textbf{Range Proofs}: Bulletproofs verify for all output
     commitments (amounts in $[0, 2^{64})$)
 
-  \item \textbf{Fee}: $\text{fee} \geq \text{min\_fee}(\text{size}, \text{cluster\_factor})$
+  \item \textbf{Fee}: $\text{fee} \geq \text{min\_fee}(\text{size}, \text{cluster\_factor}, n_{\text{out}}) + \text{demurrage}$,
+    the congestion-free consensus floor
+    (\path{verify_consensus_fee_floor},
+    \path{botho/src/ledger/store/validation.rs})
 
   \item \textbf{Size}: Total serialized size $\leq$ 100 KB
 \end{enumerate}
+
+\textbf{Relay policy versus consensus (as built).} The 20-member minimum ring
+size, the $10^{6}$ pico-BTH dust floor and the $10^{8}$ pico-BTH minimum fee
+(\path{MIN_TX_FEE}) are checked by \path{is_valid_structure}
+(\path{transaction/clsag/src/lib.rs}), whose only production caller is
+mempool admission (\path{botho/src/mempool.rs}). Block validation does
+not call it, so a block producer can include its own transactions that a
+default node would not relay. These limits are relay policy today, pending
+\#1684.
 
 \subsection{Transaction Size Analysis}
 
@@ -442,21 +488,37 @@ For comparison, a post-quantum ring signature would add approximately
 
 \subsection{Decoy Selection}
 
-Ring members are selected to maximize anonymity:
+Decoy selection is wallet policy; consensus checks only that ring members
+exist and are unspent. As built:
 
 \begin{enumerate}
-  \item \textbf{Age distribution}: Decoys follow the empirical spend-age
-    distribution (recent outputs are more likely to be real)
+  \item \textbf{Age distribution}: The node and CLI pickers draw decoys from
+    a gamma spend-age model inside a $\pm 10\%$ age band centred on the real
+    input's age (\path{age_similarity_band},
+    \path{botho/src/decoy_selection.rs};
+    \path{botho-wallet/src/ring_builder.rs}). The band bounds the
+    demurrage over-charge of the max-age ring clock, but centring it on the
+    real input makes the real input the ring's median-age member (pending
+    \#1755).
 
-  \item \textbf{Cluster similarity}: At least 70\% cosine similarity
-    between decoy and real cluster tags (prevents fingerprinting)
+  \item \textbf{Cluster similarity}: Mempool admission rejects a ring whose
+    value-weighted tag centroid has cosine similarity below 0.7 with the
+    output tags (\path{RING_TAG_SIMILARITY_THRESHOLD},
+    \path{botho/src/mempool.rs}); empty tags score 1.0. This is relay
+    policy, not a consensus rule. No production picker selects decoys by
+    tag, and output tags are published in plaintext (pending \#1756).
 
-  \item \textbf{Output type matching}: Decoys match the real output's
-    characteristics (amount range, if known)
-
-  \item \textbf{Randomization}: Subject to above constraints, selection
-    is randomized
+  \item \textbf{Randomization}: Subject to the above constraints, selection
+    is randomized. Browser, Snap and claim-link signers apply the same
+    $\pm 10\%$ age band and pick uniformly inside it with a CSPRNG
+    (\path{web/packages/wasm-signer/src/decoys.ts}; \#1693, \#1735). Their pick is uniform
+    within the band, not the gamma model above, and the median-age caveat
+    (pending \#1755) applies to them too.
 \end{enumerate}
+
+Measured identification rates for each production picker are in
+\path{cluster-tax/src/simulation/PRIVACY_ANALYSIS.md}, which the privacy
+simulation rebuild (\#1700) regenerates.
 
 \subsection{Transaction Malleability}
 

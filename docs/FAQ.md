@@ -214,9 +214,9 @@ Fees are based on **source wealth** — where your coins originated. Coins trace
 
 Through legitimate economic activity. When you spend coins and they mix with others' coins in transactions, the cluster tags naturally decay. Key factors:
 
-- **Age**: UTXOs must be at least ~2 hours old before any decay applies
+- **Decay**: The standard wallets reduce tag weights by 5% on each transfer
+  (wallet policy; the network itself applies no decay and no rate limit, see #1687)
 - **Mixing**: Combining with coins from different sources dilutes tags
-- **Rate limit**: Maximum ~12 decay events per day, regardless of transaction count
 
 Through sustained real commerce — decay plus blending with counterparties' coins — original cluster attribution becomes negligible.
 
