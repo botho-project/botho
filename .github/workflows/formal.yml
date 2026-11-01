@@ -11,14 +11,15 @@ name: Formal (Lean)
 #           compiled .olean files, as the artifact `formal-lib`.
 #   verify  TRUSTED. A fresh runner with no cache. It checks out
 #           formal/scripts/ (verify-artifacts.sh, AxiomReport.lean, the
-#           scan) and axioms-allowlist.txt from the BASE commit, never from
-#           the pull request, downloads `formal-lib`, and runs leanchecker
-#           and the independent axiom walk over it. It never runs `lake` and
+#           scan), axioms-allowlist.txt and lakefile.toml from the BASE
+#           commit, never from the pull request, downloads `formal-lib`,
+#           and runs leanchecker and the independent axiom walk over it. It never runs `lake` and
 #           never compiles or imports model code through the Lean frontend,
 #           so model code does not run in this job (see "Limits" in
 #           formal/README.md). The pull request's sources are read as data:
-#           the base branch's scan checks them and the manifest is parsed as
-#           text.
+#           the base branch's scan checks them, the manifest is parsed as
+#           text, and their lakefile.toml must compile the same sources as
+#           the base's (same srcDir, libraries, roots and globs).
 #
 # The workflow file itself comes from the pull request (that is how
 # `pull_request` works; `pull_request_target` would be worse: it runs with a
@@ -167,7 +168,7 @@ jobs:
       # base of a pull request, otherwise the pushed (already merged) commit.
       TRUSTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
-      - name: Check out gate scripts and allow-list (base commit)
+      - name: Check out gate scripts, allow-list and lakefile (base commit)
         uses: actions/checkout@v7
         with:
           ref: ${{ env.TRUSTED_SHA }}
@@ -177,6 +178,8 @@ jobs:
           sparse-checkout: |
             /formal/scripts/
             /formal/axioms-allowlist.txt
+            /formal/lakefile.toml
+            /formal/lakefile.lean
       - name: Check out pull request sources (data only, never built)
         uses: actions/checkout@v7
         with:
@@ -209,6 +212,8 @@ jobs:
           sysroot="$HOME/.elan/toolchains/$(sed -e 's|/|--|g' -e 's|:|---|g' <<<"$tc")"
           "$sysroot/bin/lean" --version
           echo "sysroot=$sysroot" >>"$GITHUB_OUTPUT"
+      # No lean, lake or elan is on PATH here: verify-artifacts.sh takes the
+      # toolchain from --sysroot alone (LEAN_SYSROOT for every Lean process).
       - name: Verify (base-commit gates over the compiled library)
         env:
           SYSROOT: ${{ steps.toolchain.outputs.sysroot }}
@@ -225,7 +230,8 @@ jobs:
             --lib "$RUNNER_TEMP/formal-lib" \
             --sources untrusted/formal \
             --sysroot "$SYSROOT" \
-            --allowlist trusted/formal/axioms-allowlist.txt
+            --allowlist trusted/formal/axioms-allowlist.txt \
+            --base-lakefile trusted/formal/lakefile.toml
 
   formal-gate:
     needs: [changes, build, verify]

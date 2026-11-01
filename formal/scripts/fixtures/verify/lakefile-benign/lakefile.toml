@@ -1,0 +1,12 @@
+# A benign edit (fixture lakefile-benign): a version bump, a comment and an
+# option. The layout check must accept it, since it compiles the same
+# sources. Keep the layout keys equal to formal/lakefile.toml's.
+name = "botho_formal"
+version = "0.1.1"
+defaultTargets = ["Botho"]
+
+[leanOptions]
+autoImplicit = false
+
+[[lean_lib]]
+name = "Botho"
