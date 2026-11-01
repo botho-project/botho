@@ -59,7 +59,7 @@ Con la oferta de ~611M de BTH de la Fase 1 y a plena carga, el 2 % equivale a ap
 
 ### Comisiones de transacción
 
-Cada comisión se divide en dos: el **80 % se redistribuye** a los poseedores mediante la lotería inclinada por clúster, y el **20 % se quema**, creando una presión deflacionaria que compensa la emisión de cola.
+Cada comisión se divide en dos: el **80 % se redistribuye** a los poseedores mediante una lotería uniforme (tal como está construido), y el **20 % se quema**, creando una presión deflacionaria que compensa la emisión de cola.
 
 ```
 fee = tarifa por byte × tamaño de la transacción × factor de clúster × penalización por salida + comisiones de memo
@@ -130,7 +130,7 @@ A plena carga sostenida (bloques de 5 segundos; más lentos cuando la red está 
 
 ### ¿Por qué dividir las comisiones 80/20?
 
-- **Redistribución**: el 80 % regresa a los poseedores mediante la lotería inclinada por clúster, favoreciendo a las monedas bien circuladas
+- **Redistribución**: el 80 % regresa a los poseedores mediante una lotería uniforme entre las salidas elegibles (tal como está construido; véase [Etiquetas de clúster](#cluster-tags))
 - **Presión deflacionaria**: la quema del 20 % compensa la emisión de cola
 - **Predecible**: inflación neta = emisión bruta − quemas
 

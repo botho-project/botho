@@ -119,22 +119,22 @@ This means **privacy doesn't enable fee evasion.** A large real input dominates 
 
 ### The Lottery Redistribution
 
-Fees flow back to the community through a cluster-tilted lottery:
+Fees flow back to the community through a lottery drawn uniformly among eligible outputs (as built):
 
 **80% of all fees** are redistributed to eligible UTXOs. **20% are burned** (deflationary).
 
 **How selection works:**
 
 ```
-weight = value ÷ cluster factor
-
-Well-circulated UTXO (factor 1x):  full weight per BTH
-Whale-cluster UTXO (factor 6x):    1/6 the weight per BTH
+Every eligible output has the same chance of being drawn.
+Neither value nor cluster factor enters the draw.
 ```
 
-**Well-circulated coins win up to 6× more per BTH than concentrated wealth.** This is progressive redistribution without knowing anyone's identity — and because weight is value-based, splitting a position into many UTXOs never increases its total weight.
+Four winners are drawn per block from outputs that are at least 720 blocks old and worth at least 1 µBTH, within a 10,000-block window (at most 10,000 candidates, from a seeded offset). The pool (80% of fees, plus anything carried forward) pays out the lesser of what is available and a per-block cap.
 
-**Eligibility gates** prevent gaming: a UTXO must be at least 720 blocks old and worth at least 1 µBTH to participate.
+Progressivity lives on the *intake* side: progressive fees and demurrage fill the pool. The earlier value ÷ cluster-factor weighting was retired. Because the draw is uniform, splitting a position into many outputs can currently improve your odds ([#1682](https://github.com/botho-project/botho/issues/1682)); this and related questions ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) are open decisions.
+
+**Eligibility gates** limit gaming: a UTXO must be at least 720 blocks old and worth at least 1 µBTH to participate.
 
 ### Attack Resistance
 
@@ -159,10 +159,10 @@ Verdict: Attack defeated
 **Parking Attack (Split and Wait):**
 ```
 Attacker: Split into 100 UTXOs, wait for lottery winnings
-Result: Weight is value-based — splitting gains NO weight
-        Cluster factor inherits — the tilt still works against you
+Result: The draw is uniform per output, so as built extra outputs
+        can raise the odds of winning (open decision, #1682)
         Quadratic output fees make the split itself cost up to 100×
-Verdict: Attack defeated
+Verdict: Not fully defeated (open decision, #1682)
 ```
 
 **Wash Trading (Self-transfers):**
@@ -186,7 +186,7 @@ Botho achieves privacy + progressivity through layered design:
 | **Amount** | Pedersen commitments (in development — ADR 0006) | — |
 | **Fee rate** | — | Cluster factor curve (1-6×) |
 | **Holding cost** | — | Demurrage on idle wealthy-cluster coins |
-| **Redistribution** | Verifiable random drawing | Cluster-tilted weights (value ÷ factor) |
+| **Redistribution** | Verifiable random drawing | Uniform draw; progressivity from intake (fees, demurrage) |
 
 Each layer contributes to both goals without conflict.
 
@@ -209,8 +209,8 @@ Botho's privacy + progressivity mechanism works because:
 1. **We track provenance, not identity** — Where coins came from, not who owns them
 2. **Provenance correlates with wealth behavior** — Fresh minters are wealthy, active traders are merchants
 3. **Ring signatures preserve privacy** — Centroid validation prevents gaming
-4. **Cluster-tilted lottery is progressive** — Well-circulated coins win more per BTH
-5. **Value-based weights and quadratic output fees deter attacks** — Parking and splitting don't pay off
+4. **Progressive intake feeds a uniform lottery** — Fees and demurrage are progressive; the draw itself is uniform
+5. **Quadratic output fees raise the cost of splitting** — whether splitting pays off under the uniform draw is an open decision (#1682)
 6. **Commerce is rewarded** — Tags decay through legitimate trade; idle concentrated wealth pays demurrage
 
 The result: **The first cryptocurrency where you can be private AND contribute fairly to the network, where the wealthy pay more without anyone knowing who they are.**
