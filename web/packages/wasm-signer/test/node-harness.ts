@@ -17,6 +17,28 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fetchOutputBlocksPaged } from '@botho/core'
+
+/** A JSON-RPC caller as the live-node tests build it. */
+export type RpcCall = <T>(method: string, params: Record<string, unknown>) => Promise<T>
+
+/**
+ * Wrap a test RPC caller so `chain_getOutputs` returns the WHOLE requested
+ * range: the node clamps one call to 1000 blocks (#1656), and these tests
+ * fetch `[0, tip]`, which on a long pre-running chain (`BOTHO_LIVE_RPC`) would
+ * otherwise silently stop at block 999. Other methods pass through.
+ */
+export function withPagedOutputs(rpc: RpcCall): RpcCall {
+  return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+    if (method !== 'chain_getOutputs') return rpc<T>(method, params)
+    const start = Number(params.start_height ?? 0)
+    const end = Number(params.end_height ?? start + 100)
+    const blocks = await fetchOutputBlocksPaged(start, end, (from) =>
+      rpc<Array<{ height: number }>>(method, { ...params, start_height: from, end_height: end }),
+    )
+    return blocks as T
+  }
+}
 
 export interface NodeHarness {
   /** Base JSON-RPC URL, e.g. http://127.0.0.1:17599/rpc. */
