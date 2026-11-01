@@ -118,6 +118,33 @@ pub fn testnet_policy() -> MonetaryPolicy {
 mod tests {
     use super::*;
 
+    /// #1696: the sims' mirror of `mainnet_policy()` in `cluster-tax`
+    /// (`bth_cluster_tax::mainnet_monetary_policy`) must stay identical.
+    #[test]
+    fn mainnet_policy_matches_cluster_tax_mirror() {
+        let node = mainnet_policy();
+        let mirror = bth_cluster_tax::mainnet_monetary_policy();
+        assert_eq!(node.initial_reward, mirror.initial_reward);
+        assert_eq!(node.halving_interval, mirror.halving_interval);
+        assert_eq!(node.halving_count, mirror.halving_count);
+        assert_eq!(node.tail_inflation_bps, mirror.tail_inflation_bps);
+        assert_eq!(node.target_block_time_secs, mirror.target_block_time_secs);
+        assert_eq!(node.min_block_time_secs, mirror.min_block_time_secs);
+        assert_eq!(node.max_block_time_secs, mirror.max_block_time_secs);
+        assert_eq!(
+            node.difficulty_adjustment_interval,
+            mirror.difficulty_adjustment_interval
+        );
+        assert_eq!(
+            node.max_difficulty_adjustment_bps,
+            mirror.max_difficulty_adjustment_bps
+        );
+        assert_eq!(
+            node.expected_fee_burn_rate_bps,
+            mirror.expected_fee_burn_rate_bps
+        );
+    }
+
     #[test]
     fn test_mainnet_policy() {
         let policy = mainnet_policy();
