@@ -9,8 +9,10 @@ calls (and the plan/launch files it persists between retries).
 Tag rules:
 - `project=botho` + `Purpose=qualification` is the retention scheme accepted by
   `cloud_retention.py`; `SideProject=botho` is set at creation (#1576 decision 8).
-- Never emit `Project` (capital P). IAM tag keys match case-insensitively, and
-  `Project=botho-qualification` is denied to the botho-deploy role.
+- Never emit `Project` (capital P). It is forbidden by policy: IAM tag keys
+  match case-insensitively, so `Project` collides with `project`. (IAM does not
+  deny it: a 2026-10-25 botho-deploy dry-run with `Project=botho-qualification`
+  succeeded, #1610.)
 """
 import base64
 import datetime
@@ -31,7 +33,36 @@ SSH_PORT = 22
 HTTPS_PORT = 443
 HOST_LIFETIME = 82 * 3600       # Absolute host deadline; under the 83h maintenance cap.
 NODE_LIFETIME = 81 * 3600 + 1800
+NODE_MARGIN = HOST_LIFETIME - NODE_LIFETIME  # Nodes stop this long before the host.
 PREFUND_WINDOW = 6 * 3600
+# A rehearsal-only fleet may freeze a shorter host lifetime (#1610): at least
+# prefund and staging time plus the 1.5-2 h rehearsal infrastructure window
+# that discovery_plan.validate_lifetime() requires.
+MIN_REHEARSAL_LIFETIME = 4 * 3600
+EXECUTION_MODES = ('campaign', 'rehearsal_only')
+# The observer export account (staging's per-node observer `user`).
+OBSERVER_USER = 'botho'
+OBSERVER_SSHD_DROPIN = '/etc/ssh/sshd_config.d/41-botho-observer.conf'
+# Every sshd option that could widen the observer account beyond its one
+# forced export command (#1610 item 5). Rendered at bootstrap for the account,
+# and again with ForceCommand once staging has fixed the wrapper path.
+OBSERVER_SSHD_OPTIONS = (
+    ('AuthorizedKeysFile', '/etc/ssh/authorized_keys/%u'),  # Never ~/.ssh: the node runs as this account.
+    ('AllowTcpForwarding', 'no'),
+    ('AllowAgentForwarding', 'no'),
+    ('AllowStreamLocalForwarding', 'no'),
+    ('X11Forwarding', 'no'),
+    ('PermitTTY', 'no'),
+    ('PermitTunnel', 'no'),
+    ('PermitUserRC', 'no'),
+    ('GatewayPorts', 'no'),
+)
+# The netem smoke test proves the exact D4 qdisc stack (faults.py) on `lo`:
+# a 4-band prio root, netem on band 4 and a u32 gossip-port filter.
+NETEM_PROBE = ('tc qdisc add dev lo root handle 1: prio bands 4'
+               ' && tc qdisc add dev lo parent 1:4 handle 40: netem loss 1%% delay 1ms'
+               ' && tc filter add dev lo parent 1:0 protocol ip prio 1 u32 match ip dport %d 0xffff flowid 1:4'
+               % GOSSIP_PORT)
 # Run ids appear in hostnames (`<role>.<run_id>.internal`, one DNS label) and
 # operator-side paths; keep them short.
 MAX_RUN_ID = 48
@@ -159,9 +190,132 @@ def _lifetime(created_at, host_end):
     _need(0 < host_end - created_at <= HOST_LIFETIME, 'host lifetime must be positive and at most 82 hours')
 
 
+def host_lifetime(execution_mode='campaign', lifetime=None):
+    """The host lifetime in seconds: always 82 h for a campaign, optionally shorter for a rehearsal."""
+    _need(execution_mode in EXECUTION_MODES, 'unknown execution mode: %r' % (execution_mode,))
+    if lifetime is None:
+        return HOST_LIFETIME
+    _need(execution_mode == 'rehearsal_only', 'only a rehearsal_only fleet may shorten the host lifetime')
+    _need(type(lifetime) is int and MIN_REHEARSAL_LIFETIME <= lifetime <= HOST_LIFETIME,
+          'rehearsal host lifetime must be integer seconds from %d to %d'
+          % (MIN_REHEARSAL_LIFETIME, HOST_LIFETIME))
+    return lifetime
+
+
+def plan_lifetime(plan):
+    """The lifetime a frozen plan was built with; campaign plans carry no override."""
+    return host_lifetime(plan.get('execution_mode', 'campaign'), plan.get('host_lifetime'))
+
+
 def on_calendar(host_end):
     """systemd OnCalendar value for the absolute stop timer."""
     return datetime.datetime.fromtimestamp(host_end, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+
+def observer_match_block(user=OBSERVER_USER, wrapper=None):
+    """`Match User` block for the observer account; adds ForceCommand once the wrapper is known."""
+    _need(isinstance(user, str) and re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user) and user != 'root',
+          'invalid observer account')
+    lines = ['Match User ' + user]
+    if wrapper is not None:
+        _need(isinstance(wrapper, str) and re.fullmatch(r'/usr/local/libexec/[A-Za-z0-9_.-]+', wrapper),
+              'observer export wrapper must be a file directly under /usr/local/libexec/')
+        lines.append('    ForceCommand ' + wrapper)
+    lines += ['    %s %s' % pair for pair in OBSERVER_SSHD_OPTIONS]
+    return '\n'.join(lines) + '\n'
+
+
+def observer_sshd_config(wrapper, user=OBSERVER_USER):
+    """The sshd drop-in that pins the observer account to its staged export wrapper.
+
+    staging.py installs the wrapper and the `restrict,from=,command=` key;
+    this is the infrastructure half of that contract (#1610 item 5).
+    """
+    return ('# Botho observer export account: one forced command, no forwarding, no TTY.\n'
+            '# The key in /etc/ssh/authorized_keys/%s is already restrict,from=,command=.\n'
+            % user) + observer_match_block(user, wrapper)
+
+
+def observer_sshd_install(wrapper, user=OBSERVER_USER):
+    """Root shell script that installs `observer_sshd_config()` after staging.
+
+    Run once per node after `deploy.py stage --execute`. It replaces an earlier
+    attempt's drop-in (a staging retry renames the wrapper), validates with
+    `sshd -t` and only then reloads; a failed validation restores the previous
+    drop-in, or removes the new one, and exits non-zero.
+    """
+    text = observer_sshd_config(wrapper, user)
+    _need("'" not in text and 'EOF' not in text, 'unsafe sshd drop-in text')
+    path = OBSERVER_SSHD_DROPIN
+    return f'''#!/bin/bash
+set -euo pipefail
+test -x '{wrapper}'
+test -f /etc/ssh/authorized_keys/{user}
+chown root:root /etc/ssh/authorized_keys
+chmod 755 /etc/ssh/authorized_keys
+tmp=$(mktemp /etc/ssh/sshd_config.d/.botho-observer.XXXXXX)
+cat > "$tmp" <<'EOF'
+{text}EOF
+chmod 644 "$tmp"
+if [ -e '{path}' ]; then cp -p '{path}' '{path}.previous'; fi
+mv -f "$tmp" '{path}'
+if ! /usr/sbin/sshd -t; then
+  if [ -e '{path}.previous' ]; then mv -f '{path}.previous' '{path}'; else rm -f '{path}'; fi
+  echo 'sshd -t rejected the observer drop-in; previous configuration restored' >&2
+  exit 1
+fi
+rm -f '{path}.previous'
+systemctl reload ssh
+echo 'observer sshd hardened: ForceCommand {wrapper}'
+'''
+
+
+# -- host-key pinning fallback (#1610) -----------------------------------------
+# First-boot pinning reads each host's key fingerprint from the EC2 console
+# output, which is gone after a stop/start. The fallback scans the fleet's
+# private addresses from a host whose key is already pinned, over the VPC,
+# never over the internet.
+_RFC1918 = tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+_KEY = re.compile(r'ssh-ed25519 [A-Za-z0-9+/]+={0,2}')
+
+
+def _private(value):
+    try:
+        address = ipaddress.IPv4Address(value)
+    except (ipaddress.AddressValueError, TypeError):
+        raise ValueError('malformed private IP: %r' % (value,)) from None
+    _need(any(address in net for net in _RFC1918), 'not an RFC1918 address: ' + str(value))
+    return str(address)
+
+
+def keyscan_argv(ips):
+    """Remote argv, run on an already pinned fleet host: ed25519 keys of private peers."""
+    _need(isinstance(ips, (list, tuple)) and ips, 'at least one private IP is required')
+    ips = [_private(ip) for ip in ips]
+    _need(len(set(ips)) == len(ips), 'duplicate private IP')
+    return ['ssh-keyscan', '-T', '10', '-t', 'ed25519', *ips]
+
+
+def parse_keyscan(text, ips):
+    """`{ip: 'ssh-ed25519 <key>'}` from keyscan output; exactly one key per expected IP.
+
+    Refuses missing, extra, repeated or non-ed25519 entries, so a partial or
+    surprising scan never yields a pin.
+    """
+    wanted = {_private(ip) for ip in ips}
+    keys = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        host, _, key = line.partition(' ')
+        _need(host in wanted, 'unexpected host in keyscan output: %r' % (host,))
+        _need(_KEY.fullmatch(key), 'keyscan entry is not one ed25519 key: ' + host)
+        _need(host not in keys, 'more than one key for ' + host)
+        keys[host] = key
+    missing = sorted(wanted - set(keys))
+    _need(not missing, 'no key scanned for %s' % ', '.join(missing))
+    return keys
 
 
 def bootstrap(role, run, created_at, host_end):
@@ -170,6 +324,23 @@ def bootstrap(role, run, created_at, host_end):
     validate_run_id(run)
     _lifetime(created_at, host_end)
     maintenance = host_maintenance.bootstrap(run, created_at, host_end)
+    # D4 needs sch_netem, which the -aws kernel ships in linux-modules-extra
+    # (#1610 item 2). Probe the exact D4 qdisc stack; install the extra
+    # modules only if it fails, then require it. Nodes only.
+    netem = '' if role == 'controller' else f'''netem_probe() {{ {NETEM_PROBE}; }}
+tc qdisc del dev lo root 2>/dev/null || true
+if ! netem_probe; then
+  tc qdisc del dev lo root 2>/dev/null || true
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq "linux-modules-extra-$(uname -r)"
+  modprobe sch_netem
+  netem_probe
+fi
+tc qdisc del dev lo root
+printf 'sch_netem\\nsch_prio\\ncls_u32\\n' > /etc/modules-load.d/botho-x-faults.conf
+chmod 644 /etc/modules-load.d/botho-x-faults.conf
+date --iso-8601=seconds > /etc/botho-qualification/netem-ok
+'''
+    observer = observer_match_block()
     return f'''#!/bin/bash
 set -euo pipefail
 umask 077
@@ -200,17 +371,19 @@ if [ "$(date +%s)" -ge {host_end} ]; then systemctl poweroff; exit 1; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get -o DPkg::Lock::Timeout=600 upgrade -y -qq
-apt-get -o DPkg::Lock::Timeout=600 install -y -qq nginx python3 python3-lmdb openssl rsync git
-useradd --system --create-home --shell /bin/bash botho
+apt-get -o DPkg::Lock::Timeout=600 install -y -qq nginx python3 python3-lmdb openssl rsync git iproute2 iptables
+{netem}useradd --system --create-home --shell /bin/bash botho
 useradd --system --create-home --shell /bin/bash bothoctl
 useradd --system --create-home --shell /bin/bash botho-pin
-install -d -m 700 /etc/ssh/authorized_keys
+# sshd opens AuthorizedKeysFile as the target user, so the directory must be
+# traversable (#1610 item 8); the files in it stay root-owned 0644.
+install -d -m 755 -o root -g root /etc/ssh/authorized_keys
 cat > /etc/ssh/sshd_config.d/40-botho-qualification.conf <<'EOF'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u
-EOF
+{observer}EOF
 install -d -m755 /run/sshd
 /usr/sbin/sshd -t
 systemctl reload-or-restart ssh
@@ -221,8 +394,14 @@ date --iso-8601=seconds > /etc/botho-qualification/bootstrap-complete
 '''
 
 
-def infrastructure_plan(run, created_at, *, region, subnet, vpc, image, cidrs, scope, timing_mode='normal'):
-    """The plan the operator freezes to `infrastructure-plan.json` before any launch."""
+def infrastructure_plan(run, created_at, *, region, subnet, vpc, image, cidrs, scope, timing_mode='normal',
+                        execution_mode='campaign', lifetime=None):
+    """The plan the operator freezes to `infrastructure-plan.json` before any launch.
+
+    A `rehearsal_only` fleet may pass a shorter `lifetime` (seconds, at least
+    MIN_REHEARSAL_LIFETIME); the plan then records `execution_mode` and
+    `host_lifetime`. A campaign plan is unchanged and always lives 82 h.
+    """
     validate_run_id(run)
     _need(type(created_at) is int and created_at > 0, 'created_at must be an integer epoch')
     _need(isinstance(region, str) and re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-[0-9]', region), 'invalid region')
@@ -231,23 +410,29 @@ def infrastructure_plan(run, created_at, *, region, subnet, vpc, image, cidrs, s
     _need(isinstance(image, str) and re.fullmatch(r'ami-[0-9a-f]{8,17}', image), 'invalid image id')
     _need(isinstance(scope, str) and scope.strip(), 'scope description required')
     _need(timing_mode == 'normal', 'only normal timing is supported')
-    host_end = created_at + HOST_LIFETIME
+    life = host_lifetime(execution_mode, lifetime)
+    host_end = created_at + life
     _lifetime(created_at, host_end)
+    node_end = host_end - NODE_MARGIN
     roles = []
     for role in ROLES:
         kind, disk = INSTANCE_TYPES.get(role, VALIDATOR_TYPE)
         roles.append({'role': role, 'type': kind, 'disk_gib': disk})
-    return {'timing_mode': timing_mode, 'run_id': run, 'created_at': created_at,
-            'host_end': host_end, 'node_end': created_at + NODE_LIFETIME,
-            'prefund_end': created_at + PREFUND_WINDOW, 'region': region, 'subnet': subnet,
+    plan = {'timing_mode': timing_mode, 'run_id': run, 'created_at': created_at,
+            'host_end': host_end, 'node_end': node_end,
+            'prefund_end': min(created_at + PREFUND_WINDOW, node_end), 'region': region, 'subnet': subnet,
             'vpc': vpc, 'image': image, 'operator_cidrs': operator_cidrs(cidrs),
             'roles': roles, 'scope': scope}
+    if lifetime is not None:
+        plan.update(execution_mode=execution_mode, host_lifetime=life)
+    return plan
 
 
 def launch_request(plan, role, group_id, key_name='botho-nodes'):
     """RunInstances `--cli-input-json` body for one role, with tags set at creation."""
     run = validate_run_id(plan['run_id'])
-    _need(plan['host_end'] == plan['created_at'] + HOST_LIFETIME, 'plan host_end is not created_at + 82h')
+    _need(plan['host_end'] == plan['created_at'] + plan_lifetime(plan),
+          'plan host_end is not created_at + its frozen lifetime (82h for a campaign)')
     _need(isinstance(group_id, str) and re.fullmatch(r'sg-[0-9a-f]{8,17}', group_id), 'invalid security group id')
     item = [r for r in plan['roles'] if r['role'] == _role(role)]
     _need(len(item) == 1, 'role missing from plan: ' + role)

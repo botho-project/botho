@@ -1205,6 +1205,8 @@ fn compute_effective_decay_rate(validation_result: Option<&str>, block_height: u
 async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let ledger = read_lock!(state.ledger, id.clone());
     let chain_state = ledger.get_chain_state().unwrap_or_default();
+    // Ledger LMDB map usage (#1535), read live from the environment.
+    let storage = ledger.storage_usage();
     let minting = *read_lock!(state.minting_active, id.clone());
     let mempool = read_lock!(state.mempool, id.clone());
     let peers = *read_lock!(state.peer_count, id.clone());
@@ -1403,6 +1405,14 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "quorumByzantineTolerance".into(),
             json!(quorum_byzantine_tolerance),
         );
+        // Ledger storage (#1535): the LMDB data file's high-water mark
+        // against its fixed map size. `ledgerStorageFull` is true once a
+        // block write has failed with MDB_MAP_FULL: the node cannot store
+        // blocks (its height is frozen) until restarted with a larger map.
+        map.insert("ledgerMapSizeBytes".into(), json!(storage.map_size_bytes));
+        map.insert("ledgerUsedBytes".into(), json!(storage.used_bytes));
+        map.insert("ledgerUsedFraction".into(), json!(storage.used_fraction()));
+        map.insert("ledgerStorageFull".into(), json!(storage.map_full));
     }
     JsonRpcResponse::success(id, status)
 }
@@ -1861,15 +1871,57 @@ fn lottery_payout_row(
     Ok(row)
 }
 
+/// Maximum number of blocks one `chain_getOutputs` call serves (#1656).
+///
+/// A request for `[start_height, end_height]` is CLAMPED to
+/// `[start_height, start_height + MAX_GET_OUTPUTS_BLOCKS - 1]` rather than
+/// rejected, so the work (block reads, decodes, ledger read-lock hold time,
+/// response size) of one call is bounded no matter what range a client asks
+/// for. Previously the range was unbounded: `end_height = u64::MAX` walked
+/// heights past the tip forever while holding the ledger read lock.
+///
+/// Continuation contract: the result holds one entry per block from
+/// `start_height` up to the last served height, densely (an empty block,
+/// including genesis, still gets an entry). A caller that wants
+/// `[start, end]` therefore resumes at `last.height + 1` until it has reached
+/// `end` or a page comes back empty (past the tip). A page that stops short
+/// of `end` means "clamped or tip reached"; the next request tells them apart.
+///
+/// 1000 covers every in-repo consumer's natural page (Snap `WINDOW_SIZE` =
+/// 1000, CLI wallet sync batches of 101, the stress controller's 50-block
+/// chunks, the exchange scanner's default 100); whole-range callers (decoy
+/// ring building over `[0, tip]`, the bridge's 10 001-block reserve window)
+/// page with the contract above.
+pub const MAX_GET_OUTPUTS_BLOCKS: u64 = 1000;
+
 async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    handle_get_outputs_capped(id, params, state, MAX_GET_OUTPUTS_BLOCKS).await
+}
+
+/// The served inclusive height range for a `chain_getOutputs` request:
+/// `end_height` defaults to `start_height + 100` and is clamped to at most
+/// `max_blocks` blocks starting at `start_height`. Saturating, so extreme
+/// heights cannot overflow (overflow checks are on in release, #671).
+fn get_outputs_range(params: &Value, max_blocks: u64) -> (u64, u64) {
     let start_height = params
         .get("start_height")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let end_height = params
+    let requested_end = params
         .get("end_height")
         .and_then(|v| v.as_u64())
-        .unwrap_or(start_height + 100);
+        .unwrap_or(start_height.saturating_add(100));
+    let cap_end = start_height.saturating_add(max_blocks.max(1) - 1);
+    (start_height, requested_end.min(cap_end))
+}
+
+async fn handle_get_outputs_capped(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+    max_blocks: u64,
+) -> JsonRpcResponse {
+    let (start_height, end_height) = get_outputs_range(params, max_blocks);
 
     let ledger = read_lock!(state.ledger, id.clone());
     let mut blocks = Vec::new();
@@ -5055,6 +5107,36 @@ mod tests {
         assert_eq!(result["scpPeerCount"], json!(3));
         assert_eq!(result["quorumDegenerate"], json!(false));
         assert_eq!(result["quorumFaultTolerant"], json!(true));
+    }
+
+    /// #1535: `node_getStatus` reports the ledger's LMDB map usage, read live
+    /// from the open environment (not hardcoded).
+    #[tokio::test]
+    async fn test_node_status_reports_ledger_storage() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let usage = ledger.storage_usage();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["ledgerMapSizeBytes"], json!(usage.map_size_bytes));
+        assert!(usage.map_size_bytes > 0);
+        let used = result["ledgerUsedBytes"].as_u64().unwrap();
+        assert!(used > 0 && used <= usage.map_size_bytes);
+        let fraction = result["ledgerUsedFraction"].as_f64().unwrap();
+        assert!(fraction > 0.0 && fraction <= 1.0);
+        assert_eq!(result["ledgerStorageFull"], json!(false));
     }
 
     /// #541: `node_getStatus` must report honest sync state wired to the live

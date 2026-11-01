@@ -10,6 +10,8 @@ to detect deposits, with resumable sync state.
 - `subaddress` — precomputed subaddress lookup tables (0 to 2^64 range).
 - `deposit` — detected-deposit representation.
 - `output` — output parsing/handling.
+- `batch` — one scan pass: scans only blocks with `min_confirmations`, then
+  checkpoints there, so each deposit is reported exactly once (#1779).
 - `sync` — sync-state persistence for resumable scanning.
 - `config` — scanner configuration (`main.rs` is the CLI entry point).
 

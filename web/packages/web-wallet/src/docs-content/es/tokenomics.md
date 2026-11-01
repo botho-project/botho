@@ -43,7 +43,7 @@ La recompensa de acuñación comienza en 50 BTH y se reduce a la mitad cada **6 
 
 ### Fase 2: emisión de cola
 
-Tras la Fase 1, Botho pasa a una emisión de cola perpetua orientada a una **inflación neta anual del 2 %** (emisión bruta menos las quemas de comisiones), con la dificultad ajustándose para alcanzar el objetivo.
+Tras la Fase 1, Botho pasa a una emisión de cola perpetua orientada a una **inflación neta anual del 2 %** (emisión bruta menos las quemas de comisiones). La dificultad solo apunta al tiempo de bloque; la tasa de cola proviene de la recompensa por bloque, recalculada a partir de la emisión acumulada.
 
 **¿Por qué emisión de cola?**
 
@@ -59,7 +59,7 @@ Con la oferta de ~611M de BTH de la Fase 1 y a plena carga, el 2 % equivale a ap
 
 ### Comisiones de transacción
 
-Cada comisión se divide en dos: el **80 % se redistribuye** a los poseedores mediante la lotería inclinada por clúster, y el **20 % se quema**, creando una presión deflacionaria que compensa la emisión de cola.
+Cada comisión se divide en dos: el **80 % se redistribuye** a los poseedores mediante una lotería uniforme (tal como está construido), y el **20 % se quema**, creando una presión deflacionaria que compensa la emisión de cola.
 
 ```
 fee = tarifa por byte × tamaño de la transacción × factor de clúster × penalización por salida + comisiones de memo
@@ -84,7 +84,7 @@ Botho implementa un novedoso **sistema de comisiones progresivas** que grava la 
 |-----------|-------|
 | Rango del factor de clúster | multiplicador de 1x a 6x |
 | Forma de la curva | Sigmoide en log(riqueza del clúster), punto medio 3.5x en 100K BTH |
-| Decaimiento de etiquetas | 5 % por salto elegible |
+| Decaimiento de etiquetas | 5 % por transferencia (política del monedero; el consenso no aplica ninguno) |
 
 **Por qué es resistente a Sybil:** Dividir monedas no cambia su origen. Las monedas de una ballena llevan la misma etiqueta de clúster tanto si se guardan en 1 UTXO como en 1000.
 
@@ -130,7 +130,7 @@ A plena carga sostenida (bloques de 5 segundos; más lentos cuando la red está 
 
 ### ¿Por qué dividir las comisiones 80/20?
 
-- **Redistribución**: el 80 % regresa a los poseedores mediante la lotería inclinada por clúster, favoreciendo a las monedas bien circuladas
+- **Redistribución**: el 80 % regresa a los poseedores mediante una lotería uniforme entre las salidas elegibles (tal como está construido; véase [Etiquetas de clúster](#cluster-tags))
 - **Presión deflacionaria**: la quema del 20 % compensa la emisión de cola
 - **Predecible**: inflación neta = emisión bruta − quemas
 

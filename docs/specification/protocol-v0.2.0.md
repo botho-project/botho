@@ -269,7 +269,7 @@ struct MaskedAmountV2 {
 |-----------|-------|-------|
 | `RING_SIZE` | 20 | Decoy ring members |
 | `MAX_INPUTS` | 16 | Per transaction |
-| `MAX_OUTPUTS` | 16 | Per transaction |
+| `MAX_OUTPUTS` | 16 | Per transaction; relay/mempool policy only — not yet checked by block validation (consensus enforcement pending #1684, see #1772) |
 | `MAX_TX_SIZE` | 100 KB | DoS protection |
 | `MIN_TX_FEE` | 100,000,000 | 0.0001 BTH in picocredits |
 | `MAX_TOMBSTONE_BLOCKS` | 20,160 | ~7 days at 30s blocks |

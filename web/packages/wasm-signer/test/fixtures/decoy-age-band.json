@@ -1,0 +1,190 @@
+{
+  "_comment": "Shared web<->native decoy age-band conformance vectors (#1693). Checked by web/packages/wasm-signer/test/decoy-selection.test.ts (ageSimilarityBand) AND botho/src/decoy_selection.rs (age_similarity_band). degenerate=true means minAge>maxAge: nothing is in-band and both pickers use nearest-age fallback. Edit only together with both implementations. fallback[]: pools whose selected SET is RNG-independent (count >= in-band size, distinct distances); ages below minDecoyAgeBlocks are ineligible.",
+  "minDecoyAgeBlocks": 10,
+  "ageSimilaritySpreadBps": 1000,
+  "bands": [
+    {
+      "realAge": 0,
+      "minAge": 10,
+      "maxAge": 0,
+      "degenerate": true
+    },
+    {
+      "realAge": 1,
+      "minAge": 10,
+      "maxAge": 1,
+      "degenerate": true
+    },
+    {
+      "realAge": 5,
+      "minAge": 10,
+      "maxAge": 5,
+      "degenerate": true
+    },
+    {
+      "realAge": 9,
+      "minAge": 10,
+      "maxAge": 9,
+      "degenerate": true
+    },
+    {
+      "realAge": 10,
+      "minAge": 10,
+      "maxAge": 11,
+      "degenerate": false
+    },
+    {
+      "realAge": 11,
+      "minAge": 10,
+      "maxAge": 12,
+      "degenerate": false
+    },
+    {
+      "realAge": 12,
+      "minAge": 11,
+      "maxAge": 13,
+      "degenerate": false
+    },
+    {
+      "realAge": 19,
+      "minAge": 18,
+      "maxAge": 20,
+      "degenerate": false
+    },
+    {
+      "realAge": 20,
+      "minAge": 18,
+      "maxAge": 22,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "minAge": 45,
+      "maxAge": 55,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "minAge": 90,
+      "maxAge": 108,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "minAge": 90,
+      "maxAge": 110,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "minAge": 91,
+      "maxAge": 111,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "minAge": 99,
+      "maxAge": 119,
+      "degenerate": false
+    },
+    {
+      "realAge": 110,
+      "minAge": 99,
+      "maxAge": 121,
+      "degenerate": false
+    },
+    {
+      "realAge": 111,
+      "minAge": 100,
+      "maxAge": 122,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000,
+      "minAge": 900,
+      "maxAge": 1100,
+      "degenerate": false
+    },
+    {
+      "realAge": 4321,
+      "minAge": 3889,
+      "maxAge": 4753,
+      "degenerate": false
+    },
+    {
+      "realAge": 21600,
+      "minAge": 19440,
+      "maxAge": 23760,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000000,
+      "minAge": 900000,
+      "maxAge": 1100000,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "minAge": 8106479329266,
+      "maxAge": 9907919180214,
+      "degenerate": false
+    }
+  ],
+  "fallback": [
+    {
+      "name": "degenerate band (real younger than floor): pure nearest-age fill",
+      "realAge": 5,
+      "count": 3,
+      "poolAges": [
+        3,
+        10,
+        11,
+        30,
+        40,
+        200
+      ],
+      "expectedAges": [
+        10,
+        11,
+        30
+      ]
+    },
+    {
+      "name": "thin band: take all in-band, then nearest out-of-band",
+      "realAge": 100,
+      "count": 4,
+      "poolAges": [
+        95,
+        105,
+        150,
+        60,
+        300,
+        9
+      ],
+      "expectedAges": [
+        60,
+        95,
+        105,
+        150
+      ]
+    },
+    {
+      "name": "band exactly full: only in-band members",
+      "realAge": 1000,
+      "count": 3,
+      "poolAges": [
+        900,
+        1000,
+        1100,
+        899,
+        1101,
+        5000
+      ],
+      "expectedAges": [
+        900,
+        1000,
+        1100
+      ]
+    }
+  ]
+}

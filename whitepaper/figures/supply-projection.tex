@@ -5,9 +5,9 @@
 % A line graph showing total BTH supply over 20 years. X-axis shows years,
 % Y-axis shows total supply in millions of BTH. The curve rises steeply
 % during the 5 annual halvings, reaching the Phase-1 supply of ~611M BTH at
-% year 5, then continues growing at 2% net annual inflation (compounding,
-% supply-dependent) through the tail phase, reaching ~885M by year 20. Botho's
-% supply grows indefinitely at a fixed 2% net rate, unlike Bitcoin's 21M cap.
+% year 5, then continues growing at ~2.5% gross per year (compounding,
+% supply-dependent) through the tail phase, reaching ~889M by year 20. Botho's
+% supply grows indefinitely at a fixed rate, unlike Bitcoin's 21M cap.
 
 \begin{figure}[ht]
 \centering
@@ -32,14 +32,15 @@
         \draw[gray!30, dashed] (0,\y) -- (20,\y);
     }
 
-    % Botho supply curve: annual halvings then 2% net (2.5% gross) tail
+    % Botho supply curve: annual halvings then the 2.5% gross tail, recomputed
+    % every block (node-exact, cluster-tax-sim emission-sweep, #1699):
     % Y1=315.4, Y2=473.0, Y3=551.9, Y4=591.3, Y5=611.0 (Phase-1),
-    % Y6=626.3, Y10=691.3, Y15=782, Y20=884.9  (values / 100)
+    % Y6=626.5, Y10=692.4, Y15=784.6, Y20=889.0  (values / 100)
     \draw[blue, very thick]
         (0,0) -- (1,3.154) -- (2,4.730) -- (3,5.519)
         -- (4,5.913) -- (5,6.110)
-        .. controls (8,6.50) and (12,7.20) .. (15,7.82)
-        .. controls (17,8.25) and (19,8.65) .. (20,8.849);
+        .. controls (8,6.50) and (12,7.21) .. (15,7.846)
+        .. controls (17,8.27) and (19,8.68) .. (20,8.890);
 
     % Bitcoin comparison (21M cap, scaled x10 for visibility -> 210M)
     \draw[red, thick, dashed]
@@ -59,13 +60,13 @@
     \draw[red, thick, dashed] (1,8.6) -- (3,8.6) node[right, font=\scriptsize] {Bitcoin (scaled $\times$10)};
 
     % Tail emission annotation
-    \draw[<->, gray, thick] (5,1.20) -- (20,1.20) node[midway, below, font=\scriptsize] {Tail: 2\% net/yr (compounding)};
+    \draw[<->, gray, thick] (5,1.20) -- (20,1.20) node[midway, below, font=\scriptsize] {Tail: 2.5\% gross/yr (compounding)};
 \end{tikzpicture}
 \caption{Projected circulating supply over 20 years. The five annual halvings
 (50, 25, 12.5, 6.25, 3.125 BTH/block) fix the Phase-1 supply at
 $\approx$611M BTH by year 5; from year 6 onward the supply grows at a fixed
-2\% net annual rate (2.5\% gross before the expected fee burn), reaching
-$\approx$885M by year 20. Unlike Bitcoin's hard cap at 21M, Botho's supply
+2.5\% gross annual rate (designed as 2\% net of an assumed 0.5\% fee burn
+that realistic fee volumes do not reach), reaching $\approx$889M by year 20. Unlike Bitcoin's hard cap at 21M, Botho's supply
 grows indefinitely at a fixed percentage rate, ensuring permanent security
 funding. (Bitcoin curve scaled $\times$10 for visibility.)}
 \label{fig:supply-projection}

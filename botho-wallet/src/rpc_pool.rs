@@ -339,20 +339,41 @@ impl RpcPool {
         self.call("getChainInfo", json!({})).await
     }
 
-    /// Get outputs in a block range (for wallet sync)
+    /// Get every block's outputs in `[start_height, end_height]` (for wallet
+    /// sync and decoy-ring building).
+    ///
+    /// The node caps one `chain_getOutputs` call at `MAX_GET_OUTPUTS_BLOCKS`
+    /// (1000) blocks and clamps a longer request (#1656), so this pages: it
+    /// re-requests from the last served height + 1 until it reaches
+    /// `end_height` or the node returns an empty page (past the tip). Callers
+    /// asking for `[0, tip]` therefore still get the whole range rather than
+    /// silently only its first 1000 blocks. Against an uncapped (older) node
+    /// the first page already covers the range.
     pub async fn get_outputs(
         &mut self,
         start_height: u64,
         end_height: u64,
     ) -> Result<Vec<BlockOutputs>> {
-        self.call(
-            "chain_getOutputs",
-            json!({
-                "start_height": start_height,
-                "end_height": end_height
-            }),
-        )
-        .await
+        let mut blocks: Vec<BlockOutputs> = Vec::new();
+        let mut next = start_height;
+        while next <= end_height {
+            let page: Vec<BlockOutputs> = self
+                .call(
+                    "chain_getOutputs",
+                    json!({
+                        "start_height": next,
+                        "end_height": end_height
+                    }),
+                )
+                .await?;
+            let last = page.last().map(|b| b.height);
+            blocks.extend(page);
+            match next_outputs_page(next, end_height, last)? {
+                Some(height) => next = height,
+                None => break,
+            }
+        }
+        Ok(blocks)
     }
 
     /// Submit a signed transaction
@@ -564,6 +585,23 @@ pub(crate) fn crypto_output_index(
 
 /// The only lottery-context wire version a wallet accepts (#1286 / #1641).
 pub const LOTTERY_CONTEXT_VERSION: u8 = 2;
+
+/// Where to resume a paged `chain_getOutputs` scan of `[.., end]` after a page
+/// requested from `requested` whose last block is `last` (#1656).
+///
+/// `None` = done: the page was empty (past the tip) or reached `end`.
+/// A page whose last height is below `requested` cannot make progress and is
+/// an error rather than an infinite loop.
+pub fn next_outputs_page(requested: u64, end: u64, last: Option<u64>) -> Result<Option<u64>> {
+    match last {
+        None => Ok(None),
+        Some(height) if height < requested => Err(anyhow!(
+            "chain_getOutputs page from {requested} ended at {height}: no progress"
+        )),
+        Some(height) if height >= end => Ok(None),
+        Some(height) => Ok(Some(height + 1)),
+    }
+}
 
 /// V2 lottery payout derivation context, as emitted by `chain_getOutputs` on
 /// a V2 chain (frozen contract, #1641).
@@ -949,6 +987,131 @@ mod tests {
             .call_verified::<Value>("node_getStatus", json!({}))
             .await
             .is_err());
+    }
+
+    /// A loopback node that caps `chain_getOutputs` at `cap` blocks and has
+    /// blocks `0..=tip`, one output each (`txHash` = the height). Serves
+    /// `node_getStatus` too, so `connect_endpoint` works. Counts the
+    /// `chain_getOutputs` calls it answered.
+    async fn capped_outputs_node(
+        tip: u64,
+        cap: u64,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buf = [0u8; 4096];
+                // Read headers + Content-Length body.
+                let body = loop {
+                    let n = stream.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        break None;
+                    }
+                    bytes.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    if let Some(split) = text.find("\r\n\r\n") {
+                        let len = text[..split]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= split + 4 + len {
+                            break Some(text[split + 4..split + 4 + len].to_string());
+                        }
+                    }
+                };
+                let Some(body) = body else { continue };
+                let request: Value = serde_json::from_str(&body).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "node_getStatus" => json!({
+                        "version":"fixture", "network":"botho-testnet", "uptimeSeconds":0,
+                        "syncStatus":"synced", "chainHeight":tip, "tipHash":"00",
+                        "peerCount":0,"mempoolSize":0,"mintingActive":false
+                    }),
+                    "chain_getOutputs" => {
+                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let start = request["params"]["start_height"].as_u64().unwrap();
+                        let end = request["params"]["end_height"].as_u64().unwrap();
+                        let end = end.min(start.saturating_add(cap - 1));
+                        let blocks: Vec<Value> = (start..=end)
+                            .take_while(|h| *h <= tip)
+                            .map(|h| {
+                                json!({"height": h, "outputs": [{
+                                    "txHash": format!("{h:064x}"), "outputIndex": 0,
+                                    "targetKey": "aa", "publicKey": "bb",
+                                    "amountCommitment": "0100000000000000", "clusterTags": [],
+                                }]})
+                            })
+                            .collect();
+                        json!(blocks)
+                    }
+                    other => panic!("unexpected method {other}"),
+                };
+                let body =
+                    json!({"jsonrpc":"2.0","id":request["id"].clone(),"result":result}).to_string();
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (format!("http://{addr}/rpc"), calls)
+    }
+
+    #[test]
+    fn next_outputs_page_contract() {
+        assert_eq!(next_outputs_page(0, 10, None).unwrap(), None);
+        assert_eq!(next_outputs_page(0, 10, Some(4)).unwrap(), Some(5));
+        assert_eq!(next_outputs_page(0, 10, Some(10)).unwrap(), None);
+        assert_eq!(next_outputs_page(0, 10, Some(12)).unwrap(), None);
+        assert!(next_outputs_page(5, 10, Some(4)).is_err());
+        assert_eq!(
+            next_outputs_page(0, u64::MAX, Some(u64::MAX)).unwrap(),
+            None
+        );
+    }
+
+    /// #1656: against a node that clamps each call to 3 blocks, a `[0, tip]`
+    /// fetch (the decoy-ring / canonical-history path) and a past-the-tip
+    /// fetch both return every block exactly once, in order.
+    #[tokio::test]
+    async fn get_outputs_pages_across_the_server_cap() {
+        let (url, calls) = capped_outputs_node(7, 3).await;
+        let mut pool = RpcPool::connect_endpoint(&url, "botho-testnet")
+            .await
+            .unwrap();
+
+        let blocks = pool.get_outputs(0, 7).await.unwrap();
+        let heights: Vec<u64> = blocks.iter().map(|b| b.height).collect();
+        assert_eq!(heights, (0..=7).collect::<Vec<_>>());
+        for block in &blocks {
+            assert_eq!(block.outputs.len(), 1);
+            assert_eq!(block.outputs[0].tx_hash, format!("{:064x}", block.height));
+        }
+        // [0,2] [3,5] [6,7]: the last page reaches `end`, no extra call.
+        assert_eq!(calls.swap(0, std::sync::atomic::Ordering::SeqCst), 3);
+
+        let heights: Vec<u64> = pool
+            .get_outputs(2, 1_000_000)
+            .await
+            .unwrap()
+            .iter()
+            .map(|b| b.height)
+            .collect();
+        assert_eq!(heights, (2..=7).collect::<Vec<_>>());
+        // [2,4] [5,7] then one empty past-the-tip page.
+        assert_eq!(calls.swap(0, std::sync::atomic::Ordering::SeqCst), 3);
+
+        // Within one page: a single call, unchanged behavior.
+        assert_eq!(pool.get_outputs(4, 5).await.unwrap().len(), 2);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

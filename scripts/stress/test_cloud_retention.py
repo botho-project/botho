@@ -1,13 +1,16 @@
 import copy
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import fleet_provision
-from cloud_retention import PROJECT, ROLES, apply_plan, backup, evidence, evidence_roots, inventory, make_plan
+from cloud_retention import (PROJECT, ROLES, apply_plan, backup, evidence, evidence_roots, inventory,
+                             lock_state_roots, make_plan)
 
 
 def tagged(**values):
@@ -125,6 +128,33 @@ class RetentionTests(unittest.TestCase):
         (other / 'alias').symlink_to(self.root)
         found = list(evidence_roots([base, other, run]))
         self.assertEqual(sorted(p.resolve() for p in found), sorted([self.root.resolve(), run.resolve()]))
+
+    def test_state_root_locks_dedupe_by_resolved_path(self):
+        # #1572: `--state-root r --state-root /abs/r` used to open two lock
+        # files on one path and fail its own second flock.
+        base = Path(self.tmp.name)
+        (base / 'r').mkdir()
+        cwd = os.getcwd()
+        os.chdir(base)
+        try:
+            locks = lock_state_roots([Path('r'), (base / 'r').resolve()])
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(len(locks), 1)
+        self.assertEqual(Path(locks[0].name).resolve(), (base / 'r' / '.botho-cloud-retention.lock').resolve())
+        # Another invocation over the same root is still excluded.
+        with self.assertRaises(BlockingIOError):
+            lock_state_roots([base / 'r'])
+        for lock in locks:
+            lock.close()
+        # Disjoint roots do not exclude each other.
+        (base / 'other').mkdir()
+        held = lock_state_roots([base / 'r'])
+        other = lock_state_roots([base / 'other'])
+        self.assertEqual(len(held) + len(other), 2)
+        for lock in held + other:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
 
     def test_running_node_blocks_entire_fleet(self):
         self.nodes[0]['State']['Name'] = 'running'

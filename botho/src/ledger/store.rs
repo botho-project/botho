@@ -46,12 +46,67 @@ use crate::{
     transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
 
-/// Fixed LMDB map size for the ledger. LMDB does not grow the map on its own:
-/// once the data file reaches this size, writes fail with `MDB_MAP_FULL`.
-/// The V2 snapshot decompression ceiling is derived from it
-/// (`snapshot::MAX_SNAPSHOT_DECOMPRESSED`), so growing the map never makes
-/// honest snapshots unloadable.
-pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+/// Fixed LMDB map size for the ledger (#1535): 64 GiB on 64-bit hosts.
+///
+/// LMDB does not grow the map on its own: once the data file's high-water
+/// mark reaches this size, every write fails with `MDB_MAP_FULL` (see
+/// [`LedgerError::is_map_full`]). The map is address space, not memory or
+/// disk: without `MDB_WRITEMAP` the data file grows only as pages are used,
+/// and only touched pages count toward RSS. A 72 h stress fleet grew its
+/// ledger about 4.5 MiB/h (#1535), which put the former 1 GiB cap about 8
+/// days out; 64 GiB is years at that rate. [`Ledger::storage_usage`] reports
+/// the high-water mark against this size in `node_getStatus` and metrics.
+///
+/// The map size is NOT a consensus parameter: it decides only whether this
+/// node can store a block, never whether the block is valid. A node that hits
+/// it fails loudly (`MDB_MAP_FULL` is a local storage fault, never an invalid
+/// block) and recovers by restarting with a larger map.
+#[cfg(target_pointer_width = "64")]
+pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 64 * 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(LEDGER_MAP_SIZE >= 64 * 1024 * 1024 * 1024);
+/// 32-bit hosts cannot map 64 GiB; keep the former 1 GiB map there.
+#[cfg(not(target_pointer_width = "64"))]
+pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024;
+
+/// Map size of ledgers opened by `Ledger::open` / `open_for_network`.
+///
+/// Unit-test builds keep the former 1 GiB map: the lib suite opens hundreds
+/// of LMDB environments concurrently, and raising each one's reservation 64x
+/// would only add pressure to the parallel-open flakes tracked in #1725. A
+/// dedicated test opens a ledger at the full [`LEDGER_MAP_SIZE`].
+#[cfg(not(test))]
+const OPEN_MAP_SIZE: usize = LEDGER_MAP_SIZE;
+#[cfg(test)]
+const OPEN_MAP_SIZE: usize = 1024 * 1024 * 1024;
+
+/// How full the ledger's LMDB map is (#1535), for `node_getStatus` and the
+/// Prometheus exporter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerStorageUsage {
+    /// The LMDB map size: the most the data file can ever hold.
+    pub map_size_bytes: u64,
+    /// The data file's high-water mark: `(last used page + 1) * page size`.
+    /// `MDB_MAP_FULL` is raised when a write needs a page past the map, so
+    /// this is the figure to compare against `map_size_bytes` (free pages
+    /// below it are reused, so it never shrinks).
+    pub used_bytes: u64,
+    /// True once a block write has failed with `MDB_MAP_FULL` on this open
+    /// ledger. Sticky until restart: the node cannot store another block
+    /// until it is restarted with a larger map.
+    pub map_full: bool,
+}
+
+impl LedgerStorageUsage {
+    /// `used_bytes / map_size_bytes`, in `[0, 1]` (0 for an empty map).
+    pub fn used_fraction(&self) -> f64 {
+        if self.map_size_bytes == 0 {
+            0.0
+        } else {
+            (self.used_bytes as f64 / self.map_size_bytes as f64).min(1.0)
+        }
+    }
+}
 
 /// Maximum allowed clock skew for a block timestamp relative to local time.
 ///
@@ -360,6 +415,10 @@ pub struct Ledger {
     /// gets its derivation context in the same LMDB transaction. Reads are
     /// strict: a missing context is an error, never a default.
     contexts_db: Database<Bytes, Bytes>,
+    /// Set when a block write fails with `MDB_MAP_FULL` (#1535); reported by
+    /// [`Ledger::storage_usage`]. Node-local observability only: it never
+    /// affects what the ledger accepts.
+    map_full: std::sync::atomic::AtomicBool,
 }
 
 /// Serialized width of a `cluster_wealth_db` value: 16-byte little-endian
@@ -459,7 +518,7 @@ impl Ledger {
     /// error on the consensus double-spend check.
     #[cfg(test)]
     pub fn open_single_reader(path: &Path) -> Result<Self, LedgerError> {
-        Self::open_internal(path, Network::Testnet, Some(1), LEDGER_MAP_SIZE)
+        Self::open_internal(path, Network::Testnet, Some(1), OPEN_MAP_SIZE)
     }
 
     /// Test-only: open a ledger with a small LMDB map so tests can drive it to
@@ -533,7 +592,7 @@ impl Ledger {
     /// The ledger will be initialized with the appropriate genesis block
     /// for the specified network if it's empty.
     pub fn open_for_network(path: &Path, network: Network) -> Result<Self, LedgerError> {
-        Self::open_internal(path, network, None, LEDGER_MAP_SIZE)
+        Self::open_internal(path, network, None, OPEN_MAP_SIZE)
     }
 
     /// Internal constructor shared by `open_for_network` and test helpers.
@@ -644,6 +703,7 @@ impl Ledger {
             cluster_wealth_db,
             bridge_import_clusters_db,
             contexts_db,
+            map_full: std::sync::atomic::AtomicBool::new(false),
         };
 
         // Initialize with genesis if empty
@@ -882,7 +942,34 @@ impl Ledger {
 
     /// Add a new block to the chain
     pub fn add_block(&self, block: &Block) -> Result<(), LedgerError> {
-        self.add_block_inner(block, None)
+        self.note_map_full(self.add_block_inner(block, None))
+    }
+
+    /// Record a `MDB_MAP_FULL` block-write failure for
+    /// [`Ledger::storage_usage`] and pass the result through unchanged.
+    fn note_map_full(&self, result: Result<(), LedgerError>) -> Result<(), LedgerError> {
+        if let Err(error) = &result {
+            if error.is_map_full() {
+                self.map_full
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        result
+    }
+
+    /// How full the LMDB map is (#1535): map size, the data file's
+    /// high-water mark, and whether a block write has hit `MDB_MAP_FULL`.
+    /// Cheap (two `mdb_env_*` calls, no transaction).
+    pub fn storage_usage(&self) -> LedgerStorageUsage {
+        let info = self.env.info();
+        let page_size = u64::from(self.env.stat().page_size);
+        LedgerStorageUsage {
+            map_size_bytes: info.map_size as u64,
+            used_bytes: (info.last_page_number as u64)
+                .saturating_add(1)
+                .saturating_mul(page_size),
+            map_full: self.map_full.load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     /// Add a block AND persist the emission-controller state in a SINGLE LMDB
@@ -905,7 +992,7 @@ impl Ledger {
         block: &Block,
         emission: EmissionStateUpdate,
     ) -> Result<(), LedgerError> {
-        self.add_block_inner(block, Some(emission))
+        self.note_map_full(self.add_block_inner(block, Some(emission)))
     }
 
     /// Shared implementation for [`Ledger::add_block`] and

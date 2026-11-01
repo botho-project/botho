@@ -211,19 +211,28 @@ class DepositScanner:
         })
         return response.json()['result']
 
-    def scan(self):
-        """Scan for new deposits"""
+    def scan(self, min_confirmations=10):
+        """Scan newly *confirmed* blocks for deposits.
+
+        Only blocks that already have `min_confirmations` are scanned, and
+        `last_height` only advances over those. Do not scan up to the tip and
+        filter young deposits out afterwards: once `last_height` moves past
+        their block they are never looked at again and are never credited.
+        """
         status = self.rpc('node_getStatus')
         current_height = status['chainHeight']
 
-        if current_height <= self.last_height:
+        # A block at height h has (current_height - h + 1) confirmations.
+        confirmed_tip = current_height + 1 - min_confirmations
+        if confirmed_tip <= self.last_height:
             return []
 
         deposits = []
 
-        # Scan in batches
-        for start in range(self.last_height + 1, current_height + 1, 100):
-            end = min(start + 99, current_height)
+        # Scan in batches (at most 1000 blocks per chain_getOutputs call;
+        # the node clamps longer ranges)
+        for start in range(self.last_height + 1, confirmed_tip + 1, 100):
+            end = min(start + 99, confirmed_tip)
             outputs = self.rpc('chain_getOutputs', {
                 'start_height': start,
                 'end_height': end
@@ -238,10 +247,11 @@ class DepositScanner:
                             'tx_hash': output['txHash'],
                             'output_index': output['outputIndex'],
                             'height': block['height'],
-                            'confirmations': current_height - block['height']
+                            'confirmations': current_height - block['height'] + 1
                         })
 
-        self.last_height = current_height
+        # Persist last_height only after the deposits are durably credited.
+        self.last_height = confirmed_tip
         return deposits
 
     def is_our_output(self, output):
@@ -257,12 +267,22 @@ class DepositScanner:
 scanner = DepositScanner('http://localhost:7101/')
 
 while True:
-    deposits = scanner.scan()
-    for deposit in deposits:
-        if deposit['confirmations'] >= 10:
-            process_deposit(deposit)
+    # Every returned deposit already has >= 10 confirmations. Credit each
+    # one keyed by (tx_hash, output_index) so a retried scan cannot
+    # double-credit.
+    for deposit in scanner.scan(min_confirmations=10):
+        process_deposit(deposit)
     time.sleep(30)
 ```
+
+The bundled `botho-exchange-scanner` binary uses the same checkpoint rule: each
+pass scans only blocks at or below `chain height + 1 - min_confirmations` (at
+most `batch_size`, capped at 1000, blocks per pass), reports every deposit in
+them, and then saves its checkpoint at the last scanned block. A deposit is
+reported once, by the first pass that scans its block after it has matured. If
+the output handler (for example the webhook) fails, the checkpoint is not
+advanced and the whole batch is retried on the next pass, so handlers should
+de-duplicate on `tx_hash:output_index`.
 
 ### Confirmation Requirements
 

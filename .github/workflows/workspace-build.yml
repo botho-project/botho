@@ -178,6 +178,12 @@ jobs:
         timeout-minutes: 5
         run: cargo test --locked -p botho --lib "network::transport::webrtc::"
 
+      # #1699: drift guards pinning the cluster-tax emission model (reward
+      # rule, policy constants, fee split, block-time targets) to the node.
+      - name: Run emission-model drift guards
+        timeout-minutes: 5
+        run: cargo test --locked -p botho --lib "ledger::emission_parity_tests::"
+
       # Execute real temporary-ledger and loopback RPC assertions (#1273).
       # These tests require no public node, faucet, credentials or live funds.
       - name: Run ledger and RPC integration tests

@@ -182,6 +182,27 @@ def evidence_roots(state_roots):
                 yield root
 
 
+def lock_state_roots(state_roots):
+    """Take an exclusive non-blocking lock in each state root and return the open lock files.
+
+    Invocations (including scheduled runs) that name the same state root
+    exclude each other; locks are per state root, not per AWS account, so runs
+    over disjoint roots do not. Roots are deduped by resolved path, so
+    `--state-root r --state-root /abs/r` takes one lock instead of locking
+    itself out (#1572).
+    """
+    locks = []
+    try:
+        for root in sorted({Path(r).resolve() for r in state_roots}):
+            locks.append((root / '.botho-cloud-retention.lock').open('a'))
+            fcntl.flock(locks[-1], fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        for lock in locks:
+            lock.close()
+        raise
+    return locks
+
+
 def backup(fleet, destination):
     original = evidence(fleet['evidence']['root'])
     need(original['sha256'] == fleet['evidence']['sha256'], 'Evidence changed since planning')
@@ -280,10 +301,8 @@ def main():
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     os.umask(0o077)
-    # All invocations on this operator share a lock, including scheduled runs.
-    locks = [(root / '.botho-cloud-retention.lock').open('a') for root in sorted(set(args.state_root))]
-    for lock in locks:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # Held for the life of the process; see lock_state_roots for the scope.
+    locks = lock_state_roots(args.state_root)  # noqa: F841
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
     aws = Aws(args.profile, args.region)
     need(aws('sts', 'get-caller-identity')['Account'] == args.account_id, 'Wrong AWS account')

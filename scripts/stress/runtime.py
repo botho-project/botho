@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import email.utils
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -58,6 +59,29 @@ def validate_rpc_url(value):
     if port is not None and not 1 <= port <= 65535:
         raise Gate('invalid RPC port')
     return value
+
+
+def parse_hosts(data):
+    """`{hostname: address}` from a fleet hosts file; private addresses, no repeated names.
+
+    Shared by staging (the controller unit's bound /etc/hosts) and prefund.py.
+    """
+    resolved = {}
+    for line in data.decode().splitlines():
+        parts = line.split('#',1)[0].split()
+        if not parts:
+            continue
+        try:
+            address = ipaddress.ip_address(parts[0])
+        except ValueError:
+            raise Gate('malformed hosts-file address: %r' % parts[0]) from None
+        if not address.is_private:
+            raise Gate('campaign hosts file requires private addresses')
+        for name in parts[1:]:
+            if name in resolved:
+                raise Gate('duplicate hosts-file hostname')
+            resolved[name] = str(address)
+    return resolved
 
 
 def validate_ssh_target(value):

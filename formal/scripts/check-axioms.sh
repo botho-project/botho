@@ -66,12 +66,25 @@ with open(output, encoding="utf-8") as fh:
     text = fh.read()
 
 results = {}
-# Long axiom lists wrap across lines, so match with DOTALL.
-for m in re.finditer(r"'([^']+)' depends on axioms: \[(.*?)\]", text, re.S):
-    axioms = [a.strip() for a in m.group(2).replace("\n", " ").split(",") if a.strip()]
+# Anchor on Lean's full result-line format rather than on the quotes alone:
+#   'NAME' depends on axioms: [A, B, ...]
+#   'NAME' does not depend on any axioms
+# NAME may itself end in (or contain) `'` -- primed names such as
+# `transfer_preserves'` are idiomatic Lean -- so the name is matched lazily up
+# to the first `' depends on axioms: [` / `' does not depend on any axioms`
+# on the same line. Long axiom lists wrap across lines, so the list itself is
+# matched with DOTALL.
+RESULT = re.compile(
+    r"^'([^\n]+?)' (?:depends on axioms: \[(.*?)\]|does not depend on any axioms)",
+    re.M | re.S,
+)
+for m in RESULT.finditer(text):
+    listed = m.group(2)
+    if listed is None:
+        results[m.group(1)] = []
+        continue
+    axioms = [a.strip() for a in listed.replace("\n", " ").split(",") if a.strip()]
     results[m.group(1)] = axioms
-for m in re.finditer(r"'([^']+)' does not depend on any axioms", text):
-    results[m.group(1)] = []
 
 errors = []
 if expected == 0:

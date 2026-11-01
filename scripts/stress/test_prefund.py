@@ -1,7 +1,9 @@
 """Offline prefunder tests: a fake five-node fleet and a fake main signer, no network."""
 import asyncio
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -341,9 +343,97 @@ class OpeningTests(PrefundBase):
         self.fleet.status_override[HOSTS[0]] = {'mintingActive': True}
         self.assertOpeningRefused('only on the producer')
 
-    def test_insufficient_funding_balance(self):
+    def quiet_tick(self, p):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            done = self.tick(p)
+        return done, out.getvalue()
+
+    def waits(self, p):
+        return [json.loads(r[0]) for r in
+                p.j.db.execute("SELECT detail FROM events WHERE state='prefund_funding_wait'")]
+
+    def test_insufficient_funding_balance_waits_then_holds_at_deadline(self):
         self.m['grants_per_wallet'] = 32  # 1024 grants needs more than the 64 x 9e11 opening.
-        self.assertOpeningRefused('cannot cover principal')
+        p = self.prefunder()
+        opening = Path(self.m['state_dir']) / 'opening.json'
+        done, out = self.quiet_tick(p)
+        self.assertFalse(done)
+        self.assertIn('waiting for the funding wallet to mature', out)
+        (wait,) = self.waits(p)
+        self.assertLess(wait['spendable'], wait['needed'])
+        self.assertEqual(wait['height'], self.fleet.height)
+        self.assertFalse(opening.exists())
+        # Within the wait interval nothing is rescanned or journalled.
+        self.now += prefund.FUNDING_WAIT_SECONDS - 1
+        self.assertEqual(self.quiet_tick(p), (False, ''))
+        self.assertEqual(len(self.waits(p)), 1)
+        self.now = self.m['deadline']
+        with self.assertRaisesRegex(Gate, 'cannot cover principal plus worst-case fees by the prefund deadline'):
+            self.quiet_tick(p)
+        self.assertFalse(self.fleet.submits)
+        self.assertFalse(opening.exists())
+
+    def test_opening_waits_for_funding_to_mature_then_proceeds(self):
+        self.m['grants_per_wallet'] = 32
+        p = self.prefunder()
+        self.assertEqual(self.quiet_tick(p)[0], False)
+        self.fleet.mine(1)  # A new block, never one the first rescan already saw.
+        for _ in range(64):  # The producer keeps minting; the new outputs mature.
+            self.fleet.output(self.fleet.height, 'addr-funding', 9 * 10**11, coinbase=True)
+        self.advance(11)
+        self.now += prefund.FUNDING_WAIT_SECONDS
+        self.quiet_tick(p)
+        opening = json.loads((Path(self.m['state_dir']) / 'opening.json').read_text())
+        self.assertGreaterEqual(opening['spendable'], self.waits(p)[0]['needed'])
+        self.assertEqual(len(self.waits(p)), 1)
+
+
+class HostsTests(PrefundBase):
+    """`--hosts`: the fleet *.internal names resolve only through the bound hosts file (#1610)."""
+
+    def hosts_file(self, text):
+        path = self.root / 'hosts'
+        path.write_text(text)
+        return path
+
+    def fleet_hosts(self):
+        return ''.join('10.0.0.%d %s\n' % (i + 11, name) for i, name in enumerate(prefund.target_names(self.m)))
+
+    def test_check_hosts_and_unit_properties(self):
+        path = self.hosts_file('# fleet\n' + self.fleet_hosts() + '10.0.0.10 controller.internal\n')
+        addresses = prefund.check_hosts(self.m, path)
+        self.assertEqual(list(addresses), prefund.target_names(self.m))
+        props = prefund.unit_properties(self.m, path, addresses)
+        self.assertEqual(props[0], 'BindReadOnlyPaths=%s:/etc/hosts' % path.resolve())
+        self.assertIn('ReadWritePaths=' + self.m['state_dir'], props)
+        self.assertIn('IPAddressDeny=any', props)
+        self.assertEqual([p for p in props if p.startswith('IPAddressAllow=10.')],
+                         ['IPAddressAllow=10.0.0.%d/32' % (i + 11) for i in range(5)])
+
+    def test_check_hosts_refusals(self):
+        names = prefund.target_names(self.m)
+        for text, needle in (('10.0.0.11 %s\n' % names[0], 'does not resolve target'),
+                             (self.fleet_hosts().replace('10.0.0.11', '8.8.8.8'), 'private addresses'),
+                             (self.fleet_hosts() + '10.0.0.99 %s\n' % names[2], 'duplicate'),
+                             ('not-an-ip %s\n' % names[0], 'malformed')):
+            with self.subTest(needle=needle), self.assertRaisesRegex(Gate, needle):
+                prefund.check_hosts(self.m, self.hosts_file(text))
+
+    def test_run_refuses_unresolvable_or_misresolved_targets(self):
+        import socket
+        def missing(name, port, proto=0):
+            raise socket.gaierror('nodename nor servname provided')
+        with self.assertRaisesRegex(Gate, 'bound over /etc/hosts'):
+            prefund.check_resolution(self.m, resolve=missing)
+        addresses = prefund.check_hosts(self.m, self.hosts_file(self.fleet_hosts()))
+        def right(name, port, proto=0):
+            return [(2, 1, 6, '', (addresses[name], port))]
+        prefund.check_resolution(self.m, addresses, resolve=right)
+        prefund.check_resolution(self.m, resolve=right)
+        def wrong(name, port, proto=0):
+            return [(2, 1, 6, '', ('192.168.9.9', port))]
+        with self.assertRaisesRegex(Gate, 'not the hosts-file address'):
+            prefund.check_resolution(self.m, addresses, resolve=wrong)
 
 
 class EndToEndTests(PrefundBase):
