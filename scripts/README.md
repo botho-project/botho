@@ -40,6 +40,7 @@ The manual live-testnet procedure these scripts rehearse is
 | [`version.sh`](version.sh) | Reads/checks/bumps the version across the botho-native crates and npm packages (`check`, `bump patch|minor|major`, `set X.Y.Z [--tag]`). Deliberately excludes the MobileCoin-fork crates pinned at the upstream `7.1.0`. |
 | [`fuzz.sh`](fuzz.sh) | Wrapper around the [`../fuzz/`](../fuzz/) targets — `list`, plus timed runs (quick/medium/long/overnight) with corpus and log management. |
 | [`test-ledger.sh`](test-ledger.sh) | Runs the node's ledger unit tests (`cargo test --locked -p botho --lib ledger::`). On macOS, bounds test concurrency using the current SysV semaphore undo budget; accepts `--binary /absolute/path/to/botho-lib-test` to reuse a built test executable. |
+| [`glib-parallel-loop.sh`](glib-parallel-loop.sh) | Diagnostic for #1561: loops the vendored GLib lib-test binary (`--binary PATH`) with parallel test threads, each run under gdb, and names the tests in flight when a run aborts. Unlike the other scripts, run it from `vendor/glib/`. CI runs it through the manual `glib-parallel-loop.yml` workflow. |
 | [`join-betanet.sh`](join-betanet.sh) | Smoke test: launches a throwaway local node, points it at the live betanet seed over the public internet, and verifies it peers and syncs. Ops/manual only — it depends on live infrastructure and must not be wired into PR CI. |
 
 ## Testnet campaign design

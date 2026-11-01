@@ -1,0 +1,75 @@
+name: GLib parallel test loop
+
+# Manual-only diagnostic for #1561. The Security workflow's
+# "Vendored GLib iterator safety" job runs the vendored glib lib tests with
+# `--test-threads=1` because, run in parallel, the binary sometimes aborted
+# with `fatal runtime error: failed to initiate panic, error 3`. The cause is
+# unconfirmed.
+#
+# This workflow builds the same release lib-test binary, then loops it with
+# parallel threads under gdb (scripts/glib-parallel-loop.sh). On an abort it
+# logs the thread list, the test functions on every stack, and the tests that
+# never finished, and uploads the full gdb logs. Use those names to serialize
+# only the colliding tests and return the rest of the suite to parallel.
+#
+# It never runs on pull requests or pushes, so it costs nothing by default.
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Number of parallel runs of the lib-test binary
+        required: false
+        default: "50"
+      threads:
+        description: Value for --test-threads (empty = libtest default, the runner's CPU count)
+        required: false
+        default: ""
+      use_gdb:
+        description: Run each iteration under gdb to capture backtraces
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: Loop vendored GLib lib tests in parallel
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install native GLib dependencies and gdb
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config gdb jq
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build the optimized lib-test binary
+        id: build
+        run: |
+          bin=$(cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --lib --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "glib") | .executable' \
+            | grep -v '^null$' | tail -n1)
+          test -x "$bin"
+          echo "binary=$bin" >> "$GITHUB_OUTPUT"
+      - name: Loop in parallel
+        working-directory: vendor/glib
+        env:
+          BINARY: ${{ steps.build.outputs.binary }}
+          ITERATIONS: ${{ inputs.iterations }}
+          THREADS: ${{ inputs.threads }}
+          USE_GDB: ${{ inputs.use_gdb }}
+        run: |
+          args=(--binary "$BINARY" --iterations "$ITERATIONS" --out "$RUNNER_TEMP/glib-loop-out")
+          if [[ -n "$THREADS" ]]; then args+=(--threads "$THREADS"); fi
+          if [[ "$USE_GDB" != "true" ]]; then args+=(--no-gdb); fi
+          "$GITHUB_WORKSPACE/scripts/glib-parallel-loop.sh" "${args[@]}"
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: glib-parallel-loop-logs
+          path: ${{ runner.temp }}/glib-loop-out
+          if-no-files-found: ignore
