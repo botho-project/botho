@@ -868,6 +868,59 @@ mod cli {
             #[arg(long, value_enum, default_value = "consensus")]
             fee_model: FeeModelArg,
         },
+
+        /// M2-PRODUCTION (#1696): the M2 Gini experiment at the node's real
+        /// parameters — 6,307,200 blocks/yr, mainnet emission with the
+        /// lottery-share ramp and epoch-0 holiday, the V2 uniform draw
+        /// (window 720..=10k, 4 winners, payouts as new outputs, real reward
+        /// cap, 80% fee pool), coinbase-lineage clusters with merge-on-spend,
+        /// monotone W, 16-tag cap and 0.1% prune, and a mining whale that
+        /// picks floor-minimising decoys. Each scenario is run with the
+        /// mechanism on and off (counterfactual).
+        ///
+        ///   sim m2-production                       # 20 yr, snapshots 10/20
+        ///   sim m2-production --validate-days 30    # exact vs aggregated
+        M2Production {
+            /// Horizon in years
+            #[arg(long, default_value = "20")]
+            horizon_years: u64,
+
+            /// Snapshot years (comma-separated)
+            #[arg(long, value_delimiter = ',', default_value = "10,20")]
+            snapshot_years: Vec<u64>,
+
+            /// Deterministic RNG seed
+            #[arg(long, default_value = "1696")]
+            seed: u64,
+
+            /// Blocks per aggregation step (1 = exact; must divide 6,307,200)
+            #[arg(long, default_value = "720")]
+            step_blocks: u64,
+
+            /// Hashpower distribution: wealth, egalitarian, or both
+            #[arg(long, default_value = "both")]
+            mining: String,
+
+            /// Strategic whale: honest, optimal-decoy, or both
+            #[arg(long, default_value = "both")]
+            whale: String,
+
+            /// Fee model (consensus or consensus-relay; legacy is not
+            /// supported here)
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
+
+            /// Instead of the main runs, validate the step aggregation: run
+            /// this many days from the start of epoch 1 in exact per-block
+            /// mode and at --step-blocks, and print both.
+            #[arg(long)]
+            validate_days: Option<u64>,
+
+            /// Multiply every cohort's transactions per year (velocity held
+            /// fixed). 1 = the M2 rates, about 13k tx/yr or 0.002 tx/block.
+            #[arg(long, default_value = "1")]
+            tx_scale: f64,
+        },
     }
 
     pub fn run(cli: Cli) {
@@ -1149,6 +1202,27 @@ mod cli {
             } => {
                 run_m2_cumulative(horizon_years, gamed, seed, smoke, fee_model);
             }
+            Command::M2Production {
+                horizon_years,
+                snapshot_years,
+                seed,
+                step_blocks,
+                mining,
+                whale,
+                fee_model,
+                validate_days,
+                tx_scale,
+            } => run_m2_production_cli(
+                horizon_years,
+                snapshot_years,
+                seed,
+                step_blocks,
+                &mining,
+                &whale,
+                fee_model,
+                validate_days,
+                tx_scale,
+            ),
             Command::M2Decay {
                 horizon_years,
                 half_life_years,
@@ -4833,6 +4907,186 @@ mod cli {
             r.whale_mean_factor,
             m2_pass(r.whale_mean_factor > 5.0)
         );
+    }
+
+    /// M2-production (#1696): printing wrapper over
+    /// `bth_cluster_tax::simulation::m2_production`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_m2_production_cli(
+        horizon_years: u64,
+        snapshot_years: Vec<u64>,
+        seed: u64,
+        step_blocks: u64,
+        mining: &str,
+        whale: &str,
+        fee_model: FeeModelArg,
+        validate_days: Option<u64>,
+        tx_scale: f64,
+    ) {
+        use bth_cluster_tax::simulation::m2_production::{
+            run_m2_production, run_m2_production_pair, MiningModel, ProdParams, ProdSnapshot,
+            WhaleStrategy, PROD_BLOCKS_PER_YEAR,
+        };
+        let Some(fee_mode) = fee_model.mode() else {
+            eprintln!("m2-production prices fees with the consensus model only");
+            std::process::exit(2);
+        };
+        let minings: Vec<MiningModel> = match mining {
+            "wealth" => vec![MiningModel::WealthProportional],
+            "egalitarian" => vec![MiningModel::Egalitarian],
+            _ => vec![MiningModel::WealthProportional, MiningModel::Egalitarian],
+        };
+        let whales: Vec<WhaleStrategy> = match whale {
+            "honest" => vec![WhaleStrategy::Honest],
+            "optimal-decoy" => vec![WhaleStrategy::OptimalDecoy],
+            _ => vec![WhaleStrategy::Honest, WhaleStrategy::OptimalDecoy],
+        };
+
+        let print_snap = |label: &str, s: &ProdSnapshot| {
+            println!(
+                "  {label:<5} y{:>5.2}  gini={:.4}  top-decile<1.5x={:>5.1}%  whale priced={:.3}x  \
+                 mined={:.4e} BTH  lottery={:.4e}  demurrage={:.4e}  fees={:.4e}  burned={:.4e}",
+                s.blocks as f64 / PROD_BLOCKS_PER_YEAR as f64,
+                s.gini,
+                s.top_decile_below_1_5x * 100.0,
+                s.whale_priced_factor as f64 / 1000.0,
+                s.total_mined_bth,
+                s.lottery_paid_bth,
+                s.demurrage_bth,
+                s.fees_bth,
+                s.burned_bth,
+            );
+            for c in &s.cohorts {
+                println!(
+                    "        {:<9} wealth={:>6.2}%  lottery={:>6.2}%  demurrage={:>12.2} BTH  \
+                     priced factor={:.3}x",
+                    c.name,
+                    c.wealth_share * 100.0,
+                    c.lottery_share * 100.0,
+                    c.demurrage_bth,
+                    c.mean_priced_factor,
+                );
+            }
+        };
+
+        if let Some(days) = validate_days {
+            let blocks = days * PROD_BLOCKS_PER_YEAR / 365;
+            println!(
+                "M2-PRODUCTION aggregation check: {days} days ({blocks} blocks) from height \
+                 {PROD_BLOCKS_PER_YEAR} (epoch 1), seed={seed}, tx-scale={tx_scale}, fee model={}",
+                fee_model.label()
+            );
+            for m in &minings {
+                for w in &whales {
+                    for step in [1, step_blocks] {
+                        let t = std::time::Instant::now();
+                        let r = run_m2_production(&ProdParams {
+                            horizon_blocks: blocks,
+                            snapshots: vec![blocks],
+                            start_height: PROD_BLOCKS_PER_YEAR,
+                            step_blocks: step,
+                            mining: *m,
+                            whale: *w,
+                            fee_mode,
+                            mechanism: true,
+                            seed,
+                            tx_scale,
+                        });
+                        println!(
+                            "mining={} whale={} step={step}  gini0={:.4}  ({:.1}s)",
+                            m.label(),
+                            w.label(),
+                            r.gini0,
+                            t.elapsed().as_secs_f64()
+                        );
+                        print_snap("on", &r.snapshots[0]);
+                    }
+                }
+            }
+            return;
+        }
+
+        println!(
+            "M2-PRODUCTION (#1696): horizon={horizon_years}yr  snapshots={snapshot_years:?}  \
+             seed={seed}  step={step_blocks} blocks  tx-scale={tx_scale}  fee model={}",
+            fee_model.label()
+        );
+        print_m2_population();
+        println!("  + strategic mining whale 5,000,000 BTH");
+        let mut rows = Vec::new();
+        for m in &minings {
+            for w in &whales {
+                let mut p = ProdParams::years(horizon_years, &snapshot_years);
+                p.seed = seed;
+                p.step_blocks = step_blocks;
+                p.mining = *m;
+                p.whale = *w;
+                p.fee_mode = fee_mode;
+                p.tx_scale = tx_scale;
+                let t = std::time::Instant::now();
+                let pair = run_m2_production_pair(&p);
+                println!(
+                    "\n== mining={} whale={}  gini0={:.4}  txs={}  outputs={}  ({:.0}s)",
+                    m.label(),
+                    w.label(),
+                    pair.on.gini0,
+                    pair.on.transactions,
+                    pair.on.outputs_created,
+                    t.elapsed().as_secs_f64()
+                );
+                for (i, (on, off)) in pair
+                    .on
+                    .snapshots
+                    .iter()
+                    .zip(&pair.off.snapshots)
+                    .enumerate()
+                {
+                    print_snap("on", on);
+                    print_snap("off", off);
+                    println!(
+                        "        dGini raw (gini0-giniF, legacy def) = {:+.4} ({})   \
+                         dGini mechanism (off-on) = {:+.4} ({})",
+                        pair.delta_gini_raw(i),
+                        m2_pass(pair.delta_gini_raw(i) > 0.05),
+                        pair.delta_gini_mechanism(i),
+                        m2_pass(pair.delta_gini_mechanism(i) > 0.05),
+                    );
+                    rows.push((
+                        m.label(),
+                        w.label(),
+                        on.blocks / PROD_BLOCKS_PER_YEAR,
+                        pair.on.gini0,
+                        on.gini,
+                        off.gini,
+                        pair.delta_gini_raw(i),
+                        pair.delta_gini_mechanism(i),
+                        on.top_decile_below_1_5x,
+                    ));
+                }
+            }
+        }
+        println!(
+            "\nSUMMARY (fee model {}, seed {seed}, tx-scale {tx_scale})",
+            fee_model.label()
+        );
+        println!(
+            "| mining | whale | yr | gini0 | giniF on | giniF off | dGini raw | dGini mechanism | top-decile <1.5x |"
+        );
+        println!("|---|---|---|---|---|---|---|---|---|");
+        for r in rows {
+            println!(
+                "| {} | {} | {} | {:.4} | {:.4} | {:.4} | {:+.4} | {:+.4} | {:.1}% |",
+                r.0,
+                r.1,
+                r.2,
+                r.3,
+                r.4,
+                r.5,
+                r.6,
+                r.7,
+                r.8 * 100.0
+            );
+        }
     }
 
     /// Run set 2: epoch-halving decay variant. Emits Δgini plus the

@@ -63,9 +63,9 @@ pub use bridge_import::{
 pub use cluster::{ClusterId, ClusterWealth};
 // One shared consensus fee model for every economic sim (#1695).
 pub use consensus_fee::{
-    consensus_fee_breakdown, consensus_fee_model, consensus_tx_size_bytes, ClaimedClass,
-    ConsensusFeeBreakdown, ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode, SimConsensusFee,
-    RELAY_MIN_TX_FEE,
+    consensus_fee_breakdown, consensus_fee_model, consensus_tx_size_bytes, mainnet_monetary_policy,
+    ClaimedClass, ConsensusFeeBreakdown, ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode,
+    SimConsensusFee, RELAY_MIN_TX_FEE,
 };
 // Pure mirrors of the ledger's DB-dependent fee-floor resolution (#1697).
 pub use fee_floor_inputs::{
