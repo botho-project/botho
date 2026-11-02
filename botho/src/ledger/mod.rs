@@ -15,6 +15,11 @@ mod store;
 #[cfg(feature = "test-fixtures")]
 #[doc(hidden)]
 pub mod formal_drt;
+// TEST/DRT ONLY (#1840): the C6 tag check and the fee floor's output-tag
+// reads over an in-memory ValidationReads double, for formal-drt/.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub mod formal_drt_tags;
 // Drift guards pinning the cluster-tax emission model to the node (#1699).
 #[cfg(test)]
 mod emission_parity_tests;
@@ -33,6 +38,11 @@ mod mempool_tag_gate_tests;
 // the SHA-pinned store.rs.
 #[cfg(test)]
 mod cluster_tag_rules_tests;
+
+// #1840 end-to-end checks of the Lean cluster-tag counterexamples
+// (formal/Botho/Tags/), kept out of the SHA-pinned store.rs.
+#[cfg(test)]
+mod cluster_tag_invariant_tests;
 
 pub use snapshot::{SnapshotError, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2};
 /// Test-only `botho.ledger.2` ledger with V2 lottery payouts (#1286 P7).

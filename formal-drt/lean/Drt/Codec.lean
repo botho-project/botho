@@ -17,6 +17,7 @@ result, and add one `| "name" => ...` arm to `dispatch`.
 import Lean.Data.Json
 import Botho
 import Drt.Sha256
+import Drt.Tags
 
 namespace Drt
 
@@ -219,7 +220,11 @@ def dispatch (fn : String) (a : Json) : Dec Json := do
         Json.mkObj [("error", Json.str (encDrawingError e)),
           ("windows", Json.arr (if e == .seedParent || e == .awardBound then #[]
             else windowSeed.toArray))])
-  | other => throw s!"unknown fn {other}"
+  | other =>
+    -- The cluster-tag legs (#1840) live in `Drt/Tags.lean`.
+    match Tags.dispatch other a with
+    | some r => r
+    | none => throw s!"unknown fn {other}"
 
 /-- Handle one request line. -/
 def handleLine (line : String) : Json :=

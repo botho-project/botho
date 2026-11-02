@@ -25,6 +25,7 @@ randomx-rs = { path = "../vendor/randomx-rs" }
 # `botho::ledger::formal_drt` (the end-to-end `drawing` leg).
 botho = { path = "../botho", features = ["test-fixtures"] }
 bth-cluster-tax = { path = "../cluster-tax" }
+bth-transaction-types = { path = "../transaction/types" }
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-util-from-random = { path = "../util/from-random" }

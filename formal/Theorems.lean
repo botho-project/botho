@@ -155,3 +155,27 @@ import Botho
 #print axioms Botho.Lottery.r3_no_split_profit
 #print axioms Botho.Lottery.r3_eligibility_unpriced
 #print axioms Botho.Lottery.r3_pricing_violated
+
+-- Botho.Tags.Vector (the wallet's merge_weighted, #1840; status: proven (model) + tested)
+#print axioms Botho.Tags.mergeWeighted_sub_convex
+#print axioms Botho.Tags.mergeWeighted_mass_le_scale
+#print axioms Botho.Tags.mergeWeighted_isSome
+#print axioms Botho.Tags.decayEntry_le
+#print axioms Botho.Tags.decayEntry_antitone
+#print axioms Botho.Tags.mergeWeighted_truncation_halves_mass
+#print axioms Botho.Tags.mergeWeighted_overflow_panics
+#print axioms Botho.Tags.mergeWeighted_no_panic_4294
+#print axioms Botho.Tags.mergeWeighted_decay_not_antitone
+
+-- Botho.Tags.Inherit (consensus C6 and the fee-floor tag reads, #1840;
+-- status: proven (model) + tested, except tag_drop_escapes_import_floor:
+-- trusted, hypotheses on the fee curve and the ring-centroid factor)
+#print axioms Botho.Tags.inheritOk_bound
+#print axioms Botho.Tags.inheritOk_cons_fresh
+#print axioms Botho.Tags.inheritOk_of_untagged
+#print axioms Botho.Tags.inherit_admits_fresh_mass_above_one
+#print axioms Botho.Tags.fresh_cluster_credit_unbounded
+#print axioms Botho.Tags.importFloor_of_untagged
+#print axioms Botho.Tags.tag_drop_demurrage_factor
+#print axioms Botho.Tags.tag_drop_escapes_import_floor
+#print axioms Botho.Tags.import_floor_invariant_refuted

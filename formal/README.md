@@ -10,7 +10,10 @@ differentially tested against the Rust code (see
 [Differential random testing](#differential-random-testing-drt)).
 It also holds the flat-FBAS quorum model (`Botho/Quorum/`, #1714), which
 decides the quorum gate's intersection, fault-tolerance and rotation questions
-(see [The quorum model](#the-quorum-model)).
+(see [The quorum model](#the-quorum-model)), and the cluster-tag model
+(`Botho/Tags/`, #1840), which mirrors the consensus tag check C6, the fee
+floor's reads of output tags and the wallet's tag merge
+(see [The cluster-tag model](#the-cluster-tag-model)).
 
 The approach follows Cedar's verification-guided development: write a small
 executable Lean model of a Rust component, prove properties about the model,
@@ -256,6 +259,41 @@ The separate [demurrage counterexample model](DEMURRAGE.md) covers the
 charge kernel and default ring factor (#1711), including refutations of
 the positive-charge threshold, churn identity and conservative-overflow claim.
 
+## The cluster-tag model
+
+`Botho/Tags/` (#1840) asks whether the cluster-tag rules keep the invariants
+the privacy and demurrage design assumes. It models two kernels and keeps
+them apart, because a modified wallet need not run the wallet's:
+
+- **Consensus** (`Botho/Tags/Inherit.lean`). Block acceptance applies no
+  tag mixing and no decay. Its only tag rule is C6,
+  `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:228`,
+  `CONSENSUS_TAG_DECAY_RATE = 0`). The ledger also reads output tags for the
+  fee floor (`effective_cluster_wealth_from_outputs`,
+  `import_floor_factor_from_outputs`, `store/validation.rs:272,305`) and
+  credits them to the per-cluster wealth index
+  (`update_cluster_wealth_for_output`, `store/writer.rs:469`). The fee curve
+  and the ring-centroid factor are parameters (`FeeEnv`), not models (#1711).
+- **Wallet** (`Botho/Tags/Vector.lean`).
+  `ClusterTagVector::merge_weighted` (`transaction/types/src/cluster_tags.rs:355`)
+  and `from_pairs`, which the stock wallets use to choose output tags and
+  the mempool uses to compare a transaction's output tags with its ring.
+
+Not mirrored (no caller outside the simulations): `cluster-tax`'s
+`block_decay.rs`, `age_decay.rs`, `entropy_decay.rs`, the floating-point
+`TagVector`, and `merge_weighted_with_and_decay`.
+
+| Invariant | Kernel | Result | Theorems |
+|---|---|---|---|
+| 1. Output tag mass at most 100%, no attribution to clusters absent from the inputs | C6 + writer | **refuted** | `inherit_admits_fresh_mass_above_one`, `fresh_cluster_credit_unbounded`, `inheritOk_cons_fresh`; what C6 does bound: `inheritOk_bound` |
+| 2. Mixing is a value-weighted convex combination | wallet | **refuted** exactly; **proven** as a sub-convex bound | `mergeWeighted_truncation_halves_mass`; `mergeWeighted_sub_convex`, `mergeWeighted_mass_le_scale` |
+| 2'. The merge does not panic | wallet, mempool | **proven** for well-formed inputs, **refuted** in general | `mergeWeighted_isSome`; `mergeWeighted_overflow_panics`, `mergeWeighted_no_panic_4294` |
+| 3. Decay is monotone and never raises a weight | wallet | **proven** below `2^32`, **refuted** (in the rate) above it | `decayEntry_le`, `decayEntry_antitone`; `mergeWeighted_decay_not_antitone` |
+| 4. (#1687) No accepted spend drops a tagged input's mass without paying the demurrage owed | C6 + fee floor | **refuted** | `inheritOk_of_untagged`, `importFloor_of_untagged`, `tag_drop_demurrage_factor`, `tag_drop_escapes_import_floor` (trusted), `import_floor_invariant_refuted` |
+
+Every counterexample is also checked end to end, on a real ledger with
+validly signed transactions, in `botho/src/ledger/cluster_tag_invariant_tests.rs`.
+
 ## Differential random testing (DRT)
 
 `formal-drt/` (#1706, #1707) checks that the Lean model and the Rust code
@@ -310,6 +348,16 @@ and `botho::ledger::formal_drt`, which runs the production
 | `draw_lottery_winners_seeded` | `consensus::draw_lottery_winners_seeded` | `drawLotteryWinnersSeeded` |
 | `lottery_candidates` | `Ledger::get_lottery_validation_candidates` over a real LMDB ledger | `lotteryCandidates` |
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
+| `merge_weighted` | `ClusterTagVector::merge_weighted` (a panic is compared as `{"panic": true}`) | `Botho.Tags.mergeWeighted` |
+| `cluster_tag_inheritance` | `ValidationReads::verify_cluster_tag_inheritance` (C6) over the in-memory double `botho::ledger::formal_drt_tags` | `Botho.Tags.inheritOk` (and the first failing cluster's numbers) |
+| `effective_cluster_wealth` | `ValidationReads::effective_cluster_wealth_from_outputs` over the same double | `Botho.Tags.effectiveWealth` |
+| `import_floor_factor` | `ValidationReads::import_floor_factor_from_outputs` over the same double | `Botho.Tags.importFloor` |
+
+The cluster-tag legs (#1840) live in `formal-drt/src/legs_tags.rs` and
+`formal-drt/lean/Drt/Tags.lean`. Their mutation check: a C6 tolerance of
+`max(0)` instead of `max(1)`, a pruning test of `>` instead of `>=` in
+`from_pairs`, and a looser clamp in the import floor are each caught within
+the first 1,024 cases.
 
 The `drawing` double reimplements the candidate read over an in-memory
 table (it cannot use LMDB); the `lottery_candidates` leg checks the
