@@ -23,6 +23,13 @@ fresh_copy() {
   echo "$dst"
 }
 
+# The root imports of the tree under test other than `Botho.Basic` (#1714).
+# A case that rewrites Botho.lean keeps these, so the theorems Theorems.lean
+# lists from other model modules still resolve.
+model_imports() {
+  grep '^import ' "$1/Botho.lean" | grep -v '^import Botho\.Basic$' || true
+}
+
 expect() {
   local want="$1" desc="$2"
   shift 2
@@ -577,7 +584,10 @@ simproc botho_tidy (Nat.succ _) := fun _ => do
 
 example : Nat.succ 1 = 2 := by simp only [botho_tidy]
 EOF
-  printf 'import Botho.Basic\nimport Botho.Cheat\nimport Botho.Evil\n' >"$1/Botho.lean"
+  local others
+  others="$(model_imports "$1")"
+  { printf 'import Botho.Basic\nimport Botho.Cheat\nimport Botho.Evil\n'
+    [ -z "$others" ] || printf '%s\n' "$others"; } >"$1/Botho.lean"
   printf '#print axioms Botho.one_eq_two\n' >>"$1/Theorems.lean"
 }
 d="$(fresh_copy)"
@@ -709,6 +719,7 @@ expect fail "  (and nothing was built)" test -e "$d/.lake"
 # Both full gates pass.
 d="$(fresh_copy)"
 mkdir -p "$d/Botho/Extra"
+others="$(model_imports "$d")"
 cat >"$d/Botho.lean" <<'EOF'
 /- Root import (self-test control). import Lean in a comment. -/
 import Botho.Basic -- the toy model
@@ -716,6 +727,7 @@ import Botho.Basic -- the toy model
 import
   «Botho».Extra.«Deep»
 EOF
+[ -z "$others" ] || printf '%s\n' "$others" >>"$d/Botho.lean"
 cat >"$d/Botho/Extra/Deep.lean" <<'EOF'
 import Botho.Basic
 -- import Lean (in a comment)

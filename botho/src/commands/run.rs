@@ -5606,6 +5606,224 @@ mod tests {
         }
     }
 
+    // -- Lean ties (#1714): formal/Botho/Quorum/Fbas.lean ---------------------
+    //
+    // The Lean model proves closed forms about flat FBAS (status: proven
+    // (model)). These tests tie the Rust functions to them (status: tested).
+    // Symmetric cases are checked exhaustively, which for n <= 13 covers the
+    // `bth_quorum_sim` branch of `symmetric_quorum_has_intersection` and above
+    // that its analytic branch. The heterogeneous instances re-check the
+    // Lean counterexamples and rotation instances with `bth_quorum_sim`.
+
+    /// Lean `sym_intersects_iff_pos`: `t`-of-`n` (t >= 1) intersects iff
+    /// `2t > n`. Exhaustive over `1 <= t <= n <= 64`, both Rust branches.
+    #[test]
+    fn symmetric_intersection_matches_lean_closed_form() {
+        for n in 1..=64usize {
+            for t in 1..=n {
+                assert_eq!(
+                    symmetric_quorum_has_intersection(n, t),
+                    2 * t > n,
+                    "symmetric_quorum_has_intersection({n}, {t}) != (2t > n)"
+                );
+            }
+        }
+        // Lean `seed_fallback_intersects`: the initial-seed fallback always
+        // intersects.
+        for n in 1..=64usize {
+            assert!(symmetric_quorum_has_intersection(n, n / 2 + 1));
+        }
+    }
+
+    /// Lean `byzTol_iff_dset`, `byzTol_pos_iff`, `recommended_bft_byzTol`,
+    /// `recommended_crash_flag_overclaims` (its `byzTol = 0` half) and
+    /// `recommended_crash_flag_even_sound`, against
+    /// `config::byzantine_tolerance` and `QuorumConfig::effective_threshold`.
+    #[test]
+    fn byzantine_tolerance_matches_lean_dset_bound() {
+        use crate::config::{byzantine_tolerance, FaultModel, QuorumConfig, QuorumMode};
+        for n in 0..=64usize {
+            for t in 0..=n + 2 {
+                let bt = byzantine_tolerance(n, t);
+                // byzTol_pos_iff
+                assert_eq!(
+                    bt >= 1,
+                    t < n && n + 1 < 2 * t,
+                    "byzTol_pos_iff at n={n} t={t}"
+                );
+                // byzTol_iff_dset: for 1 <= f, f + 2 <= n, f <= bt iff B is a
+                // DSet, i.e. t + f <= n (availability) and n + f < 2t
+                // (intersection despite f).
+                for f in 1..=n.saturating_sub(2) {
+                    assert_eq!(
+                        f <= bt,
+                        t + f <= n && n + f < 2 * t,
+                        "byzTol_iff_dset at n={n} t={t} f={f}"
+                    );
+                }
+            }
+        }
+        let recommended = |fault_model| QuorumConfig {
+            mode: QuorumMode::Recommended,
+            fault_model,
+            ..QuorumConfig::default()
+        };
+        let bft = recommended(FaultModel::Bft);
+        let crash = recommended(FaultModel::Crash);
+        for n in 1..=64usize {
+            // `effective_threshold` takes the connected-peer count (n - 1).
+            let t_bft = bft.effective_threshold(n - 1);
+            assert_eq!(t_bft, n - (n - 1) / 3);
+            assert_eq!(byzantine_tolerance(n, t_bft), (n - 1) / 3, "Bft n={n}");
+            let t_crash = crash.effective_threshold(n - 1);
+            assert_eq!(t_crash, n / 2 + 1);
+            if n >= 4 {
+                // Odd n: zero tolerance (the #1714 lead-A counterexample);
+                // even n: at least one.
+                assert_eq!(
+                    byzantine_tolerance(n, t_crash) >= 1,
+                    n % 2 == 0,
+                    "Crash n={n}"
+                );
+            }
+        }
+    }
+
+    /// Test-only builder: a flat FBAS from `(threshold, members)` per node.
+    fn lean_fbas(qsets: &[(usize, Vec<usize>)]) -> bth_quorum_sim::Fbas {
+        bth_quorum_sim::Fbas::from_quorum_sets(
+            qsets
+                .iter()
+                .map(|(t, m)| bth_quorum_sim::QuorumSet::new(*t, m.clone())),
+        )
+    }
+
+    /// Test-only mirror of Lean `delete` (Mazieres' `(V, Q)^B` for flat
+    /// quorum sets): drop the nodes in `faulty`, drop them from every
+    /// member list, and lower each threshold by the number of its members
+    /// that were dropped. Survivors are re-indexed in order.
+    fn lean_delete(qsets: &[(usize, Vec<usize>)], faulty: &[usize]) -> bth_quorum_sim::Fbas {
+        let survivors: Vec<usize> = (0..qsets.len()).filter(|i| !faulty.contains(i)).collect();
+        let index = |i: usize| survivors.iter().position(|&s| s == i).unwrap();
+        let deleted: Vec<(usize, Vec<usize>)> = survivors
+            .iter()
+            .map(|&v| {
+                let (t, m) = &qsets[v];
+                let dropped = m.iter().filter(|x| faulty.contains(x)).count();
+                let kept = m
+                    .iter()
+                    .filter(|x| !faulty.contains(x))
+                    .map(|&x| index(x))
+                    .collect();
+                (t.saturating_sub(dropped), kept)
+            })
+            .collect();
+        lean_fbas(&deleted)
+    }
+
+    /// Lean `mixed`: nodes whose bit is set in `runs_b` use `b`, others `a`.
+    fn lean_mixed(
+        n: usize,
+        a: &(usize, Vec<usize>),
+        b: &(usize, Vec<usize>),
+        runs_b: u32,
+    ) -> Vec<(usize, Vec<usize>)> {
+        (0..n)
+            .map(|v| {
+                if runs_b & (1 << v) != 0 {
+                    b.clone()
+                } else {
+                    a.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// The Lean counterexamples and instances, re-checked with
+    /// `bth_quorum_sim`'s brute-force analyser.
+    #[test]
+    fn lean_quorum_instances_match_quorum_sim() {
+        // recommended_crash_bowtie_fork: triangles {0,1,2}, {2,3,4} on hub 2,
+        // each node majority over its own view.
+        let views: [Vec<usize>; 5] = [
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            vec![0, 1, 2, 3, 4],
+            vec![2, 3, 4],
+            vec![2, 3, 4],
+        ];
+        let crash: Vec<(usize, Vec<usize>)> =
+            views.iter().map(|v| (v.len() / 2 + 1, v.clone())).collect();
+        for (t, m) in &crash {
+            assert!(symmetric_quorum_has_intersection(m.len(), *t));
+        }
+        assert!(!lean_fbas(&crash).has_quorum_intersection());
+
+        // recommended_bft_bowtie_fork: 4-cliques {0,1,2,3}, {3,4,5,6} on hub 3.
+        let bft: Vec<(usize, Vec<usize>)> = (0..7)
+            .map(|v| {
+                let view: Vec<usize> = match v {
+                    3 => (0..7).collect(),
+                    0..=2 => (0..4).collect(),
+                    _ => (3..7).collect(),
+                };
+                let n = view.len();
+                (n - (n - 1) / 3, view)
+            })
+            .collect();
+        for (t, m) in &bft {
+            assert!(symmetric_quorum_has_intersection(m.len(), *t));
+        }
+        assert!(!lean_fbas(&bft).has_quorum_intersection());
+
+        // reroster_mixed_fork: 2-of-{0,1,2} -> 2-of-{2,3,4}, nodes 3, 4 moved.
+        let old = (2, vec![0, 1, 2]);
+        let new = (2, vec![2, 3, 4]);
+        assert!(!lean_fbas(&lean_mixed(5, &old, &new, 0b11000)).has_quorum_intersection());
+
+        // checker_not_complete: intersects, but the pairwise bound fails.
+        let ex = vec![
+            (2, vec![0, 1, 2]),
+            (2, vec![0, 1, 2]),
+            (2, vec![0, 1, 2]),
+            (2, vec![0, 1, 3]),
+        ];
+        assert!(lean_fbas(&ex).has_quorum_intersection());
+
+        // prod_4of5_dset_one / prod_4of5_two_faults: 4-of-5 keeps intersection
+        // despite one and despite two faulty nodes.
+        let prod: Vec<(usize, Vec<usize>)> = (0..5).map(|_| (4, (0..5).collect())).collect();
+        for b in 0..5 {
+            assert!(lean_delete(&prod, &[b]).has_quorum_intersection());
+            for c in b + 1..5 {
+                assert!(lean_delete(&prod, &[b, c]).has_quorum_intersection());
+            }
+        }
+
+        // prod_4of5_rotate_one_despite_one: every split, every <= 1 fault.
+        let a = (4, vec![0, 1, 2, 3, 4]);
+        let swap_one = (4, vec![0, 1, 2, 3, 5]);
+        for runs_b in 0..(1u32 << 6) {
+            let fleet = lean_mixed(6, &a, &swap_one, runs_b);
+            assert!(lean_fbas(&fleet).has_quorum_intersection());
+            for b in 0..6 {
+                assert!(
+                    lean_delete(&fleet, &[b]).has_quorum_intersection(),
+                    "swap-one runs_b={runs_b:#b} faulty={b}"
+                );
+            }
+        }
+
+        // prod_4of5_rotate_two_intersects (every split) and
+        // prod_4of5_rotate_two_not_despite_one (nodes 2, 5, 6 moved, 0 faulty).
+        let swap_two = (4, vec![0, 1, 2, 5, 6]);
+        for runs_b in 0..(1u32 << 7) {
+            assert!(lean_fbas(&lean_mixed(7, &a, &swap_two, runs_b)).has_quorum_intersection());
+        }
+        let fleet = lean_mixed(7, &a, &swap_two, (1 << 2) | (1 << 5) | (1 << 6));
+        assert!(!lean_delete(&fleet, &[0]).has_quorum_intersection());
+    }
+
     // -- Operator-action apply path (#748) driven through the SAME gate --------
 
     use crate::operator_action::{ActionKind, OutcomeClass, ParsedEnvelope};
