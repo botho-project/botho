@@ -188,6 +188,31 @@ class StagingTests(unittest.TestCase):
                     self.observer_install(text,True,'r%d'%i)
                 self.assertEqual((self.root/'keys'/'botho').read_text(),text)
 
+    def observer_sample(self,status):
+        def read_text(path):
+            if str(path)=='/proc/321/status':return status
+            if str(path)=='/proc/meminfo':return 'MemAvailable: 1000 kB\nMemTotal: 2000 kB\n'
+            return 'some=0'
+        fields='MainPID=321\nNRestarts=0\nExecMainStartTimestampMonotonic=123\nMemoryPeak=4096\n'
+        with patch('observer.subprocess.check_output',return_value=fields), \
+             patch('observer.Path.read_text',read_text), patch('observer.Path.read_bytes',return_value=b'c'), \
+             patch('observer.shutil.disk_usage',return_value=types.SimpleNamespace(free=99,total=100)):
+            return observer.sample('binaryhash',observer.node_config(self.p['observers'][0]['node']))
+
+    def test_observer_records_heap_and_file_backed_rss(self):
+        result=self.observer_sample('VmRSS: 20 kB\nVmSwap: 0 kB\nRssAnon: 12 kB\nRssFile: 8 kB\n')
+        self.assertNotIn('error',result)
+        self.assertEqual((result['rss'],result['rss_anon'],result['rss_file']),(20*1024,12*1024,8*1024))
+
+    def test_observer_without_or_with_malformed_heap_fields_is_not_an_error_row(self):
+        for status in ('VmRSS: 20 kB\nVmSwap: 0 kB\n','VmRSS: 20 kB\nVmSwap: 0 kB\nRssAnon: x kB\nRssFile: 8 MB\n'):
+            with self.subTest(status=status):
+                result=self.observer_sample(status)
+                self.assertNotIn('error',result)
+                self.assertEqual(result['rss'],20*1024)
+                self.assertIsNone(result['rss_anon'])
+                self.assertIsNone(result['rss_file'])
+
     def test_observer_uses_configured_unit_and_paths(self):
         node=self.p['observers'][0]['node']
         def read_text(path):

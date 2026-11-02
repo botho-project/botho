@@ -43,6 +43,15 @@ def node_config(config):
     return node
 
 
+def kib(value):
+    """Optional ``/proc`` ``N kB`` field in bytes; None when absent or unparseable."""
+    try:
+        number, unit = value.split()
+        return int(number)*1024 if unit == 'kB' else None
+    except (AttributeError, ValueError):
+        return None
+
+
 def sample(binary, node=None):
     at = time.time()
     node = DEFAULT_NODE if node is None else node
@@ -61,6 +70,9 @@ def sample(binary, node=None):
                 'node_key':hashlib.sha256(Path(node['node_key_path']).read_bytes()).hexdigest(),
                 'rss':int(process['VmRSS'].split()[0])*1024,
                 'swap':int(process['VmSwap'].split()[0])*1024,
+                # Heap vs mapped files (LMDB ledger): optional, never an error row (#1835).
+                'rss_anon':kib(process.get('RssAnon')),
+                'rss_file':kib(process.get('RssFile')),
                 'service_peak':fields['MemoryPeak'],
                 'mem_available':int(mem['MemAvailable'].split()[0])*1024,
                 'mem_total':int(mem['MemTotal'].split()[0])*1024,
