@@ -17,9 +17,11 @@
 #   (no flag)  print the computed record on stdout.
 #   --check    compare it with FORMAL_ROOT/statements.txt: exit 1 if a
 #              listed theorem has no identical block there, and list the
-#              blocks that match no compiled theorem (pending or stale).
+#              blocks that match no compiled theorem (pending or stale)
+#              and the `retired` lines.
 #   --write    overwrite FORMAL_ROOT/statements.txt with the computed
-#              record (drops pending and stale blocks).
+#              record (drops pending and stale blocks and `retired`
+#              lines).
 # Environment: LAKE overrides the lake binary (default: lake).
 set -euo pipefail
 
@@ -37,6 +39,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${1:-$(cd "$here/.." && pwd)}"
 root="$(cd "$root" && pwd)"
 lake="${LAKE:-lake}"
+# shellcheck disable=SC2034  # used by the sourced gate-common.sh (run_report)
 gate_lib=Botho
 # shellcheck disable=SC1091  # gate-common.sh sits next to this script
 . "$here/gate-common.sh"

@@ -10,10 +10,11 @@
 #   3. keeps only the files the workflow uploads (artifact_files below must
 #      match the `upload-artifact` paths in .github/workflows/formal.yml);
 #   4. runs verify-artifacts.sh from this directory with the clean
-#      allow-list and the clean statement record (plus the fixture's
-#      record.txt, standing for blocks a reviewer accepted on the base
-#      branch), as the verify job runs the base branch's copy, from a
-#      directory that holds a canary `axioms-allowlist.txt`.
+#      allow-list, the clean manifest as the base manifest and the clean
+#      statement record (plus the fixture's record.txt, standing for blocks
+#      a reviewer accepted on the base branch), as the verify job runs the
+#      base branch's copy, from a directory that holds a canary
+#      `axioms-allowlist.txt`.
 #
 # It asserts that the clean tree passes, also with no `lean`, `lake` or `elan`
 # on PATH (the verify job installs none there); that each fixture fails, for
@@ -23,8 +24,8 @@
 # lakefile check can stop it) is rejected by the statement check (#1805)
 # without the scan, and passes only with neither the scan nor the statement
 # check; that a fixture with statement.txt is rejected by the statement
-# check for that reason; that the clean tree fails with no statement record;
-# and that
+# check for that reason; that the clean tree fails with no statement record
+# and with no base manifest (#1824); and that
 # no model initializer ran inside the verifier (the fixtures' initializers
 # write to $BOTHO_INIT_CANARY). As a control it then imports the fixture's
 # library through the Lean frontend (`import Botho`), which does run
@@ -171,6 +172,27 @@ for path, old, new in rows:
 PY
 }
 
+# drop_manifest MANIFEST SPEC: delete the `#print axioms NAME` line of each
+# NAME in SPEC (one per line) from MANIFEST; each must occur exactly once.
+drop_manifest() {
+  python3 -I - "$1" "$2" <<'PY'
+import sys
+
+manifest, spec = sys.argv[1:]
+with open(spec, encoding="utf-8") as fh:
+    names = [n.strip() for n in fh.read().split("\n") if n.strip()]
+with open(manifest, encoding="utf-8") as fh:
+    lines = fh.read().split("\n")
+for name in names:
+    hits = [i for i, ln in enumerate(lines) if ln.strip() == f"#print axioms {name}"]
+    if len(hits) != 1:
+        sys.exit(f"drop: '#print axioms {name}' occurs {len(hits)} times, wanted 1")
+    del lines[hits[0]]
+with open(manifest, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(lines))
+PY
+}
+
 run_case() {
   local name="$1" dir="$tmp/$1" fx=""
   echo "== verify self-test: $name"
@@ -189,6 +211,11 @@ run_case() {
     if [[ -d "$fx/Botho" ]]; then cp -R "$fx/Botho/." "$dir/tree/Botho/"; fi
     if [[ -f "$fx/imports.txt" ]]; then cat "$fx/imports.txt" >>"$dir/tree/Botho.lean"; fi
     if [[ -f "$fx/manifest.txt" ]]; then cat "$fx/manifest.txt" >>"$dir/tree/Theorems.lean"; fi
+    # manifest-drop.txt: theorem names whose `#print axioms` line the pull
+    # request deletes from Theorems.lean (#1824).
+    if [[ -f "$fx/manifest-drop.txt" ]]; then
+      drop_manifest "$dir/tree/Theorems.lean" "$fx/manifest-drop.txt" || return 1
+    fi
     if [[ -f "$fx/allowlist.txt" ]]; then
       cat "$fx/allowlist.txt" >>"$dir/tree/axioms-allowlist.txt"
     fi
@@ -291,7 +318,7 @@ run_case() {
   local runs=(full no-scan)
   if [[ "$name" == clean ]]; then
     pass=1
-    runs=(full no-lean-path no-record)
+    runs=(full no-lean-path no-record no-base-manifest)
   elif [[ -f "$fx/pass" ]]; then
     pass=1
   else
@@ -313,12 +340,13 @@ run_case() {
     rc=0
     printf 'propext\n' >"$dir/cwd/axioms-allowlist.txt"
     local extra=() base_lakefile="$root/lakefile.toml" env_cmd=(env)
-    local record="$dir/record.txt"
+    local record="$dir/record.txt" base_manifest="$root/Theorems.lean"
     case "$run" in
       no-scan) extra=(--no-scan) ;;
       no-scan-no-statements) extra=(--no-scan --no-statements) ;;
       no-statements) extra=(--no-statements) ;;
       no-record) record="$dir/no-such-record.txt" ;;
+      no-base-manifest) base_manifest="$dir/no-such-manifest.lean" ;;
       same-layout) extra=(--no-scan); base_lakefile="$dir/tree/lakefile.toml" ;;
       no-lean-path)
         local nolean
@@ -329,10 +357,17 @@ run_case() {
       bash "$here/verify-artifacts.sh" --lib "$dir/artifact" --sources "$dir/sources" \
         --sysroot "$sysroot" --allowlist "$root/axioms-allowlist.txt" \
         --base-lakefile "$base_lakefile" --statements "$record" \
+        --base-manifest "$base_manifest" \
         ${extra[@]+"${extra[@]}"}) >"$log" 2>&1 || rc=$?
     if [[ "$run" == no-record ]]; then
       if [[ "$rc" == 0 ]] || ! grep -Eq -- 'FAIL: statement record: missing' "$log"; then
         echo "  [$run] expected verify to fail closed without a statement record (rc=$rc)" >&2
+        ok=0
+      fi
+    elif [[ "$run" == no-base-manifest ]]; then
+      if [[ "$rc" == 0 ]] ||
+          ! grep -Eq -- 'FAIL: statement record: missing base manifest' "$log"; then
+        echo "  [$run] expected verify to fail closed without a base manifest (rc=$rc)" >&2
         ok=0
       fi
     elif [[ "$run" == same-layout ]]; then
@@ -423,6 +458,8 @@ run_case() {
     echo "  ok: clean tree passes, also with no lean, lake or elan on PATH"
     echo "  ok: fails closed with no statement record ($(grep -E -m1 -- \
       'FAIL: statement record' "$dir/verify-no-record.log"))"
+    echo "  ok: fails closed with no base manifest ($(grep -E -m1 -- \
+      'FAIL: statement record' "$dir/verify-no-base-manifest.log"))"
   elif [[ "$pass" == 1 ]]; then
     echo "  ok: accepted by the full verifier and by the checks without the scan"
   elif [[ -n "$scan_only" ]]; then

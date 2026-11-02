@@ -1,0 +1,4 @@
+# The base record retires satAdd_eq_add (the first of the two pull requests
+# that remove a theorem, #1824), so this pull request may drop it from the
+# manifest.
+retired Botho.satAdd_eq_add

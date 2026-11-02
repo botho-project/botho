@@ -1,0 +1,3 @@
+# A `retired` line does not unbind a theorem that is still listed (#1824):
+# the forged satAdd_le_cap must still match its block.
+retired Botho.satAdd_le_cap

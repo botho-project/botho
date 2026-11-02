@@ -1,0 +1,5 @@
+# The honest block (over Nat), as a reviewer accepted it on the base branch.
+# The forged build states the theorem over Fin 2; its block differs in the
+# hash and, with the explicit printer (#1824), in the readable text too.
+theorem Botho.implicit_zero sha256:284c4ae06d2c384412c36489e7a6b6bdeea093f9a39d70ccb7e498d12255a8fb
+  : @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))

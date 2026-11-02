@@ -3,9 +3,10 @@
 #
 # The `verify` job in .github/workflows/formal.yml runs this script. It checks
 # out the script, AxiomReport.lean, check-sorry.sh, statements.py,
-# axioms-allowlist.txt, statements.txt and lakefile.toml from the BASE branch,
-# so a pull request cannot change what this script does, which axioms it
-# accepts or which statements its theorems must have. It checks compiled .olean files that the
+# axioms-allowlist.txt, statements.txt, Theorems.lean and lakefile.toml from
+# the BASE branch, so a pull request cannot change what this script does,
+# which axioms it accepts, which statements its theorems must have or which
+# theorems stay listed. It checks compiled .olean files that the
 # untrusted `build` job uploaded. It never runs `lake`, never compiles a model
 # source, and never runs model code:
 #
@@ -24,8 +25,8 @@
 #
 # Usage: verify-artifacts.sh --lib DIR --sources DIR [--sysroot DIR]
 #                            [--allowlist FILE] [--base-lakefile FILE]
-#                            [--statements FILE] [--no-scan]
-#                            [--no-statements]
+#                            [--statements FILE] [--base-manifest FILE]
+#                            [--no-scan] [--no-statements]
 #   --lib DIR        the downloaded build artifact: Botho.olean and
 #                    Botho/**/*.olean (the `.lake/build/lib/lean` directory).
 #   --sources DIR    the pull request's formal/ tree. Read as data only: the
@@ -40,6 +41,11 @@
 #   --statements FILE
 #                    the statement record (default: ../statements.txt next
 #                    to this script, which in CI is the base branch's copy).
+#   --base-manifest FILE
+#                    the base branch's Theorems.lean (default:
+#                    ../Theorems.lean next to this script). Read as text,
+#                    like the pull request's manifest, for the removal check
+#                    in check 6.
 #   --no-scan        skip check 2. Only selftest-verify.sh uses this, to show
 #                    that checks 3-6 reject each fixture on their own. CI
 #                    never passes it.
@@ -84,17 +90,82 @@
 #      closure pretty-printed) and requires an identical block in the
 #      statement record (--statements; the base branch's statements.txt). A
 #      missing record, a malformed record, or a theorem with no identical
-#      block fails. Checks 5 and 6 both report before the script exits, so
-#      a fixture's output shows every reason it fails.
+#      block fails. So does (#1824) a theorem that the base manifest lists
+#      and the base record binds but the pull request's manifest no longer
+#      lists, unless the base record has a `retired NAME` line for it:
+#      removing a bound theorem takes two pull requests, like changing its
+#      statement. A missing base manifest fails closed. Checks 5 and 6 both
+#      report before the script exits, so a fixture's output shows every
+#      reason it fails.
 #
 # What this does not check: that the .olean files are what the sources
 # compile to. Check 6 binds each listed theorem's compiled statement to the
 # reviewed record instead; see "Limits" in formal/README.md.
 set -euo pipefail
 
+# parse_manifest FILE: print the theorem names of the manifest FILE (a
+# Theorems.lean), one per line, first occurrence first. Parsed as text: the
+# file is never passed to Lean.
+parse_manifest() {
+  python3 -I - "$1" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    src = fh.read()
+
+
+def blank_comments(s):
+    out, i, n, depth = [], 0, len(s), 0
+    while i < n:
+        two = s[i:i + 2]
+        if depth > 0:
+            if two == "/-":
+                depth += 1
+                out.append("  ")
+                i += 2
+            elif two == "-/":
+                depth -= 1
+                out.append("  ")
+                i += 2
+            else:
+                out.append("\n" if s[i] == "\n" else " ")
+                i += 1
+        elif two == "/-":
+            depth = 1
+            out.append("  ")
+            i += 2
+        elif two == "--":
+            while i < n and s[i] != "\n":
+                out.append(" ")
+                i += 1
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+PRINT = re.compile(r"^\s*#print\s+axioms\s+(\S+)\s*$")
+names = []
+for line in blank_comments(src).split("\n"):
+    m = PRINT.match(line)
+    if m:
+        name = m.group(1)
+        while name.startswith("_root_."):
+            name = name[len("_root_."):]
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_'!?]*(\.[A-Za-z_][A-Za-z0-9_'!?]*)*", name):
+            sys.exit(f"FAIL: {path}: unsupported theorem name {name!r}")
+        names.append(name)
+if not names:
+    sys.exit(f"FAIL: {path}: no '#print axioms' lines (empty manifest)")
+print("\n".join(dict.fromkeys(names)))
+PY
+}
+
 main() {
 local here lib="" sources="" sysroot="" allowlist="" base_lakefile="" scan=1
-local statements="" stmt_check=1
+local statements="" stmt_check=1 base_manifest=""
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -104,14 +175,15 @@ while [[ $# -gt 0 ]]; do
     --allowlist) allowlist="$2"; shift 2 ;;
     --base-lakefile) base_lakefile="$2"; shift 2 ;;
     --statements) statements="$2"; shift 2 ;;
+    --base-manifest) base_manifest="$2"; shift 2 ;;
     --no-scan) scan=0; shift ;;
     --no-statements) stmt_check=0; shift ;;
-    *) echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--statements FILE] [--no-scan] [--no-statements]" >&2
+    *) echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--statements FILE] [--base-manifest FILE] [--no-scan] [--no-statements]" >&2
        exit 2 ;;
   esac
 done
 if [[ -z "$lib" || -z "$sources" ]]; then
-  echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--statements FILE] [--no-scan] [--no-statements]" >&2
+  echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--statements FILE] [--base-manifest FILE] [--no-scan] [--no-statements]" >&2
   exit 2
 fi
 lib="$(cd "$lib" && pwd)"
@@ -119,6 +191,7 @@ sources="$(cd "$sources" && pwd)"
 allowlist="${allowlist:-$here/../axioms-allowlist.txt}"
 base_lakefile="${base_lakefile:-$here/../lakefile.toml}"
 statements="${statements:-$here/../statements.txt}"
+base_manifest="${base_manifest:-$here/../Theorems.lean}"
 if [[ -z "$sysroot" ]]; then
   sysroot="$(lean --print-prefix)"
 fi
@@ -142,6 +215,12 @@ done
 if [[ "$stmt_check" == 1 ]] && [[ ! -f "$statements" || -L "$statements" ]]; then
   echo "FAIL: statement record: missing $statements (the base commit must have" \
     "formal/statements.txt)" >&2
+  exit 1
+fi
+# So does the base manifest, which the removal check reads (#1824).
+if [[ "$stmt_check" == 1 ]] && [[ ! -f "$base_manifest" || -L "$base_manifest" ]]; then
+  echo "FAIL: statement record: missing base manifest $base_manifest (the base" \
+    "checkout must include formal/Theorems.lean)" >&2
   exit 1
 fi
 local gate_lib=Botho
@@ -316,61 +395,7 @@ fi
 echo "  $(wc -l <"$tmp/modules" | tr -d ' ') modules"
 
 echo "== verify: manifest (Theorems.lean, parsed as text)"
-if ! python3 -I - "$sources/Theorems.lean" >"$tmp/names" <<'PY'
-import re
-import sys
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    src = fh.read()
-
-
-def blank_comments(s):
-    out, i, n, depth = [], 0, len(s), 0
-    while i < n:
-        two = s[i:i + 2]
-        if depth > 0:
-            if two == "/-":
-                depth += 1
-                out.append("  ")
-                i += 2
-            elif two == "-/":
-                depth -= 1
-                out.append("  ")
-                i += 2
-            else:
-                out.append("\n" if s[i] == "\n" else " ")
-                i += 1
-        elif two == "/-":
-            depth = 1
-            out.append("  ")
-            i += 2
-        elif two == "--":
-            while i < n and s[i] != "\n":
-                out.append(" ")
-                i += 1
-        else:
-            out.append(s[i])
-            i += 1
-    return "".join(out)
-
-
-PRINT = re.compile(r"^\s*#print\s+axioms\s+(\S+)\s*$")
-names = []
-for line in blank_comments(src).split("\n"):
-    m = PRINT.match(line)
-    if m:
-        name = m.group(1)
-        while name.startswith("_root_."):
-            name = name[len("_root_."):]
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_'!?]*(\.[A-Za-z_][A-Za-z0-9_'!?]*)*", name):
-            sys.exit(f"FAIL: {path}: unsupported theorem name {name!r}")
-        names.append(name)
-if not names:
-    sys.exit(f"FAIL: {path}: no '#print axioms' lines (empty manifest)")
-print("\n".join(dict.fromkeys(names)))
-PY
-then
+if ! parse_manifest "$sources/Theorems.lean" >"$tmp/names"; then
   echo "FAIL: manifest" >&2
   exit 1
 fi
@@ -402,8 +427,15 @@ fi
 local stmt_rc=0 axiom_rc=0
 if [[ "$stmt_check" == 1 ]]; then
   echo "== verify: statement binding (statements.py against $statements)"
-  python3 -I "$here/statements.py" check "$tmp/report" "$statements" "$tmp/names" \
-    || stmt_rc=$?
+  # The base manifest, parsed like the pull request's: the theorems that
+  # must stay listed unless the base record retires them (#1824).
+  if ! parse_manifest "$base_manifest" >"$tmp/base-names"; then
+    echo "FAIL: statement: cannot parse the base manifest $base_manifest" >&2
+    stmt_rc=1
+  else
+    python3 -I "$here/statements.py" check "$tmp/report" "$statements" "$tmp/names" \
+      "$tmp/base-names" || stmt_rc=$?
+  fi
 fi
 
 echo "== verify: axioms, modules and initializers"
