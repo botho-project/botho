@@ -21,10 +21,14 @@
 //!    continuously re-split (paying base fees each cycle) to stay in the draw.
 //! 2. **Endogenous reward cap** `R = min(fee_pool, ρ · base_fee)`, where `ρ` is
 //!    the count of in-window eligible outputs (whale splits included) and
-//!    `base_fee` is [`LOTTERY_BASE_FEE_PICO`]. Because the cap rises by exactly
-//!    `base_fee` per extra eligible output, a splitter wins back exactly the
-//!    base fee it pays: splitting is **net-zero** (net-negative when the pool
-//!    is thin). See [`sybil_reward_cap`] and §9 of the research memo.
+//!    `base_fee` is [`LOTTERY_BASE_FEE_PICO`]. The cap rises by exactly
+//!    `base_fee` per extra eligible output, so a splitter's expected winnings
+//!    per draw rise by at most `base_fee` per output. That does **not** make
+//!    splitting net-zero: no consensus rule charges `base_fee`, and a ticket
+//!    paid for once stays eligible for 9,281 draws. Splitting is profitable as
+//!    implemented (#1682, #1837; research §9.1.1; proven (model) in
+//!    `formal/Botho/Lottery/Sybil.lean`, `sybil_net_zero_refuted`). See
+//!    [`sybil_reward_cap`].
 //!
 //! The historical value-weighted modes (`ClusterWeighted`, `ValueWeighted`,
 //! `Hybrid`, `EntropyWeighted`) are retained for simulation/back-compat but are
@@ -260,10 +264,15 @@ pub fn count_eligible(
 ///
 /// The per-block lottery payout is capped at `R = min(fee_pool, ρ · base_fee)`,
 /// where `ρ` = [`count_eligible`] and `base_fee` = [`LOTTERY_BASE_FEE_PICO`].
-/// Under a uniform draw a splitter creating `k` of the `ρ` eligible outputs
-/// wins expected `k/ρ · R = k · base_fee`, exactly the `k · base_fee` it pays
-/// in base fees — splitting is net-zero (net-negative when `fee_pool < cap`).
-/// This is the regime-independent Sybil bound (research §9.1).
+/// Under a uniform draw a splitter holding `k` of the `ρ` eligible outputs
+/// wins expected `k/ρ · R ≤ k · base_fee` per draw. That bound holds, but the
+/// conclusion research §9.1 drew from it ("splitting is net-zero") does not:
+/// no consensus rule charges `base_fee` (the fee floor is 870 to 117,032 pico
+/// per ticket, #1684), and a ticket stays eligible for 9,281 draws. Once
+/// `ρ · base_fee ≥ block_reward` (ρ ≥ 100 at 25 BTH, and ρ saturates at
+/// `MAX_LOTTERY_CANDIDATES` = 10,000) this cap does not bind, and the payout
+/// is clamped by the block reward alone. See research §9.1.1, #1682, #1837,
+/// and `formal/lottery.md` (`sybil_net_zero_refuted`, `rewardCap_saturated`).
 ///
 /// Returns `u128`: `ρ` can be up to the candidate cap and `base_fee` is
 /// ~2.5e11, so the product can exceed `u64` in principle; the consensus caller
