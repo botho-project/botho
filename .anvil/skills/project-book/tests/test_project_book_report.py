@@ -35,7 +35,7 @@ def test_report_table_rows(tmp_path):
     threads = [_collect(tmp_path, "00-intro"), _collect(tmp_path, "01-mid")]
     threads.append(_collect(tmp_path, "appendix"))  # EMPTY
     md = R.render_report(
-        project_name="nitas-mama",
+        project_name="example-memoir",
         threads=threads,
         ordering_source=O.ORDERING_BUILD_ORDER,
     )

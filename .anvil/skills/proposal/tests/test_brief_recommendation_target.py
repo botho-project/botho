@@ -174,7 +174,7 @@ class TestLoadRecommendationTargetHappyPaths(_TmpThreadBase):
             ---
             title: "Gossamer LAN"
             subtitle: "Estate-grade fiber backbone"
-            studio: "Spheresemi"
+            studio: "Acmesemi"
             customer_kind: external
             recommendation_target: undecided
             ---

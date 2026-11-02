@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent  # anvil/skills/deck/
 
@@ -30,10 +32,6 @@ DECK_DRAFT = _SKILL_ROOT / "commands" / "deck-draft.md"
 SKILL_MD = _SKILL_ROOT / "SKILL.md"
 
 POLICY_VALUES = ("generative-eligible", "consumer-provided", "deterministic-only")
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,13 @@
+/* @theme fixture-consumer-theme-no-contract */
+
+/* A consumer theme that registers no @anvil-capacity contract at all —
+ * geometry_from_theme_css must fall through to the shipped default
+ * Geometry() unchanged. Used by test_marp_lint.py (issue #1150). */
+
+:root {
+  --fixture-brand-accent: #654321;
+}
+
+section {
+  padding: 72px;
+}

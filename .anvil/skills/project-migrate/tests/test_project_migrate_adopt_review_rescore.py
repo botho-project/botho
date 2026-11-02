@@ -27,6 +27,7 @@ import json
 
 import pytest
 
+from anvil.lib.testing import tree_hash as _tree_digest
 from _fixtures import FOREIGN_REVIEW_PROSE, build_adopted_review_threads
 from _project_migrate_skill_lib import adopt_review, orchestrate
 
@@ -37,9 +38,9 @@ run_adopt_review = orchestrate.run_adopt_review
 _IP_BRIEF = (
     "---\n"
     "documents:\n"
-    "  - slug: brasidas-c\n"
+    "  - slug: meridian-c\n"
     "    artifact_type: ip-uspto\n"
-    "  - slug: brasidas-a\n"
+    "  - slug: meridian-a\n"
     "    artifact_type: ip-uspto\n"
     "---\n"
     "# Project BRIEF\n"
@@ -48,15 +49,6 @@ _IP_BRIEF = (
 
 def _digest(path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for p in sorted(root.rglob("*")):
-        h.update(str(p.relative_to(root)).encode("utf-8"))
-        if p.is_file():
-            h.update(p.read_bytes())
-    return h.hexdigest()
 
 
 def _build_rescorable_tree(tmp_path, *, with_brief: bool = True):
@@ -99,10 +91,10 @@ class TestPlanner:
         plan = adopt_review.build_rescore_plan(project)
         names = sorted(t.sidecar_dir.name for t in plan.targets)
         assert names == [
-            "brasidas-a.2.review",
-            "brasidas-c.5.review",
-            "brasidas-c.7.enablement",
-            "brasidas-c.7.s101",
+            "meridian-a.2.review",
+            "meridian-c.5.review",
+            "meridian-c.7.enablement",
+            "meridian-c.7.s101",
         ]
         # Each target resolved the ip-uspto rubric (via BRIEF).
         for target in plan.targets:
@@ -120,9 +112,9 @@ class TestPlanner:
         (project / "BRIEF.md").write_text(_IP_BRIEF, encoding="utf-8")
         plan = adopt_review.build_rescore_plan(project)
         names = {t.sidecar_dir.name for t in plan.targets}
-        assert "brasidas-c.7.audit" not in names
+        assert "meridian-c.7.audit" not in names
         skipped = {n for n, _ in plan.skipped}
-        assert "brasidas-c.7.audit" in skipped
+        assert "meridian-c.7.audit" in skipped
 
     def test_idempotent_noop_on_rescored_tree(self, tmp_path):
         project = _build_rescorable_tree(tmp_path)
@@ -166,7 +158,7 @@ class TestDryRunSafety:
         result = run_adopt_review(project, rescore=True)
         report = result.report
         assert "Phase 3b" in report
-        assert "brasidas-c.7.enablement" in report
+        assert "meridian-c.7.enablement" in report
         assert "anvil-ip-uspto-v2" in report
         assert "ip-uspto" in report
 
@@ -194,13 +186,13 @@ class TestScoredWrite:
         )
         assert result.success, result.report
         assert sorted(result.apply_result.rescored) == [
-            "brasidas-a.2.review",
-            "brasidas-c.5.review",
-            "brasidas-c.7.enablement",
-            "brasidas-c.7.s101",
+            "meridian-a.2.review",
+            "meridian-c.5.review",
+            "meridian-c.7.enablement",
+            "meridian-c.7.s101",
         ]
 
-        sidecar = project / "brasidas-c" / "brasidas-c.7.enablement"
+        sidecar = project / "meridian-c" / "meridian-c.7.enablement"
         review_raw = json.loads((sidecar / "_review.json").read_text())
         # Validates against the schema (unscored=False requires scores).
         review = adopt_review.Review.model_validate(review_raw)
@@ -237,7 +229,7 @@ class TestScoredWrite:
             project, rescore=True, apply=True, scored_reviews=scored
         )
         assert result.success, result.report
-        sidecar = project / "brasidas-a" / "brasidas-a.2.review"
+        sidecar = project / "meridian-a" / "meridian-a.2.review"
         review = adopt_review.Review.model_validate(
             json.loads((sidecar / "_review.json").read_text())
         )
@@ -260,7 +252,7 @@ class TestScoredWrite:
             project, rescore=True, apply=True, scored_reviews=scored
         )
         assert result.success, result.report
-        sidecar = project / "brasidas-a" / "brasidas-a.2.review"
+        sidecar = project / "meridian-a" / "meridian-a.2.review"
         review = adopt_review.Review.model_validate(
             json.loads((sidecar / "_review.json").read_text())
         )
@@ -308,7 +300,7 @@ class TestVerbatimPreservationAndAtomicity:
 
         def failing_staged(final_dir, required_files, **kw):
             cm = real(final_dir, required_files, **kw)
-            if final_dir.name == "brasidas-c.7.s101":
+            if final_dir.name == "meridian-c.7.s101":
 
                 class _Boom:
                     def __enter__(self_inner):
@@ -328,10 +320,10 @@ class TestVerbatimPreservationAndAtomicity:
         )
         assert not result.success, result.report
         failed = {n for n, _ in result.apply_result.failed}
-        assert "brasidas-c.7.s101" in failed
+        assert "meridian-c.7.s101" in failed
 
         # The failed sidecar is restored to its ORIGINAL stub state.
-        s101 = project / "brasidas-c" / "brasidas-c.7.s101"
+        s101 = project / "meridian-c" / "meridian-c.7.s101"
         assert s101.is_dir()
         assert (s101 / "review.md").read_text() == FOREIGN_REVIEW_PROSE
         restored = json.loads((s101 / "_review.json").read_text())
@@ -342,10 +334,10 @@ class TestVerbatimPreservationAndAtomicity:
         assert "rescored_from" not in restored_meta
         # No staging / backup dirs survive.
         assert not (
-            project / "brasidas-c" / ".brasidas-c.7.s101.tmp"
+            project / "meridian-c" / ".meridian-c.7.s101.tmp"
         ).exists()
         assert not (
-            project / "brasidas-c" / ".brasidas-c.7.s101.bak"
+            project / "meridian-c" / ".meridian-c.7.s101.bak"
         ).exists()
 
     def test_no_leftover_staging_dirs(self, tmp_path):
@@ -376,9 +368,9 @@ class TestHonestyGuard:
         # Every foreign stub appears in skipped with the rubric-resolution
         # reason.
         reasons = {name: reason for name, reason in plan.skipped}
-        assert "brasidas-c.7.enablement" in reasons
+        assert "meridian-c.7.enablement" in reasons
         assert "rubric could not be resolved" in reasons[
-            "brasidas-c.7.enablement"
+            "meridian-c.7.enablement"
         ]
 
     def test_body_filename_route_resolves_rubric(self, tmp_path):
@@ -388,9 +380,9 @@ class TestHonestyGuard:
         # Drop a memo.md body alongside each version dir's spec.md.
         for version in project.rglob("*"):
             if version.is_dir() and version.name in (
-                "brasidas-c.5",
-                "brasidas-c.7",
-                "brasidas-a.2",
+                "meridian-c.5",
+                "meridian-c.7",
+                "meridian-a.2",
             ):
                 (version / "memo.md").write_text("# body\n", encoding="utf-8")
         plan = adopt_review.build_rescore_plan(project)
@@ -407,7 +399,7 @@ class TestMixedTree:
             tmp_path, pre_converted=True, with_real_sibling=True
         )
         (project / "BRIEF.md").write_text(_IP_BRIEF, encoding="utf-8")
-        audit = project / "brasidas-c" / "brasidas-c.7.audit"
+        audit = project / "meridian-c" / "meridian-c.7.audit"
         before_audit = _digest(audit / "_review.json")
 
         plan = adopt_review.build_rescore_plan(project)

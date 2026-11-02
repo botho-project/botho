@@ -27,7 +27,7 @@ sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import apply_mod, detect, plan  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_bessemer_shaped,
+    build_foundry_shaped,
     build_post_283_anvil_json,
     build_pre_283_classic,
 )
@@ -155,16 +155,16 @@ class TestApplyPost283(unittest.TestCase):
             )
 
 
-class TestApplyBessemer(unittest.TestCase):
+class TestApplyFoundry(unittest.TestCase):
     def test_critic_siblings_landed_correctly(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             plan = build_plan(project, Shape.PRE_283_CLASSIC)
             apply_plan(plan, use_git=False)
-            # The review siblings should now be at bessemer/bessemer.<n>.review/.
+            # The review siblings should now be at foundry/foundry.<n>.review/.
             for n in (1, 2, 3):
                 review_dir = (
-                    project / "bessemer" / f"bessemer.{n}.review"
+                    project / "foundry" / f"foundry.{n}.review"
                 )
                 self.assertTrue(
                     review_dir.is_dir(),
@@ -176,8 +176,8 @@ class TestApplyBessemer(unittest.TestCase):
                     f"expected verdict at {verdict}",
                 )
             # The audit sibling on memo.2 should land at
-            # bessemer/bessemer.2.audit/.
-            audit_dir = project / "bessemer" / "bessemer.2.audit"
+            # foundry/foundry.2.audit/.
+            audit_dir = project / "foundry" / "foundry.2.audit"
             self.assertTrue(audit_dir.is_dir())
 
 

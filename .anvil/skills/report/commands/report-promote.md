@@ -80,15 +80,16 @@ And updates `<project>/<thread>.{N}/_progress.json` with `phases.promote.state =
    - `<thread>.{N}.review/verdict.md` exists, parses, has `advance: true` and no critical flags.
    - `<thread>.{N}.audit/verdict.md` exists, parses, has `pass: true` and no critical flags.
    - `<thread>.{N}/report.pdf` exists and is newer than `report.md`.
+   - **No unresolved pending marker (issue #841)**: `<thread>.{N}.pending/_review.json` (written by `report-review` step 4f / `report-audit` step 10b) carries no active `pending_dependency` flag — equivalently, re-invoke `uv run --project .anvil python -m anvil.lib.pending_marker <thread>.{N}/ --body report.md` and require exit code 0. A well-formed `[PENDING <source>]` placeholder is an honest disclosure that a load-bearing number does not exist yet — it is not recoverable by rubric score alone, so `CUSTOMER-READY` (the human-acknowledged release gate) checks it explicitly even though `AUDITED` (the machine-checkable state this command requires as a precondition) already gates on it. This is defense-in-depth, not a redundant check: a thread hand-promoted from a stale on-disk state, or one whose `.pending/` sidecar predates this contract, still gets caught here.
 
-   If any precondition fails, exit with a specific error explaining which one. Do NOT run the promotion. Then **sweep a stale staging dir from a prior interrupt of THIS critic on THIS version** by invoking `anvil/lib/sidecar.py::cleanup_one_staging(<thread>.{N}.promote)` (the per-critic, parallel-safe sweep — issue #376). This removes ONLY a leftover `.<thread>.{N}.promote.tmp/` from a previously-killed run of this same critic on THIS version. Sibling critics' in-flight staging dirs under the same portfolio root are NOT touched (issue #350, #376). The sweep is idempotent.
+   If any precondition fails, exit with a specific error explaining which one (a failed pending-marker check names the outstanding source label(s) from the tool's `outstanding_sources` field). Do NOT run the promotion. Then **sweep a stale staging dir from a prior interrupt of THIS critic on THIS version** by invoking `anvil/lib/sidecar.py::cleanup_one_staging(<thread>.{N}.promote)` (the per-critic, parallel-safe sweep — issue #376). This removes ONLY a leftover `.<thread>.{N}.promote.tmp/` from a previously-killed run of this same critic on THIS version. Sibling critics' in-flight staging dirs under the same portfolio root are NOT touched (issue #350, #376). The sweep is idempotent.
 2. **Idempotence check**: if `<thread>.{N}.promote/` already exists (the atomic-rename contract guarantees the dir only exists when complete — i.e., `receipt.md` + `_progress.json` are both present), exit early with the message "thread already CUSTOMER-READY at version <N>, promoted at <timestamp>." (Re-promotion is not supported; supersession works by promoting a later version.)
 3. **Load project context**: read `<project>/_project.md`. Extract `recipient` and `engagement_id` (both REQUIRED fields). The acknowledgment will be checked against `recipient` to ensure the operator knows who they are releasing to.
 4. **Extract report title**: parse the first H1 heading from `report.md`. This is the canonical title used in the acknowledgment prompt.
 5. **Verify rendering match**: compute SHA256 of both `report.md` and `report.pdf`. Re-render the PDF if `report.md` modtime is newer than `report.pdf` modtime — a stale PDF cannot be promoted. (If re-render is needed and `report-figures` has not been invoked since the last `report.md` change, fail with "report.pdf is stale; run report-figures first" rather than re-rendering implicitly — promotion should be a no-op check, not a side-effect cascade.)
 6. **Acknowledgment** (REQUIRED — no shortcut path):
    - **Interactive path** (`--confirm-customer-ready`): print the report title, recipient, engagement_id, and SHA256 of the PDF to the operator. Prompt: "Type the exact report title to confirm CUSTOMER-READY promotion." Read input. Reject if it does not match the H1 character-for-character (whitespace-trimmed comparison; case-sensitive). On three rejected attempts, exit with no promotion.
-   - **Non-interactive path** (`--ack-file <path>`): the ack file MUST be a pure YAML document (no markdown wrapper) carrying a structured `ack:` token. Parse the file with `yaml.safe_load` and verify the schema below. v0.0.1+ rejects the prior substring-quoting contract (no fallback, no deprecation shim — anvil is alpha and has no shipped consumers of the legacy path).
+   - **Non-interactive path** (`--ack-file <path>`): the ack file MUST be a pure YAML document (no markdown wrapper) carrying a structured `ack:` token. v0.0.1+ rejects the prior substring-quoting contract (no fallback, no deprecation shim — anvil is alpha and has no shipped consumers of the legacy path).
 
      **Required schema** (snake_case; pure YAML):
      ```yaml
@@ -107,17 +108,33 @@ And updates `<project>/<thread>.{N}/_progress.json` with `phases.promote.state =
      - `ack.sha256` must EXACTLY match `hashlib.sha256(report.pdf).hexdigest()` computed at promotion time (lowercase hex, no `sha256:` prefix, no whitespace). The skill computes the digest of the on-disk PDF and rejects on any mismatch.
      - The ack file's mtime must be within the last 24 hours (defense-in-depth against stale ack files).
 
-     **Eight failure modes — each MUST exit with its own specific message** (no generic "ack rejected" fallback; the operator must see which check failed without guessing):
-     1. **file not found** — the path passed via `--ack-file` does not exist on disk.
-     2. **YAML parse error** — the file exists but `yaml.safe_load` raises `YAMLError` (unclosed quote, tab indent, malformed mapping, etc.).
-     3. **missing `ack:` key** — the document parsed cleanly but has no top-level `ack:` mapping.
-     4. **missing required subkey** — one of `report_title` / `recipient` / `sha256` is absent under `ack:` (the error names the specific missing key).
-     5. **unknown subkey under `ack:`** — a key other than the three required subkeys appears under `ack:` (the error names the offending key — catches typos like `report-title`, `sha-256`, `title`).
-     6. **`report_title` mismatch** — value present but does not equal the `report.md` H1.
-     7. **`recipient` mismatch** — value present but does not equal the `_project.md` recipient.
-     8. **`sha256` mismatch + modtime > 24h** — sha256 does not match the current PDF digest. If the ack file's mtime is also older than 24h, the error specifically calls out the staleness (the operator's first fix is usually to regenerate the ack file against the fresh PDF).
+     **Validation is delegated to `anvil/skills/report/lib/ack.py`** (issue #1098) — that module is the executable specification of the schema above and its nine `AckError.mode` failure modes; this step does not re-derive the parsing/hashing algorithm in prose. Two invocation tiers, in preference order (mirrors step 8's `anvil.lib.sidecar` dual-tier pattern below):
 
-     If any check fails, exit with no promotion and no on-disk state.
+     1. **Primary — `python -m anvil.skills.report.lib.ack` CLI shim**. In an installed consumer repo (anvil vendored under `.anvil/`, not on `sys.path`), prefix with `uv run --project .anvil` (same shape as every other `anvil.lib.*` / `anvil.skills.*.lib.*` invocation in this doc); in the anvil source repo the bare `python -m anvil.skills.report.lib.ack` form works as-is:
+
+        ```bash
+        uv run --project .anvil python -m anvil.skills.report.lib.ack <ack-file> \
+          --expected-title "<H1 from report.md>" \
+          --expected-recipient "<recipient from _project.md>" \
+          --expected-sha256 <sha256 of report.pdf computed at promotion time>
+        ```
+
+        - Exit `0`: the ack file is valid. Stdout carries the validated `report_title` / `recipient` / `sha256` as JSON — proceed to step 7.
+        - Exit `1`: the ack file failed one of the nine checks below. Stderr carries `error (mode=<mode>): <message>` — abort the promotion with that exact message; write no on-disk state.
+        - Exit `2`: invocation error (a required flag was omitted) — a promoter-agent bug, not an ack-file defect; fix the invocation and retry.
+
+     2. **Last resort — manual validation** when even `python`/`uv` is unavailable. Reproduce the nine checks below by hand, IN ORDER, stopping at the first failure (checks after the first failure may reference values that were never validated). **Each check MUST exit with its own specific message** (no generic "ack rejected" fallback; the operator must see which check failed without guessing):
+        1. **`file_not_found`** — the path passed via `--ack-file` does not exist on disk.
+        2. **`yaml_parse_error`** — the file exists but is not valid YAML (unclosed quote, tab indent, malformed mapping, etc.).
+        3. **`missing_ack_key`** — the document parsed cleanly but has no top-level `ack:` mapping (or `ack:`'s value is not itself a mapping).
+        4. **`missing_required_subkey`** — one of `report_title` / `recipient` / `sha256` is absent under `ack:` (the error names the specific missing key).
+        5. **`unknown_subkey`** — a key other than the three required subkeys appears under `ack:` (the error names the offending key — catches typos like `report-title`, `sha-256`, `title`).
+        6. **`report_title_mismatch`** — value present but does not equal the `report.md` H1.
+        7. **`recipient_mismatch`** — value present but does not equal the `_project.md` recipient.
+        8. **`sha256_mismatch` / `sha256_mismatch_stale`** — sha256 does not match the current PDF digest. If the ack file's mtime is ALSO older than 24h, report the stale variant (`sha256_mismatch_stale`) — the operator's first fix is usually to regenerate the ack file against the fresh PDF.
+        9. **`stale_ack_file`** — sha256 matches, but the ack file's mtime is older than 24h (defense-in-depth against an ack file left over from a prior cycle).
+
+     If any check fails (either tier), exit with no promotion and no on-disk state.
 7. **Detect supersession**: enumerate other `<thread>.{prior_N}.promote/` siblings under the project for the same thread slug. If any exist, the new promotion supersedes them. Prompt the operator for a one-line `Cause:` (or read from the ack file). Record both the prior version reference and the cause in `receipt.md`. (The skill does NOT modify prior `.promote/` siblings; they remain as audit trail. The newest `.promote/` is canonical for delivery.)
 8. **Open the staged sidecar** for the promote dir by invoking the context manager `anvil/lib/sidecar.py::staged_sidecar(final_dir=<project>/<thread>.{N}.promote, required_files=["receipt.md", "_progress.json"])`. Every file write in steps 9-10 MUST land **inside the yielded staging directory** (the path of the shape `.<thread>.{N}.promote.tmp/`), NOT inside the final `<thread>.{N}.promote/` path. On clean context exit, the primitive verifies the manifest, then atomically renames the staging dir to its final name (issue #350). Then, **inside the staging dir**, initialize `_progress.json`: `phases.promote.state = in_progress`, `phases.promote.started = <ISO>`, `for_version = N`.
 

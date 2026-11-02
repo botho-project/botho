@@ -591,7 +591,7 @@ class TestSkillFilterForceSetSemantics(unittest.TestCase):
 
     Per Option B in the curator enrichment: the prior-release behavior
     was pure filter for all three cases, which left the canary's deck
-    threads (with `aldus/aldus.4/deck.md`, no BRIEF) skipped with
+    threads (with `beacon/beacon.4/deck.md`, no BRIEF) skipped with
     `outside --skill=deck scope (inferred skill: None)` even though
     the operator's assertion carried enough information to stamp.
     """
@@ -701,7 +701,7 @@ class TestCanaryDeckRebackportE2E(unittest.TestCase):
     """End-to-end smoke test for the canary's #374 reproducer.
 
     The canary's original on-disk shape was a deck thread with
-    ``aldus/aldus.4/deck.md`` and an unstamped ``aldus.4.review/
+    ``beacon/beacon.4/deck.md`` and an unstamped ``beacon.4.review/
     _meta.json``. Pre-fix, this skipped with ``outside --skill=deck
     scope (inferred skill: None)``. Post-fix (either path):
 

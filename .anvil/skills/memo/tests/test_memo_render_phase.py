@@ -134,6 +134,11 @@ def _no_rules(project_dir):  # noqa: ANN001 — test seam
     return None
 
 
+def _no_byline(project_dir):  # noqa: ANN001 — test seam
+    """Default AI-byline resolver stub: no ``ai_byline:`` block (issue #941)."""
+    return None
+
+
 class TestRenderPhaseModule(unittest.TestCase):
     """Defensive shape checks on the CLI module itself."""
 
@@ -199,6 +204,7 @@ class TestRendererUnavailable(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=fake,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
             self.assertEqual(rc, 0)
             progress = _read_progress(vdir)
@@ -227,6 +233,7 @@ class TestRendererUnavailable(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=fake,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
             self.assertEqual(rc, 0)
             progress = _read_progress(vdir)
@@ -246,6 +253,7 @@ class TestRendererUnavailable(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=exploding_gate,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
             self.assertEqual(rc, 0)
             progress = _read_progress(vdir)
@@ -257,6 +265,7 @@ class TestRendererUnavailable(unittest.TestCase):
                 [str(Path(td) / "nope" / "acme.1")],
                 gate_fn=_gate_result,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
         self.assertEqual(rc, 0)
 
@@ -268,40 +277,61 @@ class TestRendererUnavailable(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=_gate_result,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
             self.assertEqual(rc, 0)
             self.assertFalse((vdir / "_progress.json").exists())
+
+
+def _run_with_metadata(
+    metadata: dict, resolver=_no_rules, byline_resolver=_no_byline
+) -> dict:
+    """Shared fixture: run ``render_phase.main`` with a capturing fake
+    gate over a fresh version dir carrying ``metadata``. Returns the
+    captured gate kwargs plus ``_version_dir`` / ``_progress`` / ``_rc``.
+
+    Used by both ``TestKnobThreading`` (issues #463/#468 and prior) and
+    ``TestAiByline`` (issue #941) so the two test classes share one
+    on-disk fixture recipe.
+    """
+    captured: dict = {}
+
+    def capturing_gate(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return _gate_result()
+
+    with TemporaryDirectory() as td:
+        vdir = _make_version_dir(
+            Path(td),
+            progress={
+                "version": 1,
+                "thread": "acme",
+                "phases": {},
+                "metadata": metadata,
+            },
+        )
+        rc = render_phase.main(
+            [str(vdir)],
+            gate_fn=capturing_gate,
+            resolve_rhetoric_rules_fn=resolver,
+            resolve_ai_byline_fn=byline_resolver,
+        )
+        captured["_rc"] = rc
+        captured["_version_dir"] = vdir
+        captured["_progress"] = _read_progress(vdir)
+    return captured
 
 
 class TestKnobThreading(unittest.TestCase):
     """``_progress.json.metadata`` knobs land in the ``gate()`` kwargs."""
 
     def _run_with_metadata(
-        self, metadata: dict, resolver=_no_rules
+        self, metadata: dict, resolver=_no_rules, byline_resolver=_no_byline
     ) -> dict:
-        captured: dict = {}
-
-        def capturing_gate(**kwargs):  # noqa: ANN003
-            captured.update(kwargs)
-            return _gate_result()
-
-        with TemporaryDirectory() as td:
-            vdir = _make_version_dir(
-                Path(td),
-                progress={
-                    "version": 1,
-                    "thread": "acme",
-                    "phases": {},
-                    "metadata": metadata,
-                },
-            )
-            rc = render_phase.main(
-                [str(vdir)],
-                gate_fn=capturing_gate,
-                resolve_rhetoric_rules_fn=resolver,
-            )
-            self.assertEqual(rc, 0)
-            captured["_version_dir"] = vdir
+        captured = _run_with_metadata(
+            metadata, resolver=resolver, byline_resolver=byline_resolver
+        )
+        self.assertEqual(captured["_rc"], 0)
         return captured
 
     def test_all_knobs_threaded(self) -> None:
@@ -407,6 +437,110 @@ class TestKnobThreading(unittest.TestCase):
         )
 
 
+class TestAiByline(unittest.TestCase):
+    """Opt-in AI-authorship byline threading into gate kwargs + provenance
+    (issue #941)."""
+
+    def _run_with_metadata(self, metadata: dict, byline_resolver) -> dict:
+        captured = _run_with_metadata(metadata, byline_resolver=byline_resolver)
+        self.assertEqual(captured["_rc"], 0)
+        return captured
+
+    def test_inactive_tier_omits_render_metadata(self) -> None:
+        captured = self._run_with_metadata({}, byline_resolver=_no_byline)
+        self.assertNotIn("render_metadata", captured)
+        render_block = captured["_progress"]["phases"]["render"]
+        self.assertNotIn("ai_byline_text", render_block)
+        self.assertNotIn("ai_byline_placement", render_block)
+
+    def test_active_byline_merged_into_render_metadata(self) -> None:
+        resolved = SimpleNamespace(
+            text="Drafted with AI assistance.", placement="byline"
+        )
+        captured = self._run_with_metadata(
+            {}, byline_resolver=lambda project_dir: resolved
+        )
+        self.assertEqual(
+            captured["render_metadata"],
+            {"ai_byline": "Drafted with AI assistance."},
+        )
+        render_block = captured["_progress"]["phases"]["render"]
+        self.assertEqual(
+            render_block["ai_byline_text"], "Drafted with AI assistance."
+        )
+        self.assertEqual(render_block["ai_byline_placement"], "byline")
+
+    def test_footer_placement_also_merges_into_render_metadata(self) -> None:
+        resolved = SimpleNamespace(
+            text="Drafted with AI assistance.", placement="footer"
+        )
+        captured = self._run_with_metadata(
+            {}, byline_resolver=lambda project_dir: resolved
+        )
+        self.assertEqual(
+            captured["render_metadata"],
+            {"ai_byline": "Drafted with AI assistance."},
+        )
+
+    def test_frontmatter_only_placement_skips_render_metadata(self) -> None:
+        """``frontmatter-only`` is provenance-only — no visible line, so
+        ``render_metadata`` is untouched even though the tier is active."""
+        resolved = SimpleNamespace(
+            text="Drafted with AI assistance.", placement="frontmatter-only"
+        )
+        captured = self._run_with_metadata(
+            {}, byline_resolver=lambda project_dir: resolved
+        )
+        self.assertNotIn("render_metadata", captured)
+        render_block = captured["_progress"]["phases"]["render"]
+        self.assertEqual(
+            render_block["ai_byline_text"], "Drafted with AI assistance."
+        )
+        self.assertEqual(
+            render_block["ai_byline_placement"], "frontmatter-only"
+        )
+
+    def test_composes_with_operator_declared_render_metadata(self) -> None:
+        """An operator's own ``render_metadata_requested`` dict survives —
+        only the ``ai_byline`` key is added/overwritten."""
+        resolved = SimpleNamespace(
+            text="Drafted with AI assistance.", placement="byline"
+        )
+        captured = self._run_with_metadata(
+            {"render_metadata_requested": {"docversion": "v{N}"}},
+            byline_resolver=lambda project_dir: resolved,
+        )
+        self.assertEqual(
+            captured["render_metadata"],
+            {
+                "docversion": "v{N}",
+                "ai_byline": "Drafted with AI assistance.",
+            },
+        )
+
+    def test_resolver_receives_project_dir(self) -> None:
+        seen_project_dirs: list[Path] = []
+
+        def resolver(project_dir):  # noqa: ANN001
+            seen_project_dirs.append(project_dir)
+            return None
+
+        captured = self._run_with_metadata({}, byline_resolver=resolver)
+        vdir = captured["_version_dir"].resolve()
+        self.assertEqual(seen_project_dirs, [vdir.parent.parent])
+
+    def test_resolver_exception_is_non_blocking(self) -> None:
+        def exploding_resolver(project_dir):  # noqa: ANN001
+            raise RuntimeError("boom")
+
+        captured = self._run_with_metadata(
+            {}, byline_resolver=exploding_resolver
+        )
+        self.assertNotIn("render_metadata", captured)
+        render_block = captured["_progress"]["phases"]["render"]
+        self.assertNotIn("ai_byline_text", render_block)
+
+
 class TestShallowMerge(unittest.TestCase):
     """The CLI owns only ``phases.render`` + top-level ``render_gate``."""
 
@@ -442,6 +576,7 @@ class TestShallowMerge(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=lambda **kwargs: _gate_result(),
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
             self.assertEqual(rc, 0)
             after = _read_progress(vdir)
@@ -469,6 +604,7 @@ class TestShallowMerge(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=lambda **kwargs: _gate_result(),
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
             self.assertEqual(rc, 0)
             after = _read_progress(vdir)
@@ -503,6 +639,7 @@ class TestIdempotence(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=must_not_run,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
         self.assertEqual(rc, 0)
 
@@ -532,6 +669,7 @@ class TestIdempotence(unittest.TestCase):
                 [str(vdir)],
                 gate_fn=counting_gate,
                 resolve_rhetoric_rules_fn=_no_rules,
+                resolve_ai_byline_fn=_no_byline,
             )
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 1)

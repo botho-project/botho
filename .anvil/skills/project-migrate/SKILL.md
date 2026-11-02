@@ -105,7 +105,7 @@ are consumed by external tooling (marp CLI, xelatex,
 `.anvil.json` → BRIEF merge only.
 
 **Artifact types.** The registered artifact-type enum
-(`anvil/lib/project_brief.py::ArtifactType`) carries skill-identity
+(`anvil/lib/project_brief/types.py::ArtifactType`) carries skill-identity
 values `deck`, `slides`, `proposal` (issue #386), and `paper` (registered as `pub`, issue
 #408) alongside the memo subtypes. The migration infers the type from
 the retained body filename and writes it into the BRIEF `documents:`
@@ -134,6 +134,40 @@ hand-rolled unstamped review content stays invisible-but-intact to
 `discover_critics` per the #346 additive contract (rebackportable via
 `anvil:rubric-rebackport`).
 
+**Foreign `.md` body filenames + `--artifact-type` (issue #878).** A
+bare thread's `.md` body may carry a name fixed by a FOREIGN pipeline
+(e.g. a hand-rolled blog tool's `post.md` — the shape `anvil:essay`
+documents as its migration path) rather than any anvil skill's *own*
+historical fixed name. Two independent gaps this closes:
+
+1. **Circular declaration.** The bare-synthesis default is always
+   `artifact_type: investment-memo` (TODO-marked), because the correct
+   declaration (e.g. `artifact_type: essay`) can only come from the very
+   BRIEF the run is synthesizing. `--artifact-type <type>` (validated
+   against the same two-tier `#394` registry `--enroll`/`--adopt-vn`
+   use) breaks the circularity: given on the main mode, it is applied
+   directly to every synthesized `documents:` entry with **no** TODO
+   marker — the operator's explicit declaration, not a guess.
+2. **Nothing to rename.** `_SKILL_FIXED_BODY_FILENAMES` only recognizes
+   anvil's own prior fixed names (`memo.md`, `proposal.md`, ...) — a
+   foreign name like `post.md` matches none of them, so the historical
+   rename loop has nothing to match. The planner separately detects a
+   **single consistent** non-canonical `.md` filename across a bare
+   thread's version dirs and plans its rename to `<slug>.md`,
+   independent of whether `--artifact-type` is given — reviewable in the
+   dry-run plan, paired with a `# TODO(operator)` confirmation note.
+   Multiple distinct foreign names across the thread's version dirs are
+   ambiguous: no rename is planned, and the plan notes it instead of
+   guessing.
+
+The bare-shape definitional edge case this resolves (curator note): a
+project with no anvil config anywhere but a foreign pipeline's fixed
+body name still classifies BARE (`ProjectInventory.is_bare` is
+unaffected — a foreign name is not one of anvil's own skill-fixed or
+retained names), and the rename mechanism now recognizes that same
+foreign name as the thread's sole body candidate rather than having
+nothing to match.
+
 ## Commands
 
 | Command                                     | What it does                                                                                  |
@@ -146,6 +180,14 @@ hand-rolled unstamped review content stays invisible-but-intact to
 | `/anvil:project-migrate --adopt-family <dir> --tag-map <file> --artifact-type <type>` | **Letter-family adoption** (issue #440 — Phase 2 of #432): adopt foreign `{Project}.{Letter}.{N}` families (+ foreign-tagged critic siblings, mapped declaratively) into `<dir>/<slug>/<slug>.{N}/`. Dry-run by default; `--apply` executes. Slugs are derived (no `--slug`); `--artifact-type` is REQUIRED. |
 | `/anvil:project-migrate --adopt-review <dir>` | **Foreign `review.md` stub conversion** (issue #454 — Phase 3a of #432): on an already-adopted tree, convert each `<slug>.{N}.<tag>/` critic sibling holding only a single-file prose `review.md` into a recognizable-but-explicitly-**unscored** `_review.json` stub (+ `_meta.json` foreign-provenance marker), preserving `review.md` byte-identical. **NO LLM, NO synthesized scores.** Dry-run by default; `--apply` executes. |
 | `/anvil:project-migrate --adopt-review <dir> --rescore` | **Operator-driven LLM rescore of stubs** (issue #507 — Phase 3b of #432): on a tree carrying Phase-3a stubs, resolve each stub's target anvil rubric and (with the operator/LLM step in the slash-command runtime supplying per-dimension scores) turn the unscored stub into a real scored `_review.json` (`unscored: false`), stamping `rubric_id` / `rubric_total` / `advance_threshold` + `rescored_from: foreign-adopted` lineage; `review.md` byte-identical. Unresolvable stubs are SKIPPED, never guessed. Dry-run by default; `--apply` (operator-gated) executes. |
+
+All three main-mode forms in the table above (dry-run, `--apply`,
+`--report`) accept an optional `--artifact-type <type>` (issue #878):
+applied to every synthesized `documents:` entry on a BARE project
+instead of the inferred/defaulted value — closing the circularity where
+the correct declaration (e.g. `artifact_type: essay`) would otherwise
+have to come from the very BRIEF the run is synthesizing. See "Bare
+sub-state" below.
 
 See `commands/project-migrate.md` for the operator-facing contract.
 
@@ -219,14 +261,14 @@ is the conversion path:
 ## Letter-family adoption (`--adopt-family`, issue #440 — Phase 2 of #432)
 
 Adoption-target repos also hold **foreign letter-family ip threads**
-(`{Project}.{Letter}.{N}` — `Brasidas.C.7/` +
-`Brasidas.C.7.enablement/` siblings, ~163 version dirs across the
+(`{Project}.{Letter}.{N}` — `Meridian.C.7/` +
+`Meridian.C.7.enablement/` siblings, ~163 version dirs across the
 sphere survey). `--adopt-family` is their conversion path:
 
 - One invocation = one directory = N letter families (batch): each
   `{Project}.{Letter}` stem becomes one document —
   `{stem}.{N}/` → `<dir>/<slug>/<slug>.{N}/` with the slug **derived**
-  from the stem (`Brasidas.C` → `brasidas-c`; deliberately no `--slug`
+  from the stem (`Meridian.C` → `meridian-c`; deliberately no `--slug`
   in this mode). Plan-time errors abort the whole batch pre-mutation;
   apply-time failures isolate per family with the BRIEF written for
   the succeeded subset.
@@ -398,9 +440,9 @@ constructed in tmp dirs rather than baked on disk):
 - `build_post_283_anvil_json` — post-#283 with `.anvil.json` (project BRIEF +
   per-thread `.anvil.json`).
 - `build_fully_migrated` — target shape (no-op test).
-- `build_bessemer_shaped` — sanitized multi-thread snapshot exercising the
+- `build_foundry_shaped` — sanitized multi-thread snapshot exercising the
   canary case (multiple `memo.N` versions, critic siblings).
-- `build_aldus_shaped_deck` — sanitized snapshot of the studio's
+- `build_beacon_shaped_deck` — sanitized snapshot of the studio's
   pre-`2cf3f37` deck thread (thread root with BRIEF + refs + assets +
   `.anvil.json` as a sibling of flat version dirs; issue #382).
 - `build_mixed_memo_deck_proposal` — the mixed-skill canary case: one
@@ -409,6 +451,14 @@ constructed in tmp dirs rather than baked on disk):
   (issue #408): `.tex` bodies, version gaps {1,3,4,5,6,7}, mixed
   hand-rolled `.review`/`.audit` sidecars, root-level
   `paper.tex`/`paper.pdf` build artifacts, `figures/`.
+- `build_bare_foreign_md_body_threads` — the `anvil:essay`
+  adoption-target shape (issue #878): a bare thread whose `.md` body is
+  a foreign pipeline's fixed name (`post.md`), not any anvil skill's
+  own historical fixed name.
+- `build_bare_ambiguous_md_body_threads` — a bare thread whose version
+  dirs disagree on the foreign body filename (`post.md` vs `draft.md`)
+  — the ambiguous case the single-candidate constraint refuses to guess
+  at (issue #878).
 - `build_loose_file_in_existing_project` — migrated project with a
   tripwire-laden operator BRIEF (`theme:`, `render_*` keys, YAML
   comments, quoting, non-alpha entry order) + a dated loose file
@@ -448,6 +498,12 @@ Test files:
   TODO markers, dry-run BRIEF preview, apply + post-apply contracts
   (`discover_thread_root`, strict load, verify, `discover_critics`
   excludes unstamped sidecars), byte-identical idempotence.
+- `test_project_migrate_foreign_body.py` — foreign `.md` body rename +
+  `--artifact-type` on the bare main mode (issue #878): single- vs
+  multi-candidate detection, dry-run rename plan (post-move path
+  correctness), `--artifact-type` closing the circularity with no TODO
+  marker, `PlanError` on an unregistered value pre-mutation, end-to-end
+  apply + `discover_thread_root`/`verify_migration`, idempotence.
 - `test_project_migrate_enroll_slug.py` — slug derivation + canonical
   `--slug` validation (issue #406).
 - `test_project_migrate_enroll_append.py` — surgical-append byte

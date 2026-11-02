@@ -135,6 +135,8 @@ anvil/lib/
                                 declared, derived = guessed from a link in the
                                 artifacts section only); only a declared URL
                                 yields a concrete \href fix. (#1322)
+  reader_flow_lint.py          Deterministic define-before-use, variant-name and
+                                roadmap-order lint (advisory, paper step 4k). (#1401)
   cross_thread_refs.py         Cross-thread reference resolver. (#287)
   evidence_check.py            Quoted-evidence verifier for critic scoring
                                 tables. (#464)

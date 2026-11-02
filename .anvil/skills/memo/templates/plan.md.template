@@ -32,6 +32,16 @@
 
   Declined items become `Resolution: declined — <reason>` rows in
   `<thread>.{N+1}/changelog.md` after `--apply` runs.
+
+  RESOLUTION MODE (issue #748):
+  Each row's `Mode` cell is the reviser's PROPOSED resolution mode —
+  one of `added` / `restructured` / `removed` / `moved-to-exhibit` (see
+  `commands/memo-revise.md` §"Resolution modes"). The operator MAY
+  overwrite the `Mode` cell in place to change how an accepted item is
+  resolved (e.g. from `added` to `removed`) without declining it — this
+  is independent of the three rejection shapes above. The confirmed (or
+  edited) mode flows verbatim into that item's `changelog.md` row at
+  `--apply` time.
 -->
 
 # Revision plan — `<thread>.{N+1}`
@@ -43,31 +53,33 @@
 | Target version | `<thread>.{N+1}/` |
 | Source review verdict | `<advance: true|false>` — `<NN/44>` |
 | Plan written | `<ISO-8601-UTC>` |
-| Revision mode | `normal` \| `polish` (when invoked with `--polish "<reason>"`) |
+| Revision mode | `normal` \| `polish` (when invoked with `--polish "<reason>"`) \| `operator_reject` (when invoked with `--reject "<reason>"`) |
 
 ## Planned edits
 
 One row per planned edit. The operator edits this table in place to
-decline items before invoking `memo-revise <thread> --apply` (see
-operator-use comment at top of file).
+decline items, or to change an item's proposed `Mode`, before invoking
+`memo-revise <thread> --apply` (see operator-use comment at top of
+file).
 
-| ID | Source | Priority | Insertion site | Summary | Words Δ | Dim Δ |
-|---|---|---|---|---|---|---|
-| 1 | `<thread>.{N}.review (critical)` | critical | §3.2 ¶2 | Add Gartner 2025 cite for $38B TAM (corrects $40B) | +25 | +1 dim 3 |
-| 2 | `<thread>.{N}.review (major)` | major | §5 risks (new item #6) | Sphere exec/funding risk paragraph w/ 1-line mitigation | +90 | +1 dim 6 |
-| 3 | `<thread>.{N}.audit (major)` | major | §2.1 ¶3 | Recompute cash-burn from primary deck; correct exhibit | +10 | +1 dim 4 |
-| 4 | `<thread>.{N}.review (nit)` | nit | §1 lede | Insert "why now" line before paragraph 2 | +35 | +1 dim 2 |
-| 5 | `<thread>.{N}.review (nit)` | nit | §3↔§4 | Reorder Recommendation before Market (front-load disposition) | 0 | +1 dim 8 |
+| ID | Source | Priority | Insertion site | Summary | Words Δ | Dim Δ | Mode |
+|---|---|---|---|---|---|---|---|
+| 1 | `<thread>.{N}.review (critical)` | critical | §3.2 ¶2 | Add Gartner 2025 cite for $38B TAM (corrects $40B) | +25 | +1 dim 3 | added |
+| 2 | `<thread>.{N}.review (major)` | major | §5 risks (new item #6) | Sphere exec/funding risk paragraph w/ 1-line mitigation | +90 | +1 dim 6 | added |
+| 3 | `<thread>.{N}.audit (major)` | major | §2.1 ¶3 | Recompute cash-burn from primary deck; correct exhibit | +10 | +1 dim 4 | restructured |
+| 4 | `<thread>.{N}.review (major)` | major | §4 ¶3 | Cut the unsupported "category-defining" superlative rather than hedge it | -12 | +1 dim 9 | removed |
+| 5 | `<thread>.{N}.review (nit)` | nit | §1 lede | Insert "why now" line before paragraph 2 | +35 | +1 dim 2 | added |
+| 6 | `<thread>.{N}.review (nit)` | nit | §3↔§4 | Reorder Recommendation before Market (front-load disposition) | 0 | +1 dim 8 | restructured |
 
 ## Aggregate
 
 | Metric | Value |
 |---|---|
-| Items planned | 5 |
-| Items by priority | 1 critical, 2 major, 2 nit |
-| Total expected words Δ | +160 |
+| Items planned | 6 |
+| Items by priority | 1 critical, 3 major, 2 nit |
+| Total expected words Δ | +148 |
 | Source word count | 2150 |
-| Projected new word count | 2310 |
+| Projected new word count | 2298 |
 | Target length window | 2000–2800 words (source: `overrides.<N+1>`) |
 | Target-length flag | `within_target` |
 

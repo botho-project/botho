@@ -16,7 +16,7 @@ The rubric is tuned so that **pedagogy dominates**: dim 1 (*Pedagogical scaffold
 | 6 | **Audience calibration** | 4 | Pitched at the stated non-specialist reader; jargon is introduced, not assumed; standard primitives with external literature may be cited out rather than re-taught. Assumed jargon, or a passage pitched above/below the stated reader, deducts. |
 | 7 | **Structure & navigation** | 4 | Long-form wayfinding: sections, progressive disclosure, "putting it together" synthesis. A reader who can't locate where they are, or who reaches the end without a synthesis pass, is the failure mode. |
 | 8 | **Prose clarity** | 4 | Sentence/paragraph craft for comprehension: the reader is never re-reading a sentence to parse it. |
-| 9 | **Rhetorical economy** | 4 | Earns its length; no padding. **Residual here** (unlike `essay`, where it is load-bearing) — length is expected of a long-form explainer, so this is guarded but not dominant. Wandering repetition, throat-clearing, and non-load-bearing digressions deduct. |
+| 9 | **Rhetorical economy** | 4 | Earns its length; no padding. **Residual here** (unlike `essay`, where it is load-bearing) — length is expected of a long-form explainer, so this is guarded but not dominant. Wandering repetition, throat-clearing, and non-load-bearing digressions deduct. Teaching-oriented length is not padding — see `anvil/lib/snippets/plain_language.md` and `anvil/lib/snippets/rubric.md` §"Dim 9 — teaching-oriented length is not padding" (issue #1042) for the plain-language-first distinction between padding and patient explanation. |
 | | **Total** | **44** | Advance threshold: ≥35 |
 
 ## Scoring guidance

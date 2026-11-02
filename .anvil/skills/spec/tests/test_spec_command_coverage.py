@@ -25,11 +25,17 @@ avoid the cross-skill pytest collection collision.
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
 RUBRIC_ID = "anvil-spec-v1"
 
@@ -37,42 +43,7 @@ RUBRIC_ID = "anvil-spec-v1"
 # sidecar primitive.
 CRITIC_COMMANDS = ("commands/spec-review.md", "commands/spec-audit.md")
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value``
-    parser so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestFilesExist(unittest.TestCase):
@@ -110,10 +81,24 @@ class TestFilesExist(unittest.TestCase):
                     (_SKILL_ROOT / "commands" / f"{stem}.md").exists(),
                     f"{stem}.md is deferred/out-of-scope",
                 )
-        # The Phase-4 worked example is NOT vendored yet.
-        self.assertFalse(
-            (_SKILL_ROOT / "examples").exists(),
-            "the botho worked example is Phase 4 scope (#709)",
+
+    def test_phase4_worked_example_vendored(self):
+        # Phase 4 (#709) vendors the terminal-AUDITED botho-bridge-spec thread
+        # as the skill's worked example (mirrors primer's #700 shape). The
+        # load-bearing structural contract is pinned in detail by
+        # test_spec_example_brief_parses.py; this coverage test only asserts the
+        # example dir + its BRIEF + the structural-contract README are present.
+        examples = _SKILL_ROOT / "examples"
+        self.assertTrue(
+            examples.is_dir(), "the botho worked example must be vendored (#709)"
+        )
+        self.assertTrue(
+            (examples / "botho-bridge-spec" / "BRIEF.md").is_file(),
+            "expected the vendored example BRIEF",
+        )
+        self.assertTrue(
+            (examples / "expected-thread.N" / "README.md").is_file(),
+            "expected the structural-contract README",
         )
 
     def test_phase3_constant_gate_present(self):
@@ -212,9 +197,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
 
 class TestCriticCommandStamping(unittest.TestCase):
@@ -439,7 +422,7 @@ class TestFigurePlanContract(unittest.TestCase):
         # Existence validation mirrors report/primer-figures.
         self.assertIn("Validation by file existence", text)
         # LaTeX render path (not pandoc/markdown) + the render gate.
-        self.assertIn("render_gate.py", text)
+        self.assertIn("anvil/lib/render_gate/", text)
         self.assertIn("xelatex", text.lower())
 
     def test_review_has_exhibit_existence_freshness_check(self):
@@ -509,9 +492,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)
@@ -673,9 +654,7 @@ class TestCodeRefResolver(unittest.TestCase):
             project_dir = Path(d)
             impl = project_dir / "impl.rs"
             impl.write_text("fn main() {}\n", encoding="utf-8")
-            self._write_brief(
-                project_dir, code_ref_line="    code_ref: impl.rs\n"
-            )
+            self._write_brief(project_dir, code_ref_line="    code_ref: impl.rs\n")
             resolved = pb.resolve_code_ref(
                 project_dir, "toy-spec", consumer_root=project_dir
             )
@@ -694,9 +673,7 @@ class TestCodeRefResolver(unittest.TestCase):
             src.mkdir()
             (src / "a.rs").write_text("fn a() {}\n", encoding="utf-8")
             (src / "b.rs").write_text("fn b() {}\n", encoding="utf-8")
-            self._write_brief(
-                project_dir, code_ref_line="    code_ref: src/*.rs\n"
-            )
+            self._write_brief(project_dir, code_ref_line="    code_ref: src/*.rs\n")
             resolved = pb.resolve_code_ref(
                 project_dir, "toy-spec", consumer_root=project_dir
             )
@@ -729,9 +706,7 @@ class TestCodeRefResolver(unittest.TestCase):
         pb = self._import_registry()
         with tempfile.TemporaryDirectory() as d:
             project_dir = Path(d)
-            self._write_brief(
-                project_dir, code_ref_line="    code_ref: impl.rs\n"
-            )
+            self._write_brief(project_dir, code_ref_line="    code_ref: impl.rs\n")
             resolved = pb.resolve_code_ref(
                 project_dir, "not-a-slug", consumer_root=project_dir
             )

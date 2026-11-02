@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
 
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent  # anvil/skills/deck/
@@ -39,10 +40,6 @@ DECK_NARRATIVE = _SKILL_ROOT / "commands" / "deck-narrative.md"
 DECK_TEMPLATE = _SKILL_ROOT / "templates" / "deck.md.j2"
 SPEAKER_NOTES_TEMPLATE = _SKILL_ROOT / "templates" / "speaker-notes.md.j2"
 SLIDE_ARCHETYPES = _SKILL_ROOT / "assets" / "slide-archetypes.md"
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 def _assert_tokens_in_order(body: str, tokens: list[str], source_label: str) -> None:

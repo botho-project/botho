@@ -31,24 +31,24 @@ class TestDiscovery:
         project = build_adopted_review_threads(tmp_path)
         run_adopt_review(project, apply=True)
 
-        version_dir = project / "brasidas-c" / "brasidas-c.7"
+        version_dir = project / "meridian-c" / "meridian-c.7"
         criticism = discover_critics(version_dir)
         names = sorted(p.name for p in criticism)
         # Both converted foreign siblings are now discoverable.
-        assert "brasidas-c.7.enablement" in names
-        assert "brasidas-c.7.s101" in names
+        assert "meridian-c.7.enablement" in names
+        assert "meridian-c.7.s101" in names
 
         for sidecar in criticism:
             review = load_review(sidecar)  # parses without error
             assert review.unscored is True
             assert review.scores == []
-            assert review.version_dir == "brasidas-c.7"
+            assert review.version_dir == "meridian-c.7"
 
     def test_stub_invisible_before_apply(self, tmp_path):
         # Before conversion, the review.md-only siblings are NOT discovered
         # (the #346 additive contract — invisible-but-intact).
         project = build_adopted_review_threads(tmp_path)
-        version_dir = project / "brasidas-c" / "brasidas-c.7"
+        version_dir = project / "meridian-c" / "meridian-c.7"
         assert discover_critics(version_dir) == []
 
 
@@ -61,14 +61,14 @@ class TestZeroDimensionTolerance:
         )
         run_adopt_review(project, apply=True)
 
-        version_dir = project / "brasidas-c" / "brasidas-c.7"
+        version_dir = project / "meridian-c" / "meridian-c.7"
         sidecars = discover_critics(version_dir)
         # The real .audit sibling + the two converted foreign stubs.
         names = sorted(p.name for p in sidecars)
         assert names == [
-            "brasidas-c.7.audit",
-            "brasidas-c.7.enablement",
-            "brasidas-c.7.s101",
+            "meridian-c.7.audit",
+            "meridian-c.7.enablement",
+            "meridian-c.7.s101",
         ]
 
         reviews = [load_review(s) for s in sidecars]
@@ -92,12 +92,12 @@ class TestZeroDimensionTolerance:
     def test_stub_only_aggregate_does_not_spurious_advance(self, tmp_path):
         # A version dir whose ONLY critics are stubs: aggregate must not
         # spuriously ADVANCE (no div-by-zero, no zero>=zero advance on a
-        # fabricated threshold). brasidas-a.2 has only the foreign .review
+        # fabricated threshold). meridian-a.2 has only the foreign .review
         # stub.
         project = build_adopted_review_threads(tmp_path)
         run_adopt_review(project, apply=True)
 
-        version_dir = project / "brasidas-a" / "brasidas-a.2"
+        version_dir = project / "meridian-a" / "meridian-a.2"
         sidecars = discover_critics(version_dir)
         reviews = [load_review(s) for s in sidecars]
         assert all(r.unscored for r in reviews)

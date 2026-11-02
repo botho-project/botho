@@ -3,7 +3,7 @@
 Covers: family grouping by ``{Project}.{Letter}`` stem (version gaps
 tolerated), sidecar grouping with their version dir, strays + orphan
 sidecars excluded-and-reported (including the numeric-tag
-``Brasidas.C.7.1`` corner that matches neither grammar), no-family
+``Meridian.C.7.1`` corner that matches neither grammar), no-family
 no-op, and the `Shape.ADOPT_FAMILY` plan-mode-only regression lock
 (`detect_shape` / `_classify` never return it).
 """
@@ -38,8 +38,8 @@ class TestFamilyGrouping:
         project = build_letter_family_threads(tmp_path)
         plan = _plan(project, tmp_path)
         assert [d.slug for d in plan.documents] == [
-            "brasidas-a",
-            "brasidas-c",
+            "meridian-a",
+            "meridian-c",
         ]
 
     def test_version_gap_tolerated(self, tmp_path):
@@ -51,10 +51,10 @@ class TestFamilyGrouping:
             for r in doc_c.renames
             if r.target.name.split(".")[-1].isdigit()
         )
-        assert version_targets == ["brasidas-c.5", "brasidas-c.7"]
+        assert version_targets == ["meridian-c.5", "meridian-c.7"]
         assert any("Version gaps tolerated" in n for n in doc_c.notes)
         assert any(
-            "Brasidas.C.6" in n for n in doc_c.notes if "gap" in n.lower()
+            "Meridian.C.6" in n for n in doc_c.notes if "gap" in n.lower()
         )
 
     def test_sidecars_grouped_with_their_version(self, tmp_path):
@@ -66,7 +66,7 @@ class TestFamilyGrouping:
             for r in doc_a.renames
             if not r.target.name.split(".")[-1].isdigit()
         )
-        assert sidecar_targets == ["brasidas-a.2.review"]
+        assert sidecar_targets == ["meridian-a.2.review"]
 
     def test_single_family_single_version(self, tmp_path):
         project = tmp_path / "solo"
@@ -95,7 +95,7 @@ class TestStraysAndOrphans:
         assert "notes-archive" in strays
 
     def test_numeric_tag_dir_is_stray_not_sidecar(self, tmp_path):
-        # `Brasidas.C.7.1` matches neither the version grammar (the
+        # `Meridian.C.7.1` matches neither the version grammar (the
         # letter position holds a digit) nor the sidecar grammar (tags
         # start with a non-digit) — stray, untouched, reported.
         project = build_letter_family_threads(tmp_path)
@@ -103,8 +103,8 @@ class TestStraysAndOrphans:
         sources = {
             r.source.name for d in plan.documents for r in d.renames
         }
-        assert "Brasidas.C.7.1" not in sources
-        assert "Brasidas.C.7.1" in plan.family_strays
+        assert "Meridian.C.7.1" not in sources
+        assert "Meridian.C.7.1" in plan.family_strays
 
     def test_orphan_sidecar_untouched_and_reported_on_family(
         self, tmp_path
@@ -114,9 +114,9 @@ class TestStraysAndOrphans:
         sources = {
             r.source.name for d in plan.documents for r in d.renames
         }
-        assert "Brasidas.C.9.fto" not in sources
+        assert "Meridian.C.9.fto" not in sources
         doc_c = plan.documents[1]
-        assert any("Brasidas.C.9.fto" in n for n in doc_c.notes)
+        assert any("Meridian.C.9.fto" in n for n in doc_c.notes)
 
     def test_sidecar_of_unknown_stem_is_stray(self, tmp_path):
         project = build_letter_family_threads(tmp_path)
@@ -144,8 +144,8 @@ class TestNoFamilyNoOp:
 
     def test_already_adopted_tree_is_noop_plan(self, tmp_path):
         adopted = tmp_path / "proj"
-        (adopted / "brasidas-c" / "brasidas-c.7").mkdir(parents=True)
-        (adopted / "brasidas-c" / "brasidas-c.7" / "spec.md").write_text(
+        (adopted / "meridian-c" / "meridian-c.7").mkdir(parents=True)
+        (adopted / "meridian-c" / "meridian-c.7" / "spec.md").write_text(
             "# s\n", encoding="utf-8"
         )
         plan = build_adopt_family_plan(adopted)

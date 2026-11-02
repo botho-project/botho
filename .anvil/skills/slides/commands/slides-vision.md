@@ -20,7 +20,7 @@ This critic owns a separate **vision rubric subset** alongside the slides skill'
 | v1 | `vertical_overflow` | Content cut off below the slide bottom; rendered-bbox-based, not source-based. The deeper companion to the `slide-content-overflow` lint. | D4 (slide density / cognitive load) |
 | v2 | `label_cropping` | Chart axis labels, legends, annotations truncated by the slide/figure border. | D5 (visual quality) / D6 (accessibility) |
 | v3 | `axis_legibility` | Font size of chart axis labels and tick marks vs projection scale. If illegible at 50% zoom on the PNG, the audience can't read it from row 20. | D6 (accessibility / readability at distance) |
-| v4 | `palette_adherence` | Figures match the Marp theme palette (slides ships an Okabe-Ito color-blind-safe palette per `templates/anvil-slides-theme.css`). Default matplotlib colors are a finding. | D5 (visual quality) / D6 (accessibility) |
+| v4 | `palette_adherence` | Figures match the declared palette (BRIEF.md "Brand palette" line, or the active Marp theme). When the deck uses no anvil theme and declares none, score internal consistency instead: a small fixed set of colors used consistently, no stray default-matplotlib colors. The slides Okabe-Ito palette (`templates/anvil-slides-theme.css`) is the reference for anvil-themed decks only. Default matplotlib colors are a finding. | D5 (visual quality) / D6 (accessibility) |
 | v5 | `mathtext_artifacts` | Italic letters adjacent to dollar signs; LaTeX/MathJax source rendered literally; a `$`-delimited token rendered as math instead of intended literal text. | D1 (technical accuracy) |
 | v6 | `slide_density` | Walls of text exceeding the slide's working bar at projection scale (talks: ~30 words / ~6 bullets). The visual companion to the `slides-rehearse` deterministic word/bullet density check. | D4 (slide density / cognitive load) |
 
@@ -43,7 +43,7 @@ These two flag types are defined in `anvil/lib/vision.py` (`CRITICAL_FLAG_RENDER
 - **Latest version directory**: highest `N` with `<thread>.{N}/deck.md` under the thread root `<thread>/`.
 - **Rendered PDF**: `<thread>.{N}/deck.pdf` — produced by `slides-figures`/`slides-handout` or by this critic on demand via `anvil.lib.render.render_marp_to_pdf` (which invokes Marp with the framework-pinned `--config-file anvil/lib/marp/config.yml` per #32).
 - **Per-page PNGs**: produced by `anvil.lib.render.render_pdf_to_pngs` from the PDF.
-- **VLM**: Anthropic SDK by default; consumers without an API key inject a callback per `anvil/lib/vision.py`.
+- **VLM**: Anthropic SDK by default (`vlm_mode: sdk`); consumers without an API key either inject a callback per `anvil/lib/vision.py` (`vlm_mode: callback`) or let the invoking agent act as the VLM (`vlm_mode: agent`, step 5).
 
 ## Outputs
 
@@ -54,11 +54,14 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
   slides/
     page-1.png, page-2.png, ...    Per-page PNGs at 150 DPI (configurable)
   _review.json                     Canonical schema, kind=vision, rendered_artifact=deck.pdf
-  _meta.json                       { critic, role, started, finished, model, scorecard_kind }
+  _meta.json                       { critic, role, started, finished, model, vlm_mode, scorecard_kind }
+                                   vlm_mode: sdk | callback | agent (when agent, model = the agent's actual model id)
   _progress.json                   { version, thread, for_version, phases.vision.{state,started,completed} }
 ```
 
 **Atomicity** (issue #350, #376): the vision sibling dir is written **atomically** via the staged-sidecar primitive at `anvil/lib/sidecar.py`. The three top-level files (`_review.json`, `_meta.json`, `_progress.json`) are staged under a leading-dot sibling `.<thread>.{N}.vision.tmp/` during writing; on clean completion the staging dir is renamed (one atomic `Path.rename`) to the final `<thread>.{N}.vision/` name. A mid-cycle interrupt leaves a `.<thread>.{N}.vision.tmp/` dir on disk that the next invocation's `cleanup_one_staging(<thread>.{N}.vision)` per-critic sweep removes; the final-named dir never exists in partial form. Discovery (`anvil/lib/critics.py::discover_critics`) is unchanged — the leading-dot staging shape is invisible to the discovery glob. The `slides/` subdirectory is staged inside the staging dir but is NOT validated by the required-files manifest (per `staged_sidecar`'s flat-manifest contract — subdirectories like `slides/` are not validated).
+
+> **`slides/` is a regenerable render intermediate — safe to gitignore (issue #738).** The per-slide PNGs are pure output of `render_pdf_to_pngs(pdf, out_dir, dpi)` from a regenerable PDF; they are NOT part of the canonical committed critic output (that is the three top-level JSONs — the reviser only needs `_review.json`). `scripts/install-anvil.sh` seeds a root-`.gitignore` rule (`**/*.vision/slides/`) so a `git add <thread>.{N}.vision/` never commits them. If you already committed them, `git rm -r --cached <thread>.{N}.vision/slides` untracks them (gitignore does not un-track already-tracked paths).
 
 ## Procedure
 
@@ -80,6 +83,7 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
      "started": "<ISO>",
      "finished": null,
      "model": "claude-opus-4-7-20251022",
+     "vlm_mode": "sdk",
      "schema_version": 1,
      "scorecard_kind": "machine-summary"
    }
@@ -119,6 +123,8 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
    ```
    Consumers without an Anthropic API key (CI, offline development) construct the critic with a `callback=` instead. The slides-vision unit tests use the callback path exclusively.
 
+   **Agent-as-VLM (supported, no API key)**: the invoking agent can be the VLM. It views the per-slide PNGs, uses `build_prompt(default_vision_rubric())` output as its rubric (including the mid-scale anchors), and writes `_review.json` itself in the callback payload shape, then wraps it with the same validation. Set `vlm_mode` to `agent` in `_meta.json` and record the agent's actual model id in `model`. The staged-sidecar flow is unchanged.
+
 6. **Write `_review.json`**:
    - Validate via `Review.model_validate` (the constructor in step 5 already validated).
    - Serialize with `review.model_dump_json(indent=2)` to `<thread>.{N}.vision/_review.json`.
@@ -126,6 +132,15 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
 7. **Update `_progress.json`** and `_meta.json` inside the staging dir to `state: done` / `finished: <ISO>`. The `_progress.json` write MUST be the LAST file write before the context manager exits — the manifest verification + atomic rename at exit (issue #350) requires it to be present. Then **exit the `staged_sidecar` context block**: the primitive verifies every name in the required-files manifest exists in the staging dir, then atomically renames `.<thread>.{N}.vision.tmp/` → `<thread>.{N}.vision/`. The final-named dir only ever exists in **complete** form.
 
 8. **Report**: one-line status, e.g. `Vision critic on kdd-2026.1 → kdd-2026.1.vision/ (vision total 22/30; 4 findings; 1 critical flag: mathtext_artifact_breaks_meaning)`.
+
+## Editorial overrides (issue #1373)
+
+When the project `BRIEF.md` declares `documents[].editorial_overrides:` for this thread's slug (see `SKILL.md` § "Editorial overrides"), load them with `anvil.lib.project_brief.load_editorial_overrides_for_slug(<project_dir>, <slug>)` before scoring the vision dimensions. An empty list (or no key) means this section does not apply and the output is byte-identical to the no-overrides path.
+
+- **Matching** is exact, via `anvil/skills/slides/lib/editorial_overrides.py::match_override`: a finding matches only when its `evidence_span` is `...:slide=<slide>` AND its `dimension` equals the entry's `dimension` (the vision dimension key, e.g. `slide_density`). A finding with no slide span or no dimension never matches.
+- **Effect**: a matched finding is NOT deducted from the score and is written with `severity: "nit"` and a rationale prefixed `overridden: <reason> (<date>)`.
+- **Never overrides a critical flag or a `blocker`-severity finding**: those are reported at full strength; add an `override ignored: critical` note to the rationale.
+- **Visibility**: list the applied overrides and any `unmatched (possibly stale)` overrides (slide numbers shift across revisions) in the `_review.json` summary.
 
 ## Idempotence and resumability
 
@@ -158,6 +173,8 @@ See `anvil/lib/README.md` § "Rendered-artifact review (`kind: vision`)" for the
 Dimension 4 (slide density / cognitive load) in `rubric.md` is now **jointly owned**: the deterministic source-side checks (`slides-rehearse`'s word/bullet counts, and the `slides-review` pre-flight `slide-content-overflow` lint) catch what is visible in the source, and this critic's `slide_density` + `vertical_overflow` vision dims catch what only shows up after rendering (true overflow from font fallback / theme overrides, density that the source heuristics under-counted). The slides skill has no `slides-design` critic; the density dimension's source-side owner is `slides-rehearse` (mechanical) plus `slides-review` (qualitative), and its rendered-side owner is `slides-vision`. `rubric.md` documents this split.
 
 ## Notes for the slides-vision agent
+
+- **Disclosure and photo-swap guidance.** Apply `rubric.md` §"On-slide disclosure vs. provenance": do not raise a finding recommending an on-slide disclosure label that fails the audience common-sense test (an obviously AI-painted illustration needs no "not a photo" tag). Do not recommend replacing documentary photos with schematics or plots unless `talk_genre` in `BRIEF.md` is `technical-lecture` (the default when absent; see `rubric.md` §"Talk genre calibration").
 
 - **Always evaluate the rendered PNGs, not the markdown source.** The whole point of this critic is that visual hierarchy and rendered overflow are invisible in markdown — that is exactly the gap the deterministic lint cannot close.
 - **Vision findings often require fixing `figures/src/*.py` or `figures/src/*.mmd`, not `deck.md`.** A vision finding flagging mathtext or palette on a chart label is a matplotlib-script fix under `figures/src/`; a finding flagging illegible axis labels is a DPI/figsize/font-size fix in the same script; a finding flagging an illegible or overflowing mermaid diagram requires editing the `.mmd` source under `figures/src/` and re-running `slides-figures` (the working PDF path is `mmdc → PNG`; inline ```mermaid does not render in the PDF per issue #65). Vertical-overflow on text-heavy slides remains a `deck.md` fix. The `slides-revise` command surfaces this guidance to the reviser explicitly (its D6 reviser-guidance note).

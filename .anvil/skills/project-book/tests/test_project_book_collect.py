@@ -143,3 +143,57 @@ def test_custom_chapter_filename(tmp_path):
     info = CL.collect_thread(tmp_path, "a", chapter_filename="ch.tex")
     assert info.needs_placeholder is False
     assert info.chapter_source.name == "ch.tex"
+
+
+# --- `{slug}` chapter-filename templating (#864) -------------------------
+
+
+def test_resolve_chapter_filename_substitutes_slug():
+    assert CL.resolve_chapter_filename("{slug}.tex", "00-introduction") == (
+        "00-introduction.tex"
+    )
+
+
+def test_resolve_chapter_filename_is_noop_without_token():
+    """A literal filename passes through unchanged — no `.format()` blowup."""
+    assert CL.resolve_chapter_filename("chapter.tex", "a") == "chapter.tex"
+    assert CL.resolve_chapter_filename("ch{1}.tex", "a") == "ch{1}.tex"
+
+
+def test_slug_template_resolves_slug_echo_chapter(tmp_path):
+    """A memoir-shaped `<slug>.tex` body resolves under `{slug}.tex` (#864)."""
+    make_thread(
+        tmp_path,
+        "00-introduction",
+        version=1,
+        chapter=True,
+        chapter_filename="00-introduction.tex",
+    )
+    info = CL.collect_thread(
+        tmp_path,
+        "00-introduction",
+        chapter_filename="{slug}.tex",
+        artifact_type="memoir",
+    )
+    assert info.needs_placeholder is False
+    assert info.chapter_source.name == "00-introduction.tex"
+    assert not any("placeholder chapter was staged" in w for w in info.warnings)
+
+
+def test_slug_template_missing_chapter_warns_with_resolved_name(tmp_path):
+    """The missing-chapter warning names the slug-resolved filename."""
+    make_thread(tmp_path, "01-childhood", version=1, chapter=False)
+    info = CL.collect_thread(
+        tmp_path, "01-childhood", chapter_filename="{slug}.tex"
+    )
+    assert info.needs_placeholder is True
+    assert any("`01-childhood.tex`" in w for w in info.warnings)
+    assert not any("{slug}" in w for w in info.warnings)
+
+
+def test_literal_default_still_matches_chapter_tex(tmp_path):
+    """Regression: the pre-#864 literal default is unaffected."""
+    make_thread(tmp_path, "a", version=1, chapter=True)
+    info = CL.collect_thread(tmp_path, "a", chapter_filename="chapter.tex")
+    assert info.needs_placeholder is False
+    assert info.chapter_source.name == "chapter.tex"

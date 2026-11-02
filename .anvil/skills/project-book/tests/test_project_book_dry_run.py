@@ -2,26 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
-
+from anvil.lib.testing import tree_hash as _tree_hashes
 from _book_fixtures import default_documents, make_thread, write_brief
 from _project_book_skill_lib import config as C
 from _project_book_skill_lib import orchestrate as O
-
-
-def _tree_hashes(root):
-    acc = {}
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            acc[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
-    return acc
 
 
 def _build_project(tmp_path):
     slugs = ["00-intro", "01-mid", "appendix"]
     write_brief(
         tmp_path,
-        project="nitas-mama",
+        project="example-memoir",
         documents=default_documents(slugs),
         build={
             "order": slugs,

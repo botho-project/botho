@@ -21,17 +21,17 @@ sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import plan as plan_mod  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_aldus_shaped_deck,
+    build_beacon_shaped_deck,
     build_mixed_memo_deck_proposal,
 )
 
 build_plan = plan_mod.build_plan
 
 
-class TestAldusShapedDeckPlan(unittest.TestCase):
+class TestBeaconShapedDeckPlan(unittest.TestCase):
     def test_nesting_renames_emitted(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             plan = build_plan(project)
             self.assertEqual(len(plan.documents), 1)
             doc = plan.documents[0]
@@ -51,7 +51,7 @@ class TestAldusShapedDeckPlan(unittest.TestCase):
 
     def test_critic_siblings_renamed_alongside(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             plan = build_plan(project)
             doc = plan.documents[0]
             targets = {
@@ -68,7 +68,7 @@ class TestAldusShapedDeckPlan(unittest.TestCase):
     def test_no_body_rename_for_deck_md(self) -> None:
         """deck.md is retained — no rename targets a deck.md source."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             plan = build_plan(project)
             doc = plan.documents[0]
             body_renames = [
@@ -84,7 +84,7 @@ class TestAldusShapedDeckPlan(unittest.TestCase):
 
     def test_thread_root_anvil_json_merged(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             plan = build_plan(project)
             doc = plan.documents[0]
             self.assertIsNotNone(doc.brief_merge)
@@ -99,7 +99,7 @@ class TestAldusShapedDeckPlan(unittest.TestCase):
         """A flat deck thread in a BRIEF-bearing project still gets the
         nesting plan (per-thread dispatch under POST_283)."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(
+            project = build_beacon_shaped_deck(
                 Path(td), with_project_brief=True
             )
             plan = build_plan(project)
@@ -122,20 +122,20 @@ class TestMixedProjectPlan(unittest.TestCase):
             plan = build_plan(project)
             slugs = sorted(d.slug for d in plan.documents)
             self.assertEqual(
-                slugs, ["aldus", "gossamer-lan", "series-a-deck"]
+                slugs, ["beacon", "gossamer-lan", "series-a-deck"]
             )
 
     def test_memo_thread_gets_body_rename(self) -> None:
         with TemporaryDirectory() as td:
             project = build_mixed_memo_deck_proposal(Path(td))
             plan = build_plan(project)
-            doc = next(d for d in plan.documents if d.slug == "aldus")
+            doc = next(d for d in plan.documents if d.slug == "beacon")
             targets = {
                 str(r.target.relative_to(plan.project_dir))
                 for r in doc.renames
             }
-            self.assertIn("aldus/aldus.1", targets)
-            self.assertIn("aldus/aldus.1/aldus.md", targets)
+            self.assertIn("beacon/beacon.1", targets)
+            self.assertIn("beacon/beacon.1/beacon.md", targets)
 
     def test_proposal_thread_nested_without_body_rename(self) -> None:
         with TemporaryDirectory() as td:
@@ -172,7 +172,7 @@ class TestMixedProjectPlan(unittest.TestCase):
                 "proposal",
             )
             self.assertEqual(
-                by_slug["aldus"].brief_merge.artifact_type,
+                by_slug["beacon"].brief_merge.artifact_type,
                 "investment-memo",
             )
 
@@ -217,7 +217,7 @@ class TestMixedProjectPlan(unittest.TestCase):
         with TemporaryDirectory() as td:
             project = build_mixed_memo_deck_proposal(Path(td))
             plan = build_plan(project)
-            doc = next(d for d in plan.documents if d.slug == "aldus")
+            doc = next(d for d in plan.documents if d.slug == "beacon")
             self.assertEqual(
                 [n for n in doc.notes if "retained" in n],
                 [],

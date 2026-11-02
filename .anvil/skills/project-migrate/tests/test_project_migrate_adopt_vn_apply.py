@@ -11,24 +11,15 @@ written).
 
 from __future__ import annotations
 
-import hashlib
 import subprocess
 
 import pytest
 
 from _fixtures import ENROLL_OPERATOR_BRIEF, build_vn_report_dirs
 from _project_migrate_skill_lib import apply_mod, orchestrate
+from anvil.lib.testing import tree_hash as _tree_digest
 
 run_adopt_vn = orchestrate.run_adopt_vn
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 class TestAdoptNoBrief:

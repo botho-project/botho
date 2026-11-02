@@ -3,7 +3,7 @@
 The studio canary surfaced two shapes the memo-only detector (#297) had
 never been pointed at:
 
-- **Aldus-shaped deck** — a thread root (``<slug>/`` with BRIEF + refs +
+- **Beacon-shaped deck** — a thread root (``<slug>/`` with BRIEF + refs +
   assets + per-thread ``.anvil.json``) sitting as a SIBLING of flat
   ``<slug>.N/`` version dirs at the project root.
 - **Mixed memo + deck + proposal** — one project root with three flat
@@ -25,7 +25,7 @@ sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import detect  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_aldus_shaped_deck,
+    build_beacon_shaped_deck,
     build_mixed_memo_deck_proposal,
 )
 
@@ -34,17 +34,17 @@ detect_shape = detect.detect_shape
 inventory_project = detect.inventory_project
 
 
-class TestAldusShapedDeckDetection(unittest.TestCase):
+class TestBeaconShapedDeckDetection(unittest.TestCase):
     def test_classifies_pre_283_classic(self) -> None:
         """No project BRIEF + flat version dirs → PRE_283_CLASSIC."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             self.assertEqual(detect_shape(project), Shape.PRE_283_CLASSIC)
 
     def test_inventory_slug_is_stem(self) -> None:
         """The deck stem is not a skill name, so slug == stem."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             inv = inventory_project(project)
             self.assertEqual(len(inv.threads), 1)
             thread = inv.threads[0]
@@ -55,7 +55,7 @@ class TestAldusShapedDeckDetection(unittest.TestCase):
     def test_inventory_records_thread_root_anvil_json(self) -> None:
         """The .anvil.json inside the sibling thread root is recorded."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             inv = inventory_project(project)
             thread = inv.threads[0]
             self.assertIsNotNone(thread.anvil_json_path)
@@ -67,7 +67,7 @@ class TestAldusShapedDeckDetection(unittest.TestCase):
     def test_deck_body_is_not_skill_fixed(self) -> None:
         """deck.md is observed but is NOT pre-#295 evidence."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             inv = inventory_project(project)
             thread = inv.threads[0]
             self.assertIn("deck.md", thread.body_filenames)
@@ -79,7 +79,7 @@ class TestAldusShapedDeckDetection(unittest.TestCase):
     def test_with_project_brief_classifies_post_283(self) -> None:
         """A BRIEF-bearing project with a flat deck thread → POST_283."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(
+            project = build_beacon_shaped_deck(
                 Path(td), with_project_brief=True
             )
             self.assertEqual(
@@ -99,7 +99,7 @@ class TestMixedProjectDetection(unittest.TestCase):
             inv = inventory_project(project)
             slugs = sorted(t.slug for t in inv.threads)
             self.assertEqual(
-                slugs, ["aldus", "gossamer-lan", "series-a-deck"]
+                slugs, ["beacon", "gossamer-lan", "series-a-deck"]
             )
 
     def test_per_thread_shapes_inventoried_correctly(self) -> None:
@@ -109,8 +109,8 @@ class TestMixedProjectDetection(unittest.TestCase):
             by_slug = {t.slug: t for t in inv.threads}
 
             # Memo thread: skill-fixed body, no thread-root .anvil.json.
-            self.assertIn("memo.md", by_slug["aldus"].body_filenames)
-            self.assertIsNone(by_slug["aldus"].anvil_json_path)
+            self.assertIn("memo.md", by_slug["beacon"].body_filenames)
+            self.assertIsNone(by_slug["beacon"].anvil_json_path)
 
             # Deck thread: retained body + thread-root .anvil.json.
             self.assertIn(
@@ -156,7 +156,7 @@ class TestMixedProjectDetection(unittest.TestCase):
                 ["deck.md"],
             )
             # Memo threads observe no retained body.
-            self.assertEqual(by_slug["aldus"].retained_body_filenames, [])
+            self.assertEqual(by_slug["beacon"].retained_body_filenames, [])
 
             # And classification is unchanged by the new surface.
             self.assertEqual(detect_shape(project), Shape.PRE_283_CLASSIC)

@@ -60,6 +60,18 @@ A proposal's customer is either an external client or an internal budget sponsor
 
 This is strictly simpler than `anvil:installation`'s `participatory` gate (which conditionally omitted three whole sections); it tunes emphasis, not structure.
 
+## The `cost_basis` knob
+
+Not every proposal is a hardware system with a vendor-sourceable BOM — a partnership/integration proposal (a data-backed challenge to another company) has no hardware BOM and no vendor quotes at all. The optional `cost_basis: quoted | estimated | none` frontmatter key (default `quoted`; issue #840) captures whether priced claims have external sources at all — orthogonal to `customer_kind` (an `internal` build spec can still be `quoted`, `estimated`, or `none`):
+
+| `cost_basis` | Section 7 shape | Dim 6 (Cost credibility) scoring | `proposal-audit` step 7 |
+|---|---|---|---|
+| `quoted` (default) | Priced BOM + labor estimate + project total, sourced | Vendor-sourceability, as written | Full vendor-quote back-check |
+| `estimated` | Same three tables, estimate-labelled captions | Estimate-basis consistency, not vendor sourceability | Estimate-basis check, not vendor-quote back-check |
+| `none` | Dropped — a short "Cost Basis" section instead; commercial terms move to Open Decisions (§10) | Full weight by default | Skipped |
+
+See `rubric.md` §"Dim 6 — `cost_basis` calibration" and `SKILL.md` §"The `cost_basis` knob" for the full contract.
+
 ## Audit-by-default
 
 Unlike `anvil:installation` (which deferred audit per memo), `proposal` runs its auditor sibling **by default**. Proposals make priced, sourceable cost claims and link-budget/throughput claims — exactly the `kind: tool_evidence` class the audit phase exists for. The auditor (`proposal-audit`) checks:

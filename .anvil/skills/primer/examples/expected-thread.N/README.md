@@ -40,9 +40,17 @@ The vendored example is a **trimmed snapshot** of a real end-to-end
     theirs.)
   - **The full-resolution exhibit PNGs are dropped** (~1.1 MB across five
     figures). The **`.mmd` mermaid sources are kept** (the structurally
-    interesting figure-plan artifact per #690) so the body's inline
-    `![Figure N — …](exhibits/figN-*.png)` references resolve to a diagram
-    *source* even though the rendered PNG is not shipped.
+    interesting figure-plan artifact per #690), so the diagram *source* is
+    still present even though the rendered PNG is not shipped. This means
+    the body's five inline `![Figure N — …](exhibits/figN-*.png)`
+    references are **intentionally unresolved** in this trimmed tree — a
+    known, deliberate consequence of the size trim, not a missed commit.
+    `botho-from-the-basics.3/exhibits/README.md` documents the same gap
+    at the point a link scan would actually flag it (#1184); a pinned
+    regression test
+    (`test_primer_example_brief_parses.py::test_no_full_resolution_exhibit_pngs_vendored`)
+    asserts no PNG is ever vendored here, so please don't re-add one or
+    re-file the broken-link report without reading that note first.
 
 ## Why the `spec_ref` glob is illustrative-only
 
@@ -50,7 +58,7 @@ The vendored `BRIEF.md` keeps `spec_ref: ../../whitepaper/sections/*.tex`.
 That glob points at **botho's own whitepaper**, which is deliberately NOT
 vendored here (out of scope, large, not anvil's to maintain). When this
 example is copied standalone the glob **matches nothing**, and
-`anvil/lib/project_brief.py::resolve_spec_ref` returns a structured
+`anvil/lib/project_brief/refs.py::resolve_spec_ref` returns a structured
 `missing: true` entry (it never raises). This ACTIVATES the
 spec-consistency tier but degrades gracefully — the primer critics would
 surface a `major` finding recommending you fix the path, never a crash and

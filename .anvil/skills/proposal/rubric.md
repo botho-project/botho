@@ -16,7 +16,7 @@ A proposal must score BOTH "is this technically sound" AND "should the approver 
 | 6 | **Cost credibility** | 5 | BOM + labor are priced, sourceable, and competitive. Figures have a basis (planning range, vendor list price, quote), not arbitrary numbers; the arithmetic holds. |
 | 7 | **Persuasiveness / value proposition** | 4 | Why the approver should say yes — the pitch element. For `customer_kind: external`, read as "wins the client". For `customer_kind: internal`, read as "justifies the budget allocation" (same weight, reframed prompt). |
 | 8 | **Open decisions** | 4 | Unresolved engineering choices are tracked honestly (the `anvil:memo` "assumptions to validate" analogue). A proposal that pretends every decision is settled scores low. |
-| 9 | **Rhetorical economy** | 4 | Is every paragraph load-bearing? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a busy reader extract the recommendation in 90 seconds? |
+| 9 | **Rhetorical economy** | 4 | Does every paragraph carry weight the argument needs? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a busy reader extract the recommendation in 90 seconds? |
 | | **Total** | **44** | Advance threshold: ≥35 |
 
 ## `customer_kind` and dimension 7
@@ -151,6 +151,36 @@ The dim 6 audit-side justification (in the audit's `verdict.md` and `findings.md
 
 The deduction is applied entirely via auditor judgment — there is no automated `refs/` parsing in v0. See `commands/proposal-audit.md` §Procedure step 7 (refs back-check sub-step for non-cost claims) for the auditor-side procedure, `commands/proposal-review.md` §Procedure step 4 for the light reviewer-side mention, and `commands/proposal-draft.md` §Procedure step 3 for the drafter-side ingestion contract.
 
+## Dim 6 — `cost_basis` calibration
+
+**Trigger** (issue #840). The thread-level `<thread>/BRIEF.md`'s YAML frontmatter may declare a `cost_basis` key (`quoted` / `estimated` / `none`; default `quoted` when absent). This routes how dimension 6 (Cost credibility, weight 5) is scored and how `proposal-audit` step 7's sourceability walk behaves — the missing axis the pre-#840 rubric conflated with `customer_kind`: **whether priced claims have external sources at all**, orthogonal to who the customer is (an `internal` build spec still answers to a budget with priced lines that may or may not be vendor-sourced). Not every buildable-system proposal is a hardware system with vendor-sourceable BOM lines — a partnership/integration proposal (a data-backed challenge to another company) has no hardware BOM and no vendor quotes at all. The reviewer reads the value via `anvil/skills/proposal/lib/project_brief.py::load_cost_basis(thread_dir)` and dispatches per the rules below.
+
+- **`quoted`** (default; byte-identical to pre-#840 behavior). Dim 6 scores as written in the dimension table above — figures need a basis (planning range, vendor list price, quote), and `proposal-audit` step 7 back-checks BOM lines against `refs/` vendor quotes and datasheets per the existing sourceability walk.
+- **`estimated`**. The proposal has no vendor quotes — every priced figure is an internal engineering-effort estimate (`templates/proposal.tex.j2` emits estimate-labelled captions — "Materials subtotal (estimated)", an "ESTIMATE BASIS" preface, and an "ESTIMATE, NOT A QUOTE" cost-notes caption per issue #840). Dim 6 scores on **estimate-basis consistency**, not vendor sourceability:
+  - **Full weight (5/5)** — every priced figure is explicitly captioned as an estimate, the estimate basis is named (comparable prior work, engineering judgment, a named estimator) and internally consistent, and the arithmetic holds.
+  - **~75%** — figures are captioned as estimates and arithmetic holds, but the estimate basis is thin (named but not substantiated — e.g. "engineering judgment" with no comparable cited).
+  - **~50%** — some figures lack the estimate caption, or the basis is inconsistent across sections (one figure cites a comparable, another states nothing).
+  - **~25%** — figures read as if sourced (no estimate captioning) despite `cost_basis: estimated`, creating a misleading impression of vendor-backed pricing.
+  - **0** — arithmetic fails, or a figure is presented as a sourced quote it is not (a fabrication risk in an outward-facing document — this SHOULD also be considered a critical-flag-2 candidate per the audit's estimate-basis check).
+  - An unsourced figure is **NOT** a sourceability defect under this mode — the absence of a vendor quote is expected and correctly labelled, not a gap.
+- **`none`**. There is no hardware BOM and no vendor quotes at all (`templates/proposal.tex.j2` drops the priced-table section entirely and emits a "Cost Basis" section instead, deferring commercial terms to Open Decisions per issue #840). Dim 6 scores **full weight (5/5) by default** unless the proposal makes an un-deferred priced claim elsewhere in the body (a stray dollar figure outside §10 Open Decisions) — that is a contract violation of the declared `cost_basis: none` and should be penalized as if the figure were unsourced under `quoted` (the drafter cannot have it both ways: declare no pricing and then price something anyway). `proposal-audit` step 7's vendor-quote back-check sub-step does not run under this mode (see `commands/proposal-audit.md` step 7).
+
+**Interaction with the refs back-check (dim 6 + dim 4).** The §"Refs back-check (dim 6 + dim 4)" sub-rule above extends dim 6's scope to non-cost claims (scope, deliverability, comparable-project claims) sourced against `refs/` source-of-truth materials. That extension is **unaffected** by `cost_basis` — a `cost_basis: none` proposal can still make deliverability or comparable-project claims that back-check against `refs/`; only the **cost-line** portion of dim 6's sourceability walk is inactive under `none` (and reads through the estimate-basis lens instead of the vendor-quote lens under `estimated`).
+
+**Suffix shape (mandatory)**. The reviewer's dim 6 `scoring.md` justification MUST cite the resolved `cost_basis` value when it is `estimated` or `none` so the audit trail records why the calibration fired. The verbatim suffix appended to the dim 6 `scoring.md` cell is:
+
+```
+cost_basis: estimated — scoring dim 6 on estimate-basis consistency, not vendor sourceability
+```
+
+or
+
+```
+cost_basis: none — no hardware BOM / vendor quotes; dim 6 scores full weight absent a stray un-deferred priced claim
+```
+
+**Backwards-compat — byte-identical when the trigger value is absent or `quoted`**. This calibration is byte-identically inert when any of the following hold: no `<thread>/BRIEF.md` exists; the BRIEF has no YAML frontmatter or malformed frontmatter; the frontmatter has no `cost_basis` key; the value is not in the closed set (`quoted` / `estimated` / `none`) — e.g. a typo resolves to `None` and dim 6 scores against the standard calibration verbatim; or the value is explicitly `quoted`. Every other path is byte-identical to pre-#840 behavior.
+
 ## Dim 8 — `recommendation_target: undecided` calibration
 
 **Trigger** (issue #356). When the thread-level `<thread>/BRIEF.md`'s YAML frontmatter declares `recommendation_target: undecided` (the documented default for a fresh proposal thread per `templates/BRIEF.md.example` — *"the job of v1 is to resolve the open architectural / scope / cost decisions, not to defend a pre-committed recommendation"*), the reviewer scores dim 8 (Open decisions, weight 4) on **open-decision framing clarity** rather than the standard "are open decisions tracked honestly" reading. The reviewer reads the value via `anvil/skills/proposal/lib/project_brief.py::load_recommendation_target(thread_dir)` and dispatches per the rules below.
@@ -193,7 +223,7 @@ The contract is: the only path through this section is `recommendation_target ==
 
 ## Dim 9 — rhetorical economy
 
-**Rhetorical economy** (weight: 4) — Is every paragraph load-bearing? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a busy reader extract the recommendation in 90 seconds?
+**Rhetorical economy** (weight: 4) — Does every paragraph carry weight the argument needs? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a busy reader extract the recommendation in 90 seconds?
 
 The dim exists because every other dimension in this rubric rewards *more*: more constraint-threading prose (dim 3), more enumerated BOM lines (dim 4), more sourced footnotes (dim 6), more open-decisions entries (dim 8). A reviser optimizing against the legacy 8-dim rubric is incentivized to add — but for strategic-positioning artifacts (program-design memos, internal sponsor pitches, executive briefs) force comes from compression and surprise, not enumeration. Dim 9 is the countervailing pressure: a paragraph that does not earn its weight costs the same score as a missing one.
 
@@ -221,6 +251,8 @@ Suggested calibration:
 
 **Quoted evidence (issue #464 / #475).** Every justification follows the quoted-evidence sub-rule in `anvil/lib/snippets/rubric.md` §"Dimension scoring guidance" rule 1: at least one verbatim inline quote from `proposal.tex` with a location anchor — `("the quoted span" — §2.1)` — per dimension, with the `no instance of <X> found` by-absence marker allowed at full weight only. The reviewer self-checks its `scoring.md` against the body via `anvil/lib/evidence_check.py` before the review sidecar lands (see `commands/proposal-review.md` step 5b); a quote that does not appear verbatim in the body is fabricated evidence and the justification must be re-derived. No weight or threshold changes — this is an evidence-discipline contract on the justification prose, not a scoring change.
 
+**Pending-measurement markers do not incur a dimension penalty (issue #841).** A well-formed `[PENDING <source>]` placeholder (see `anvil/lib/snippets/pending_marker.md`) is an honest disclosure that a specific number is not yet available (a vendor quote not yet returned, a bench measurement still running) — it is NOT a defect and MUST NOT be scored down on any dimension (Dim 6 *Cost credibility* is the dimension most tempting to mark down for "missing data"; do not). Score the surrounding argument's soundness *assuming* the pending value resolves as described. The gap is tracked separately as an **outstanding dependency** (see the "Outstanding dependencies (not critical flags)" section below), which holds only the READY/AUDITED terminal transition.
+
 ## Advance threshold
 
 - **≥35/44** — advance to `READY` (subject to also having `pass: true` in the audit sibling).
@@ -232,11 +264,17 @@ Suggested calibration:
 A critical flag is an issue severe enough that **the proposal cannot proceed as specified**, regardless of how well other dimensions score. The four named flags below are the disqualifiers for a buildable-system proposal; three of the four are **audit-owned** (`kind: tool_evidence` — set by `proposal-audit` from externally-verifiable checks per `anvil/lib/snippets/audit.md`). This list is the baseline, not a closed set.
 
 1. **Misses a stated hard constraint** *(review-owned)* — the design violates a constraint the customer declared non-negotiable (e.g. visible conduit when invisibility was required; sub-spec bandwidth when 10 Gbps was the floor). The proposal fails its own brief.
-2. **Cost estimate not credible / not sourceable** *(audit-owned)* — BOM or labor figures are unsourceable, internally arbitrary, or off by an order of magnitude. The auditor walks every priced line for a basis (planning range, vendor list price, quote) and flags any that has none or is implausible.
+2. **Cost estimate not credible / not sourceable** *(audit-owned)* — BOM or labor figures are unsourceable, internally arbitrary, or off by an order of magnitude. The auditor walks every priced line for a basis (planning range, vendor list price, quote) and flags any that has none or is implausible. Scored per the operative `cost_basis` (see §"Dim 6 — `cost_basis` calibration" below): under `estimated`, an unsourced-but-captioned internal estimate is expected, not a flag; under `none`, there is no BOM to flag unless the proposal makes a stray un-deferred priced claim anyway.
 3. **Not deliverable as resourced** *(audit/review-owned)* — there is no real path to the staff / contractors / tools / skills needed to build and maintain the system as proposed. The "workshop" / delivery-capability story is absent or hand-waved, so the proposal cannot be executed by the party it is pitched to.
 4. **Internal inconsistency** *(audit-owned)* — the proposal contradicts itself on a verifiable fact: optics link budget vs. stated run length; BOM quantities vs. topology (e.g. 7 spokes should imply 14 + 2 uplink = 16 transceivers); section subtotals or the project total that do not add up.
 
 The reviewer and auditor should each raise a flag for any other issue that, in their judgment, meets the "cannot proceed as specified" bar above — these four are starting points, not a closed set.
+
+## Outstanding dependencies (not critical flags — issue #841)
+
+An **unresolved pending marker** is deliberately NOT in the critical-flags list above — it is a distinct, specially-resolved category with the opposite verdict posture:
+
+- **Unresolved pending marker** — A well-formed `[PENDING <source>]` placeholder (see `anvil/lib/snippets/pending_marker.md`) remains in `proposal.tex`. `proposal-review` step 4l and `proposal-audit` step 11b run `anvil/lib/pending_marker.py` unconditionally, which emits a specially-resolved `pending_dependency`-typed flag (the additive type from `anvil/lib/convergence.py`) whenever any active marker is still present — deterministic, not a reviewer judgment call. A well-formed marker is an **honest disclosure of a genuinely outstanding value, not a defect**: it does NOT lower any dimension score (see the "Pending-measurement markers do not incur a dimension penalty" note above) and it does NOT force a blocking verdict the way a real critical flag does (`convergence.blocking_critical_flags` filters it out). Instead it is surfaced as an *outstanding dependency* in `verdict.md` and gates **only** the READY/AUDITED terminal transition, separately from the score/verdict path. It clears once the marker is replaced with its **real value** — the reviser must never fabricate a value to clear it (see `commands/proposal-revise.md`).
 
 ## Verdict format
 
@@ -265,9 +303,10 @@ For the thread to reach the `AUDITED` state (this skill's terminal state):
 advance = review.advance == true       (total ≥ 35)
        AND audit.pass == true
        AND no unresolved critical flags in either sibling
+       AND no unresolved pending marker (issue #841 — see "Outstanding dependencies" above)
 ```
 
-If either sibling blocks, the thread stays in `REVIEWED+AUDITED` (with both verdicts written) and the operator runs `proposal-revise` to produce `<thread>.{N+1}/`, which is then re-reviewed and re-audited.
+If either sibling blocks, the thread stays in `REVIEWED+AUDITED` (with both verdicts written) and the operator runs `proposal-revise` to produce `<thread>.{N+1}/`, which is then re-reviewed and re-audited. A thread with a good score, `pass: true`, and zero critical flags but an active `[PENDING <source>]` marker also stays at `REVIEWED+AUDITED` — the pending gate is a separate, non-critical-flag hold on the terminal transition.
 
 ## Output layout
 

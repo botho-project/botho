@@ -8,13 +8,25 @@ the PNG's intrinsic dimensions from the IHDR chunk via stdlib
 ``struct.unpack`` and approximate displayed glyph height from a per-
 diagram-type intrinsic font-size lookup.
 
-Test matrix (per the curator's plan):
+Since issue #964, mermaid's intrinsic text-height constant (``18``,
+the source-SVG font size) is multiplied by
+``Geometry.mermaid_render_scale`` (default ``2.0``, matching the
+pinned ``mmdc --scale 2`` invocation, issue #545) before being compared
+against displayed height — the effective mermaid constant used below
+is therefore ``18 * 2.0 = 36``. matplotlib's intrinsic text-height is
+read from the sibling ``figures/src/<name>.py`` source (explicit
+``fontsize=`` regex scan, issue #964) rather than a fixed constant;
+``_make_figure``'s default matplotlib stub (``"import matplotlib\n"``)
+carries no explicit fontsize, so it exercises the rcParam-default
+(10 pt) fallback unless a test overrides the sibling source.
+
+Test matrix (per the curator's plan, arithmetic updated for #964):
 
 - ``thin_strip_default_clamp`` — 800x80 mermaid PNG referenced without
   any ``h:`` keyword. Falls back to the CSS ``max-height: 75vh`` clamp
   (~540 px). Aspect 10:1 means it's width-limited: displayed height
   = 1280 * (80/800) = 128 px. Displayed glyph height
-  = 18 * (128/80) = 28.8 px → ABOVE the warning threshold. NOT flagged.
+  = 36 * (128/80) = 57.6 px → ABOVE the warning threshold. NOT flagged.
 
   This is a more important test than the raw goodboy.1 ratio: the
   width-limited case shows the gate correctly skips a thin strip that
@@ -22,22 +34,22 @@ Test matrix (per the curator's plan):
 
 - ``thin_strip_with_explicit_h_clamp`` — 800x80 mermaid PNG referenced
   with ``h:80px`` Marp keyword. Explicit clamp kicks in at 80 px.
-  Displayed glyph height = 18 * (80/80) * (intrinsic_h / displayed_h)
+  Displayed glyph height = 36 * (80/80) * (intrinsic_h / displayed_h)
   → at h:80px the displayed height equals the intrinsic height so the
-  scale ratio is 1.0 and displayed glyph = 18 px ABOVE the threshold.
+  scale ratio is 1.0 and displayed glyph = 36 px ABOVE the threshold.
 
 - ``thin_strip_severe_clamp`` — A genuinely illegible case: a tall
   intrinsic figure (200x1200) clamped via ``h:80px``. Displayed glyph
-  = 18 * (80/1200) = 1.2 px → ERROR.
+  = 36 * (80/1200) = 2.4 px → ERROR.
 
 - ``tb_oriented_no_keyword`` — A reasonably-shaped 800x600 TB
   mermaid PNG, no ``h:`` keyword. Displayed height clamps to the
-  CSS default 540 px → glyph 16.2 px ABOVE warning. NOT flagged.
+  CSS default 540 px → glyph 32.4 px ABOVE warning. NOT flagged.
 
 - ``goodboy_raas_flywheel_repro`` — The canary fixture cited in the
   issue body: a 784x102 mermaid PNG (LR cycle that rendered as a thin
-  strip). Width-limited displayed height = 1280 * (102/784) = 166 px.
-  Displayed glyph height = 18 * (166/102) = 29.3 px. ABOVE warning.
+  strip). Width-limited displayed height = 1280 * (102/784) ≈ 166.5 px.
+  Displayed glyph height = 36 * (166.5/102) ≈ 58.8 px. ABOVE warning.
   This is the BEFORE-#545 case; the figure now reads fine BECAUSE
   width-fill produces a tall enough display height. The legibility
   gate is NOT a substitute for the render-side aspect/orient fix.
@@ -51,13 +63,55 @@ Test matrix (per the curator's plan):
   not this gate).
 
 - ``matplotlib_chart_passes`` — A reasonably-shaped matplotlib chart
-  (1200x800) with no clamp. Treated as ``matplotlib`` diagram type
-  with 14 px intrinsic font. Displayed height clamps to 540 px;
-  glyph 14 * (540/800) = 9.45 px → ERROR. Demonstrates the gate is
-  not mermaid-specific.
+  (1200x800, no embedded ``pHYs`` DPI chunk) with no clamp. Treated as
+  ``matplotlib`` diagram type; since no DPI is embedded, the gate
+  assumes the shipped ``anvil.mplstyle`` default of 200 DPI, giving an
+  intrinsic glyph height of ``10pt * (200/72) ≈ 27.8 px``. Displayed
+  height clamps to 540 px; glyph ``27.8 * (540/800) ≈ 18.75 px`` →
+  ABOVE the warning threshold. NOT flagged. Demonstrates the gate is
+  not mermaid-specific *and* closes the issue #904 DPI-blindness bug:
+  pre-#904 this exact figure (with the un-DPI-scaled 14 px constant)
+  incorrectly fired an ``error``.
 
 - ``escape_hatch_whole_slide`` — Bare ``<!-- anvil-figure-legibility-
   disable -->`` (no name) suppresses every figure on that slide.
+
+- ``matplotlib_dpi_scaling`` (issue #904) — A 1000x1000 matplotlib
+  chart with an explicit ``pHYs`` DPI chunk, exercised at 72, 100, and
+  200 DPI. No clamp, so displayed height is the CSS default 540 px;
+  scale = 540/1000 = 0.54. Displayed glyph = ``10pt * (dpi/72) *
+  0.54``: 5.4 px @72 dpi (ERROR), 7.5 px @100 dpi (ERROR), 15.0 px
+  @200 dpi (passes, just above the 14 px warning floor). Pins the
+  DPI-proportional scaling directly, independent of the 200-DPI
+  fallback default.
+
+- ``matplotlib_genuinely_undersized_still_fires`` (issue #904) — A
+  1200x800 matplotlib chart at a real 200 DPI, constrained via an
+  explicit ``w:`` keyword to well under the CSS default. The DPI fix
+  must not blind the gate to a figure that is *actually* too small
+  once genuinely constrained — this is the issue's "important caveat."
+
+- ``mermaid_render_scale_fixes_under_flag`` (issue #964) — A 700x900
+  mermaid PNG (``graph TB``-shaped) referenced with ``h:400px``.
+  Scale ratio = 400/900 ≈ 0.444. At the render-scale-aware default
+  (``mermaid_render_scale=2.0``), displayed glyph = 36 * 0.444 = 16 px
+  → ABOVE warning, NOT flagged — matching the issue's "a scale-2
+  mermaid render ... that displays above the floor produces no error
+  stub" acceptance criterion. Pinned against a ``mermaid_render_scale=1.0``
+  override (i.e. the pre-#964 behaviour) on the *same* figure, which
+  computes 18 * 0.444 = 8 px → ERROR, demonstrating the ~2x under-flag
+  this issue fixes.
+
+- ``matplotlib_source_fontsize_changes_verdict`` (issue #964) — Two
+  1200x1000 matplotlib PNGs referenced with ``h:400px`` (scale ratio
+  400/1000 = 0.4), differing only in their sibling
+  ``figures/src/<name>.py`` source's explicit ``fontsize=`` value:
+  ``fontsize=8`` → intrinsic 8pt * (200/72) ≈ 22.2 px → displayed
+  ≈ 8.9 px → ERROR; ``fontsize=16`` → intrinsic 16pt * (200/72)
+  ≈ 44.4 px → displayed ≈ 17.8 px → NOT flagged. Same PNG geometry
+  throughout — only the source-declared fontsize changes — pinning
+  that a source-side fontsize change now moves the gate's verdict
+  (pre-#964 the fixed ``14.0`` px constant could never move).
 
 Runs under either ``python -m unittest discover anvil/skills/deck/tests/``
 or ``pytest anvil/skills/deck/tests/``.
@@ -114,6 +168,41 @@ def _make_minimal_png(width: int, height: int) -> bytes:
     return sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 
 
+def _make_png_with_dpi(width: int, height: int, dpi: float) -> bytes:
+    """Build a valid PNG with an explicit ``pHYs`` chunk declaring ``dpi``.
+
+    Mirrors matplotlib's ``savefig(dpi=D)`` output: ``ppux == ppuy ==
+    round(D / 0.0254)``, unit byte ``1`` (meters), inserted between
+    IHDR and IDAT (matplotlib's own chunk order).
+    """
+    sig = b"\x89PNG\r\n\x1a\n"
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+
+    ppu = round(dpi / 0.0254)
+    phys = struct.pack(">IIB", ppu, ppu, 1)
+
+    scanline = b"\x00" + b"\xff" * (width * 3)
+    raw = scanline * height
+    idat = zlib.compress(raw)
+
+    return (
+        sig
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"pHYs", phys)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+
+
 def _write_deck(
     tmp_path: Path,
     figure_refs: list[str],
@@ -153,21 +242,38 @@ def _make_figure(
     height: int,
     *,
     diagram_type: str = "mermaid",
+    dpi: float | None = None,
+    matplotlib_source: str | None = None,
 ) -> Path:
-    """Create a figures/<name>.png plus a sibling src/<name>.<ext> for type."""
+    """Create a figures/<name>.png plus a sibling src/<name>.<ext> for type.
+
+    ``dpi``, when given, embeds a ``pHYs`` chunk declaring that physical
+    density (mirrors matplotlib's ``savefig(dpi=...)``). Omitted by
+    default, matching a PNG with no declared density.
+
+    ``matplotlib_source``, when given (and ``diagram_type ==
+    "matplotlib"``), overrides the sibling script's contents — used to
+    exercise the issue #964 source-fontsize regex scan
+    (``_matplotlib_source_fontsize_pt``). Defaults to a fontsize-free
+    stub, exercising the rcParam-default fallback.
+    """
     figures = tmp_path / "figures"
     figures.mkdir(exist_ok=True)
     src = figures / "src"
     src.mkdir(exist_ok=True)
 
     png_path = figures / f"{name}.png"
-    png_path.write_bytes(_make_minimal_png(width, height))
+    if dpi is None:
+        png_path.write_bytes(_make_minimal_png(width, height))
+    else:
+        png_path.write_bytes(_make_png_with_dpi(width, height, dpi))
 
     # Sibling source for diagram-type classification.
     if diagram_type == "mermaid":
         (src / f"{name}.mmd").write_text("flowchart LR\nA --> B\n", encoding="utf-8")
     elif diagram_type == "matplotlib":
-        (src / f"{name}.py").write_text("import matplotlib\n", encoding="utf-8")
+        text = matplotlib_source if matplotlib_source is not None else "import matplotlib\n"
+        (src / f"{name}.py").write_text(text, encoding="utf-8")
     # 'unknown' = no sibling source.
 
     return png_path
@@ -273,9 +379,13 @@ class TestGoodboyRaasFlywheelRepro(unittest.TestCase):
 class TestExplicitHClampOnThinStripPushesUnderFloor(unittest.TestCase):
     """A thin-strip figure with an aggressive ``h:`` keyword IS flagged.
 
-    784x102 mermaid PNG referenced with ``h:60px`` Marp keyword.
-    Clamped displayed height = 60 px; scale = 60/102 ≈ 0.588;
-    displayed glyph = 18 * 0.588 ≈ 10.6 px → ERROR.
+    784x102 mermaid PNG referenced with ``h:20px`` Marp keyword.
+    Clamped displayed height = 20 px; scale = 20/102 ≈ 0.196;
+    displayed glyph = 36 * 0.196 ≈ 7.1 px → ERROR. (Pre-#964, at the
+    un-scaled 18 px constant, ``h:60px`` was the threshold-crossing
+    clamp; post-#964 the doubled 36 px constant needs a tighter clamp
+    to still land under the error floor — recomputed, not just
+    loosened, per the issue's test-update guidance.)
     """
 
     def test_h_clamp_drives_under_error_threshold(self) -> None:
@@ -283,7 +393,7 @@ class TestExplicitHClampOnThinStripPushesUnderFloor(unittest.TestCase):
             root = Path(tmp)
             _make_figure(root, "thin_clamped", 784, 102, diagram_type="mermaid")
             deck = _write_deck(
-                root, ["![h:60px alt](figures/thin_clamped.png)"]
+                root, ["![h:20px alt](figures/thin_clamped.png)"]
             )
 
             result = lint_figures(deck)
@@ -362,13 +472,20 @@ class TestMissingFigureSilentlySkipped(unittest.TestCase):
 class TestMatplotlibChartNotMermaidSpecial(unittest.TestCase):
     """The gate is diagram-type-aware but not mermaid-only.
 
-    A 1200x800 matplotlib chart (14 px intrinsic font, the matplotlib
-    default axis-label height) referenced with no clamp displays at
-    540 px (the CSS default cap). Scale = 540/800 = 0.675;
-    displayed glyph = 14 * 0.675 ≈ 9.45 px → ERROR.
+    A 1200x800 matplotlib chart with no embedded ``pHYs`` DPI chunk,
+    referenced with no clamp, displays at 540 px (the CSS default
+    cap). Since no DPI is declared, the gate assumes the shipped
+    ``anvil.mplstyle`` default of 200 DPI: intrinsic glyph height
+    = 10pt * (200/72) ≈ 27.8 px. Scale = 540/800 = 0.675;
+    displayed glyph ≈ 27.8 * 0.675 ≈ 18.75 px → ABOVE the warning
+    floor. NOT flagged.
+
+    This is the exact issue #904 regression case: pre-#904, the
+    un-DPI-scaled 14 px constant computed 14 * 0.675 ≈ 9.45 px and
+    fired an ``error`` on a figure that was demonstrably legible.
     """
 
-    def test_matplotlib_chart_under_floor_emits_error(self) -> None:
+    def test_matplotlib_chart_at_default_dpi_not_flagged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _make_figure(root, "chart", 1200, 800, diagram_type="matplotlib")
@@ -376,9 +493,196 @@ class TestMatplotlibChartNotMermaidSpecial(unittest.TestCase):
 
             result = lint_figures(deck)
 
+            self.assertEqual(len(result.errors), 0, result.to_summary())
+            self.assertEqual(len(result.warnings), 0, result.to_summary())
+
+
+class TestMatplotlibDpiScaling(unittest.TestCase):
+    """Issue #904: the gate reads the PNG's embedded DPI (``pHYs``).
+
+    A 1000x1000 matplotlib chart, no clamp, so displayed height is
+    the CSS default 540 px; scale = 540/1000 = 0.54. Displayed glyph
+    = ``10pt * (dpi/72) * 0.54``:
+
+    - 72 dpi:  10 * 1.000 * 0.54 =  5.4 px → ERROR
+    - 100 dpi: 10 * 1.389 * 0.54 =  7.5 px → ERROR
+    - 200 dpi: 10 * 2.778 * 0.54 = 15.0 px → passes (just above the
+      14 px warning floor)
+
+    Same figure geometry throughout — only the declared DPI changes —
+    so this pins the DPI-proportional scaling directly rather than
+    relying on the 200 DPI no-``pHYs`` fallback.
+    """
+
+    def test_72_dpi_emits_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(root, "chart", 1000, 1000, diagram_type="matplotlib", dpi=72)
+            deck = _write_deck(root, ["![alt](figures/chart.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 1, result.to_summary())
+            self.assertIn("matplotlib", result.errors[0].message)
+
+    def test_100_dpi_emits_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(root, "chart", 1000, 1000, diagram_type="matplotlib", dpi=100)
+            deck = _write_deck(root, ["![alt](figures/chart.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 1, result.to_summary())
+
+    def test_200_dpi_not_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(root, "chart", 1000, 1000, diagram_type="matplotlib", dpi=200)
+            deck = _write_deck(root, ["![alt](figures/chart.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 0, result.to_summary())
+            self.assertEqual(len(result.warnings), 0, result.to_summary())
+
+
+class TestMatplotlibGenuinelyUndersizedStillFires(unittest.TestCase):
+    """Issue #904's "important caveat": a truly-undersized figure still fires.
+
+    A 1200x800 matplotlib chart rendered at a real 200 DPI (so the DPI
+    fix's scaling is in play), but referenced with an explicit ``w:``
+    keyword clamping it to 400 px — well under a third of the 1280 px
+    slide width. Width clamp dominates: displayed height =
+    400 * (800/1200) ≈ 266.7 px; scale ≈ 0.333; displayed glyph
+    ≈ 10 * (200/72) * 0.333 ≈ 9.3 px → ERROR. The DPI fix must not
+    blind the gate to a figure that is genuinely constrained too small.
+    """
+
+    def test_narrow_w_clamp_still_emits_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(root, "chart", 1200, 800, diagram_type="matplotlib", dpi=200)
+            deck = _write_deck(root, ["![w:400px alt](figures/chart.png)"])
+
+            result = lint_figures(deck)
+
             self.assertEqual(len(result.errors), 1, result.to_summary())
             self.assertEqual(result.errors[0].rule, "figure-legibility-floor")
+
+
+class TestMermaidRenderScaleFixesUnderFlag(unittest.TestCase):
+    """Issue #964: the mermaid render-scale fix stops the ~2x under-flag.
+
+    A 700x900 mermaid PNG (a ``graph TB``-shaped figure) referenced
+    with ``h:400px``. Scale ratio = 400/900 ≈ 0.444.
+
+    At the shipped default (``mermaid_render_scale=2.0``, matching the
+    load-bearing ``mmdc --scale 2`` invocation), displayed glyph =
+    36 * 0.444 = 16 px → ABOVE warning, NOT flagged: this is the
+    acceptance criterion "a scale-2 mermaid render ... that displays
+    above the floor produces no error stub."
+
+    Pinned against the pre-#964 behaviour on the *identical* figure via
+    a ``mermaid_render_scale=1.0`` override: 18 * 0.444 = 8 px → ERROR
+    — reproducing the exact ~2x under-flag this issue fixes (a figure
+    that is in fact legible, incorrectly flagged).
+    """
+
+    def test_default_scale_not_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(root, "tb_shape", 700, 900, diagram_type="mermaid")
+            deck = _write_deck(root, ["![h:400px alt](figures/tb_shape.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 0, result.to_summary())
+            self.assertEqual(len(result.warnings), 0, result.to_summary())
+
+    def test_pre_964_unscaled_geometry_reproduces_the_under_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(root, "tb_shape", 700, 900, diagram_type="mermaid")
+            deck = _write_deck(root, ["![h:400px alt](figures/tb_shape.png)"])
+
+            geo = Geometry(mermaid_render_scale=1.0)
+            result = lint_figures(deck, geometry=geo)
+
+            self.assertEqual(len(result.errors), 1, result.to_summary())
+
+
+class TestMatplotlibSourceFontsizeChangesVerdict(unittest.TestCase):
+    """Issue #964: a source-side fontsize change moves the gate's verdict.
+
+    Two 1200x1000 matplotlib PNGs referenced with ``h:400px`` (scale
+    ratio 400/1000 = 0.4), differing only in their sibling
+    ``figures/src/<name>.py`` source's explicit ``fontsize=`` value:
+
+    - ``fontsize=8``: intrinsic 8pt * (200/72) ≈ 22.2 px (no embedded
+      DPI, so the 200 DPI fallback applies) → displayed ≈ 8.9 px →
+      ERROR.
+    - ``fontsize=16``: intrinsic 16pt * (200/72) ≈ 44.4 px → displayed
+      ≈ 17.8 px → NOT flagged.
+
+    Pre-#964 the fixed ``14.0`` px constant could never move — a
+    source-side fontsize bump (e.g. 10pt → 12pt, applied specifically
+    to satisfy the gate) produced an identical estimate on both
+    versions. This pins that the fix actually reads the source.
+    """
+
+    def test_small_fontsize_emits_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(
+                root,
+                "annotated",
+                1200,
+                1000,
+                diagram_type="matplotlib",
+                matplotlib_source="ax.annotate('n', xy=(0, 0), fontsize=8)\n",
+            )
+            deck = _write_deck(root, ["![h:400px alt](figures/annotated.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 1, result.to_summary())
             self.assertIn("matplotlib", result.errors[0].message)
+
+    def test_larger_fontsize_on_identical_geometry_is_not_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(
+                root,
+                "annotated",
+                1200,
+                1000,
+                diagram_type="matplotlib",
+                matplotlib_source="ax.annotate('n', xy=(0, 0), fontsize=16)\n",
+            )
+            deck = _write_deck(root, ["![h:400px alt](figures/annotated.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 0, result.to_summary())
+            self.assertEqual(len(result.warnings), 0, result.to_summary())
+
+    def test_global_rcparams_font_size_override_is_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_figure(
+                root,
+                "annotated",
+                1200,
+                1000,
+                diagram_type="matplotlib",
+                matplotlib_source="plt.rcParams['font.size'] = 8\n",
+            )
+            deck = _write_deck(root, ["![h:400px alt](figures/annotated.png)"])
+
+            result = lint_figures(deck)
+
+            self.assertEqual(len(result.errors), 1, result.to_summary())
 
 
 class TestWorstCaseAcrossSlides(unittest.TestCase):
@@ -446,31 +750,35 @@ class TestNonPngSilentlySkipped(unittest.TestCase):
 
 
 class TestGeometryOverride(unittest.TestCase):
-    """A consumer with a custom CSS cap can pass a Geometry override."""
+    """A consumer with a custom CSS cap can pass a Geometry override.
+
+    Issue #964: the intrinsic figure height here is 2400 (not the
+    pre-#964 1200) — doubled to offset the now-doubled effective
+    mermaid constant (``18 * mermaid_render_scale`` = 36, default
+    scale 2.0) so the worked arithmetic below reproduces the original
+    test's intent (default cap → error; widened cap → passes) rather
+    than just loosening the assertions.
+    """
 
     def test_tighter_max_height_drives_under_floor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            # 200x1200 figure, no clamp.
-            _make_figure(root, "tall", 200, 1200, diagram_type="mermaid")
+            # 200x2400 figure, no clamp.
+            _make_figure(root, "tall", 200, 2400, diagram_type="mermaid")
             deck = _write_deck(root, ["![alt](figures/tall.png)"])
 
             # Default cap is 75vh = 540 px; with that cap, displayed glyph
-            # ≈ 18 * (540/1200) = 8.1 px → already an error.
-            # Verify by overriding to a *generous* cap (>= 1200) so the
+            # = 36 * (540/2400) = 8.1 px → already an error.
+            # Verify by overriding to a *generous* cap so the
             # default-default case becomes legible.
             result = lint_figures(deck)
             self.assertEqual(len(result.errors), 1)
 
-            # Now widen the cap: img_max_height_vh = 100 vh = 720 px, but
-            # the figure is taller than that → still clamped to 720 px,
-            # displayed glyph = 18 * (720/1200) = 10.8 px → still an
-            # error, just barely. To make this *pass*, widen the slide
-            # height geometry itself to e.g. 1440 px:
+            # Widen the slide height geometry to 1440 px so the 75vh cap
+            # becomes 1080 px; the figure's intrinsic 2400 px height means
+            # it's still height-limited, to 1080. Glyph = 36 *
+            # (1080/2400) = 16.2 px → ABOVE warning.
             geo = Geometry(slide_height_px=1440)
-            # Now the 75vh cap = 1080 px; the figure's intrinsic 1200 px
-            # height means it's height-limited to 1080. Glyph = 18 *
-            # (1080/1200) = 16.2 px → ABOVE warning.
             result_wide = lint_figures(deck, geometry=geo)
             self.assertEqual(len(result_wide.errors), 0)
             self.assertEqual(len(result_wide.warnings), 0)

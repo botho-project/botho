@@ -445,8 +445,9 @@ class TestConsumerOverlayTier(unittest.TestCase):
     def test_skill_identity_guard_unaffected_by_consumer_tier(self) -> None:
         """The #386 guard still fires for every skill-identity value
         even when a consumer overlay registry exists — the guard is
-        keyed on the explicit SKILL_IDENTITY_ARTIFACT_TYPES set (`pub`
-        joined under #408, `report` under #432, `ip-uspto` /
+        keyed on the explicit SKILL_IDENTITY_ARTIFACT_TYPES set (`paper`
+        joined under #408 as `pub`, renamed to `paper` under #694,
+        `report` under #432, `ip-uspto` /
         `ip-uspto-provisional` under #440, `essay` under #460,
         `datasheet` under #486 — memo overlay dispatch must
         fail loudly on all of them)."""
@@ -455,7 +456,7 @@ class TestConsumerOverlayTier(unittest.TestCase):
             "deck",
             "slides",
             "proposal",
-            "pub",
+            "paper",
             "report",
             "ip-uspto",
             "ip-uspto-provisional",

@@ -12,7 +12,7 @@ Covered (mirrors the curated test plan on #429):
 
 1. Customers-dir resolution: default; ``report.customers_dir``
    config-key override (relative + absolute); absent/malformed
-   config; repo-root discovery (``.anvil`` / ``.git`` walk-up).
+   config.
 2. Context load: valid template shape; missing file; malformed YAML;
    unknown version; customer/slug mismatch; bad shapes — every
    breakage a structured error, never a crash, tier never silently
@@ -55,15 +55,12 @@ from anvil.skills.report.lib.customer_context import (  # noqa: E402
     CRITICAL_FLAG_AUDIT_DISCLOSURE_TOPIC_VIOLATION,
     CUSTOMERS_DIR_CONFIG_KEY,
     DEFAULT_CUSTOMERS_DIRNAME,
-    DISCLOSURE_RECORD_KEYS,
     LEDGER_FILENAME,
-    PROJECT_CUSTOMER_KEY,
     TopicViolationRow,
     append_disclosure,
     context_active,
     customer_dir,
     detect_disclosure_topic_violations,
-    find_repo_root,
     load_context,
     load_disclosures,
     read_project_customer,
@@ -136,41 +133,6 @@ def _row(n: int, *, topic: str = "unreleased roadmap items") -> TopicViolationRo
 # --------------------------------------------------------------------------
 # 1. Repo-root + customers-dir resolution
 # --------------------------------------------------------------------------
-
-
-class TestFindRepoRoot:
-    def test_finds_anvil_marker(self, tmp_path: Path):
-        (tmp_path / ".anvil").mkdir()
-        nested = tmp_path / "reports" / "acme-q2"
-        nested.mkdir(parents=True)
-        assert find_repo_root(nested) == tmp_path
-
-    def test_finds_git_dir_marker(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        nested = tmp_path / "a" / "b"
-        nested.mkdir(parents=True)
-        assert find_repo_root(nested) == tmp_path
-
-    def test_finds_git_file_marker(self, tmp_path: Path):
-        """Worktrees use a .git FILE — both shapes must count."""
-        (tmp_path / ".git").write_text("gitdir: /elsewhere\n")
-        assert find_repo_root(tmp_path) == tmp_path
-
-    def test_no_marker_returns_none_or_ancestor(self, tmp_path: Path):
-        """With no marker inside tmp_path the walk never stops at
-        the unmarked dirs themselves (it returns ``None`` or some
-        marker-bearing ancestor outside the temp tree)."""
-        nested = tmp_path / "plain"
-        nested.mkdir()
-        result = find_repo_root(nested)
-        assert result not in (nested, tmp_path)
-
-    def test_file_start_resolves_from_parent(self, tmp_path: Path):
-        (tmp_path / ".anvil").mkdir()
-        f = tmp_path / "reports" / "_project.md"
-        f.parent.mkdir()
-        f.write_text("---\n---\n")
-        assert find_repo_root(f) == tmp_path
 
 
 class TestResolveCustomersDir:
@@ -457,7 +419,16 @@ class TestDisclosureLedger:
         assert len(lines) == 1
         record = json.loads(lines[0])
         # Record field completeness — every canonical key present.
-        assert set(record) == set(DISCLOSURE_RECORD_KEYS)
+        assert set(record) == {
+            "ts",
+            "customer",
+            "engagement_id",
+            "project",
+            "thread",
+            "version",
+            "summary",
+            "report_sha256",
+        }
         assert record["customer"] == "acme"
         assert record["project"] == "acme-q2"
         assert record["thread"] == "findings"
@@ -626,9 +597,7 @@ class TestActivationRegression:
         )
 
         # Resolution chain: repo root → customers dir → context.
-        root = find_repo_root(project_md)
-        assert root == tmp_path
-        res = resolve_customers_dir(root)
+        res = resolve_customers_dir(tmp_path)
         assert res.path == customers
         slug = read_project_customer(project_md)
         assert slug == "acme"
@@ -703,7 +672,6 @@ def test_constants_are_pinned() -> None:
     assert CONTEXT_FILENAME == "context.yaml"
     assert LEDGER_FILENAME == "disclosures.jsonl"
     assert DEFAULT_CUSTOMERS_DIRNAME == "customers"
-    assert PROJECT_CUSTOMER_KEY == "customer"
 
 
 def test_draft_doc_references_tier() -> None:

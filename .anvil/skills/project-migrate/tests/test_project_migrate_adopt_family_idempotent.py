@@ -14,7 +14,6 @@ single-file ``review.md`` payload remain INVISIBLE to
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import re
 import sys
@@ -28,6 +27,7 @@ from _fixtures import (
     write_tag_map,
 )
 from _project_migrate_skill_lib import orchestrate
+from anvil.lib.testing import tree_hash as _tree_digest
 
 run_adopt_family = orchestrate.run_adopt_family
 
@@ -64,15 +64,6 @@ def _load_scout_foreign():
 
 def _tag_map(tmp_path):
     return write_tag_map(tmp_path / "tag-map.json", DEFAULT_TAG_MAP)
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 def _families_on_disk(parent: Path):
@@ -187,17 +178,17 @@ class TestForeignGuardRegression:
         assert result.success, result.report
 
         for slug, versions, sidecars in (
-            ("brasidas-a", [1, 2], ["brasidas-a.2.review"]),
+            ("meridian-a", [1, 2], ["meridian-a.2.review"]),
             (
-                "brasidas-c",
+                "meridian-c",
                 [5, 7],
                 [
-                    "brasidas-c.5.pre_flight",
-                    "brasidas-c.5.review",
-                    "brasidas-c.7.audit",
-                    "brasidas-c.7.audit2",
-                    "brasidas-c.7.enablement",
-                    "brasidas-c.7.s101",
+                    "meridian-c.5.pre_flight",
+                    "meridian-c.5.review",
+                    "meridian-c.7.audit",
+                    "meridian-c.7.audit2",
+                    "meridian-c.7.enablement",
+                    "meridian-c.7.s101",
                 ],
             ),
         ):
@@ -229,13 +220,13 @@ class TestSingleFileReviewStaysInvisible:
         assert result.success, result.report
 
         for version_dir in (
-            project / "brasidas-a" / "brasidas-a.2",
-            project / "brasidas-c" / "brasidas-c.5",
-            project / "brasidas-c" / "brasidas-c.7",
+            project / "meridian-a" / "meridian-a.2",
+            project / "meridian-c" / "meridian-c.5",
+            project / "meridian-c" / "meridian-c.7",
         ):
             assert discover_critics(version_dir) == []
 
         # ...and the payloads are intact on disk.
         assert (
-            project / "brasidas-c" / "brasidas-c.5.review" / "review.md"
+            project / "meridian-c" / "meridian-c.5.review" / "review.md"
         ).is_file()

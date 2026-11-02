@@ -15,7 +15,7 @@ Design decisions (mirroring the curated plan on #427):
   runtime-consulted consumer config surface shipped by #426), NOT in
   ``.anvil/config.toml``. JSON parses with stdlib on every supported
   Python (the deck imagegen TOML path had to ship a regex fallback
-  parser for 3.10), and adapter entries are *data* (command strings +
+  parser, written when 3.10 was supported), and adapter entries are *data* (command strings +
   globs), not Python dotted-paths, so TOML's import-path convention
   buys nothing here.
 - **Defaults-off contract**: an absent config file or an absent

@@ -16,7 +16,7 @@ Customer-facing reports fail differently from internal memos: a typo in a memo i
 | 6 | **Internal consistency** | 4 | Numbers in body match exec summary match tables match prior reports in this engagement. Common failure when reports go through multiple revisions; the auditor sibling explicitly checks this. |
 | 7 | **Format / presentation quality** | 4 | Tables render, figures legible, pagination clean, headers/footers consistent, recipient-appropriate branding. Customer-visible — sloppy presentation undermines trust in the technical content. `report-review` enforces a deterministic existence + freshness gate on `report.pdf` (cap at 2/4 if missing or stale; see `commands/report-review.md` step 4c). |
 | 8 | **Tone & audience calibration** | 3 | Written for the named recipient (from `_project.md`) — appropriate jargon level, no hedging-to-hide, no overselling. Lowest weight but non-zero: a technically correct report in the wrong tone still damages the engagement. |
-| 9 | **Rhetorical economy** | 4 | Is the WHOLE report load-bearing? Could the same findings + recommendations land in fewer pages? Customer reports balloon under "more = more rigorous" pressure — dim 9 catches sections that restate findings without adding evidence, appendices that quote interview transcripts verbatim where excerpts would land, recommendation lists that pad with low-value items. Distinct from dim 1 (first-page clarity) and dim 7 (rendered polish). |
+| 9 | **Rhetorical economy** | 4 | Does the WHOLE report carry weight the findings need? Could the same findings + recommendations land in fewer pages? Customer reports balloon under "more = more rigorous" pressure — dim 9 catches sections that restate findings without adding evidence, appendices that quote interview transcripts verbatim where excerpts would land, recommendation lists that pad with low-value items. Distinct from dim 1 (first-page clarity) and dim 7 (rendered polish). |
 | | **Total** | **44** | Advance threshold: ≥39 |
 
 ## Vision-owned dimensions (rendered-PDF critic)
@@ -57,7 +57,7 @@ For a customer-facing report, the ≥39 threshold means the report has at most ~
 
 ## Dim 8 — voice-grounding calibration
 
-**Trigger** (issues #461, #578): the project-level `<project>/BRIEF.md` declares an optional top-level `voice:` block naming up to four persona docs — `style_guide` (register / cadence rules), `vocabulary` (AI-tell guidance), `values` (stances / anti-stances / standing / voice signatures / failure modes — private by default as `VALUES.local.md`; see `anvil/templates/voice/VALUES.template.md`), and `corpus` (a glob over published exemplars quoted as voice ground truth). The block is parsed by `anvil/lib/project_brief.py::VoiceDocs` and resolved — project-root first, then consumer-root — by `resolve_voice_docs`. The full role contracts live in `anvil/lib/snippets/voice_grounding.md`.
+**Trigger** (issues #461, #578): the project-level `<project>/BRIEF.md` declares an optional top-level `voice:` block naming up to four persona docs — `style_guide` (register / cadence rules), `vocabulary` (AI-tell guidance), `values` (stances / anti-stances / standing / voice signatures / failure modes — private by default as `VALUES.local.md`; see `anvil/templates/voice/VALUES.template.md`), and `corpus` (a glob over published exemplars quoted as voice ground truth). The block is parsed by `anvil/lib/project_brief/models.py::VoiceDocs` and resolved — project-root first, then consumer-root — by `resolve_voice_docs`. The full role contracts live in `anvil/lib/snippets/voice_grounding.md`.
 
 **What changes when triggered**: dim 8 (*Tone & audience calibration*) is the report rubric's native home for register and voice — it already names "written for the named recipient … appropriate jargon level, no hedging-to-hide, no overselling" — so the voice-fidelity calibration attaches there as a **triggered fixed suffix** (the memo dim-8 precedent, `anvil/skills/memo/rubric.md` §"Dim 8 — voice-grounding calibration"; the #348 triggered-suffix mechanism). This calibration does NOT add a tenth dimension and does NOT alter the /44 total; dim 9 (*Rhetorical economy*) stays economy-scoped (its deterministic vocabulary feeder is the rhetoric lint, issue #463), and dim 7 (*Format / presentation quality*) stays rendered-polish-scoped.
 
@@ -69,11 +69,39 @@ For a customer-facing report, the ≥39 threshold means the report has at most ~
 
 **Backwards-compat**: when the BRIEF declares no `voice:` block (or an empty one), the calibration does NOT fire — no suffix, no corpus-quote requirement, no `_summary.md.voice_grounding` block. Dim 8 scores against its standard recipient-calibration **byte-identically** to pre-#578 behavior (the #428/#452 contract). The audit trail of an active calibration is the `scoring.md` suffix plus the `_summary.md.voice_grounding` block (`commands/report-review.md`).
 
+## Dim 9 — plain-language framing (issue #1042/#1044)
+
+Dim 9's "could the same findings + recommendations land in fewer pages?"
+test does not penalize a passage for teaching a non-specialist recipient.
+Per `anvil/lib/snippets/plain_language.md` (the plain-language-first
+framework — issue #1042/#1043) and `anvil/lib/snippets/rubric.md`
+§"Dim 9 — teaching-oriented length is not padding", a finding stated in
+ordinary language before its technical name is introduced, or a plain
+restatement kept alongside a newly-introduced term, is doing the
+report's job — a reviewer scoring dim 9 should not cite it as bloat.
+The test remains: **would deleting this passage remove information the
+recipient needs, or only remove words?** This composes with, and does
+not replace, dim 8's recipient-jargon calibration (§"Dim 8 —
+voice-grounding calibration" above) — dim 8 tunes *how much* specialist
+vocabulary a given recipient can absorb; dim 9 governs whether a passage
+that explains a term is padding or teaching. See
+`commands/report-review.md` step 5's D9 bullet for the reviewer-side
+application.
+
+**Pending-measurement markers do not incur a dimension penalty (issue #841).** A well-formed `[PENDING <source>]` placeholder (see `anvil/lib/snippets/pending_marker.md`) is an honest disclosure that a specific number is not yet available (a client-supplied figure not yet returned, an analysis still running) — it is NOT a defect and MUST NOT be scored down on any dimension. Score the surrounding argument's soundness *assuming* the pending value resolves as described. The gap is tracked separately as an **outstanding dependency** (see "Outstanding dependencies (not critical flags)" below), which holds only the `AUDITED`/`CUSTOMER-READY` terminal transitions.
+
 ## Advance threshold
 
-- **≥39/44** — advance to `READY` (subject to also having `pass: true` in the audit sibling). This skill's terminal pre-promotion state is `AUDITED` (which for this skill means both `.review/` advance AND `.audit/` pass).
+- **≥39/44** — advance to `READY` (subject to also having `pass: true` in the audit sibling). This skill's terminal pre-promotion state is `AUDITED` (which for this skill means both `.review/` advance AND `.audit/` pass AND no unresolved pending marker).
 - **<39/44** — block; revise.
 - **Any critical flag set** (in either `.review/` or `.audit/`) — block regardless of total. The next revision must address the flagged issue specifically and the relevant critic must re-evaluate the flag before the threshold check applies.
+- **Any unresolved pending marker** — does NOT block `advance`/`pass` (it is not a critical flag; see below), but DOES hold the thread short of `AUDITED` until the marker resolves (`commands/report-audit.md`'s terminal-gate step); `report-promote` additionally re-checks it before `CUSTOMER-READY`.
+
+## Outstanding dependencies (not critical flags — issue #841)
+
+An **unresolved pending marker** is deliberately NOT in the critical-flags list below — it is a distinct, specially-resolved category with the opposite verdict posture:
+
+- **Unresolved pending marker** — A well-formed `[PENDING <source>]` placeholder (see `anvil/lib/snippets/pending_marker.md`) remains in `report.md`. `report-review` step 4f and `report-audit` step 10b run `anvil/lib/pending_marker.py` unconditionally, which emits a specially-resolved `pending_dependency`-typed flag (the additive type from `anvil/lib/convergence.py`) whenever any active marker is still present — deterministic, not a reviewer/auditor judgment call. It does NOT lower any dimension score and does NOT force `advance: false` / `pass: false` (`convergence.blocking_critical_flags` filters it out). Instead it is surfaced as an *outstanding dependency* in `verdict.md` and gates **only** the `AUDITED`/`CUSTOMER-READY` terminal transitions, separately from the score/verdict path. It clears once the marker is replaced with its **real value** — the reviser must never fabricate a value to clear it (see `commands/report-revise.md`).
 
 ## Critical flags
 

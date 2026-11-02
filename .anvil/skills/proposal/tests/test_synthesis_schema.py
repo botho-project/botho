@@ -54,7 +54,7 @@ _SCHEMA_JSON = _SKILL_ROOT / "lib" / "synthesis_schema.json"
 CANARY_FIXTURE: dict = {
     "schema_version": "1",
     "for_version": 1,
-    "thread": "raytheon-pitch-strategy",
+    "thread": "northwind-pitch-strategy",
     "gaps": [
         {
             "id": "g-12lp-mask-cost",
@@ -108,7 +108,7 @@ class TestRoundTrip(unittest.TestCase):
         gl = GapList.model_validate(CANARY_FIXTURE)
         self.assertEqual(gl.schema_version, "1")
         self.assertEqual(gl.for_version, 1)
-        self.assertEqual(gl.thread, "raytheon-pitch-strategy")
+        self.assertEqual(gl.thread, "northwind-pitch-strategy")
         self.assertEqual(len(gl.gaps), 1)
         self.assertEqual(len(gl.singletons), 1)
 

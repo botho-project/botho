@@ -34,12 +34,13 @@ A single command an operator (or orchestrating agent) runs to see the state of e
    | State | Recommended next command |
    |---|---|
    | `EMPTY` | `primer-draft <thread>` |
-   | `DRAFTED` | `primer-review <thread>` + `primer-audit <thread>` (parallel) |
+   | `DRAFTED` (figure plan present, exhibits not yet rendered) | `primer-figures <thread>` first (render the drafter-referenced diagrams so the critics can score them per #690), then `primer-review <thread>` + `primer-audit <thread>` (parallel) |
+   | `DRAFTED` (no figure plan / exhibits current) | `primer-review <thread>` + `primer-audit <thread>` (parallel) |
    | `REVIEWED-PARTIAL` | `primer-audit <thread>` (run the missing critic) |
    | `AUDITED-PARTIAL` | `primer-review <thread>` (run the missing critic) |
    | `REVIEWED+AUDITED` (either critic blocks, under iteration cap) | `primer-revise <thread>` |
    | `REVIEWED+AUDITED` (either critic blocks, AT iteration cap) | `BLOCKED — human review required` |
-   | `AUDITED` (both clear) | `primer-figures <thread>` (optional PDF/exhibits) or (terminal — publish handoff; see SKILL.md §Publish handoff contract) |
+   | `AUDITED` (both clear) | `primer-figures <thread>` (refresh/produce PDF+exhibits if not current) or (terminal — publish handoff; see SKILL.md §Publish handoff contract) |
 
 5. Detect anomalies and surface them:
    - A `<slug>.{N}/_progress.json` with any phase `in_progress` AND the version dir older than 10 minutes — likely a crashed phase; recommend resuming (the next `primer-review`/`primer-audit` invocation's `cleanup_one_staging` sweep handles stale critic staging).
@@ -65,4 +66,4 @@ Follow the table with an `## Anomalies` section if any were detected, and an `##
 
 - This command does **not** write to disk. Safe to run repeatedly. As a read-only command it is **exempt from the per-phase git-sync hook by definition** (see SKILL.md §"Git sync hook").
 - The orchestrator is the recommended user-facing entry point; the lifecycle commands (`primer-draft`, `primer-review`, `primer-audit`, `primer-revise`, `primer-figures`) can be invoked directly in sequence.
-- `AUDITED` is terminal: publishing stays consumer-native (SKILL.md §Publish handoff contract). `primer-figures` is optional collateral, not a state advance.
+- `AUDITED` is terminal: publishing stays consumer-native (SKILL.md §Publish handoff contract). `primer-figures` is collateral, not a state advance; post-#690 it runs any time after draft (so the critics can score the rendered figures) rather than only after `AUDITED`.

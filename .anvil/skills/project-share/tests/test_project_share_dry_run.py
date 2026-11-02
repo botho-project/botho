@@ -8,11 +8,11 @@ rubric-rebackport dry-run suite).
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from anvil.lib.testing import tree_hash as _tree_hash
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
@@ -22,15 +22,6 @@ from _share_fixtures import (  # noqa: E402
     build_full_project,
     build_project_with_unstarted_slug,
 )
-
-
-def _tree_hash(project: Path) -> dict:
-    out: dict = {}
-    for path in sorted(project.rglob("*")):
-        if path.is_file():
-            rel = str(path.relative_to(project))
-            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return out
 
 
 class TestDryRunNoMutations(unittest.TestCase):
@@ -90,6 +81,28 @@ class TestDryRunReport(unittest.TestCase):
             self.assertIn("walk-to-highest", result.report)
             self.assertIsNone(result.apply_result)
             self.assertIsNone(result.verify_result)
+
+
+class TestDryRunWithCover(unittest.TestCase):
+    """Issue #757: dry-run reports the planned cover copy, writes nothing."""
+
+    def test_cover_reported_and_no_writes(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(
+                Path(td),
+                export_block="export:\n  cover: SHARE-README.md\n",
+            )
+            (project / "SHARE-README.md").write_text(
+                "# Welcome\n", encoding="utf-8"
+            )
+            before = _tree_hash(project)
+            result = orchestrate.run(project, dry_run=True)
+            after = _tree_hash(project)
+            self.assertEqual(before, after)
+            self.assertTrue(result.success, result.report)
+            self.assertIn("Cover note", result.report)
+            self.assertIn("README.md", result.report)
+            self.assertFalse((project / "SHARE").exists())
 
 
 if __name__ == "__main__":

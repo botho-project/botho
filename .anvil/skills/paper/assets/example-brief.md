@@ -35,6 +35,65 @@ A simple online adaptation rule for SGD batch size improves throughput by
 1.5--2x on heterogeneous GPU clusters with no measurable accuracy regression on
 ResNet-50/ImageNet and BERT-base/GLUE.
 
+## Strongest claim
+
+**Strongest honest statement**: The single online per-worker EMA rule matches
+the throughput of a fully coordinated global scheduler on heterogeneous
+clusters, at a fraction of its coordination cost — the paper's actual claim is
+that heterogeneity-aware scheduling does not need global coordination, not
+merely "our rule is faster."
+
+**Why a thoughtful reader might find it surprising or generative**: The
+batch-size EMA rule uses no cross-worker communication beyond the existing
+gradient all-reduce, yet it recovers most of the throughput a fully
+coordinated scheduler would achieve — a reader familiar with
+heterogeneous-cluster scheduling would expect coordination overhead to be
+unavoidable. If it holds up, it suggests per-worker local signals are
+sufficient for cluster-level load balancing more broadly than assumed.
+
+**What it could inspire**: Follow-on work applying the same
+local-adaptation-instead-of-coordination pattern to other resource axes
+(memory pressure, network bandwidth) in heterogeneous training, and a
+broader argument for when local signals substitute for global coordination
+in distributed systems generally.
+
+**Demonstrated / derived / synthesis / conjecture split**:
+- *Demonstrated*: the EMA rule improves measured throughput 1.5--2x on the
+  two benchmark clusters with no accuracy regression.
+- *Derived*: the closed-form batch-size update rule follows directly from
+  the target-latency clip formulation in the Method section.
+- *Synthesis*: combining an EMA latency estimator (well known in systems
+  literature) with per-worker batch clipping (well known in ML systems)
+  into a training-loop-native scheduler is the paper's actual construction —
+  neither ingredient alone is new; see the litsearch sibling's
+  ingredient-level positioning.
+- *Conjecture*: that the same local-signal pattern generalizes to other
+  heterogeneous-resource axes is stated as a direction in the Discussion,
+  not demonstrated here.
+
+**Opening organized around the strongest claim, not the easiest-to-defend
+one**: The introduction leads with the "no coordination needed" framing
+before the throughput-percentage headline number — the safer, narrower claim
+("we get 1.5--2x throughput") is the second sentence, not the first.
+
+**Intellectual territory on success**: Readers should associate the authors
+with "local-adaptation scheduling for heterogeneous clusters" as a research
+direction, not solely with one benchmark result.
+
+**Reader should remember** (one paragraph): Heterogeneous-cluster training
+does not need a global scheduler; a per-worker EMA rule that reacts only to
+each worker's own observed latency recovers most of the throughput benefit a
+fully coordinated scheduler would provide, with none of the coordination
+cost or single-point-of-failure risk.
+
+**Deliberately excluded for focus**: A comparison against fully asynchronous
+SGD (interesting but orthogonal — this paper's claim is about synchronous
+training with heterogeneous per-step latency, not about relaxing
+synchrony); a theoretical convergence proof for the EMA rule under
+adversarial latency traces (would strengthen the claim but is a separate
+paper's worth of work). Selectivity here sharpens the central claim; it does
+not replace it with a smaller one.
+
 ## Method (sketch — the drafter expands)
 
 For each worker $w$ and step $t$, maintain an EMA $\bar{\tau}_w$ of step

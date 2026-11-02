@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
+
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parents[3]
 
@@ -54,10 +56,6 @@ CANONICAL_MMDC_FLAGS = (
     "--backgroundColor white",
     "-c anvil/lib/figures/mermaid-theme.json",
 )
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 def test_deck_figures_file_exists() -> None:

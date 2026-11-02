@@ -12,33 +12,22 @@ Per the #58 packaging convention this filename is unique across the
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from anvil.lib.testing import tree_hash as _tree_digest
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import orchestrate  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_aldus_shaped_deck,
+    build_beacon_shaped_deck,
     build_mixed_memo_deck_proposal,
 )
 
 run = orchestrate.run
-
-
-def _tree_digest(root: Path) -> str:
-    """Stable digest of a tree: sorted relpaths + per-file content hashes."""
-    digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root)
-        digest.update(str(rel).encode("utf-8"))
-        if path.is_file():
-            digest.update(path.read_bytes())
-    return digest.hexdigest()
 
 
 class TestMixedIdempotence(unittest.TestCase):
@@ -58,9 +47,9 @@ class TestMixedIdempotence(unittest.TestCase):
                 "re-apply on a migrated mixed project changed the tree",
             )
 
-    def test_aldus_deck_reapply_is_noop(self) -> None:
+    def test_beacon_deck_reapply_is_noop(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             first = run(project, apply=True)
             self.assertTrue(first.success)
             before = _tree_digest(project)

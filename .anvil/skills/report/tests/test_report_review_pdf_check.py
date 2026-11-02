@@ -46,7 +46,6 @@ if str(_REPO_ROOT) not in sys.path:
 from anvil.skills.report.lib.pdf_freshness import (  # noqa: E402
     DIM7_CAP_WHEN_MISSING_OR_STALE,
     DIM7_NAME,
-    DIM7_WEIGHT,
     check_pdf_freshness,
 )
 
@@ -135,8 +134,7 @@ def test_dim7_capped_when_pdf_missing(tmp_path: Path) -> None:
     # Dim 7 cap is exactly 2/4 (floor of weight/2; weight is 4).
     assert finding.dim7_cap == DIM7_CAP_WHEN_MISSING_OR_STALE
     assert finding.dim7_cap == 2
-    assert DIM7_WEIGHT == 4
-    assert finding.dim7_cap <= DIM7_WEIGHT // 2
+    assert finding.dim7_cap <= 4 // 2
 
     # The same cap is exposed on the top-level result.
     assert result.dim7_cap == 2
@@ -248,7 +246,7 @@ def test_freshness_check_independent_of_render_gate(
 ) -> None:
     """Step 4c is independent of step 4b's render-gate fail-open path.
 
-    Even if the render-gate at ``anvil/lib/render_gate.py`` is fully
+    Even if the render-gate at ``anvil/lib/render_gate/`` is fully
     stubbed out (simulating the fail-open path: no compile log, no
     PDF, no gate result at all), step 4c MUST still fire when the PDF
     is missing or stale. This verifies the two checks are truly

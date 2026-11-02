@@ -35,6 +35,7 @@ A single command that an operator (or orchestrating agent) runs to see the state
    | State | Recommended next command |
    |---|---|
    | `EMPTY` (no outline yet) | `slides-outline <thread>` (or `slides-draft <thread>` if the brief contains a `## Outline` heading) |
+   | `EMPTY` + `refs/original/*.pdf` (no `<slug>.1/`) | `slides-import <thread> --pdf refs/original/<file>.pdf` |
    | `OUTLINED` | `slides-draft <thread>` |
    | `DRAFTED` | `slides-review <thread>` AND `slides-audit <thread>` AND `slides-rehearse <thread>` (run all three; they are independent critics) |
    | `REVIEWED` (advance=false, under iteration cap) | `slides-revise <thread>` |

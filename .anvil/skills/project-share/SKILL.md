@@ -16,6 +16,7 @@ to an email:
 ```
 <project>/SHARE/
   EXPORT.md                # auto-generated provenance index (also the rebuild marker)
+  README.md                # optional recipient-facing cover note (export.cover, issue #757)
   00-<slug>/
     <slug>.md              # body from the .latest-resolved version dir
     <slug>.pdf             # rendered output, when present
@@ -51,8 +52,9 @@ already owns the word "export" for an unrelated meaning.
 - **Copies** the resolved version dir's contents wholesale, minus the strip
   list — PDFs, `figures/`, `exhibits/`, speaker notes, and supporting assets
   ride along without per-skill special-casing.
-- **Strips** anvil bookkeeping: `_progress.json`, `changelog.md`, `_*.json`,
-  `*.tmp`, `.tmp*` by default (configurable via `export.strip`).
+- **Strips** anvil bookkeeping and non-project droppings: `_progress.json`,
+  `changelog.md`, `_*.json`, `*.tmp`, `.tmp*`, `__pycache__`, `*.pyc`,
+  `.DS_Store` by default (configurable via `export.strip`).
 - **Structurally excludes** (never copied, regardless of config): critic
   siblings (`<slug>.<N>.<tag>/` are siblings of the version dir, not
   contents), version history (only the resolved version), the `.latest`
@@ -63,6 +65,15 @@ already owns the word "export" for an unrelated meaning.
   ordering source, and a per-doc table with resolved version-dir name,
   resolution mode, and PDF filename + SHA-256 — so the recipient can tell at
   a glance what they got and the sender can prove provenance later.
+- **Lints for dangling citations** (issue #758): scans every exported
+  markdown file for references (markdown links, `../` paths, bare
+  backticked/prose filenames) to repo-relative files that are NOT part of
+  the export set — e.g. a thread body citing a project-root working
+  document like `STRATEGIC-OPTIONS.md`. This is the export-time analog of
+  the memo skill's refs back-check: references should resolve within the
+  world the reader receives. Report-only (never blocks) since the citation
+  may be deliberate — findings appear in the run summary and in
+  `EXPORT.md`.
 - **No re-rendering**: purely a packaging step. A missing PDF is noted in
   `EXPORT.md`, never an error and never a render trigger.
 
@@ -83,6 +94,8 @@ export:
     - "*.tmp"
     - ".tmp*"
   out: SHARE                # output dir name under the project root
+  cover: SHARE-README.md    # optional recipient-facing cover note (see below)
+  cover_as: README.md       # optional dest filename under the out dir
 ```
 
 Zero-config works: with no `export:` block, every `documents:` entry exports
@@ -95,6 +108,22 @@ keys, so the `export:` block is safe in any BRIEF today.
 ordering — slugs omitted from `order` are excluded (with a note in the
 summary and in `EXPORT.md`); slugs in `order` that don't appear in
 `documents:` are a hard error naming the slug.
+
+`cover` semantics (issue #757): `EXPORT.md` is machine provenance, not a
+human cover note — and because the out dir is a marker-guarded blow-away
+rebuild, a hand-written `SHARE/README.md` is deleted on every re-export.
+`export.cover` points at a durable source file living OUTSIDE the out dir
+(e.g. a project-root file like `SHARE-README.md`, never itself exported);
+the apply step copies it into the export root — as `README.md` by default,
+or the `cover_as` name — on every run, so rebuilds and `--zip` include it
+automatically. `cover` is a path relative to the project root (a bare
+filename or a nested relative path like `refs/cover-note.md`; a leading
+`/` or any `..` component is a hard error at parse time); the source file
+must exist (hard error at plan time otherwise), and `cover_as` must be a
+bare filename that does not collide with a reserved top-level export-root
+name — the `EXPORT.md` marker, `research/`, or a planned `NN-<slug>/` doc
+directory (hard error at plan time). With no `cover` key, no cover file is
+copied — zero-config behavior is unchanged.
 
 ## Commands
 
@@ -147,16 +176,19 @@ single invocation; the on-disk evidence is the rebuilt `SHARE/` tree and its
 
 ## Lib primitives composed
 
-- `anvil/lib/project_brief.py` — `load_project_brief_strict` for the
+- `anvil/lib/project_brief/` — `load_project_brief_strict` for the
   `documents:` list and default ordering.
 - `anvil/lib/latest_resolution.py` — `resolve_latest(thread_dir, slug)` per
   thread (the exporter calls `.resolve()` to dereference; the helper returns
   the `.latest` path itself by contract).
 - Skill-local `lib/`: `config.py` (ExportConfig), `collect.py` (per-doc
   resolution + refs + PDF fingerprints), `plan.py` (ordering, strip
-  filtering, collision/guard checks), `apply.py` (marker-guarded rebuild,
-  EXPORT.md, zip), `verify.py` (post-write layout + leak checks),
-  `orchestrate.py` (single `run()` entry).
+  filtering, collision/guard checks), `citations.py` (dangling-citation
+  lint, issue #758), `apply.py` (marker-guarded rebuild, EXPORT.md, zip),
+  `verify.py` (post-write layout + leak checks), `orchestrate.py` (single
+  `run()` entry), `cli.py` (the runnable argparse entry point wrapping
+  `orchestrate.run` — `python3 <skill>/lib/cli.py <project-dir> [--dry-run]
+  [--zip]`; mirrors `memo/lib/render_phase.py`).
 
 ## Tests
 
@@ -167,21 +199,32 @@ packaging convention; lib loaded under the unique package name
 PR #362 / #372 precedent):
 
 - `test_project_share_config.py` — `export:` block parsing + defaults +
-  malformed shapes.
+  malformed shapes, including `cover` / `cover_as` parsing and type
+  validation.
 - `test_project_share_collect.py` — `.latest` precedence (pinned symlink >
   real dir > walk-to-highest), deref provenance, refs detection, PDF
   SHA-256, per-doc failure capture.
 - `test_project_share_plan.py` — ordering semantics, strip filtering,
-  include toggles, out-name collision guard.
+  include toggles, out-name collision guard, `export.cover` inclusion +
+  missing-source hard error + `cover_as`/`EXPORT.md` collision guard.
 - `test_project_share_apply.py` — full-layout assertions, EXPORT.md
-  contents, zip, findings, and the AC-8 regression that `SHARE/` does not
-  trip `load_project_brief_strict` slug-divergence validation.
+  contents, zip, findings, the AC-8 regression that `SHARE/` does not
+  trip `load_project_brief_strict` slug-divergence validation, and
+  `export.cover` surviving a rebuild + landing in the `--zip` archive.
 - `test_project_share_dry_run.py` — snapshot-and-diff: dry-run leaves the
   project tree byte-identical (SHA-256 per file).
 - `test_project_share_idempotent.py` — re-run rebuilds cleanly; stale doc
   folders disappear; pinned-timestamp runs are byte-identical.
 - `test_project_share_guard.py` — foreign-dir refusal (no deletion) and
   marker-authorized rebuild.
+- `test_project_share_citations.py` — dangling-citation lint: bare
+  filename + markdown-link detection, exported-sibling non-flagging,
+  clean-project no-findings, and report-only surfacing in the run
+  summary + `EXPORT.md`.
+- `test_project_share_cli.py` — the runnable `lib/cli.py` entry point:
+  stdlib-only module imports (standalone-import discipline), `main()`
+  dry-run / apply / `--zip` / unresolved-doc / bad-dir exit codes, an
+  end-to-end subprocess run, and the command-doc invocation contract.
 
 ## Git sync hook (opt-in, off by default)
 
