@@ -7,7 +7,7 @@ crate in the build uses the patched copy instead of the crates.io release.
 | Crate | Version | Why it is vendored | Provenance |
 |---|---|---|---|
 | `bulletproofs-og` | 3.0.0-pre.1 | Removes the dependency on unmaintained `clear_on_drop` (RUSTSEC-2026-0283, #1261). Proof algorithms, transcripts, generators and encodings are unchanged. | [`BOTHO-PATCH.md`](bulletproofs-og/BOTHO-PATCH.md), `botho-zeroize.patch` |
-| `glib` | 0.18.5 | Backports the upstream iterator fix for RUSTSEC-2024-0429 while keeping desktop compatibility (#1541). | `Cargo.toml.orig` |
+| `glib` | 0.18.5 | Backports the upstream iterator fix for RUSTSEC-2024-0429 while keeping desktop compatibility (#1541). | [`SECURITY-PROVENANCE.json`](glib/SECURITY-PROVENANCE.json) (archive URL, SHA-256 and upstream fix commit) |
 | `lru` | 0.16.4 | Backports the upstream `pop` panic-safety fix without changing Alloy 1.x requirements (#1539). | [`SECURITY-PROVENANCE.json`](lru/SECURITY-PROVENANCE.json) (archive URL and SHA-256) |
 | `randomx-rs` | 1.4.1 | Upstream's `build.rs` hardcodes a host-specific CPU target. This copy defaults to the portable `DARCH=default` and honours a `RANDOMX_ARCH` override, for reproducible, hermetic builds (#640). | [`README.md`](randomx-rs/README.md), `Cargo.toml.orig` |
 

@@ -49,6 +49,12 @@ bumps (`0.X.Y`) are backwards-compatible.
   build uses Vite 8's native minifier (#1321, #1328).
 - Ledger test concurrency respects the macOS SysV semaphore undo budget
   without changing host limits (`scripts/test-ledger.sh`, #1362).
+- Chain sync handles bad peers without stalling or falsely reporting synced:
+  stale request failures no longer demote a caught-up node, Discovery rounds
+  exclude silent and banned peers under a bounded deadline, reputation bans
+  expire (5 min, doubling to a 1 h cap) with an all-banned fallback, and block
+  responses earn reputation only after they apply (#1431, #1722, #1723, #1802,
+  #1813, #1815, #1819, #1827, #1832, #1834).
 
 ### Security
 - Bumped zstd 0.13 → 0.14.3 to clear RUSTSEC-2026-0391, -0398, -0403 and -0410

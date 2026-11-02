@@ -11,5 +11,5 @@ merge driver.
 
 | Hook | What it does |
 |---|---|
-| `pre-commit` | Rejects non-ASCII filenames and bad whitespace, checks that `rustfmt` is installed, and checks that `rustfmt` would not change the staged files. |
+| `pre-commit` | Rejects non-ASCII filenames and bad whitespace, checks that `Cargo.toml` dependencies are sorted (`cargo sort --workspace --grouped --check`; installs `cargo-sort` if it is missing), checks that `rustfmt` is installed and would not change the staged `.rs` files, and checks the copyright header on staged `.rs` files. Set `SKIP_RUSTFMT=1` to skip the rustfmt and copyright checks. |
 | `pre-push` | Placeholder for blocking accidental pushes to protected branches. It currently exits 0 and does nothing. |
