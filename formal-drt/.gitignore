@@ -1,0 +1,6 @@
+# Built by `cargo` (the lockfile is copied from the root workspace before
+# each build, so the DRT resolves the node's exact dependency versions).
+/target/
+/Cargo.lock
+# Built by `lake build` in lean/.
+/lean/.lake/

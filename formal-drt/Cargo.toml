@@ -1,0 +1,45 @@
+[package]
+name = "botho-formal-drt"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Differential random testing (DRT) of the Lean lottery model against the Rust node (#1706, #1707). Dev-only; never linked into the node."
+license = "GPL-3.0"
+
+# Its own workspace, excluded from the root one (like fuzz/). As a root
+# member it would unify botho's `test-fixtures` feature into every
+# `cargo build --workspace`, compiling the fixture API into the node binary.
+[workspace]
+
+# Same patches as the root workspace (an excluded crate does not inherit
+# them). randomx-rs is the one botho needs to build hermetically (#640).
+[patch.crates-io]
+lru = { path = "../vendor/lru" }
+bulletproofs-og = { path = "../vendor/bulletproofs-og" }
+schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
+randomx-rs = { path = "../vendor/randomx-rs" }
+
+[dependencies]
+# `test-fixtures`: Ledger::seed_fixture_snapshot_unvalidated (the windowing
+# leg seeds a real LMDB ledger) and the in-memory DerivationReads double
+# `botho::ledger::formal_drt` (the end-to-end `drawing` leg).
+botho = { path = "../botho", features = ["test-fixtures"] }
+bth-cluster-tax = { path = "../cluster-tax" }
+bth-account-keys = { path = "../account-keys" }
+bth-crypto-keys = { path = "../crypto/keys" }
+bth-util-from-random = { path = "../util/from-random" }
+proptest = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+sha2 = "0.10"
+tempfile = "3"
+rand = "0.10"
+rand_chacha = "0.10"
+
+# Release with overflow checks, like the root release profile (#663): a
+# mirrored function that overflows panics here instead of wrapping.
+[profile.release]
+opt-level = 3
+overflow-checks = true
+debug-assertions = false
