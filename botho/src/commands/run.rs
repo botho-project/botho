@@ -40,10 +40,10 @@ use crate::{
         ScpSlotSnapshot, TransactionValidator,
     },
     network::{
-        default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
-        NetworkDiscovery, NetworkEvent, QuorumBuilder, ReconstructionResult, SyncAction,
-        SyncRequest, SyncRequestKind, SyncRequestToken, SyncResponse, SyncStatusSnapshot,
-        MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
+        default_seed_domain, BatchApplyOutcome, BlockTxn, ChainSyncManager, CompactBlock,
+        GetBlockTxn, NetworkDiscovery, NetworkEvent, QuorumBuilder, ReconstructionResult,
+        SyncAction, SyncRequest, SyncRequestKind, SyncRequestToken, SyncResponse,
+        SyncStatusSnapshot, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
     },
     node::{
         commit_block_locked, is_ledger_map_full, ApplyState, MintedMintingTx, Node, SharedLedger,
@@ -1498,6 +1498,9 @@ async fn run_async_with_shutdown(
                         }
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
+                            // Count the peer for the all-banned sync floor
+                            // now, not at the next sync tick (#1832).
+                            sync_manager.on_peer_connected(peer_id);
                             let new_peer_count = discovery.peer_count();
                             // The pending-tx re-broadcast reset for this peer
                             // happens on its transactions-topic subscription
@@ -2279,7 +2282,15 @@ async fn run_async_with_shutdown(
                             error!(source = origin.label(), height = ?top_height, error = %join_error,
                                 "Off-loop block apply aborted");
                             if let ApplyOrigin::Sync { peer, .. } = &origin {
-                                sync_manager.on_failure(Some(peer), format!("sync apply aborted: {join_error}"));
+                                // A panic while applying a peer's batch is
+                                // charged to the batch (#1832): the block's
+                                // content is what triggered it. Later applies
+                                // then fail on the poisoned lock, which is
+                                // classified local and charges nobody.
+                                sync_manager.on_blocks_applied(
+                                    peer,
+                                    BatchApplyOutcome::Rejected(format!("sync apply aborted: {join_error}")),
+                                );
                             }
                             continue;
                         }
@@ -2344,10 +2355,13 @@ async fn run_async_with_shutdown(
                         }
                         match &origin {
                             _ if storage_full => {
-                                if origin.is_sync() {
+                                if let ApplyOrigin::Sync { peer, .. } = &origin {
                                     // Back off the sync state machine without a
                                     // reputation hit against the peer.
-                                    sync_manager.on_failure(None, format!("local ledger storage full: {e}"));
+                                    sync_manager.on_blocks_applied(
+                                        peer,
+                                        BatchApplyOutcome::LocalFailure(format!("local ledger storage full: {e}")),
+                                    );
                                 }
                             }
                             ApplyOrigin::Gossip { .. } => warn!("Failed to add network block: {}", e),
@@ -2357,8 +2371,12 @@ async fn run_async_with_shutdown(
                                 e
                             ),
                             ApplyOrigin::Sync { peer, .. } => {
-                                warn!("Failed to add synced block {}: {}", block.height(), e);
-                                sync_manager.on_failure(Some(peer), e.to_string());
+                                // #1832: charge the peer only for a block that
+                                // failed validation, not for a local fault.
+                                let outcome =
+                                    classify_sync_apply_failure(e, block.height(), ledger_tip_height(&node));
+                                warn!(%peer, ?outcome, "Failed to add synced block {}: {}", block.height(), e);
+                                sync_manager.on_blocks_applied(peer, outcome);
                             }
                             ApplyOrigin::Consensus { .. } => unreachable!("handled above"),
                         }
@@ -2374,6 +2392,11 @@ async fn run_async_with_shutdown(
                     let zero_progress = !applied_any && outcome.failure.is_none();
                     match &origin {
                         ApplyOrigin::Sync { peer, last_tx_count } => {
+                            if applied_any && outcome.failure.is_none() {
+                                // The whole batch validated and applied: only
+                                // now does the response earn reputation (#1832).
+                                sync_manager.on_blocks_applied(peer, BatchApplyOutcome::Applied);
+                            }
                             if applied_any {
                                 // Update dynamic fee after syncing (use the
                                 // batch's last block's tx count)
@@ -2421,7 +2444,7 @@ async fn run_async_with_shutdown(
                                 // peer that persistently re-serves a range we
                                 // already hold (#644). A one-off overlap stays
                                 // below the threshold and is tolerated.
-                                sync_manager.on_zero_progress(peer);
+                                sync_manager.on_blocks_applied(peer, BatchApplyOutcome::NoProgress);
                             }
                         }
                         _ if applied_any => {
@@ -4138,6 +4161,27 @@ fn ledger_storage_usage(node: &Node) -> crate::ledger::LedgerStorageUsage {
 }
 
 /// The committed ledger height, or `None` if it cannot be read.
+/// Classify why a sync batch from a peer failed to apply (#1832): a block
+/// fault ([`crate::ledger::LedgerError::is_block_fault`]) is charged to the
+/// peer, anything else is local and is not. A block at or below the current
+/// tip (`ledger_tip`) is never charged: the node already advanced past it, so
+/// the failure says nothing about the peer.
+fn classify_sync_apply_failure(
+    error: &anyhow::Error,
+    block_height: u64,
+    ledger_tip: Option<u64>,
+) -> BatchApplyOutcome {
+    let block_fault = !consensus_failure::height_already_applied(block_height, ledger_tip)
+        && error
+            .downcast_ref::<crate::ledger::LedgerError>()
+            .is_some_and(crate::ledger::LedgerError::is_block_fault);
+    if block_fault {
+        BatchApplyOutcome::Rejected(error.to_string())
+    } else {
+        BatchApplyOutcome::LocalFailure(error.to_string())
+    }
+}
+
 fn ledger_tip_height(node: &Node) -> Option<u64> {
     node.shared_ledger()
         .read()
@@ -4292,6 +4336,46 @@ fn apply_lottery_to_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1832: only a block fault is charged to the serving peer; local
+    /// faults, a block we already hold, and non-ledger errors are not.
+    #[test]
+    fn test_classify_sync_apply_failure() {
+        use crate::ledger::LedgerError;
+        // As `commit_block_locked` wraps it.
+        let wrapped = |e: LedgerError| {
+            let message = format!("Failed to add network block: {e}");
+            anyhow::Error::new(e).context(message)
+        };
+        let rejected = |o: &BatchApplyOutcome| matches!(o, BatchApplyOutcome::Rejected(_));
+        let tip = Some(100);
+
+        for fault in [
+            LedgerError::InvalidBlock("Expected height 101, got 103".into()),
+            LedgerError::InvalidLotteryDrawing,
+            LedgerError::FeeOverflow,
+        ] {
+            let outcome = classify_sync_apply_failure(&wrapped(fault), 101, tip);
+            assert!(rejected(&outcome), "{outcome:?}");
+        }
+        for local in [
+            LedgerError::Database("MDB_MAP_FULL: Environment mapsize limit reached".into()),
+            LedgerError::Database("io error".into()),
+            LedgerError::BlockExists(101),
+            LedgerError::Serialization("encode".into()),
+        ] {
+            let outcome = classify_sync_apply_failure(&wrapped(local), 101, tip);
+            assert!(!rejected(&outcome), "{outcome:?}");
+        }
+        // The node already advanced past the block: not the peer's fault.
+        let stale = wrapped(LedgerError::InvalidBlock(
+            "Expected height 101, got 99".into(),
+        ));
+        assert!(!rejected(&classify_sync_apply_failure(&stale, 99, tip)));
+        // A local lock error is not a ledger verdict.
+        let poisoned = anyhow::anyhow!("Apply state lock poisoned");
+        assert!(!rejected(&classify_sync_apply_failure(&poisoned, 101, tip)));
+    }
 
     /// #1566 A.5: no sync `GetBlocks` is issued while a `Sync` job is queued
     /// or in flight, even though `on_blocks` already cleared the sync

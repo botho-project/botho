@@ -143,6 +143,15 @@ pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
 /// consecutive from the same peer indicates persistent misbehaviour.
 pub const OVERLAP_THRESHOLD: u32 = 3;
 
+/// Minimum time between two `warn!`s about the all-banned floor turning on or
+/// off (#1832).
+///
+/// The floor follows the connected set, so a peer set that keeps connecting
+/// and disconnecting could flip it on every ~2s sync tick. Every transition
+/// is still tracked (and logged at `debug`); only the operator-facing warning
+/// is limited to one per interval.
+pub const BAN_FLOOR_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
 // ============================================================================
 // Protocol Messages
 // ============================================================================
@@ -482,6 +491,30 @@ impl SyncStatusSnapshot {
     }
 }
 
+/// How a block batch handed out by [`ChainSyncManager::on_blocks`] fared when
+/// the node applied it (#1832). Reported back through
+/// [`ChainSyncManager::on_blocks_applied`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchApplyOutcome {
+    /// Every novel block in the batch was validated and committed. Credits
+    /// the serving peer with a reputation success.
+    Applied,
+    /// A block in the batch failed validation: the peer served an invalid
+    /// block (or a block that does not extend our chain). Records a
+    /// reputation failure against the peer and fails the download with
+    /// backoff. Blocks committed before the invalid one stay committed but
+    /// earn no credit.
+    Rejected(String),
+    /// The batch could not be applied for a reason on this node's side (its
+    /// own storage, a poisoned lock, a block it already holds). The peer is
+    /// not charged; the download still backs off.
+    LocalFailure(String),
+    /// Every block was at or below our tip, so nothing was applied and nothing
+    /// failed. Neutral for reputation, but counted toward the #644
+    /// persistent-overlap penalty ([`ChainSyncManager::on_zero_progress`]).
+    NoProgress,
+}
+
 /// Action to take based on sync state
 #[derive(Debug)]
 pub enum SyncAction {
@@ -655,13 +688,21 @@ pub struct ChainSyncManager {
     /// outstanding are excluded from the round (with no reputation charge).
     /// `None` outside a round; reset whenever the round ends.
     discovery_round_clock: Option<Instant>,
-    /// Peers connected at the most recent [`Self::tick`], minus peers that
-    /// disconnected since (#1819). Used only to decide whether every
+    /// Peers connected at the most recent [`Self::tick`], plus peers that
+    /// connected since ([`Self::on_peer_connected`], #1832), minus peers
+    /// that disconnected since (#1819). Used only to decide whether every
     /// connected compatible peer is banned (see [`Self::ban_floor_active`]).
     connected_peers: HashSet<PeerId>,
     /// Whether the all-banned floor was active at the last [`Self::tick`]
     /// (#1819). Only used to log each transition once.
     ban_floor_logged: bool,
+    /// When the last floor `warn!` was emitted (#1832); transitions within
+    /// [`BAN_FLOOR_WARN_INTERVAL`] of it are logged at `debug` only.
+    ban_floor_last_warn: Option<Instant>,
+    /// Latency of each peer's block response that is still being applied
+    /// (#1832). Measured when the response arrives ([`Self::on_blocks`]) and
+    /// credited only once the batch applied ([`Self::on_blocks_applied`]).
+    awaiting_apply: HashMap<PeerId, Duration>,
 }
 
 impl ChainSyncManager {
@@ -687,6 +728,8 @@ impl ChainSyncManager {
             discovery_round_clock: None,
             connected_peers: HashSet::new(),
             ban_floor_logged: false,
+            ban_floor_last_warn: None,
+            awaiting_apply: HashMap::new(),
         }
     }
 
@@ -733,23 +776,36 @@ impl ChainSyncManager {
         }
     }
 
-    /// Log each change of the all-banned floor once (#1819).
-    fn log_ban_floor_transition(&mut self) {
+    /// Log each change of the all-banned floor once (#1819), as a `warn!`
+    /// at most once per [`BAN_FLOOR_WARN_INTERVAL`] and otherwise at `debug`
+    /// (#1832). Returns `true` if a transition was logged as a warning.
+    fn log_ban_floor_transition_at(&mut self, now: Instant) -> bool {
         let active = self.ban_floor_active();
         if active == self.ban_floor_logged {
-            return;
+            return false;
         }
         self.ban_floor_logged = active;
-        if active {
-            warn!(
-                peers = self.connected_peers.len(),
+        let warn_due = self
+            .ban_floor_last_warn
+            .is_none_or(|last| now.saturating_duration_since(last) >= BAN_FLOOR_WARN_INTERVAL);
+        let peers = self.connected_peers.len();
+        match (active, warn_due) {
+            (true, true) => warn!(
+                peers,
                 "Every connected compatible peer is banned; ignoring bans for sync peer selection"
-            );
-        } else {
-            warn!(
+            ),
+            (false, true) => warn!(
                 "No longer every connected peer is banned; sync peer selection honors bans again"
-            );
+            ),
+            (_, false) => debug!(
+                active,
+                peers, "All-banned sync floor changed (warning rate-limited)"
+            ),
         }
+        if warn_due {
+            self.ban_floor_last_warn = Some(now);
+        }
+        warn_due
     }
 
     /// End the current Discovery round's bookkeeping (#1723, #1813): forget
@@ -1318,8 +1374,13 @@ impl ChainSyncManager {
         blocks: Vec<Block>,
         has_more: bool,
     ) -> Option<SyncAction> {
-        // Record successful response in reputation
-        self.reputation.response_received(peer);
+        // Measure the latency now, but credit the peer only once the batch
+        // has been validated and applied (`on_blocks_applied`, #1832). An
+        // empty batch carries no blocks to judge and stays neutral.
+        let latency = self.reputation.take_latency(peer);
+        if !blocks.is_empty() {
+            self.awaiting_apply.insert(*peer, latency);
+        }
 
         // A response arrived, so the in-flight request (if any) is resolved:
         // clear the guard so `tick()` may issue the next batch request (#641).
@@ -1345,6 +1406,45 @@ impl ChainSyncManager {
         // `commands/run.rs`. The committed height is advanced via
         // `on_blocks_added`, which is also what anchors the next request.
         Some(SyncAction::AddBlocks(blocks))
+    }
+
+    /// Report how a batch from `peer` (handed out by [`Self::on_blocks`]) fared
+    /// when the node applied it (#1832).
+    ///
+    /// This is where a block response earns its reputation: a success (at the
+    /// latency measured when it arrived) only for
+    /// [`BatchApplyOutcome::Applied`], a failure for
+    /// [`BatchApplyOutcome::Rejected`]. Before #1832 the success
+    /// was recorded on arrival, so a peer serving only invalid batches scored
+    /// about 50% and was never banned. Now three rejected batches in a row
+    /// ban it (the ban threshold needs at least three samples).
+    ///
+    /// A single rejected batch deliberately does not ban outright: a block
+    /// can also fail validation because this node is the one that diverged
+    /// (a local bug or bad state), and then banning every peer on the first
+    /// batch would only push sync onto the all-banned floor. Charging one
+    /// failure per rejected batch, with no credit for it, bans a peer that
+    /// keeps serving invalid blocks within three batches while each one also
+    /// costs it the backoff and the download.
+    ///
+    /// The caller still reports forward progress with
+    /// [`Self::on_blocks_added`] when any block committed.
+    pub fn on_blocks_applied(&mut self, peer: &PeerId, outcome: BatchApplyOutcome) {
+        let latency = self.awaiting_apply.remove(peer);
+        match outcome {
+            BatchApplyOutcome::Applied => {
+                let latency = latency.unwrap_or(Duration::from_millis(100));
+                self.reputation.record_success_with(peer, latency);
+            }
+            BatchApplyOutcome::Rejected(reason) => {
+                self.on_failure(Some(peer), format!("invalid block batch: {reason}"));
+            }
+            BatchApplyOutcome::LocalFailure(reason) => {
+                // Back off without charging the peer.
+                self.on_failure(None, reason);
+            }
+            BatchApplyOutcome::NoProgress => self.on_zero_progress(peer),
+        }
     }
 
     /// Called after blocks are added to ledger
@@ -1582,9 +1682,21 @@ impl ChainSyncManager {
         self.incompatible_peers.contains(peer)
     }
 
+    /// Handle a newly established peer connection (#1832).
+    ///
+    /// Adds the peer to the connected set used by the all-banned floor
+    /// ([`Self::ban_floor_active`]) right away instead of at the next
+    /// [`Self::tick`] (~2s). Otherwise, in that window, a banned peer's status
+    /// answer could still find the floor active and conclude Discovery
+    /// before the newly connected unbanned peer was seen.
+    pub fn on_peer_connected(&mut self, peer: PeerId) {
+        self.connected_peers.insert(peer);
+    }
+
     /// Handle peer disconnection
     pub fn on_peer_disconnected(&mut self, peer: &PeerId) {
         self.peer_statuses.remove(peer);
+        self.awaiting_apply.remove(peer);
 
         // Drop any consecutive-overlap count for this peer so a reconnecting
         // peer starts with a clean slate rather than inheriting a stale count
@@ -1708,7 +1820,7 @@ impl ChainSyncManager {
         // Peer bans are bounded in time and never all-encompassing (#1819).
         self.connected_peers = connected_peers.iter().copied().collect();
         self.expire_reputation_bans();
-        self.log_ban_floor_transition();
+        self.log_ban_floor_transition_at(Instant::now());
 
         // Peers excluded from a Discovery round are excluded from that round
         // only (#1723). Every transition out of `Discovery` ends the round;
@@ -3185,18 +3297,19 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_manager_on_blocks_records_reputation() {
+    fn test_sync_manager_on_blocks_defers_reputation() {
         let mut manager = ChainSyncManager::new(0);
         let peer = make_peer_id();
 
         manager.on_status(peer, 100, [1u8; 32]);
+        manager.on_request_sent(peer);
 
-        // Calling on_blocks should record a successful response
+        // #1832: a response is not credited on arrival, only once its batch
+        // applied (`on_blocks_applied`). An empty batch stays neutral.
         let _ = manager.on_blocks(&peer, vec![], false);
-
-        // The peer should have a reputation entry
-        let rep = manager.reputation_mut().get(&peer);
-        assert!(rep.is_some());
+        let rep = manager.reputation_mut().get(&peer).expect("tracked");
+        assert_eq!(rep.total_requests(), 0);
+        assert!(manager.awaiting_apply.is_empty(), "nothing to apply");
     }
 
     // ========================================================================
@@ -5354,6 +5467,194 @@ mod tests {
         assert!(
             left > BAN_BASE_DURATION && left <= ban_duration(2),
             "{left:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // #1832: block responses earn reputation only once they apply
+    // ------------------------------------------------------------------
+
+    /// Serve one batch from `peer` the way the run loop does: dispatch the
+    /// block request, receive the response, then report how it applied.
+    fn serve_batch(manager: &mut ChainSyncManager, peer: PeerId, outcome: BatchApplyOutcome) {
+        let start_height = manager.local_height + 1;
+        let token = manager.on_request_dispatched(peer, SyncRequestKind::Blocks { start_height });
+        manager.on_request_resolved(token);
+        let action = manager.on_blocks(&peer, vec![Block::genesis()], true);
+        assert!(matches!(action, Some(SyncAction::AddBlocks(_))));
+        assert!(manager.awaiting_apply.contains_key(&peer));
+        manager.on_blocks_applied(&peer, outcome);
+        assert!(!manager.awaiting_apply.contains_key(&peer));
+    }
+
+    /// #1832: a peer serving only invalid batches is banned. Before #1832
+    /// each response was credited on arrival and its rejection then charged,
+    /// so the peer sat at ~50% success and was never banned.
+    #[test]
+    fn test_peer_serving_only_invalid_batches_is_banned() {
+        let mut manager = ChainSyncManager::new(100);
+        let bad = make_peer_id();
+        let good = make_peer_id();
+        manager.on_status(bad, 200, [1u8; 32]);
+        manager.on_status(good, 200, [2u8; 32]);
+
+        for i in 0..3 {
+            assert!(!manager.reputation.is_banned(&bad), "batch {i}");
+            serve_batch(
+                &mut manager,
+                bad,
+                BatchApplyOutcome::Rejected("Invalid block: bad signature".into()),
+            );
+            assert!(
+                matches!(manager.state(), SyncState::Failed { .. }),
+                "a rejected batch fails the download, got {:?}",
+                manager.state()
+            );
+            skip_backoff(&mut manager);
+        }
+        let rep = manager.reputation.get(&bad).expect("tracked");
+        assert_eq!((rep.successes, rep.failures), (0, 3));
+        assert!(
+            manager.reputation.is_banned(&bad),
+            "banned after 3 invalid batches"
+        );
+
+        // The next download goes to the other peer.
+        assert_eq!(manager.best_peer().map(|(p, _)| p), Some(good));
+    }
+
+    /// #1832: one invalid batch does not ban outright (it may be this node
+    /// that diverged); it is a failure with no credit.
+    #[test]
+    fn test_single_invalid_batch_does_not_ban() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 200, [1u8; 32]);
+        serve_batch(
+            &mut manager,
+            peer,
+            BatchApplyOutcome::Rejected("bad".into()),
+        );
+        let rep = manager.reputation.get(&peer).expect("tracked");
+        assert_eq!((rep.successes, rep.failures), (0, 1));
+        assert!(!manager.reputation.is_banned(&peer));
+    }
+
+    /// #1832: a peer whose batches apply is credited (with the latency
+    /// measured on arrival) and stays selectable.
+    #[test]
+    fn test_peer_serving_valid_batches_stays_good() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 1_000, [1u8; 32]);
+        for i in 0..5u64 {
+            serve_batch(&mut manager, peer, BatchApplyOutcome::Applied);
+            manager.on_blocks_added(100 + (i + 1) * 10);
+        }
+        let rep = manager.reputation.get(&peer).expect("tracked");
+        assert_eq!((rep.successes, rep.failures), (5, 0));
+        assert!(
+            rep.avg_latency_ms < 1_000.0,
+            "measured, not a failure penalty"
+        );
+        assert!(!manager.reputation.is_banned(&peer));
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+    }
+
+    /// #1832: a batch that fails for a local reason (our storage, a block we
+    /// already hold) backs off the download but never charges the peer.
+    #[test]
+    fn test_local_apply_failure_does_not_penalize_peer() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 200, [1u8; 32]);
+        for _ in 0..5 {
+            serve_batch(
+                &mut manager,
+                peer,
+                BatchApplyOutcome::LocalFailure("local ledger storage full".into()),
+            );
+            assert!(matches!(manager.state(), SyncState::Failed { .. }));
+            skip_backoff(&mut manager);
+        }
+        let rep = manager.reputation.get(&peer).expect("tracked");
+        assert_eq!((rep.successes, rep.failures), (0, 0));
+        assert!(!manager.reputation.is_banned(&peer));
+    }
+
+    /// #1832: a pure-overlap batch is neutral, and still feeds the #644
+    /// persistent-overlap counter.
+    #[test]
+    fn test_no_progress_batch_is_neutral_below_threshold() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 200, [1u8; 32]);
+        serve_batch(&mut manager, peer, BatchApplyOutcome::NoProgress);
+        let rep = manager.reputation.get(&peer).expect("tracked");
+        assert_eq!(rep.total_requests(), 0);
+        assert_eq!(manager.peer_overlap_counts.get(&peer), Some(&1));
+    }
+
+    /// #1832: the floor's on/off warning is rate-limited. A flapping
+    /// connected set still flips the floor every time, but warns at most
+    /// once per `BAN_FLOOR_WARN_INTERVAL`.
+    #[test]
+    fn test_ban_floor_warning_is_rate_limited() {
+        let mut manager = ChainSyncManager::new(100);
+        let banned = make_peer_id();
+        let fresh = make_peer_id();
+        ban(&mut manager, banned);
+        let t0 = Instant::now();
+
+        manager.on_peer_connected(banned);
+        assert!(manager.log_ban_floor_transition_at(t0), "first: warned");
+        assert!(manager.ban_floor_logged);
+
+        // Flap within the interval: transitions tracked, not warned.
+        for i in 1..=10u64 {
+            if i % 2 == 1 {
+                manager.on_peer_connected(fresh);
+            } else {
+                manager.on_peer_disconnected(&fresh);
+            }
+            let now = t0 + Duration::from_secs(i);
+            assert!(!manager.log_ban_floor_transition_at(now), "flap {i}");
+            assert_eq!(manager.ban_floor_logged, i % 2 == 0, "flap {i} tracked");
+        }
+        // No transition: nothing to log at all.
+        assert!(!manager.log_ban_floor_transition_at(t0 + BAN_FLOOR_WARN_INTERVAL));
+
+        // A transition after the interval warns again.
+        manager.on_peer_connected(fresh);
+        assert!(manager.log_ban_floor_transition_at(t0 + BAN_FLOOR_WARN_INTERVAL));
+        assert!(!manager.ban_floor_logged);
+    }
+
+    /// #1832: a peer that connects between ticks counts for the floor right
+    /// away, so a banned peer's answer cannot conclude Discovery (as Synced,
+    /// here) before the newly connected unbanned peer is seen.
+    #[test]
+    fn test_peer_connected_between_ticks_disarms_floor() {
+        let mut manager = ChainSyncManager::new(100);
+        let banned = make_peer_id();
+        let fresh = make_peer_id();
+        ban(&mut manager, banned);
+
+        let token = tick_dispatch(&mut manager, &[banned]);
+        assert!(manager.ban_floor_active());
+        // `fresh` connects before the next tick, then `banned` answers.
+        manager.on_peer_connected(fresh);
+        assert!(!manager.ban_floor_active());
+        manager.on_request_resolved(token);
+        manager.on_status(banned, 100, [1u8; 32]);
+        assert_eq!(*manager.state(), SyncState::Discovery, "not concluded");
+        assert!(!manager.is_synced());
+
+        // The next tick asks the fresh peer.
+        let action = manager.tick(&[banned, fresh]);
+        assert!(
+            matches!(action, Some(SyncAction::RequestStatus(p)) if p == fresh),
+            "got {action:?}"
         );
     }
 }
