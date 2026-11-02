@@ -117,6 +117,37 @@ impl LedgerError {
     pub fn is_map_full(&self) -> bool {
         matches!(self, LedgerError::Database(message) if message.contains("MDB_MAP_FULL"))
     }
+
+    /// True when this error, raised while adding a block, is a verdict on
+    /// the block itself (it failed validation or does not extend our chain)
+    /// rather than a fault on this node's side (#1832).
+    ///
+    /// Block sync charges the serving peer's reputation only for block
+    /// faults. Storage, encoding and schema errors, a block we already hold,
+    /// a missing record and the wallet-side decoy shortage are local and must
+    /// not count against the peer. The match is exhaustive so a new variant
+    /// has to be classified.
+    pub fn is_block_fault(&self) -> bool {
+        match self {
+            LedgerError::InvalidBlock(_)
+            | LedgerError::InvalidLotteryFeeSplit { .. }
+            | LedgerError::InvalidLotteryDrawing
+            | LedgerError::LotteryPayoutMismatch { .. }
+            | LedgerError::LotteryOutputCountMismatch { .. }
+            | LedgerError::LotteryWinnerNotEligible(_)
+            | LedgerError::FeeOverflow => true,
+            LedgerError::UnsupportedSchema(_)
+            | LedgerError::StorageEncoding(_)
+            | LedgerError::MissingContext(_)
+            | LedgerError::InconsistentRecord(_)
+            | LedgerError::Database(_)
+            | LedgerError::Serialization(_)
+            | LedgerError::BlockNotFound(_)
+            | LedgerError::BelowSnapshotBase { .. }
+            | LedgerError::InsufficientDecoys { .. }
+            | LedgerError::BlockExists(_) => false,
+        }
+    }
 }
 
 /// Information about the current chain state

@@ -18,6 +18,21 @@
 //! block responses do), so a peer this node never downloaded from was banned
 //! after three status failures for the life of the process, and a node whose
 //! peers were all banned could never download again.
+//!
+//! # Ban memory fades (#1832)
+//!
+//! `ban_count` is reset once a peer has gone [`BAN_COUNT_DECAY`] without being
+//! banned (measured from the end of its last ban), so a peer that was flaky
+//! long ago starts over at [`BAN_BASE_DURATION`] rather than at the cap.
+//!
+//! # Block responses are credited after they apply (#1832)
+//!
+//! A block response is not evidence of good service until the batch has been
+//! validated and applied. The sync manager therefore splits the old
+//! `response_received` into [`ReputationManager::take_latency`] (measured when
+//! the response arrives) and [`ReputationManager::record_success_with`]
+//! (called once the batch applied). Before #1832 a peer serving only invalid
+//! batches scored one success per failure, about 50%, and was never banned.
 
 use libp2p::PeerId;
 use std::{
@@ -55,6 +70,16 @@ pub const BAN_BASE_DURATION: Duration = Duration::from_secs(5 * 60);
 /// for a while from being shut out for hours after it recovers.
 pub const BAN_MAX_DURATION: Duration = Duration::from_secs(60 * 60);
 
+/// How long a peer must go without a ban before its `ban_count` resets
+/// (#1832), measured from the end of its last ban.
+///
+/// The backoff in [`ban_duration`] is meant for a peer that keeps failing
+/// within hours. A day with no ban is long past the longest backoff
+/// ([`BAN_MAX_DURATION`]), so a peer flaky that long ago is treated as a
+/// first offender again (a [`BAN_BASE_DURATION`] ban) instead of carrying
+/// 1-hour bans forever.
+pub const BAN_COUNT_DECAY: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Length of a peer's `ban_number`-th ban (1-based): [`BAN_BASE_DURATION`]
 /// doubled for each earlier ban, capped at [`BAN_MAX_DURATION`].
 pub fn ban_duration(ban_number: u32) -> Duration {
@@ -81,9 +106,14 @@ pub struct PeerReputation {
     /// The peer is banned while the current time is before this instant.
     /// Tests backdate it to simulate expiry without sleeping.
     pub banned_until: Option<Instant>,
-    /// Number of times this peer has been banned (#1819). Never reset, so a
-    /// repeat offender gets a longer ban (see [`ban_duration`]).
+    /// Number of times this peer has been banned (#1819), so a repeat
+    /// offender gets a longer ban (see [`ban_duration`]). Reset after
+    /// [`BAN_COUNT_DECAY`] without a ban (#1832).
     pub ban_count: u32,
+    /// End of the peer's most recent ban, kept after the ban is lifted
+    /// (#1832). [`BAN_COUNT_DECAY`] is measured from here. Tests backdate it
+    /// to simulate a quiet period without sleeping.
+    pub last_ban_end: Option<Instant>,
 }
 
 impl PeerReputation {
@@ -97,6 +127,7 @@ impl PeerReputation {
             first_seen: Instant::now(),
             banned_until: None,
             ban_count: 0,
+            last_ban_end: None,
         }
     }
 
@@ -104,6 +135,7 @@ impl PeerReputation {
     pub fn record_success(&mut self, latency: Duration) {
         let now = Instant::now();
         self.expire_ban_at(now);
+        self.decay_ban_count_at(now);
         let latency_ms = latency.as_millis() as f64;
         self.update_latency(latency_ms);
         self.successes += 1;
@@ -120,11 +152,31 @@ impl PeerReputation {
     /// threshold and it is not already banned.
     pub fn record_failure_at(&mut self, now: Instant) {
         self.expire_ban_at(now);
+        self.decay_ban_count_at(now);
         self.update_latency(FAILURE_LATENCY_MS as f64);
         self.failures += 1;
         if !self.is_banned_at(now) && self.meets_ban_threshold() {
             self.ban_count = self.ban_count.saturating_add(1);
-            self.banned_until = Some(now + ban_duration(self.ban_count));
+            let until = now + ban_duration(self.ban_count);
+            self.banned_until = Some(until);
+            self.last_ban_end = Some(until);
+        }
+    }
+
+    /// Reset `ban_count` if the peer is not banned and its last ban ended at
+    /// least [`BAN_COUNT_DECAY`] before `now` (#1832). Returns `true` if the
+    /// count was reset.
+    pub fn decay_ban_count_at(&mut self, now: Instant) -> bool {
+        if self.ban_count == 0 || self.is_banned_at(now) {
+            return false;
+        }
+        match self.last_ban_end {
+            Some(end) if now.saturating_duration_since(end) >= BAN_COUNT_DECAY => {
+                self.ban_count = 0;
+                self.last_ban_end = None;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -238,15 +290,30 @@ impl ReputationManager {
         self.get_or_create(&peer_id);
     }
 
-    /// Record that a response was received from a peer
+    /// Record that a response was received from a peer and credit it as a
+    /// success right away. For block responses the sync manager instead
+    /// measures the latency with [`Self::take_latency`] and credits it with
+    /// [`Self::record_success_with`] only once the batch applied (#1832).
     pub fn response_received(&mut self, peer_id: &PeerId) {
-        if let Some(start_time) = self.pending_requests.remove(peer_id) {
-            let latency = start_time.elapsed();
-            self.get_or_create(peer_id).record_success(latency);
-        } else {
-            self.get_or_create(peer_id)
-                .record_success(Duration::from_millis(100));
-        }
+        let latency = self.take_latency(peer_id);
+        self.record_success_with(peer_id, latency);
+    }
+
+    /// Latency of the response that just arrived from `peer_id`: the time
+    /// since the last [`Self::request_sent`] to it, or a nominal 100ms when no
+    /// request is recorded. Clears the pending request; records no success or
+    /// failure (#1832).
+    pub fn take_latency(&mut self, peer_id: &PeerId) -> Duration {
+        self.pending_requests
+            .remove(peer_id)
+            .map(|start_time| start_time.elapsed())
+            .unwrap_or(Duration::from_millis(100))
+    }
+
+    /// Credit `peer_id` with a successful request that took `latency`
+    /// (#1832).
+    pub fn record_success_with(&mut self, peer_id: &PeerId, latency: Duration) {
+        self.get_or_create(peer_id).record_success(latency);
     }
 
     /// Record that a request to a peer failed
@@ -258,10 +325,17 @@ impl ReputationManager {
     /// Lift every ban that has expired by `now` and reset those peers'
     /// counters (see [`PeerReputation::expire_ban_at`]). Returns the peers
     /// whose ban was lifted.
+    ///
+    /// Also resets the `ban_count` of every peer whose last ban ended
+    /// [`BAN_COUNT_DECAY`] ago (#1832).
     pub fn expire_bans_at(&mut self, now: Instant) -> Vec<PeerId> {
         self.peers
             .iter_mut()
-            .filter_map(|(peer, rep)| rep.expire_ban_at(now).then_some(*peer))
+            .filter_map(|(peer, rep)| {
+                let lifted = rep.expire_ban_at(now);
+                rep.decay_ban_count_at(now);
+                lifted.then_some(*peer)
+            })
             .collect()
     }
 
@@ -806,6 +880,80 @@ mod tests {
             .get_or_create(&good)
             .record_success(Duration::from_secs(20));
         assert_eq!(manager.best_peer(&[bad, good]), Some(good));
+    }
+
+    // ========================================================================
+    // #1832: ban_count decays after a quiet period
+    // ========================================================================
+
+    #[test]
+    fn test_ban_count_resets_after_quiet_period() {
+        let t0 = Instant::now();
+        let mut rep = PeerReputation::new();
+        let mut now = t0;
+        // Three bans in a row: the third lasts 20 minutes.
+        for _ in 0..3 {
+            now = ban_at(&mut rep, now);
+            assert!(rep.expire_ban_at(now));
+        }
+        assert_eq!(rep.ban_count, 3);
+        let last_end = rep.last_ban_end.expect("recorded");
+        assert_eq!(last_end, now);
+
+        // Just short of a quiet day: the memory is kept and the next ban is
+        // the 4th (40 minutes).
+        let mut kept = rep.clone();
+        let almost = last_end + BAN_COUNT_DECAY - Duration::from_secs(1);
+        assert!(!kept.decay_ban_count_at(almost));
+        let until = ban_at(&mut kept, almost);
+        assert_eq!(kept.ban_count, 4);
+        assert_eq!(until - almost, ban_duration(4));
+
+        // A full quiet day: the next ban is a first offence again.
+        let later = last_end + BAN_COUNT_DECAY;
+        let until = ban_at(&mut rep, later);
+        assert_eq!(rep.ban_count, 1, "ban_count reset after the quiet period");
+        assert_eq!(until - later, BAN_BASE_DURATION);
+    }
+
+    #[test]
+    fn test_ban_count_never_decays_while_banned() {
+        let t0 = Instant::now();
+        let mut rep = PeerReputation::new();
+        ban_at(&mut rep, t0);
+        // Pretend the ban is (absurdly) still running a day after it ended
+        // per `last_ban_end`: an active ban is never forgotten.
+        rep.banned_until = Some(t0 + 2 * BAN_COUNT_DECAY);
+        assert!(!rep.decay_ban_count_at(t0 + BAN_COUNT_DECAY + BAN_BASE_DURATION));
+        assert_eq!(rep.ban_count, 1);
+    }
+
+    #[test]
+    fn test_manager_expire_bans_decays_ban_counts() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+        let t0 = Instant::now();
+        let until = ban_at(manager.get_or_create(&peer), t0);
+        assert_eq!(manager.expire_bans_at(until), vec![peer]);
+        assert_eq!(manager.get(&peer).unwrap().ban_count, 1);
+        assert!(manager.expire_bans_at(until + BAN_COUNT_DECAY).is_empty());
+        let rep = manager.get(&peer).unwrap();
+        assert_eq!(rep.ban_count, 0);
+        assert_eq!(rep.last_ban_end, None);
+    }
+
+    #[test]
+    fn test_take_latency_records_nothing_until_credited() {
+        let mut manager = ReputationManager::new();
+        let peer = PeerId::random();
+        manager.request_sent(peer);
+        let latency = manager.take_latency(&peer);
+        let rep = manager.get(&peer).unwrap();
+        assert_eq!(rep.total_requests(), 0, "no verdict yet");
+        manager.record_success_with(&peer, latency);
+        assert_eq!(manager.get(&peer).unwrap().successes, 1);
+        // The pending request was consumed: a second take uses the default.
+        assert_eq!(manager.take_latency(&peer), Duration::from_millis(100));
     }
 
     #[test]
