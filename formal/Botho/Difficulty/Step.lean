@@ -27,7 +27,7 @@ Labels (formal/README.md):
 - the model agrees with the Rust kernel on the vectors in
   `Botho/Difficulty/Vectors.lean` (**tested**: the Lean kernel proves the
   model's outputs there, and the Rust test
-  `formal_drt_difficulty::step_vectors_match_rust` checks the Rust kernel
+  `formal_drt_difficulty::tests::step_vectors_match_rust` checks the Rust kernel
   against the same file).
 -/
 namespace Botho.Difficulty

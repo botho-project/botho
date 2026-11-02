@@ -12,8 +12,9 @@ pub mod block;
 pub mod config;
 pub mod consensus;
 pub mod decoy_selection;
-#[cfg(test)]
-mod formal_drt_difficulty;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub mod formal_drt_difficulty;
 pub mod ledger;
 pub mod mempool;
 pub mod monetary;

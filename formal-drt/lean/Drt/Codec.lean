@@ -220,6 +220,16 @@ def dispatch (fn : String) (a : Json) : Dec Json := do
         Json.mkObj [("error", Json.str (encDrawingError e)),
           ("windows", Json.arr (if e == .seedParent || e == .awardBound then #[]
             else windowSeed.toArray))])
+  | "difficulty_step" =>
+    pure (encNat (Botho.Difficulty.step (← nat a "current") (← nat a "observed")
+      (← nat a "target")))
+  | "difficulty_run" =>
+    pure (encNat (Botho.Difficulty.run (← nat a "start") (← (← arr a "gaps").mapM asNat)))
+  | "slot_duration" =>
+    let feed ← (← arr a "feed").mapM fun b => do
+      pure ({ timestamp := ← nat b "ts", txCount := ← nat b "tx" } : Botho.Consensus.RecentBlockInfo)
+    let w := feed.foldl Botho.Consensus.recordBlock []
+    pure (encNat (Botho.Consensus.slotSecs (← asBool (← field a "dynamic")) (← nat a "cfg") w))
   | other =>
     -- The cluster-tag legs (#1840) live in `Drt/Tags.lean`.
     match Tags.dispatch other a with
