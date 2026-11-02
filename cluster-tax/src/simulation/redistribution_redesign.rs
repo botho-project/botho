@@ -478,21 +478,61 @@ fn hash01(seed: u64, a: u64, b: u64) -> f64 {
     (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// Blocks an output spends in the lottery window (ages `min_utxo_age ..=
+/// circulation_window`, 9,281 blocks at node parameters).
+pub fn window_blocks() -> u64 {
+    let d = LotteryDrawConfig::default();
+    d.circulation_window - d.min_utxo_age + 1
+}
+
+/// Blocks of window exposure an output gets before it is spent at age
+/// `spend_age`: the eligible ages strictly below the spend age,
+/// `min_utxo_age ..= min(spend_age - 1, circulation_window)`.
+pub fn exposure_before_spend(spend_age: u64) -> u64 {
+    let d = LotteryDrawConfig::default();
+    spend_age
+        .min(d.circulation_window + 1)
+        .saturating_sub(d.min_utxo_age)
+}
+
+/// Probability that an output wins before it is spent at age `spend_age`,
+/// given that an output exposed for the whole window wins with probability
+/// `q_window`. Wins arrive at a constant per-block hazard, so the exposure
+/// fraction `f` gives `1 - (1 - q_window)^f`.
+pub fn win_before_spend(q_window: f64, spend_age: u64) -> f64 {
+    let f = exposure_before_spend(spend_age) as f64 / window_blocks() as f64;
+    if f == 0.0 {
+        return 0.0;
+    }
+    1.0 - (1.0 - q_window).powf(f)
+}
+
 /// Claim-reveal measurement: every lottery winner reveals its output's key
 /// image to claim (the only way to keep spent outputs out of the draw without
-/// a zero-knowledge non-membership proof). A fraction `q` of all outputs is
-/// then known: if a ring's real input is one, the ring is deanonymized; a
-/// revealed decoy is known not to be this ring's real input.
+/// a zero-knowledge non-membership proof), and a spent output forfeits.
 ///
-/// Returns (ID rate of a uniform guess over the surviving members, ID rate
-/// of the Band-Center guess over the survivors, mean surviving members).
-pub fn claim_reveal_rates(rings: &[RouteRingAges], q: f64, seed: u64) -> (f64, f64, f64) {
+/// - **Real input.** A rational owner never reveals the key image of an output
+///   it has already spent (the win is forfeit anyway), so the ring is
+///   deanonymized directly only if its real input won *before* the spend:
+///   probability [`win_before_spend`]`(q, real_age)`, using each ring's own
+///   real age.
+/// - **Decoys.** A decoy's key image is public whenever it wins and is claimed,
+///   so each decoy is eliminated with the full-window probability `q`. That is
+///   an upper bound for decoys that were themselves spent inside their window
+///   (they could only be revealed before their own spend).
+///
+/// Returns (direct-reveal rate of the real input, ID rate of a uniform guess
+/// over the surviving members, ID rate of the Band-Center guess over the
+/// survivors, mean surviving members). The ID rates count directly revealed
+/// rings as identified.
+pub fn claim_reveal_rates(rings: &[RouteRingAges], q: f64, seed: u64) -> (f64, f64, f64, f64) {
     if rings.is_empty() {
-        return (0.0, 0.0, 0.0);
+        return (0.0, 0.0, 0.0, 0.0);
     }
-    let (mut naive, mut band, mut size) = (0.0, 0.0, 0.0);
+    let (mut direct, mut naive, mut band, mut size) = (0.0, 0.0, 0.0, 0.0);
     for (i, ring) in rings.iter().enumerate() {
-        if hash01(seed, i as u64, u64::MAX) < q {
+        if hash01(seed, i as u64, u64::MAX) < win_before_spend(q, ring.real_age) {
+            direct += 1.0;
             naive += 1.0;
             band += 1.0;
             size += 1.0;
@@ -531,7 +571,7 @@ pub fn claim_reveal_rates(rings: &[RouteRingAges], q: f64, seed: u64) -> (f64, f
         }
     }
     let n = rings.len() as f64;
-    (naive / n, band / n, size / n)
+    (direct / n, naive / n, band / n, size / n)
 }
 
 /// Decay-oracle measurement (R4/R5): if the time-decay allowance is keyed to
@@ -599,8 +639,9 @@ pub struct PrivacyRow {
     pub route: DecoyRoute,
     pub real_age: RealAgeSpec,
     pub rings: usize,
-    /// (rho per block, q, naive ID, band-center ID, mean survivors).
-    pub claim_reveal: Vec<(f64, f64, f64, f64, f64)>,
+    /// (rho per block, q, direct-reveal rate of the real input, naive ID,
+    /// band-center ID, mean survivors).
+    pub claim_reveal: Vec<(f64, f64, f64, f64, f64, f64)>,
     /// Band-Center ID with nothing revealed (q = 0).
     pub band_center_base: f64,
     /// Decay oracle ID at full-weight and 1%-weight tag resolution.
@@ -623,8 +664,8 @@ pub fn privacy_table() -> Vec<PrivacyRow> {
                 .into_iter()
                 .map(|rho| {
                     let q = win_probability(rho);
-                    let (n, b, size) = claim_reveal_rates(&rings, q, PRIVACY_SEED);
-                    (rho, q, n, b, size)
+                    let (d, n, b, size) = claim_reveal_rates(&rings, q, PRIVACY_SEED);
+                    (rho, q, d, n, b, size)
                 })
                 .collect();
             out.push(PrivacyRow {
@@ -632,7 +673,7 @@ pub fn privacy_table() -> Vec<PrivacyRow> {
                 real_age: spec,
                 rings: rings.len(),
                 claim_reveal,
-                band_center_base: base.1,
+                band_center_base: base.2,
                 decay_oracle_full: decay_oracle_rate(&rings, res_full),
                 decay_oracle_weak: decay_oracle_rate(&rings, res_weak),
                 youngest: youngest_rate(&rings),
@@ -753,22 +794,33 @@ pub fn privacy_markdown() -> String {
     s.push_str(&format!(
         "### Claim-reveal: the cost of keeping spent outputs out of the draw\n\n\
          Production routes (#1757 ports), chain of 1 output/block to height {}, {} rings per \
-         row, seed {:#x}. Every winner reveals its output's key image to claim. q = share of \
-         outputs that ever win = 1 - exp(-4/rho), rho = eligible outputs created per block. \
-         ID = how often the adversary's single guess is the real input (uniform = 5.0%).\n\n",
-        chain.tip_height, PRIVACY_RINGS, PRIVACY_SEED
+         row, seed {:#x}. Every winner reveals its output's key image to claim, and a spent \
+         output forfeits. q = share of outputs that win at least once over a full {}-block \
+         window = 1 - exp(-4/rho), rho = eligible outputs created per block. Each decoy is \
+         eliminated with probability q (an upper bound for decoys spent inside their own \
+         window). The real input is exposed only if it wins before it is spent, during ages \
+         {}..min(real age, {}): \"direct reveal\" is that rate, per ring, from the ring's own \
+         real age. ID = how often the adversary's single guess is the real input (uniform = \
+         5.0%), counting directly revealed rings as identified.\n\n",
+        chain.tip_height,
+        PRIVACY_RINGS,
+        PRIVACY_SEED,
+        window_blocks(),
+        LotteryDrawConfig::default().min_utxo_age,
+        LotteryDrawConfig::default().circulation_window,
     ));
-    s.push_str("| route | real age | Band-Center ID, no reveal | rho | q | survivors (of 20) | ID uniform-over-survivors | ID Band-Center-over-survivors |\n");
-    s.push_str("|---|---|---:|---:|---:|---:|---:|---:|\n");
+    s.push_str("| route | real age | Band-Center ID, no reveal | rho | q | direct reveal | survivors (of 20) | ID uniform-over-survivors | ID Band-Center-over-survivors |\n");
+    s.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|\n");
     for r in &rows {
-        for (rho, q, naive, band, size) in &r.claim_reveal {
+        for (rho, q, direct, naive, band, size) in &r.claim_reveal {
             s.push_str(&format!(
-                "| {} | {} | {} | {:.0} | {} | {:.1} | {} | {} |\n",
+                "| {} | {} | {} | {:.0} | {} | {} | {:.1} | {} | {} |\n",
                 r.route.name(),
                 r.real_age.label(),
                 pct(r.band_center_base),
                 rho,
                 pct(*q),
+                pct(*direct),
                 size,
                 pct(*naive),
                 pct(*band),
@@ -904,11 +956,41 @@ mod tests {
                 decoy_ages: (0..19).map(|j| 900 + 10 * j).collect(),
             })
             .collect();
-        let (n0, _, s0) = claim_reveal_rates(&rings, 0.0, 1);
+        let (d0, n0, _, s0) = claim_reveal_rates(&rings, 0.0, 1);
+        assert_eq!(d0, 0.0);
         assert!((n0 - 0.05).abs() < 1e-12);
         assert!((s0 - 20.0).abs() < 1e-12);
-        let (n1, b1, _) = claim_reveal_rates(&rings, 1.0, 1);
-        assert_eq!((n1, b1), (1.0, 1.0));
+        let (d1, n1, b1, _) = claim_reveal_rates(&rings, 1.0, 1);
+        assert_eq!((d1, n1, b1), (1.0, 1.0, 1.0));
+    }
+
+    /// A spent output forfeits, so the real input is exposed only while it
+    /// sits in the window before its spend.
+    #[test]
+    fn real_input_exposure_is_truncated_by_its_spend() {
+        assert_eq!(window_blocks(), 9_281);
+        assert_eq!(exposure_before_spend(500), 0);
+        assert_eq!(exposure_before_spend(720), 0);
+        assert_eq!(exposure_before_spend(1_000), 280);
+        assert_eq!(exposure_before_spend(10_000), 9_280);
+        assert_eq!(exposure_before_spend(30_000), 9_281);
+        let q = win_probability(5.0);
+        assert_eq!(win_before_spend(q, 500), 0.0);
+        assert!((win_before_spend(q, 30_000) - q).abs() < 1e-12);
+        // About 2.4% at rho = 5 for a real input spent at age 1,000.
+        let w = win_before_spend(q, 1_000);
+        assert!((0.023..0.025).contains(&w), "{w}");
+        // An input spent before it can win is never revealed directly; only
+        // its decoys can be eliminated.
+        let young: Vec<RouteRingAges> = (0..200)
+            .map(|_| RouteRingAges {
+                real_age: 600,
+                decoy_ages: (0..19).map(|j| 900 + 10 * j).collect(),
+            })
+            .collect();
+        let (d, n, _, s) = claim_reveal_rates(&young, 1.0, 1);
+        assert_eq!(d, 0.0);
+        assert_eq!((n, s), (1.0, 1.0));
     }
 
     #[test]

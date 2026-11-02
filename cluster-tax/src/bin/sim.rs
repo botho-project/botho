@@ -939,6 +939,13 @@ mod cli {
             #[arg(long)]
             spent_eligible: bool,
 
+            /// What the per-block decay allowance (R4, R5) is keyed to:
+            /// real (the real input's age; not private) or youngest (the
+            /// ring's youngest member, modelled at the 10-block decoy floor;
+            /// the private rule)
+            #[arg(long, default_value = "real")]
+            decay_key: String,
+
             /// on (mechanism on) or off (counterfactual)
             #[arg(long, default_value = "on")]
             run: String,
@@ -1313,6 +1320,7 @@ mod cli {
                 seed,
                 tx_scale,
                 spent_eligible,
+                decay_key,
                 run,
             } => run_redistribution_redesign_cli(
                 &part,
@@ -1322,6 +1330,7 @@ mod cli {
                 seed,
                 tx_scale,
                 spent_eligible,
+                &decay_key,
                 &run,
             ),
             Command::M2Decay {
@@ -5202,10 +5211,13 @@ mod cli {
         seed: u64,
         tx_scale: f64,
         spent_eligible: bool,
+        decay_key: &str,
         run: &str,
     ) {
         use bth_cluster_tax::simulation::{
-            m2_production::{run_m2_production, MiningModel, WhaleStrategy, PROD_BLOCKS_PER_YEAR},
+            m2_production::{
+                run_m2_production, MiningModel, TagDecay, WhaleStrategy, PROD_BLOCKS_PER_YEAR,
+            },
             redistribution_redesign::{
                 privacy_markdown, splitting_markdown, variant_params, Variant,
             },
@@ -5248,6 +5260,18 @@ mod cli {
                     tx_scale,
                     spent_eligible,
                 );
+                match decay_key {
+                    "real" => {}
+                    "youngest" => {
+                        if p.tag_decay == TagDecay::PerBlock {
+                            p.tag_decay = TagDecay::PerBlockRingFloor;
+                        }
+                    }
+                    _ => {
+                        eprintln!("--decay-key must be real or youngest");
+                        std::process::exit(2);
+                    }
+                }
                 p.mechanism = match run {
                     "on" => true,
                     "off" => false,
@@ -5270,13 +5294,14 @@ mod cli {
                         })
                         .collect();
                     println!(
-                        "{{\"variant\":\"{}\",\"mining\":\"{}\",\"whale\":\"{}\",\"seed\":{},\"tx_scale\":{},\"spent_eligible\":{},\"run\":\"{}\",\"yr\":{},\"gini0\":{:.6},\"gini\":{:.6},\"top_decile_below_1_5x\":{:.6},\"lottery_bth\":{:.6e},\"demurrage_bth\":{:.6e},\"ticket_burn_bth\":{:.6e},\"downgrade_bth\":{:.6e},\"burned_bth\":{:.6e},\"mined_bth\":{:.6e},\"txs\":{},\"outputs\":{},\"secs\":{:.0},\"cohorts\":{{{}}}}}",
+                        "{{\"variant\":\"{}\",\"mining\":\"{}\",\"whale\":\"{}\",\"seed\":{},\"tx_scale\":{},\"spent_eligible\":{},\"tag_decay\":\"{}\",\"run\":\"{}\",\"yr\":{},\"gini0\":{:.6},\"gini\":{:.6},\"top_decile_below_1_5x\":{:.6},\"lottery_bth\":{:.6e},\"demurrage_bth\":{:.6e},\"ticket_burn_bth\":{:.6e},\"downgrade_bth\":{:.6e},\"burned_bth\":{:.6e},\"mined_bth\":{:.6e},\"txs\":{},\"outputs\":{},\"secs\":{:.0},\"cohorts\":{{{}}}}}",
                         v.id(),
                         mining_model.label(),
                         whale_strategy.label(),
                         seed,
                         tx_scale,
                         spent_eligible,
+                        p.tag_decay.label(),
                         run,
                         s.blocks / PROD_BLOCKS_PER_YEAR,
                         r.gini0,

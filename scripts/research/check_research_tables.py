@@ -86,7 +86,7 @@ GENERATORS = [
 SKIPPED = {
     "m2-production (m2-production-verdicts.md)": "> 200 s per run, several runs",
     "redistribution-redesign --part m2 (redistribution-redesign-study.md)":
-        "~2 min per run, 232 runs",
+        "~2 min per run, 304 runs",
     "m2-cumulative / m2-decay (consensus-fee-model-sim-verdicts.md)": "~190 s per run",
     "lottery-sweep --seed 1695 (consensus-fee-model-sim-verdicts.md)": "~76 s per fee model",
     "decoy-flood-sweep (decoy-flood-cost.md)": "~49 s; constants pinned by botho/tests/decoy_flood_parity.rs",

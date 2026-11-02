@@ -238,8 +238,19 @@ pub enum TagDecay {
     /// Decay keyed to elapsed blocks since the position's last spend:
     /// `(1 - 5%)^(elapsed / TIME_DECAY_REF_BLOCKS)`. The reference interval is
     /// the 1x whale's mean inter-spend time (1/12 yr), so the 1x whale decays
-    /// about as before, but churn no longer speeds decay up.
+    /// about as before, but churn no longer speeds decay up. This is the
+    /// allowance keyed to the *real input's* age, which the #1801 privacy
+    /// measurement shows identifies the real input (§5.3 of the study).
     PerBlock,
+    /// The privacy-safe R4 (#1801 review): the allowance is keyed to the
+    /// ring's youngest member, a public age. Modelled at its floor, a
+    /// youngest member at `MIN_DECOY_AGE_BLOCKS` (10 blocks), so each spend
+    /// may decay tags by at most `(1 - 5%)^(10 / TIME_DECAY_REF_BLOCKS)`,
+    /// about 1e-6: in effect, tags do not decay. A ring whose youngest member
+    /// is older allows more decay, up to [`TagDecay::PerBlock`] when the real
+    /// input is the youngest member, so this and `PerBlock` bracket the
+    /// private rule.
+    PerBlockRingFloor,
 }
 
 impl TagDecay {
@@ -247,6 +258,7 @@ impl TagDecay {
         match self {
             TagDecay::PerHop => "per-hop",
             TagDecay::PerBlock => "per-block",
+            TagDecay::PerBlockRingFloor => "per-block-ring-floor",
         }
     }
 }
@@ -1091,6 +1103,11 @@ impl World {
                 TagDecay::PerBlock => {
                     (1.0 - STOCK_WALLET_DECAY).powf(elapsed as f64 / TIME_DECAY_REF_BLOCKS as f64)
                 }
+                // Keyed to the ring's youngest member, at the picker's floor.
+                TagDecay::PerBlockRingFloor => (1.0 - STOCK_WALLET_DECAY).powf(
+                    elapsed.min(super::privacy_routes::MIN_DECOY_AGE_BLOCKS) as f64
+                        / TIME_DECAY_REF_BLOCKS as f64,
+                ),
             };
             let out = finish_tags(in_tags.iter().map(|(c, wt)| (*c, wt * keep)).collect());
             let claimed = self.factor(self.eff_wealth(&out));

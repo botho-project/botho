@@ -9,20 +9,24 @@
 
 ## Verdict
 
-None of the five candidates passes all three axes. Each fails at least one of them by a wide margin:
+None of the five candidates passes all three axes, and none passes the Gini axis in any form measured. Each row is one rule, and every cell in a row measures that rule. R4 and R5 have two forms that differ on privacy, so each form has its own row:
 
 | id | candidate | Gini (> 0.05, every cell) | Splitting (#1761 grid, node rules) | Privacy | Node-side complexity |
 |---|---|---|---|---|---|
 | R0 | current rules (baseline) | **FAIL** (0/6 cells; best mean +0.0176) | **FAIL** (192/192 profitable) | PASS (reads nothing new) | — |
-| R1 | tickets ∝ value × age | **FAIL** (0/6 cells; best mean +0.0317) | **FAIL** on the node (192/192, by re-spending capital); PASS (0/192) only with a spend reveal | **FAIL** as specified: needs the hidden spent set (reveal) or a ZK non-membership proof; under CT, also a ZK sort | low on public amounts; very high to make it split-safe or CT-compatible |
+| R1 | tickets ∝ value × age | **FAIL** (0/6 cells; best mean +0.0317) | **FAIL** on the node (192/192, by re-spending capital); PASS (0/192) only with a spend reveal | **FAIL** as specified: needs the hidden spent set (a claim-time reveal, §5.1, or a ZK non-membership proof); under CT, also a ZK sort | low on public amounts; very high to make it split-safe or CT-compatible |
 | R2 | tickets ∝ value × (7 − factor) | **FAIL** (0/6 cells; best mean +0.0265) | **FAIL** on the node (192/192); PASS only with a spend reveal | **FAIL**, as R1 | lowest (the `ClusterWeighted` kernel already exists); very high for the same reasons as R1 |
 | R3 | uniform tickets priced at their expected payout | **FAIL** (0/6 cells; best mean +0.0033) | **PASS** (0/192) | PASS if purchase is mandatory; a small leak if opt-in | medium |
-| R4 | tag decay per block, not per hop | **FAIL** (1/6 cells; best mean +0.0780) | **FAIL** (192/192, lottery unchanged) | PASS if the allowance is keyed to the ring's youngest member; **FAIL** (~95–100% ID) if keyed to the real input's age | medium |
-| R5 | R2 + R4 | **FAIL** (0/6 cells; best mean +0.0290) | **FAIL** on the node; PASS only with a spend reveal | as R2 and R4 | as R2 plus R4 |
+| R4 | tag decay per block, allowance keyed to the real input's age | **FAIL** (1/6 cells; best mean +0.0780) | **FAIL** (192/192, lottery unchanged) | **FAIL** (95–100% of rings identified, §5.3) | medium |
+| R4p | tag decay per block, allowance keyed to the ring's youngest member (tags effectively never decay) | **FAIL** (0/6 cells; best mean +0.0163) | **FAIL** (192/192, lottery unchanged) | PASS (the allowance is a function of public ring ages) | medium |
+| R5 | R2 + R4 | **FAIL** (0/6 cells; best mean +0.0290) | **FAIL** on the node; PASS only with a spend reveal | **FAIL**, as R2 and R4 | as R2 plus R4 |
+| R5p | R2 + R4p | **FAIL** (0/6 cells; best mean +0.0405) | **FAIL** on the node; PASS only with a spend reveal | **FAIL**, as R2 | as R2 plus R4 |
 
-"Gini" is the #1790 bar: the mechanism's own effect (ΔGini, off − on) above 0.05, as a 3-seed mean (seeds 1696, 2, 3), at both 10 and 20 years, in each of the 6 cells (wealth or egalitarian mining × 1x, 100x or 1000x transaction density), with the honest whale. A "cell" passes only if both horizons pass.
+"Gini" is the #1790 bar: the mechanism's own effect (ΔGini, off − on) above 0.05, as a 3-seed mean (seeds 1696, 2, 3), at both 10 and 20 years, in each of the 6 cells (wealth or egalitarian mining × 1x, 100x or 1000x transaction density), with the honest whale, under #1790's rule (spent outputs leave the draw). A "cell" passes only if both horizons pass. §3.2 repeats R0–R3 under the node's rule. R4 and R5 are §3.1; R4p and R5p are §3.1.1.
 
-The best Gini result any candidate reaches is +0.0780 (R4, wealth mining, 1000x, 20-year 3-seed mean). That is short of the bar and comes with a splitting hole. The failure is structural, and §7 explains why. With the node's privacy constraints, a lottery rule can have at most two of three properties: it redistributes, it is neutral to splitting, and it reads nothing a ring hides.
+The best Gini result any candidate reaches is +0.0780 (R4, wealth mining, 1000x, 20-year 3-seed mean). It clears 0.05 in that one cell, but R4 fails the other five, is not private, and leaves the splitting hole open. Its private form, R4p, passes no cell.
+
+No configuration in the study reached the bar, including those that gave up privacy or split-neutrality. Giving up an axis bought nothing measurable on Gini. Value-linear weight with the spend reveal (not private) peaks at +0.0317. The node's own rule (spent outputs stay eligible, not split-neutral) peaks at +0.0726 at one horizon in one cell. §7 sets out the pattern across the candidate families studied. That is an argument over those families, under the current fee structure and tag design, not a proof about every possible lottery rule; §7.1 lists shapes it does not cover.
 
 ## 1. Why these candidates
 
@@ -69,8 +73,9 @@ How each candidate is modelled:
 
 - **R1 value-age.** An eligible output's weight is its value × its age in blocks. Within an owner, wins go to entries in proportion to weight.
 - **R2 inverse-factor.** Weight = value × (7 − factor), the `SelectionMode::ClusterWeighted` kernel (a unit test checks it against `LotteryCandidate::weight`). The factor is taken when the output enters the window, from its tags and the current W. W only grows, so this slightly overweights high-W outputs.
-- **R3 ticket-price.** Uniform draw. Every output of at least `min_utxo_value` buys its ticket at creation, at a price equal to the previous step's payout per block × 9,281 / the window count, and the price is burned. An output worth less than the price is not eligible. Coinbase and payout outputs pay too.
-- **R4 time-decay.** The honest wallet decays tags by `0.95^(elapsed / 525,600)`, where elapsed is the number of blocks since the position's last spend, instead of 5% per hop. The reference interval is the 1x whale's mean time between spends, so the 1x whale decays about as it does now. Pricing semantics are unchanged: the gap from the undecayed inputs is still charged as a #925 downgrade.
+- **R3 ticket-price.** Uniform draw. An output of at least `min_utxo_value` is eligible only if it buys its ticket at creation, and the price is burned. The price is set once per step: the previous step's total lottery payout divided by the number of tickets bought in that step (`p = R / T`). A ticket stays eligible for 9,281 blocks, about 12.9 steps, so in steady state that price equals a ticket's expected payout. Wallets buy rationally: not for an output worth no more than the price, and, under #1790's rule (where a spent ticket stops counting), not for an output whose owner's median holding time is shorter than the 10,000-block window. Coinbase and payout outputs pay too.
+- **R4 time-decay, keyed to the real input's age (`--decay-key real`, the default).** The honest wallet decays tags by `0.95^(elapsed / 525,600)`, where elapsed is the number of blocks since the position's last spend, instead of 5% per hop. The reference interval is the 1x whale's mean time between spends, so the 1x whale decays about as it does now. Pricing semantics are unchanged: the gap from the undecayed inputs is still charged as a #925 downgrade. **This is the non-private form of R4.** For the node to check it, the allowance must be keyed to the real input's age, and §5.3 shows that the resulting tag weight identifies 95–100% of rings. Every row labelled "R4" or "R5" in §3.1–§3.5 measures this form.
+- **R4p time-decay, keyed to the ring's youngest member (`--decay-key youngest`).** The private form of R4 (§5.3): the allowance is a function of the youngest ring member's age, which is public. The harness models it at its floor, a youngest member at the 10-block decoy minimum (`MIN_DECOY_AGE_BLOCKS`), so each spend may decay tags by at most `1 − 0.95^(10 / 525,600)`, about 1e-6. In practice R4p means tags essentially never decay. A ring whose youngest member is older allows more decay, up to R4 itself when the real input is the youngest member, so R4p and R4 bracket the private rule's decay allowance. R5p is R2's weight with R4p's decay. §3.1.1 reports both.
 - **R5** = R2's weight + R4's decay.
 
 ### 3.1 Main matrix (#1790 candidate rule: spent outputs leave the draw)
@@ -124,6 +129,32 @@ How each candidate is modelled:
 | R5 inverse-factor+time-decay | egalitarian | 1x | +0.0203 / +0.0052 | -0.0256 / -0.0521 | -0.0049 / +0.0080 | -0.0034 / -0.0130 | FAIL |
 | R5 inverse-factor+time-decay | egalitarian | 100x | -0.6205 / -0.4395 | -0.6336 / -0.4516 | -0.6336 / -0.4553 | -0.6292 / -0.4488 | FAIL |
 | R5 inverse-factor+time-decay | egalitarian | 1000x | -0.6385 / -0.5389 | -0.6379 / -0.5408 | -0.6393 / -0.5410 | -0.6386 / -0.5402 | FAIL |
+
+### 3.1.1 The private form of R4 and R5 (decay keyed to the ring's youngest member)
+
+The §3.1 rows for R4 and R5 measure decay keyed to the real input's age, which §5.3 shows is not private. These rows measure R4p and R5p, the private forms (§3, modelled at the 10-block floor, so tags essentially never decay). Same harness, seeds and cells; #1790's rule; the off run uses the same decay.
+
+| variant | mining | tx scale | seed 1696 (10 / 20 yr) | seed 2 | seed 3 | 3-seed mean | > 0.05 |
+|---|---|---:|---|---|---|---|---|
+| R4p time-decay (youngest-keyed) | wealth | 1x | +0.0000 / +0.0011 | -0.0001 / -0.0015 | -0.0011 / +0.0001 | -0.0004 / -0.0001 | FAIL |
+| R4p time-decay (youngest-keyed) | wealth | 100x | -0.0061 / -0.0652 | -0.0079 / -0.0595 | -0.0052 / -0.0537 | -0.0064 / -0.0594 | FAIL |
+| R4p time-decay (youngest-keyed) | wealth | 1000x | +0.0166 / -0.0654 | +0.0160 / -0.0774 | +0.0165 / -0.0767 | +0.0163 / -0.0731 | FAIL |
+| R4p time-decay (youngest-keyed) | egalitarian | 1x | -0.1546 / -0.0868 | -0.1504 / -0.0790 | -0.1680 / -0.0952 | -0.1577 / -0.0870 | FAIL |
+| R4p time-decay (youngest-keyed) | egalitarian | 100x | -0.1936 / -0.2630 | -0.2413 / -0.3040 | -0.2404 / -0.3032 | -0.2251 / -0.2900 | FAIL |
+| R4p time-decay (youngest-keyed) | egalitarian | 1000x | -0.4840 / -0.4600 | -0.4911 / -0.4623 | -0.4675 / -0.4571 | -0.4809 / -0.4598 | FAIL |
+| R5p inverse-factor+time-decay (youngest-keyed) | wealth | 1x | +0.0275 / +0.0436 | +0.0235 / +0.0368 | +0.0315 / +0.0412 | +0.0275 / +0.0405 | FAIL |
+| R5p inverse-factor+time-decay (youngest-keyed) | wealth | 100x | -0.0043 / -0.0773 | -0.0035 / -0.0727 | -0.0023 / -0.0715 | -0.0034 / -0.0738 | FAIL |
+| R5p inverse-factor+time-decay (youngest-keyed) | wealth | 1000x | +0.0014 / -0.0771 | +0.0011 / -0.0753 | +0.0011 / -0.0748 | +0.0012 / -0.0757 | FAIL |
+| R5p inverse-factor+time-decay (youngest-keyed) | egalitarian | 1x | -0.1992 / -0.1622 | -0.1844 / -0.1406 | -0.2200 / -0.1533 | -0.2012 / -0.1520 | FAIL |
+| R5p inverse-factor+time-decay (youngest-keyed) | egalitarian | 100x | -0.0987 / -0.1184 | -0.1233 / -0.1343 | -0.1338 / -0.1504 | -0.1186 / -0.1344 | FAIL |
+| R5p inverse-factor+time-decay (youngest-keyed) | egalitarian | 1000x | -0.5182 / -0.5119 | -0.5156 / -0.5143 | -0.4892 / -0.4964 | -0.5077 / -0.5075 | FAIL |
+
+| variant | mean ΔGini range, wealth | mean ΔGini range, egalitarian | best 3-seed mean | cells passing |
+|---|---|---|---|---|
+| R4p time-decay (youngest-keyed) | -0.0731 to +0.0163 | -0.4809 to -0.0870 | +0.0163 | 0/6 |
+| R5p inverse-factor+time-decay (youngest-keyed) | -0.0757 to +0.0405 | -0.5077 to -0.1186 | +0.0405 | 0/6 |
+
+Reading it: the private form of R4 does worse than the non-private one. With tags that do not decay, demurrage never stops. For R4p, seed 1696 collects 2.4e8 to 1.0e9 BTH of demurrage over 20 years in every cell, against 5.0e7 to 8.2e8 BTH for R4 (§3.4), and it keeps growing between year 10 and year 20. It falls on payment recipients as in R4, and the lottery returns most of it to the whales (R4p, seed 1696, 10 years: 52.8–83.0% of payouts in every cell except egalitarian 1x). R4's single passing cell (wealth, 1000x) becomes +0.0163 / −0.0731. R5p does slightly better than R5 under wealth mining at 1x (+0.0405 at 20 years) and worse everywhere else. No measured form of R4 passes Gini in more than one cell, and the private forms pass in none.
 
 ### 3.2 Node candidate rule (spent outputs stay eligible)
 
@@ -242,7 +273,7 @@ Cohort shares of all lottery payouts. Hashpower shares: wealth mining gives the 
 
 ### 3.6 Reading the Gini results
 
-- **Only one cell passes, and the variant behind it fails everywhere else.** R4 clears 0.05 under wealth mining at 1000x (+0.0721 / +0.0780 as 3-seed means). Two caveats apply. 94% of the demurrage behind that result is the #925 downgrade charge on tag mass that the always-consolidating wallet loses to pruning and the 16-tag cap, which #1790 already lists as an upper bound. And the same rule under egalitarian mining gives −0.46 to −0.60 at 100x and 1000x.
+- **Only one cell passes, and the variant behind it fails everywhere else.** R4, in its non-private form (decay keyed to the real input's age), clears 0.05 under wealth mining at 1000x (+0.0721 / +0.0780 as 3-seed means). Two caveats apply. 94% of the demurrage behind that result is the #925 downgrade charge on tag mass that the always-consolidating wallet loses to pruning and the 16-tag cap, which #1790 already lists as an upper bound. And the same rule under egalitarian mining gives −0.46 to −0.60 at 100x and 1000x.
 - **R4 does fix the measured density mechanism, but the demurrage lands on the wrong people.** With per-block decay, demurrage no longer vanishes at density: 2.0e8 BTH (wealth) and 8.2e8 BTH (egalitarian) at 100x over 20 years, against 2.2e3 and 5.1e4 for R0. The tags survive, though, and payments carry them to everyone. By year 10 (seed 1696, egalitarian, 100x), the 80 small holders have paid 3.4e8 BTH and the strategic whale 4.9e6 BTH. That is #1790's cause 3 (demurrage priced on velocity, not holdings), amplified. The lottery then returns most of the pool to the whales (59.5%), who spend least often.
 - **Value-linear weight (R1, R2, R5) is the best lottery rule here, and it still falls well short.** Under wealth mining at 1x it moves the lottery off coinbase counts: the whales' share drops from 98.4% to 18.7% (R1) and 17.7% (R2). The 3-seed means reach +0.0234 to +0.0317. For R1 and R2 at 100x and 1000x the effect disappears (−0.0006 to +0.0040). Under egalitarian mining it is −0.0008 at best and −0.17 at worst; R5 goes as low as −0.64, for R4's reason.
 - **A 10,000-block window turns value weight into turnover weight.** The window is about 14 hours. A whale's consolidated output, created 12 times a year, sits in it for 1.8% of the time. A merchant's (365 times a year) sits in it for 54%. So R1 and R2 pay merchants 79–81% of the lottery under wealth mining and 56–60% under egalitarian mining. Merchants are neither poor nor rich in this population, which is why the tilt (R2 vs R1) changes little: every factor is close to 1x by year 10 (#1790 cause 2).
@@ -317,53 +348,59 @@ A rule fails this axis if it needs information a ring hides (which member is rea
 
 - **What they read.** Output value and age (R1), plus the factor from plaintext tags and W (R2). The live chain has public amounts, so value is readable today. Under ADR 0006's confidential amounts it is not, and a value-weighted draw then needs the ZK weighted-sampling sort (#902, Path B). A winner's proof would also show that its amount covers the drawn offset, which leaks a lower bound on a hidden amount for 4 outputs per block.
 - **What they need to be split-safe.** On the node they are churn-farmable (§4) unless spent value stops counting. Without breaking ring privacy there are two ways to do that:
-  1. **Claim-reveal:** a winner must publish its output's key image to claim, and a spent output forfeits. That deanonymizes the ring in which the output was (or will be) spent, and it marks the output as a known decoy in every other ring that uses it.
+  1. **Claim-reveal:** a winner must publish its output's key image to claim, and a spent output forfeits. A rational owner never reveals the key image of an output it has already spent, because the win is forfeit anyway. So the ring in which an output is spent is deanonymized directly only if that output won, and was claimed, **before** the spend. Every claimed output is also marked as a known decoy in every other ring that uses it.
   2. **A ZK non-membership proof** that the output's key image is not in the spent set. This leaks nothing but needs an accumulator over all key images and a new proof per claim. It is very high complexity, and nothing in the codebase supports it today.
 
-The table measures claim-reveal. If ρ eligible outputs are created per block and 4 win, an output ever wins with probability `q = 1 − e^(−4/ρ)`: 55% at ρ = 5 (the m2 1x window, nearly all coinbase and payout outputs), 18% at ρ = 20, and 2% at ρ = 200. Ring members are revealed independently with probability q.
+The table measures claim-reveal. If ρ eligible outputs are created per block and 4 win, an output that sits in the window for all of its 9,281 blocks wins at least once with probability `q = 1 − e^(−4/ρ)`: 55% at ρ = 5 (the m2 1x window, nearly all coinbase and payout outputs), 18% at ρ = 20, and 2% at ρ = 200. Wins arrive at a constant per-block rate, so an output spent at age `a` is exposed only for ages 720..min(a, 10,000) and wins before its spend with probability `1 − (1 − q)^f`, where `f` is that exposure as a share of the 9,281-block window. The real input of each sampled ring is revealed directly at that per-ring rate (column "direct reveal"). Each decoy is eliminated at the full rate q. That is exact for decoys that were never spent inside their window and an upper bound for those that were.
 
-Production routes (#1757 ports), chain of 1 output/block to height 1200000, 4000 rings per row, seed 0x18019817. Every winner reveals its output's key image to claim. q = share of outputs that ever win = 1 - exp(-4/rho), rho = eligible outputs created per block. ID = how often the adversary's single guess is the real input (uniform = 5.0%).
+Production routes (#1757 ports), chain of 1 output/block to height 1200000, 4000 rings per row, seed 0x18019817. Every winner reveals its output's key image to claim, and a spent output forfeits. q = share of outputs that win at least once over a full 9281-block window = 1 - exp(-4/rho), rho = eligible outputs created per block. Each decoy is eliminated with probability q (an upper bound for decoys spent inside their own window). The real input is exposed only if it wins before it is spent, during ages 720..min(real age, 10000): "direct reveal" is that rate, per ring, from the ring's own real age. ID = how often the adversary's single guess is the real input (uniform = 5.0%), counting directly revealed rings as identified.
 
-| route | real age | Band-Center ID, no reveal | rho | q | survivors (of 20) | ID uniform-over-survivors | ID Band-Center-over-survivors |
-|---|---|---:|---:|---:|---:|---:|---:|
-| node | 1000 | 0.0% | 5 | 55.1% | 4.8 | 60.0% | 55.0% |
-| node | 1000 | 0.0% | 20 | 18.1% | 13.8 | 23.0% | 17.9% |
-| node | 1000 | 0.0% | 200 | 2.0% | 19.2 | 7.1% | 2.1% |
-| node | 30000 | 60.8% | 5 | 55.1% | 4.8 | 60.0% | 85.8% |
-| node | 30000 | 60.8% | 20 | 18.1% | 13.8 | 23.0% | 70.1% |
-| node | 30000 | 60.8% | 200 | 2.0% | 19.2 | 7.1% | 61.7% |
-| node | 100000 | 0.0% | 5 | 55.1% | 4.8 | 60.0% | 55.0% |
-| node | 100000 | 0.0% | 20 | 18.1% | 13.8 | 23.0% | 17.9% |
-| node | 100000 | 0.0% | 200 | 2.0% | 19.2 | 7.1% | 2.1% |
-| node | gamma-spend | 84.2% | 5 | 55.1% | 4.8 | 60.0% | 93.9% |
-| node | gamma-spend | 84.2% | 20 | 18.1% | 13.8 | 23.0% | 87.3% |
-| node | gamma-spend | 84.2% | 200 | 2.0% | 19.2 | 7.1% | 84.4% |
-| cli | 1000 | 52.0% | 5 | 55.1% | 4.8 | 60.0% | 87.4% |
-| cli | 1000 | 52.0% | 20 | 18.1% | 13.8 | 23.0% | 64.6% |
-| cli | 1000 | 52.0% | 200 | 2.0% | 19.2 | 7.1% | 53.4% |
-| cli | 30000 | 50.0% | 5 | 55.1% | 4.8 | 60.0% | 86.7% |
-| cli | 30000 | 50.0% | 20 | 18.1% | 13.8 | 23.0% | 63.2% |
-| cli | 30000 | 50.0% | 200 | 2.0% | 19.2 | 7.1% | 51.9% |
-| cli | 100000 | 49.8% | 5 | 55.1% | 4.8 | 60.0% | 86.6% |
-| cli | 100000 | 49.8% | 20 | 18.1% | 13.8 | 23.0% | 62.8% |
-| cli | 100000 | 49.8% | 200 | 2.0% | 19.2 | 7.1% | 51.4% |
-| cli | gamma-spend | 49.8% | 5 | 55.1% | 4.8 | 60.0% | 85.9% |
-| cli | gamma-spend | 49.8% | 20 | 18.1% | 13.8 | 23.0% | 62.9% |
-| cli | gamma-spend | 49.8% | 200 | 2.0% | 19.2 | 7.1% | 51.3% |
-| web | 1000 | 51.5% | 5 | 55.1% | 4.8 | 60.0% | 87.0% |
-| web | 1000 | 51.5% | 20 | 18.1% | 13.8 | 23.0% | 63.8% |
-| web | 1000 | 51.5% | 200 | 2.0% | 19.2 | 7.1% | 52.8% |
-| web | 30000 | 49.9% | 5 | 55.1% | 4.8 | 60.0% | 85.9% |
-| web | 30000 | 49.9% | 20 | 18.1% | 13.8 | 23.0% | 62.8% |
-| web | 30000 | 49.9% | 200 | 2.0% | 19.2 | 7.1% | 51.5% |
-| web | 100000 | 51.5% | 5 | 55.1% | 4.8 | 60.0% | 86.9% |
-| web | 100000 | 51.5% | 20 | 18.1% | 13.8 | 23.0% | 64.7% |
-| web | 100000 | 51.5% | 200 | 2.0% | 19.2 | 7.1% | 53.2% |
-| web | gamma-spend | 50.9% | 5 | 55.1% | 4.8 | 60.0% | 85.7% |
-| web | gamma-spend | 50.9% | 20 | 18.1% | 13.8 | 23.0% | 63.2% |
-| web | gamma-spend | 50.9% | 200 | 2.0% | 19.2 | 7.1% | 52.3% |
+| route | real age | Band-Center ID, no reveal | rho | q | direct reveal | survivors (of 20) | ID uniform-over-survivors | ID Band-Center-over-survivors |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| node | 1000 | 0.0% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 2.5% |
+| node | 1000 | 0.0% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 0.5% |
+| node | 1000 | 0.0% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 0.1% |
+| node | 30000 | 60.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.8% |
+| node | 30000 | 60.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 70.1% |
+| node | 30000 | 60.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 61.7% |
+| node | 100000 | 0.0% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 55.0% |
+| node | 100000 | 0.0% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 17.9% |
+| node | 100000 | 0.0% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 2.1% |
+| node | gamma-spend | 84.2% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 93.9% |
+| node | gamma-spend | 84.2% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 87.3% |
+| node | gamma-spend | 84.2% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 84.4% |
+| cli | 1000 | 52.0% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 71.7% |
+| cli | 1000 | 52.0% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 57.4% |
+| cli | 1000 | 52.0% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 52.6% |
+| cli | 30000 | 50.0% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 86.7% |
+| cli | 30000 | 50.0% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 63.2% |
+| cli | 30000 | 50.0% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.9% |
+| cli | 100000 | 49.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 86.6% |
+| cli | 100000 | 49.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 62.8% |
+| cli | 100000 | 49.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.4% |
+| cli | gamma-spend | 49.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.9% |
+| cli | gamma-spend | 49.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 62.9% |
+| cli | gamma-spend | 49.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.3% |
+| web | 1000 | 51.5% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 71.2% |
+| web | 1000 | 51.5% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 56.2% |
+| web | 1000 | 51.5% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 52.0% |
+| web | 30000 | 49.9% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.9% |
+| web | 30000 | 49.9% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 62.8% |
+| web | 30000 | 49.9% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.5% |
+| web | 100000 | 51.5% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 86.9% |
+| web | 100000 | 51.5% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 64.7% |
+| web | 100000 | 51.5% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 53.2% |
+| web | gamma-spend | 50.9% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.7% |
+| web | gamma-spend | 50.9% | 20 | 18.1% | 17.9% | 13.8 | 22.9% | 63.2% |
+| web | gamma-spend | 50.9% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 52.3% |
 
-Reading it: a uniform guess among the survivors goes from 5% to 7% (ρ = 200), 23% (ρ = 20) or 60% (ρ = 5). Combined with the band-center leak (#1755), CLI and web rings go from about 50% to 52–87% identifiable. #1790's candidate rule, which every Gini number in §3.1 assumes, is therefore a privacy cost unless it comes with a zero-knowledge proof.
+Reading it, per real-input age:
+
+- **Real age 1,000** (spent 280 blocks into its window): the real input is revealed directly in 2.5% of rings at ρ = 5, 0.5% at ρ = 20 and 0.1% at ρ = 200. The first version of this table used the full-window rate, 55%, 18% and 2%, for these rows; that overstated direct deanonymization of young inputs by a factor of about 20 to 35. The decoys are still eliminated at rate q, so the real input is now usually among *fewer* survivors: a uniform guess over survivors identifies it in 13.4%, 6.6% and 5.2% of rings, against 5% today. On the CLI and web routes the Band-Center guess over survivors goes from about 52% to 71–72% at ρ = 5, 56–57% at ρ = 20 and 52–53% at ρ = 200. On the node route it stays near zero, because that route's young real inputs are never the band center.
+- **Real ages 30,000 and 100,000** (spent after the window closed): unchanged from the first version. The real input had its whole window to win, so it is revealed directly in 55%, 18% and 2% of rings, and a uniform guess over survivors identifies it in 60%, 23% and 7%.
+- **Gamma-spend ages** (the node's spend-age distribution): almost unchanged. Direct reveal is 55.0%, 17.9% and 2.1%, because nearly all sampled spend ages are past the window. The first version's overstatement here is below the table's resolution.
+
+So claim-reveal costs a ring chain its anonymity mainly for outputs that are held past the window, which is the typical case under the gamma spend-age distribution, and much less for inputs spent young. #1790's candidate rule, which every Gini number in §3.1 assumes, is a privacy cost unless it comes with a zero-knowledge proof. The size of that cost depends strongly on how long outputs are held before they are spent.
 
 ### 5.2 Ticket price (R3)
 
@@ -390,7 +427,7 @@ The published tag weight reveals the real input's age to within 11 blocks for a 
 | web | 100000 | 4000 | 98.9% | 43.3% | 0.0% |
 | web | gamma-spend | 4000 | 95.3% | 10.9% | 0.0% |
 
-Reading it: keyed to the real input's age, R4 identifies 95–100% of rings on every route at ordinary ages. That holds even after cluster fingerprinting is fixed (#1756), because the leak is the decay, not the cluster. Only very young inputs (age 1,000 on the CLI and web routes) and weak tags blur it. Keyed to the youngest member, the allowance adds nothing to what the ring ages already show. On the node route that is already 100% at young ages, through the picker's own leak (#1692).
+Reading it: keyed to the real input's age, R4 identifies 95–100% of rings on every route at ordinary ages. That holds even after cluster fingerprinting is fixed (#1756), because the leak is the decay, not the cluster. Only very young inputs (age 1,000 on the CLI and web routes) and weak tags blur it. Keyed to the youngest member, the allowance adds nothing to what the ring ages already show. On the node route that is already 100% at young ages, through the picker's own leak (#1692). The Gini of this private form (R4p, with R5p as its R2 combination) is measured separately in §3.1.1: it passes no cell.
 
 ## 6. Node-side implementation complexity
 
@@ -401,29 +438,53 @@ Each estimate is the work needed for the node to enforce the rule. A wallet chan
 | R1 | new `SelectionMode` arm (`value × age`; `LotteryCandidate` already has `value` and `creation_block`, but `weight()` needs the height), plus `canonical_config` (`ledger/lottery_v2.rs`). Small. | a claim protocol (key-image reveal, claim window, payout escrow and expiry, reorg handling) or a ZK non-membership proof over the key-image set. Large to very large. | the ZK weighted-sampling sort (#902 Path B). Very large. | **very high** |
 | R2 | `SelectionMode::ClusterWeighted` exists, and `lottery_candidates` already computes each candidate's factor: a config switch. Trivial. | as R1 | as R1, plus a hidden-W factor gadget (CT-economics D2) | **very high** (trivial if splitting is accepted) |
 | R3 | a new consensus fee term `price × eligible outputs`; a full (untruncated) eligible-output counter in ledger state for the price; a per-output eligibility record (opt-in) or a rule that every output ≥ `min_utxo_value` pays (mandatory); coinbase and payout outputs pay or become ineligible; burn accounting. Medium (several hundred lines across ledger, mempool and three wallets). | none needed | price and count are public; works unchanged | **medium** |
-| R4 | an anti-deflation floor in tag-inheritance validation (today only inflation is checked, `verify_cluster_tag_inheritance`): outputs must keep `input tags × allowance(youngest ring member age)`, and any extra drop pays the #925 charge without the epoch-0 holiday (#1685); the decay change in `botho/src/wallet.rs`, `botho-wallet` and the web signer (which publishes empty tags today). Medium. | — | the CT-economics memo's value-free mass floor (D1–D3) | **medium**, coupled to #925, #1685, #1687 and #1756 |
+| R4p (R4's private form; R4 itself would also need the real input's age published) | an anti-deflation floor in tag-inheritance validation (today only inflation is checked, `verify_cluster_tag_inheritance`): outputs must keep `input tags × allowance(youngest ring member age)`, and any extra drop pays the #925 charge without the epoch-0 holiday (#1685); the decay change in `botho/src/wallet.rs`, `botho-wallet` and the web signer (which publishes empty tags today). Medium. | — | the CT-economics memo's value-free mass floor (D1–D3) | **medium**, coupled to #925, #1685, #1687 and #1756 |
 | R5 | R2 + R4 | as R1 | as R1 + R4 | **very high** |
 
-## 7. Why no candidate passes all three
+## 7. Why no studied candidate passes all three
 
-- **Splitting neutrality needs either value-linear weight or a priced ticket.** A per-output ticket that costs less than its expected payout is a subsidy anyone can farm (#1761). A value-linear weight cannot be farmed by splitting.
+This section describes the pattern across the candidate families the study built (§1). It is an argument over those families, not a proof about every possible lottery rule, and it is conditional on the current fee structure and tag design. §7.1 lists shapes it does not cover.
+
+- **Among the studied families, splitting neutrality came from value-linear weight or from a priced ticket.** A per-output ticket that costs less than its expected payout is a subsidy anyone can farm (#1761). A value-linear weight cannot be farmed by splitting.
 - **Value-linear weight needs the spent set.** On a ring chain, a re-spent coin's old output keeps its weight unless the node learns that it was spent. That costs a reveal (§5.1) or a non-membership proof (§6). The node's current UTXO set cannot provide it (§2).
-- **A priced ticket redistributes nothing.** If every ticket costs its expected payout, every holder gets back on average exactly what it paid. The lottery becomes a fair game that burns the emission share. In §3, R3 does no better than the baseline in any cell.
-- **Even with the spent set, value-linear weight does not reach the bar.** Inside a 10,000-block (about 14-hour) circulation window, value × age rewards outputs that were recently created and are large. That is turnover, not need: §3.3 shows merchants taking most of the lottery. Value-linear weight also cannot pay the poor more than their hashpower under egalitarian mining, which is the scenario in which a lottery would have to redistribute.
+- **A ticket priced at its expected payout redistributes nothing.** If every ticket costs its expected payout, every holder gets back on average what it paid. The lottery becomes a fair game that burns the emission share. In §3, R3 does no better than the baseline in any cell (best 3-seed mean +0.0033).
+- **Value-linear weight does not reach the bar even with the spent set.** Inside a 10,000-block (about 14-hour) circulation window, value × age rewards outputs that were recently created and are large. That is turnover, not need: §3.3 shows merchants taking most of the lottery. Value-linear weight also cannot pay the poor more than their hashpower under egalitarian mining, which is the scenario in which a lottery would have to redistribute.
+- **Giving up privacy or split-neutrality did not reach the bar either.** The data does not show a trade-off in which two of the three properties are reachable. Every configuration measured falls short on Gini, including the ones that give up an axis:
+  - value-linear weight with the spend reveal (R1, R2, R5 under #1790's rule; not private) peaks at +0.0317;
+  - the node's own rule, spent outputs staying eligible (not split-neutral), peaks at +0.0726 (R0, wealth mining, 1000x), at one horizon in one cell;
+  - R4 keyed to the real input's age (not private, and not split-neutral) passes 1 of 6 cells and gives −0.46 to −0.60 under egalitarian mining at 100x and 1000x.
 
-Any rule that reads only public, unlinkable data therefore either subsidizes splitting (R0, R4) or pays out nothing net (R3). Rules that read value must learn the spent set (R1, R2, R5), and even then they stay below the bar.
+Within the studied families, then: the rules that read only public, unlinkable data either subsidized splitting (R0, R4p) or paid out nothing net (R3), and the rules that read value needed the spent set (R1, R2, R5) and stayed below the bar even with it. No studied rule reached the bar on any terms.
+
+### 7.1 Shapes the study did not cover
+
+The argument above says nothing about rule shapes outside the families built here. Examples:
+
+- **A factor-dependent ticket price**, cheaper for low-factor outputs. This is R3 with a progressive subsidy. Whether the subsidy can be farmed by splitting low-factor outputs was not measured.
+- **A churn fee proportional to the value moved.** This would price the §4 churn attack under the node's rule directly, instead of requiring the spent set, and could make value-linear weight split-safe without a reveal. Its effect on honest payments was not measured.
+- **Redistribution through the demurrage side** (who pays, #1790 cause 3) rather than through ticket weighting.
+- **A different lottery window**, which changes how much value-linear weight tracks turnover (§3.6).
 
 ## 8. Ranked recommendation (no decision stated)
 
 This ranking orders the candidates by how much of the operator's requirement each one could carry. It is not a decision.
 
-1. **R3 (tickets priced at their expected payout).** This is the only candidate that passes two axes: splitting (0/192 profitable, by construction) and privacy (if purchase is mandatory, it reads only public counts). It works the same with or without confidential amounts, and its complexity is medium. It fails Gini by design. A fairly priced ticket returns on average what it costs, so the lottery stops being a redistribution channel (best 3-seed mean +0.0033). Adopting it would close #1682 and amount to retiring the lottery's redistributive role, which is consistent with the restatement in #1800. If the operator wants the lottery to redistribute, R3 is not the answer.
-2. **R2 (value × (7 − factor)), with R5 as its variant.** It has the best lottery-side Gini (up to +0.0265 for R2 and +0.0290 for R5 as 3-seed means, under wealth mining at 1x; at most +0.0294 under the node rule), and on public amounts it is a configuration switch, because the kernel and the per-candidate factor already exist. But it is split-safe only if spent value stops counting. That requires a claim-time key-image reveal (privacy FAIL: 2–55% of rings deanonymized outright, and a uniform guess identifying the real input in 7–60% of rings instead of 5%, depending on output density) or a ZK non-membership proof (very high complexity, no existing support). Under CT it also needs the #902 ZK sort. Even with all of that, it does not reach 0.05.
+1. **R3 (tickets priced at their expected payout).** This is the only candidate that passes two axes: splitting (0/192 profitable, by construction) and privacy (if purchase is mandatory, it reads only public counts). It works the same with or without confidential amounts, and its complexity is medium. It fails Gini by design. A fairly priced ticket returns on average what it costs, so the lottery stops being a redistribution channel (best 3-seed mean +0.0033). Adopting it would close the splitting hole (#1682) and would amount to retiring the lottery's redistributive role, which is consistent with the restatement in #1800. If the operator wants the lottery to redistribute, R3 is not the answer.
+2. **R2 (value × (7 − factor)), with R5 as its variant.** It has the best lottery-side Gini (up to +0.0265 for R2 and +0.0290 for R5 as 3-seed means, under wealth mining at 1x; at most +0.0294 under the node rule), and on public amounts it is a configuration switch, because the kernel and the per-candidate factor already exist. But it is split-safe only if spent value stops counting. That requires a claim-time key-image reveal (privacy FAIL; §5.1: for inputs held past the window, which is typical under the gamma spend-age distribution, 2–55% of rings are deanonymized outright and a uniform guess identifies the real input in 7–60% of rings instead of 5%, depending on output density; for an input spent at age 1,000, 0.1–2.5% outright and 5.2–13.4% by a uniform guess) or a ZK non-membership proof (very high complexity, no existing support). Under CT it also needs the #902 ZK sort. Even with all of that, it does not reach 0.05.
 3. **R1 (value × age).** Same blockers as R2, with no tilt and slightly more code. Its Gini numbers are similar (best +0.0317, under wealth mining at 1x). The age term adds nothing in steady state and penalizes frequent spenders.
-4. **R4 (per-block tag decay).** It addresses the stated density mechanism, since demurrage survives churn. Its net effect is dominated by who pays: strongly regressive under egalitarian mining at density (−0.46 to −0.60). It passes privacy only if the allowance is keyed to the ring's youngest member, and it leaves the lottery unchanged (192/192). It would be worth revisiting only together with a fix for how demurrage falls on payment recipients (the velocity mispricing, #1790 cause 3) and with #1756.
+4. **R4 (per-block tag decay).** Its two forms differ. Keyed to the real input's age (R4), it addresses the stated density mechanism, since demurrage survives churn, and it is the only rule with a passing cell (wealth, 1000x). But it identifies 95–100% of rings (§5.3), and its net effect is dominated by who pays: strongly regressive under egalitarian mining at density (−0.46 to −0.60). Keyed to the ring's youngest member (R4p), it is private, but tags then effectively never decay, and it passes no cell (best +0.0163; −0.09 to −0.48 under egalitarian mining, §3.1.1). Both leave the lottery unchanged (192/192). It would be worth revisiting only together with a fix for how demurrage falls on payment recipients (the velocity mispricing, #1790 cause 3) and with #1756.
 5. **R0 (current rules).** It fails Gini and splitting. Its only advantage is that it exists.
 
-Across all five, the study supports this reading: within ring privacy and the current tag design, the lottery cannot be both a redistribution channel and Sybil-neutral (§7). The operator's choice lies between keeping the lottery as a non-redistributive mechanism (R3, or retiring it) and paying for the spent-set proof that value-linear weighting needs, knowing that even then the measured gain stays below 0.05.
+Across all five, the study supports this reading for the candidate families it built: no measured configuration reached the 0.05 bar, including the ones that gave up privacy or split-neutrality (§7). That is a statement about these families under the current fee structure and tag design, not about every possible rule (§7.1).
+
+One reading of the operator's options, offered as a map rather than a choice set:
+
+- keep the lottery as a non-redistributive mechanism and close the splitting hole (R3);
+- retire the lottery, or its redistributive role;
+- pay for the spent-set proof that value-linear weighting needs, knowing that the measured gain stays below 0.05;
+- drop or restate the redistribution claim (#1800);
+- look for redistribution beyond the lottery, for example on the demurrage side, or in the shapes §7.1 lists and the study did not build;
+- commission further measurement before choosing.
 
 **No decision is stated here. Ratification is the operator's.** In particular, nothing here says whether to adopt any candidate, change a constant, restate the M2 criterion (#1800), or retire the lottery's redistribution role.
 
@@ -436,19 +497,21 @@ $B redistribution-redesign --part splitting          # §4 (golden-checked)
 $B redistribution-redesign --part privacy            # §5 (golden-checked)
 # §3: one run per call, prints a JSON line per snapshot (10 and 20 yr)
 $B redistribution-redesign --part m2 --variant {baseline,value-age,inverse-factor,ticket-price,time-decay,inverse-factor+time-decay} \
-   --mining {wealth,egalitarian} --seed {1696,2,3} --tx-scale {1,100,1000} --run {on,off} [--spent-eligible] [--whale optimal-decoy]
+   --mining {wealth,egalitarian} --seed {1696,2,3} --tx-scale {1,100,1000} --run {on,off} [--spent-eligible] [--whale optimal-decoy] \
+   [--decay-key youngest]   # R4p / R5p (§3.1.1): time-decay variants only
 cargo test --release -p bth-cluster-tax --features cli --lib redistribution_redesign
 cargo test --release -p bth-cluster-tax --features cli --lib baseline_reproduces_1790   # R0 = #1790, bit for bit
 ```
 
-The 232 m2 runs (232 on/off runs: 6 variants × 2 mining models × 3 seeds × 3 densities with the #1790 rule; R0–R3 again with spent outputs eligible; and the optimal-decoy whale at 1x) take 20 s to 5 min each on an Apple M-series laptop. The uniform-ticket rules are the slow ones. They were run in parallel at `5bb7969e` plus this change.
+The 304 m2 runs (on/off pairs: 6 variants × 2 mining models × 3 seeds × 3 densities with the #1790 rule; R0–R3 again with spent outputs eligible; the optimal-decoy whale at 1x; and R4p and R5p, 72 runs, with `--decay-key youngest`) take 20 s to 5 min each on an Apple M-series laptop. The uniform-ticket rules are the slow ones. The first 232 were run in parallel at `5bb7969e` plus this change. The 72 R4p/R5p runs were added in review, on the rebased branch (the harness change only adds the `--decay-key youngest` arm, so the other runs are unaffected); they took 8 minutes on 24 cores.
 
 ## 10. Approximations, and which way they lean
 
 Everything listed in the #1790 record still applies. The new ones:
 
 - **Ticket weights are fixed at window entry for R2.** W only grows, so a factor taken at entry is at most the factor at the draw. This slightly overweights high-W outputs, which leans in the mechanism's favour (more tilt).
-- **R3's price lags by one step** (720 blocks) and uses the uncapped window count. The node would use the parent block's state. In steady state the lag cancels. A sudden drop in organic activity lets anyone buy underpriced tickets for up to one window, and a flood raises the price for the flooder.
+- **R3's price lags by one step** (720 blocks). It is the previous step's total payout divided by the tickets bought in that step, which equals a ticket's expected payout only in steady state (each ticket is eligible for about 12.9 steps). The node would use the parent block's state. In steady state the lag cancels. A sudden drop in organic activity lets anyone buy underpriced tickets for up to one window, and a flood raises the price for the flooder.
+- **R4p models the youngest ring member at the 10-block floor**, the least decay any ring allows. A real wallet's youngest ring member is usually older, so the private rule allows somewhat more decay than R4p; R4 (keyed to the real input's age) is the most it could allow.
 - **R4 decays the whole position by the time since its last spend.** Coins received since then are over-decayed, which leans against the mechanism.
 - **The splitting grid's churn model** prices one churn transaction per block with a 10-block demurrage clock and gives organic outputs a fixed 10-BTH value. The sensitivity table varies capital (1,000 BTH to 5M BTH) and organic value (10 to 1,000 BTH): 180–192 points stay profitable.
-- **Claim-reveal** treats every output's win as independent at rate q, regardless of age. In reality only outputs that pass through the 720..10,000 window can win, and every output does.
+- **Claim-reveal** draws wins independently per output, at a constant per-block rate over the 720..10,000 window. The real input is exposed only for the part of its window before its spend, using each ring's own real age, because a spent output forfeits and its owner has no reason to reveal its key image. Each decoy is eliminated at the full-window rate q. That is exact for decoys never spent inside their window and an upper bound for decoys that were (they too could only be revealed before their own spend), so the survivor-based ID columns lean slightly against the rule. The adversary is also assumed not to exploit the asymmetry itself (a young real input is less likely to have been revealed than its decoys), which leans in the rule's favour.
