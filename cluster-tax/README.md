@@ -287,7 +287,7 @@ cargo bench -p bth-cluster-tax
 
 ## Economic Impact
 
-**Redistribution is not demonstrated at production parameters.** Early simulations in this crate (a different fee model and lottery, no mining) reported large Gini reductions, for example 0.788 → 0.409 over 10 years. Those results do not carry over to the protocol. The code-faithful `m2-production` run measures the mechanism's own ΔGini at −0.028 to +0.001 against a 0.05 bar, and at most +0.019 even at 1000x the transaction rate (#1790, `docs/research/m2-production-verdicts.md`). The faithful-to-code `lottery-reward-cap-sweep --faithful` finds lottery ticket-splitting profitable (#1761, #1682). A sim-only redesign is under study (#1801). See `docs/concepts/tokenomics.md` (Redistribution Status).
+**Redistribution is not demonstrated at production parameters.** Early simulations in this crate (a different fee model and lottery, no mining) reported large Gini reductions, for example 0.788 → 0.409 over 10 years. Those results do not carry over to the protocol. The code-faithful `m2-production` run measures the mechanism's own ΔGini at −0.028 to +0.003 against a 0.05 bar, and even at 1000x the transaction rate no case clears the bar at both 10 and 20 years (#1790, #1808, `docs/research/m2-production-verdicts.md`). The faithful-to-code `lottery-reward-cap-sweep --faithful` finds lottery ticket-splitting profitable (#1761, #1682). A sim-only redesign is under study (#1801). See `docs/concepts/tokenomics.md` (Redistribution Status).
 
 ## License
 

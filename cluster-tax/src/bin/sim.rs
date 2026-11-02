@@ -59,6 +59,30 @@ mod cli {
         }
     }
 
+    /// Lottery candidate rule for spent outputs in `m2-production` (#1808).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+    pub enum CandidateRuleArg {
+        /// Spent outputs stay candidates until they age out (what the node
+        /// does: a ring spend only records a key image).
+        Node,
+        /// A spend removes its coins from the draw; reproduces PR #1790.
+        #[value(name = "1790")]
+        Rule1790,
+    }
+
+    impl CandidateRuleArg {
+        fn spent_eligible(self) -> bool {
+            matches!(self, CandidateRuleArg::Node)
+        }
+
+        fn label(self) -> &'static str {
+            match self {
+                CandidateRuleArg::Node => "node",
+                CandidateRuleArg::Rule1790 => "1790",
+            }
+        }
+    }
+
     #[derive(Subcommand)]
     pub enum Command {
         /// Analyze tag decay over multiple hops
@@ -1007,8 +1031,8 @@ mod cli {
             /// stay candidates until they age out, what the node does) or
             /// 1790 (a spend removes its coins from the draw; reproduces the
             /// numbers published in PR #1790)
-            #[arg(long, default_value = "node")]
-            candidate_rule: String,
+            #[arg(long, value_enum, default_value = "node")]
+            candidate_rule: CandidateRuleArg,
         },
     }
 
@@ -1319,7 +1343,7 @@ mod cli {
                 fee_model,
                 validate_days,
                 tx_scale,
-                &candidate_rule,
+                candidate_rule,
             ),
             Command::RedistributionRedesign {
                 part,
@@ -5041,7 +5065,7 @@ mod cli {
         fee_model: FeeModelArg,
         validate_days: Option<u64>,
         tx_scale: f64,
-        candidate_rule: &str,
+        candidate_rule: CandidateRuleArg,
     ) {
         use bth_cluster_tax::simulation::m2_production::{
             run_m2_production, run_m2_production_pair, MiningModel, ProdParams, ProdSnapshot,
@@ -5063,14 +5087,8 @@ mod cli {
         };
         // #1808: spent outputs stay candidates on the node (a ring spend
         // only records a key image); `1790` reproduces PR #1790's rule.
-        let spent_eligible = match candidate_rule {
-            "node" => true,
-            "1790" => false,
-            _ => {
-                eprintln!("--candidate-rule must be node or 1790");
-                std::process::exit(2);
-            }
-        };
+        let spent_eligible = candidate_rule.spent_eligible();
+        let candidate_rule = candidate_rule.label();
 
         let print_snap = |label: &str, s: &ProdSnapshot| {
             println!(
