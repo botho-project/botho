@@ -1,0 +1,5 @@
+# The claimed statement `one_eq_two : 1 = 2`, as if a reviewer had accepted
+# it on the base branch. selftest-verify.sh appends this to the base record,
+# so the statement check compares the artifact against the claim.
+theorem Botho.one_eq_two sha256:c551f0ddf35dd8f8529f16eb299059075eae79712ac7deb5d5a3ab8966f049ab
+  : Eq 1 2

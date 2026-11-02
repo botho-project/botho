@@ -2,9 +2,10 @@
 # Trusted verifier for the Botho formal model (#1799).
 #
 # The `verify` job in .github/workflows/formal.yml runs this script. It checks
-# out the script, AxiomReport.lean, check-sorry.sh, axioms-allowlist.txt and
-# lakefile.toml from the BASE branch, so a pull request cannot change what this script does
-# or which axioms it accepts. It checks compiled .olean files that the
+# out the script, AxiomReport.lean, check-sorry.sh, statements.py,
+# axioms-allowlist.txt, statements.txt and lakefile.toml from the BASE branch,
+# so a pull request cannot change what this script does, which axioms it
+# accepts or which statements its theorems must have. It checks compiled .olean files that the
 # untrusted `build` job uploaded. It never runs `lake`, never compiles a model
 # source, and never runs model code:
 #
@@ -23,7 +24,8 @@
 #
 # Usage: verify-artifacts.sh --lib DIR --sources DIR [--sysroot DIR]
 #                            [--allowlist FILE] [--base-lakefile FILE]
-#                            [--no-scan]
+#                            [--statements FILE] [--no-scan]
+#                            [--no-statements]
 #   --lib DIR        the downloaded build artifact: Botho.olean and
 #                    Botho/**/*.olean (the `.lake/build/lib/lean` directory).
 #   --sources DIR    the pull request's formal/ tree. Read as data only: the
@@ -35,8 +37,14 @@
 #   --base-lakefile FILE
 #                    the base branch's lakefile.toml (default:
 #                    ../lakefile.toml next to this script).
+#   --statements FILE
+#                    the statement record (default: ../statements.txt next
+#                    to this script, which in CI is the base branch's copy).
 #   --no-scan        skip check 2. Only selftest-verify.sh uses this, to show
-#                    that checks 2-4 reject each fixture on their own. CI
+#                    that checks 3-6 reject each fixture on their own. CI
+#                    never passes it.
+#   --no-statements  skip check 6. Only selftest-verify.sh uses this, to show
+#                    that a forged artifact passes every other check. CI
 #                    never passes it.
 #
 # Checks, in order (any failure exits 1):
@@ -69,13 +77,24 @@
 #        module outside Init / Botho, or declares an `[init]` initializer;
 #      - the compiled module set differs from the source module set
 #        (Botho.lean + Botho/**/*.lean) or from the files in the artifact.
+#   6. Statement binding (#1805): for each theorem listed in Theorems.lean,
+#      statements.py renders the block AxiomReport.lean computed (a SHA-256
+#      of the exact statement closure, the theorem's type plus every library
+#      declaration it reaches with the bodies of definitions, and the same
+#      closure pretty-printed) and requires an identical block in the
+#      statement record (--statements; the base branch's statements.txt). A
+#      missing record, a malformed record, or a theorem with no identical
+#      block fails. Checks 5 and 6 both report before the script exits, so
+#      a fixture's output shows every reason it fails.
 #
 # What this does not check: that the .olean files are what the sources
-# compile to. See "Limits" in formal/README.md.
+# compile to. Check 6 binds each listed theorem's compiled statement to the
+# reviewed record instead; see "Limits" in formal/README.md.
 set -euo pipefail
 
 main() {
 local here lib="" sources="" sysroot="" allowlist="" base_lakefile="" scan=1
+local statements="" stmt_check=1
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -84,19 +103,22 @@ while [[ $# -gt 0 ]]; do
     --sysroot) sysroot="$2"; shift 2 ;;
     --allowlist) allowlist="$2"; shift 2 ;;
     --base-lakefile) base_lakefile="$2"; shift 2 ;;
+    --statements) statements="$2"; shift 2 ;;
     --no-scan) scan=0; shift ;;
-    *) echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--no-scan]" >&2
+    --no-statements) stmt_check=0; shift ;;
+    *) echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--statements FILE] [--no-scan] [--no-statements]" >&2
        exit 2 ;;
   esac
 done
 if [[ -z "$lib" || -z "$sources" ]]; then
-  echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--no-scan]" >&2
+  echo "usage: $0 --lib DIR --sources DIR [--sysroot DIR] [--allowlist FILE] [--base-lakefile FILE] [--statements FILE] [--no-scan] [--no-statements]" >&2
   exit 2
 fi
 lib="$(cd "$lib" && pwd)"
 sources="$(cd "$sources" && pwd)"
 allowlist="${allowlist:-$here/../axioms-allowlist.txt}"
 base_lakefile="${base_lakefile:-$here/../lakefile.toml}"
+statements="${statements:-$here/../statements.txt}"
 if [[ -z "$sysroot" ]]; then
   sysroot="$(lean --print-prefix)"
 fi
@@ -110,12 +132,18 @@ for f in "$lean" "$checker"; do
   fi
 done
 for f in "$allowlist" "$base_lakefile" "$here/AxiomReport.lean" \
-  "$here/check-sorry.sh" "$sources/Theorems.lean"; do
+  "$here/check-sorry.sh" "$here/statements.py" "$sources/Theorems.lean"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: missing $f" >&2
     exit 1
   fi
 done
+# The statement record fails closed (#1805): no record, no verdict.
+if [[ "$stmt_check" == 1 ]] && [[ ! -f "$statements" || -L "$statements" ]]; then
+  echo "FAIL: statement record: missing $statements (the base commit must have" \
+    "formal/statements.txt)" >&2
+  exit 1
+fi
 local gate_lib=Botho
 
 local tmp
@@ -370,7 +398,17 @@ if ! (cd "$tmp/cwd" && LEAN_SYSROOT="$sysroot" LEAN_PATH="$tmp/lib" \
   exit 1
 fi
 
-python3 -I - "$tmp/report" "$allowlist" "$tmp/names" "$tmp/modules" "$gate_lib" <<'PY'
+# Check 6 runs before check 5's verdict so that both reasons are reported.
+local stmt_rc=0 axiom_rc=0
+if [[ "$stmt_check" == 1 ]]; then
+  echo "== verify: statement binding (statements.py against $statements)"
+  python3 -I "$here/statements.py" check "$tmp/report" "$statements" "$tmp/names" \
+    || stmt_rc=$?
+fi
+
+echo "== verify: axioms, modules and initializers"
+python3 -I - "$tmp/report" "$allowlist" "$tmp/names" "$tmp/modules" "$gate_lib" <<'PY' \
+  || axiom_rc=$?
 import sys
 
 report, allowlist, names_file, modules_file, lib = sys.argv[1:]
@@ -419,6 +457,8 @@ for row in rows[:-1]:
             errors.append(f"the library declares non-allow-listed axiom {row[1]}")
     elif kind == "INIT":
         errors.append(f"module {row[1]} declares an initializer ({row[2]})")
+    elif kind in ("STMT", "STMTPP"):
+        pass  # check 6 (statements.py)
     else:
         errors.append(f"unknown report record {kind}")
 
@@ -440,10 +480,19 @@ if errors:
 for name in order:
     print(f"  {name}: {', '.join(walked[name]) or 'no axioms'}")
 print(
-    f"OK: verify passed ({len(order)} theorems; {len(modules)} modules; "
+    f"OK: axioms ({len(order)} theorems; {len(modules)} modules; "
     f"{swept} library declarations swept; allow-list: {', '.join(sorted(allowed))})"
 )
 PY
+if [[ "$stmt_rc" != 0 || "$axiom_rc" != 0 ]]; then
+  echo "FAIL: verify (statement binding rc=$stmt_rc, axiom walk rc=$axiom_rc)" >&2
+  exit 1
+fi
+if [[ "$stmt_check" == 1 ]]; then
+  echo "OK: verify passed (statements bound to $statements)"
+else
+  echo "OK: verify passed (statement binding skipped: --no-statements)"
+fi
 }
 
 main "$@"

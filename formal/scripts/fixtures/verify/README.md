@@ -5,8 +5,9 @@ is one pull request that tries to change the verdict of the trusted `verify`
 job (`../../verify-artifacts.sh`). `../../selftest-verify.sh`
 applies each fixture to a copy of the clean `formal/` tree, builds it the way
 the untrusted `build` job does (running the fixture's code), keeps only the
-files the workflow uploads, and runs the verifier with the clean allow-list
-and lakefile, as the base branch would. Each fixture must fail for the reason in
+files the workflow uploads, and runs the verifier with the clean allow-list,
+lakefile and statement record (`formal/statements.txt`, plus the fixture's
+`record.txt`), as the base branch would. Each fixture must fail for the reason in
 `expect.txt`, and none of its code may run inside the verifier.
 
 The first four rows reproduce the bypasses found in the reviews of PR #1783:
@@ -26,13 +27,33 @@ The first four rows reproduce the bypasses found in the reviews of PR #1783:
 | `native-split-swap` | (scan-only) `decide +native` in an `example` in a module with no axiom; its IO overwrites `Cheat.olean` and the `Tidy.olean` that holds the world-token axiom (#1810 variant A) |
 | `guard-swap` | (scan-only) the same with `#guard`, which evaluates with the compiler and has no `native` token (#1810 variant B) |
 | `eval-swap` | (scan-only) a prelude `#eval` that overwrites `Cheat.olean`, with no axiom and no `import Lean` |
+| `statement-swap` | (statement-only, #1805) the artifact is compiled from a copy in which `satAdd_le_cap` states `True`, while the scanned sources are unchanged: the swap a detached build-time process could leave, with no other trace |
+| `definition-swap` | (statement-only, #1805) the same with the body of `Botho.satAdd` changed (`min (b + a) cap`); every theorem's type is unchanged |
+| `statement-missing` | (#1805) an honest new theorem with no block in the base statement record |
+| `record-pending` | (must pass, #1805) the base record holds a second, pending block for `satAdd_le_cap` |
 
 A `scan-only` fixture leaves an artifact that is an honest build of a
-different source, so no artifact check can reject it: only the base
-branch's source scan or lakefile check (check 2) can. For these the
-verifier must fail with the full checks (matching `expect.txt`) and must
-pass without the scan (matching the regex in `scan-only`), which shows the
-forgery is real.
+different source, so no check on the artifact alone can reject it: only
+the base branch's source scan or lakefile check (check 2), or, since #1805,
+the statement check against the base record (check 6). For these the
+verifier must fail with the full checks (matching `expect.txt`), must fail
+without the scan for the statement check's reason (matching
+`statement.txt`), and must pass with neither the scan nor the statement
+check (matching the regex in `scan-only`), which shows the forgery is
+real.
+
+A `statement-only` fixture (#1805) passes every check but the statement
+check, the scan included: the verifier must fail with the full checks
+(matching `expect.txt`) and pass with `--no-statements` (matching the regex
+in `statement-only`).
+
+The fixtures that add `one_eq_two` carry a `record.txt` with the block of
+the claimed `one_eq_two : 1 = 2`, as if a reviewer had accepted the claim
+on the base branch. So the statement check compares the artifact with the
+claim, not with an empty record. `simproc-swap` and `native-world-swap` also
+carry a `statement.txt`: besides the evidence they leave behind (an
+`import Lean`, a declared axiom), the statement check rejects them for the
+swapped statement.
 
 Fixture files:
 
@@ -56,6 +77,16 @@ Fixture files:
   `expect.txt`.
 - `artifact-extra.txt`: paths added to the uploaded artifact (copies of
   `Botho.olean`), as a build job that uploads extra files would.
+- `forged.txt`: lines `FILE NAME`. After the verifier's copy of the sources
+  is taken, replaces theorem `NAME` in `FILE` (up to the next blank line)
+  with `theorem NAME : True := trivial` in the tree that is built only.
+- `forged-replace.txt`: lines `FILE<TAB>OLD<TAB>NEW`, the same for a text
+  replacement (`OLD` must occur once).
+- `record.txt`: blocks appended to the base statement record.
+- `statement.txt`: a regex the run without the scan must also match: the
+  statement check's own reason.
+- `statement-only`: a regex. The fixture must pass with `--no-statements`
+  and match it (see above).
 - `expect.txt`: an extended regex that the verifier's output must match.
 - `pass`: if present, the fixture must pass instead (no `expect.txt`).
 - `expect-same-layout.txt`: if present, the verifier also runs (without the

@@ -59,6 +59,7 @@ scripts/check-sorry.sh          # sorry gate (scans, then builds)
 scripts/check-axioms.sh         # axiom gate
 scripts/selftest-gates.sh       # proves both gates reject injected defects
 scripts/selftest-verify.sh      # proves the verify job rejects the bypass fixtures
+scripts/propose-statements.sh   # prints the statement record this tree compiles to
 ```
 
 To run the verify job's checks on your own build, stage the `.olean` files
@@ -231,8 +232,9 @@ and the source scan below, over the pull request's sources as data:
   `.github/workflows/formal.yml` and runs it with stub verifiers. It checks
   that the step fails, and runs no verifier, when the base commit has no
   `verify-artifacts.sh` (even if the pull request has one), and that
-  otherwise it runs the base copy with the base allow-list and lakefile.
-  It needs no Lean toolchain.
+  otherwise it runs the base copy with the base allow-list and lakefile and
+  no `--no-*` flag. It also checks that the base checkout includes
+  `formal/statements.txt` (#1805). It needs no Lean toolchain.
 - **Verify self-test** (`scripts/selftest-verify.sh`) runs the verify job's
   checks against the fixtures in `scripts/fixtures/verify/`: the bypasses
   found in the reviews of PR #1783 (an `@[init]` that widens the allow-list,
@@ -252,7 +254,20 @@ and the source scan below, over the pull request's sources as data:
   split across modules, `#guard`, and a prelude `#eval`, each overwriting
   compiled `.olean` files. For these the self-test shows both halves: the
   full verifier rejects them, and the checks without the scan accept the
-  forged `one_eq_two`. The self-test also checks that no
+  forged `one_eq_two`. Since #1805 the statement check rejects these four
+  too, so the self-test shows three steps: the full verifier rejects them,
+  the checks without the scan reject them for the swapped statement, and
+  only with neither the scan nor the statement check does the forged
+  `one_eq_two` pass. `simproc-swap` and `native-world-swap` must also be
+  reported by the statement check. Two `statement-only` fixtures compile a
+  different source than the one the verifier reads, as a detached
+  build-time process could, and leave no other trace: `statement-swap`
+  (`satAdd_le_cap` states `True`) and `definition-swap` (the body of
+  `satAdd` changes, no theorem's type does). Every other check, the scan
+  included, accepts them; the statement check rejects them.
+  `statement-missing` (an honest new theorem with no record block) fails
+  closed, `record-pending` (a second block for a theorem) passes, and the
+  clean tree fails closed with no record. The self-test also checks that no
   fixture initializer runs inside the verifier, and, as a control, that the
   same initializer does run when the library is imported through the Lean
   frontend. The clean tree is also verified with no `lean`, `lake` or `elan`
@@ -262,10 +277,11 @@ and the source scan below, over the pull request's sources as data:
 
 `scripts/verify-artifacts.sh` is the authority for the verdict. The verify job
 checks out `formal/scripts/` (this script, `AxiomReport.lean`,
-`check-sorry.sh`), `axioms-allowlist.txt` and `lakefile.toml` from the base
-commit of the pull request (on a push, the pushed commit), never from the
-pull request head. A pull request that edits these files changes nothing the
-verify job reads until it is merged. It then:
+`check-sorry.sh`, `statements.py`), `axioms-allowlist.txt`, `statements.txt`
+and `lakefile.toml` from the base commit of the pull request (on a push,
+the pushed commit), never from the pull request head. A pull request that
+edits these files changes nothing the verify job reads until it is merged.
+It then:
 
 1. checks that the pull request's `lakefile.toml` compiles the same sources
    as the base's. Both are parsed with Python's `tomllib`, and the
@@ -291,10 +307,73 @@ verify job reads until it is merged. It then:
    `sorryAx`; if any library declaration reaches `sorryAx`; if a library
    module declares an axiom outside the base allow-list, imports anything
    but `Init` and `Botho` modules, or declares an `[init]` initializer; or if
-   the compiled modules differ from the source modules.
+   the compiled modules differ from the source modules;
+6. binds each theorem listed in `Theorems.lean` to the base commit's
+   statement record (#1805; see [Statement binding](#statement-binding)):
+   the block computed from the compiled library must equal a block of the
+   base `statements.txt`. A missing or malformed record, or a theorem with
+   no identical block, fails. Steps 5 and 6 both report before the job
+   fails.
 
 It never runs `lake`, never compiles a model source, installs the toolchain
 fresh (an official `leanprover/lean4` release only) and uses no cache.
+
+## Statement binding
+
+The verify job checks the `.olean` files the untrusted build job uploads, and
+cannot rebuild them (see [Limits](#limits)). So each theorem the project
+claims is bound to a reviewed record instead: `statements.txt`, read from
+the base commit (#1805).
+
+A block of the record looks like this:
+
+```text
+theorem Botho.satAdd_le_cap sha256:ef778d42...
+  : ∀ (cap a b : Nat), instLENat.le (Botho.satAdd cap a b) cap
+  def Botho.satAdd : Nat → Nat → Nat → Nat
+    := fun cap a b => instMinNat.min (instHAdd.hAdd a b) cap
+```
+
+- **What the hash covers.** `AxiomReport.lean` computes the theorem's
+  *statement closure*: its type, and every declaration of the `Botho`
+  library that the type reaches, followed through what each one means (a
+  definition's type and value, an inductive's whole block, a theorem's type
+  only, since proofs are irrelevant and `leanchecker` has checked them). It
+  serializes the closure exactly (de Bruijn indices, structural names,
+  universe levels, literals and every field of each declaration kind; only
+  binder names and metadata are left out) and `statements.py` takes its
+  SHA-256. Declarations from `Init` are referenced by name: they come from
+  the toolchain the verify job installs, never from the artifact. So the
+  hash changes if the artifact states a different type *or* changes the
+  body of a definition the statement uses (`satAdd`), even when the type
+  reads the same.
+- **What the reviewer reads.** The indented lines are the same closure,
+  pretty-printed by Lean's built-in delaborator without any extension (so
+  without notation: `instLENat.le x y` rather than `x ≤ y`, with instances
+  visible, names in full). The verify job compares the whole block as
+  text, so the readable part cannot drift from the hash.
+- **Proposals.** `scripts/propose-statements.sh` builds the tree and prints
+  the record it compiles to (`--check` compares with `statements.txt`,
+  `--write` overwrites it). The build job runs `--check` for information and
+  prints the proposal on a mismatch; the verify job prints the blocks it
+  computed for any theorem that fails. Both come from an untrusted build: a
+  reviewer checks the text against the sources, and recomputes the hash on
+  a tree they have reviewed for build-time code before accepting a block.
+- **Changing or adding a statement takes two pull requests**, like adding
+  an allow-listed axiom. The verify job reads the base record, so the block
+  must be on `main` before the model that needs it:
+  1. a pull request that adds the new block to `statements.txt` next to the
+     old one (the model is unchanged, so its verify job passes against the
+     old block; a theorem may have several blocks);
+  2. the pull request that changes the model, which passes against the new
+     block and may delete the old one.
+
+  A toolchain bump that changes how a definition elaborates changes the
+  hash too, and takes the same two steps.
+- **Bootstrapping (#1805).** The pull request that introduced the record
+  could not be checked against it: its verify job ran the base scripts,
+  which had no statement check. The first push to `main` after it merged
+  is the first verify run that reads `statements.txt`.
 
 ## Limits
 
@@ -320,39 +399,80 @@ initializer and the frontend control described above.
 **What it does not guarantee: the artifact matches the sources.** The build
 job is untrusted, so the `.olean` files it uploads are whatever model code
 left on disk. The verify job proves that the uploaded library is
-kernel-valid and that the listed theorems, as compiled, depend only on
-allowed axioms. It does not prove that those theorems state what the
-sources say. The `simproc-swap` and `native-world-swap` fixtures replace
-`one_eq_two : 1 = 2` with `one_eq_two : True` in the compiled library, and
-the later checks reject them only because of other evidence they leave
-behind (an `import Lean`, a declared axiom). A build-time attack that also
-rewrites those modules leaves a library that passes every artifact check:
-the `native-split-swap`, `guard-swap`, `eval-swap` and `require-dep`
-fixtures do exactly that. Two things stand in the way of such an attack:
+kernel-valid, that the listed theorems, as compiled, depend only on
+allowed axioms, and (#1805) that they state what the base record says. It
+does not prove that the library is what the sources compile to.
 
-- the base commit's source scan, which the pull request cannot weaken, has to
-  miss every way the attack runs code during the build; and
-- review: the sources of such a pull request contain both the false proof
-  and the code that runs during the build.
+**What statement binding closes.** Before #1805 a build-time attack that
+replaced `one_eq_two : 1 = 2` with `one_eq_two : True` in the compiled
+library, and rewrote the modules that betrayed it, left a library that
+passed every artifact check (the `native-split-swap`, `guard-swap`,
+`eval-swap` and `require-dep` fixtures). The verify job now requires each
+listed theorem's statement closure to match a block of the base record, so
+substituting what a listed theorem states fails however it was done: by
+code run during the build, by a detached process, or by build
+configuration (`srcDir`, `lean_lib` roots or globs, a decoy copy). The
+`statement-swap` and `definition-swap` fixtures leave no other trace and
+are rejected by this check alone.
+
+**What remains.** The binding is only as good as the record and covers
+only what the record names:
+
+- *The record is reviewed, not computed by a trusted build.* A block is
+  proposed by a build of the pull request's sources, which runs model
+  code. A reviewer who accepts a block must check its text against the
+  sources and, before trusting its hash, rebuild a tree they have reviewed
+  for build-time code. A malicious block that a reviewer accepts is bound
+  as faithfully as an honest one.
+- *The readable text is not the whole binding.* The pretty-printer hides
+  implicit arguments, universe levels, numeral instances (`Eq 1 2`) and
+  proofs inside definitions. The hash covers all of them; the reviewer
+  sees only the text, so a difference that only the hash shows must be
+  found by recomputing the hash.
+- *Only listed theorems are bound.* A declaration that no listed theorem's
+  statement reaches (a helper lemma, an unused definition) is not in any
+  block. It cannot change what a listed theorem states, but it is not
+  checked against the sources either.
+- *`Init` is referenced by name.* The verify job loads `Init` from the
+  toolchain the pull request picks (an official release only); the record
+  binds names such as `instLENat`, not their definitions. A toolchain
+  change is under CODEOWNERS (see below).
+- *More of Lean runs on the artifact.* To print a block, the verify job
+  runs Lean's pretty-printer (the built-in delaborator, with type
+  inference and reduction) over declarations read from the artifact. No
+  model code runs, but it is more of Lean's own code exposed to a
+  hand-crafted `.olean` than the kernel replay and the walk alone. A term
+  built to make printing or hashing slow fails the job by timeout, closed.
+- *Pending blocks.* A theorem may have several blocks. An old block left in
+  the record after a statement changed still verifies; remove it in the
+  second pull request (`propose-statements.sh --check` lists blocks that
+  match no compiled theorem).
+
+The base commit's source scan and review still stand in front of build-time
+code: they keep it from running at all, and the statement check makes it
+pointless for the listed theorems.
 
 Statement substitution through build configuration alone, with no code run
 during the build, is closed by step 1: Lake compiles only the sources the
 base's layout names, and those are the sources the scan reads and the
-intake's module-set check compares (the `lakefile-decoy` fixture; it passes
-every other check). That check covers the layout keys of Lake v4.35.0's
+intake's module-set check compares (the `lakefile-decoy` fixture; every
+other check but the statement check passes it). That check covers the layout keys of Lake v4.35.0's
 TOML configuration. Build configuration that loads or runs code is closed
 by the base's key allow-list in step 2. A `[[require]]` dependency's
 `lakefile.lean` is a Lean program that Lake elaborates, `#eval` included, on
 every `lake` call, and its source is never scanned, so it could rewrite a
 model source before Lake compiles it and leave an artifact that is an
-honest build of the rewritten source (the `require-dep` fixture; no check
-on the artifact can tell). The allow-list rejects `[[require]]`, a manifest
+honest build of the rewritten source (the `require-dep` fixture; only the
+statement check, of the checks on the artifact, can tell). The allow-list rejects `[[require]]`, a manifest
 that lists a package, `moreLeanArgs`, `weakLeanArgs`, `plugins`, `dynlibs`,
 `precompileModules`, `extraDepTargets`, any unknown key and any
-`leanOptions` entry outside a short list. Binding each theorem's compiled statement
-to a reviewed record is tracked in #1805.
+`leanOptions` entry outside a short list. Since #1805 the statement check
+also rejects any of these routes that changes what a listed theorem states
+(the `lakefile-decoy` fixture with its own lakefile as the base's fails
+there).
 
-Binding the artifact to the sources needs a build that runs no model code,
+Binding the whole artifact to the sources, beyond the listed statements,
+needs a build that runs no model code,
 which Lean does not offer (macros, `decide +native` and initializers all run
 user code during elaboration), or a rebuild under a sandbox that confines
 each module's elaboration to its own output.
@@ -384,9 +504,9 @@ broad. Hence the review rule below.
 
 - A human must review every change to the model (`Botho.lean`, `Botho/`,
   `Theorems.lean`, `lakefile.toml`, `lean-toolchain`, `lake-manifest.json`,
-  `axioms-allowlist.txt`) for IO and metaprogramming, with the same care as
-  a change to `formal/scripts/`. A green `formal-gate` does not replace that
-  review.
+  `axioms-allowlist.txt`, `statements.txt`) for IO and metaprogramming, with
+  the same care as a change to `formal/scripts/`. A green `formal-gate` does
+  not replace that review.
 
 - The `.olean` format is a memory image that Lean maps without validating
   it. A hand-crafted `.olean` that corrupts the memory of `leanchecker` or of
@@ -397,7 +517,8 @@ broad. Hence the review rule below.
   including the verify job. Such an edit, and any edit under
   `formal/scripts/`, is visible in review and needs a human reviewer.
   `.github/CODEOWNERS` (#1804) names a code owner for `formal/scripts/`,
-  `formal/axioms-allowlist.txt`, `formal/lakefile.toml`,
+  `formal/axioms-allowlist.txt`, `formal/statements.txt`,
+  `formal/lakefile.toml`,
   `formal/lean-toolchain`, `.github/workflows/formal.yml` and
   `.github/CODEOWNERS` itself.
 - **Two branch-protection settings are not in place.** They need a
@@ -445,6 +566,12 @@ broad. Hence the review rule below.
    tested / trusted).
 3. Run `scripts/check-axioms.sh`. If it reports a non-allow-listed axiom,
    either remove the dependency or follow the next section.
+4. Run `scripts/propose-statements.sh` and land the new block in
+   `statements.txt` in its own pull request first (see
+   [Statement binding](#statement-binding)); the verify job fails a theorem
+   with no block in the base record. Changing an existing theorem's
+   statement, or a definition its statement uses, takes the same two
+   steps.
 
 ## Adding an allow-listed opaque axiom
 

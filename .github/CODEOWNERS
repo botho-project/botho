@@ -7,6 +7,7 @@
 
 /formal/scripts/               @rjwalters
 /formal/axioms-allowlist.txt   @rjwalters
+/formal/statements.txt         @rjwalters
 /formal/lakefile.toml          @rjwalters
 /formal/lean-toolchain         @rjwalters
 /.github/workflows/formal.yml  @rjwalters

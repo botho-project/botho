@@ -11,9 +11,12 @@ name: Formal (Lean)
 #           compiled .olean files, as the artifact `formal-lib`.
 #   verify  TRUSTED. A fresh runner with no cache. It checks out
 #           formal/scripts/ (verify-artifacts.sh, AxiomReport.lean, the
-#           scan), axioms-allowlist.txt and lakefile.toml from the BASE
-#           commit, never from the pull request, downloads `formal-lib`,
-#           and runs leanchecker and the independent axiom walk over it. It never runs `lake` and
+#           scan, statements.py), axioms-allowlist.txt, statements.txt and
+#           lakefile.toml from the BASE commit, never from the pull request,
+#           downloads `formal-lib`, and runs leanchecker, the independent
+#           axiom walk and the statement check (#1805: each listed theorem's
+#           compiled statement must match a block of the base
+#           statements.txt) over it. It never runs `lake` and
 #           never compiles or imports model code through the Lean frontend,
 #           so model code does not run in this job (see "Limits" in
 #           formal/README.md). The pull request's sources are read as data:
@@ -154,6 +157,16 @@ jobs:
           path: ${{ runner.temp }}/formal-lib
           if-no-files-found: error
           retention-days: 5
+      # Information only (#1805): the statement record this build compiles
+      # to, compared with the pull request's statements.txt. The verify job
+      # does its own check against the BASE record; a statement change needs
+      # its block on the base branch first (see formal/README.md).
+      - name: Propose statement record (for review)
+        run: |
+          if ! scripts/propose-statements.sh --check; then
+            echo "::warning::statements.txt has no block for a compiled theorem; the proposed record follows. The verify job checks the base branch's record."
+            scripts/propose-statements.sh
+          fi
       # The self-tests run fixture code, so they run after the upload.
       - name: Gate self-test
         run: scripts/selftest-gates.sh
@@ -172,7 +185,7 @@ jobs:
       # base of a pull request, otherwise the pushed (already merged) commit.
       TRUSTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
-      - name: Check out gate scripts, allow-list and lakefile (base commit)
+      - name: Check out gate scripts, allow-list, statement record and lakefile (base commit)
         uses: actions/checkout@v7
         with:
           ref: ${{ env.TRUSTED_SHA }}
@@ -182,6 +195,7 @@ jobs:
           sparse-checkout: |
             /formal/scripts/
             /formal/axioms-allowlist.txt
+            /formal/statements.txt
             /formal/lakefile.toml
             /formal/lakefile.lean
       - name: Check out pull request sources (data only, never built)
@@ -224,6 +238,9 @@ jobs:
         # Fails closed: if the base commit has no verifier, nothing else runs
         # (#1804). Never fall back to the pull request's copy. Keep this block
         # free of ${{ }} expressions: scripts/selftest-workflow.sh runs it.
+        # The statement record is the base's trusted/formal/statements.txt,
+        # which verify-artifacts.sh reads next to itself (its default), and
+        # it fails closed if that file is missing (#1805).
         run: |
           verifier=trusted/formal/scripts/verify-artifacts.sh
           if [[ ! -f "$verifier" ]]; then
