@@ -4,6 +4,20 @@
 //!
 //! Tracks response times using exponential moving average and counts
 //! successes/failures to score peers for selection priority.
+//!
+//! # Bans expire (#1819)
+//!
+//! A peer whose success rate drops below 25% (after [`MIN_SAMPLES`] requests)
+//! is banned, but only for a bounded time: [`BAN_BASE_DURATION`] for its first
+//! ban, doubling for each further ban of the same peer, capped at
+//! [`BAN_MAX_DURATION`]. When a ban expires the peer's success/failure counters
+//! are reset, so a single further failure does not immediately re-ban it; the
+//! per-peer ban count carries the memory instead and lengthens the next ban.
+//!
+//! Before #1819 a ban never lifted. Status answers record no success (only
+//! block responses do), so a peer this node never downloaded from was banned
+//! after three status failures for the life of the process, and a node whose
+//! peers were all banned could never download again.
 
 use libp2p::PeerId;
 use std::{
@@ -21,6 +35,35 @@ const FAILURE_LATENCY_MS: u64 = 30_000;
 /// Minimum requests before reputation is considered reliable
 const MIN_SAMPLES: u32 = 3;
 
+/// Success rate below which a peer (with at least [`MIN_SAMPLES`] requests) is
+/// banned.
+const BAN_SUCCESS_RATE: f64 = 0.25;
+
+/// How long a peer's first ban lasts (#1819).
+///
+/// Long enough that a peer which really is failing is not retried on every
+/// ~2s sync tick or every 30s status refresh (it needs three fresh failures to
+/// be banned again in any case), short enough that a peer banned for a
+/// transient reason (our own outage, a network blip that timed out several
+/// status requests) is usable again within minutes.
+pub const BAN_BASE_DURATION: Duration = Duration::from_secs(5 * 60);
+
+/// Upper bound on a single ban's length (#1819).
+///
+/// Repeated bans of the same peer double the duration
+/// (5, 10, 20, 40, 60, 60, ... minutes). The cap keeps a peer that was flaky
+/// for a while from being shut out for hours after it recovers.
+pub const BAN_MAX_DURATION: Duration = Duration::from_secs(60 * 60);
+
+/// Length of a peer's `ban_number`-th ban (1-based): [`BAN_BASE_DURATION`]
+/// doubled for each earlier ban, capped at [`BAN_MAX_DURATION`].
+pub fn ban_duration(ban_number: u32) -> Duration {
+    let doublings = ban_number.saturating_sub(1).min(16);
+    BAN_BASE_DURATION
+        .saturating_mul(1u32 << doublings)
+        .min(BAN_MAX_DURATION)
+}
+
 /// Per-peer reputation data
 #[derive(Debug, Clone)]
 pub struct PeerReputation {
@@ -34,6 +77,13 @@ pub struct PeerReputation {
     pub last_response: Option<Instant>,
     /// When this peer was first seen
     pub first_seen: Instant,
+    /// End of the peer's current ban, if it has ever been banned (#1819).
+    /// The peer is banned while the current time is before this instant.
+    /// Tests backdate it to simulate expiry without sleeping.
+    pub banned_until: Option<Instant>,
+    /// Number of times this peer has been banned (#1819). Never reset, so a
+    /// repeat offender gets a longer ban (see [`ban_duration`]).
+    pub ban_count: u32,
 }
 
 impl PeerReputation {
@@ -45,21 +95,55 @@ impl PeerReputation {
             failures: 0,
             last_response: None,
             first_seen: Instant::now(),
+            banned_until: None,
+            ban_count: 0,
         }
     }
 
     /// Record a successful response with latency
     pub fn record_success(&mut self, latency: Duration) {
+        let now = Instant::now();
+        self.expire_ban_at(now);
         let latency_ms = latency.as_millis() as f64;
         self.update_latency(latency_ms);
         self.successes += 1;
-        self.last_response = Some(Instant::now());
+        self.last_response = Some(now);
     }
 
     /// Record a failed request
     pub fn record_failure(&mut self) {
+        self.record_failure_at(Instant::now());
+    }
+
+    /// Record a failed request at `now`. Bans the peer (until
+    /// `now + ban_duration(..)`) if this failure takes it over the ban
+    /// threshold and it is not already banned.
+    pub fn record_failure_at(&mut self, now: Instant) {
+        self.expire_ban_at(now);
         self.update_latency(FAILURE_LATENCY_MS as f64);
         self.failures += 1;
+        if !self.is_banned_at(now) && self.meets_ban_threshold() {
+            self.ban_count = self.ban_count.saturating_add(1);
+            self.banned_until = Some(now + ban_duration(self.ban_count));
+        }
+    }
+
+    /// If the peer's ban has expired by `now`, lift it and reset the
+    /// success/failure counters and latency average (#1819), so the peer
+    /// starts over as a fresh peer and needs [`MIN_SAMPLES`] new requests
+    /// before it can be banned again. `ban_count` is kept, so the next ban
+    /// is longer. Returns `true` if a ban was lifted.
+    pub fn expire_ban_at(&mut self, now: Instant) -> bool {
+        match self.banned_until {
+            Some(until) if now >= until => {
+                self.banned_until = None;
+                self.successes = 0;
+                self.failures = 0;
+                self.avg_latency_ms = 0.0;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Update latency using exponential moving average
@@ -98,9 +182,21 @@ impl PeerReputation {
         base * reliability_factor
     }
 
+    /// Whether the counters are past the ban threshold.
+    fn meets_ban_threshold(&self) -> bool {
+        self.total_requests() >= MIN_SAMPLES && self.success_rate() < BAN_SUCCESS_RATE
+    }
+
     /// Check if this peer should be avoided
     pub fn is_banned(&self) -> bool {
-        self.total_requests() >= MIN_SAMPLES && self.success_rate() < 0.25
+        self.is_banned_at(Instant::now())
+    }
+
+    /// Check if this peer is banned at `now`. A ban ends at
+    /// [`Self::banned_until`] even before [`Self::expire_ban_at`] has reset
+    /// the counters.
+    pub fn is_banned_at(&self, now: Instant) -> bool {
+        self.banned_until.is_some_and(|until| now < until)
     }
 }
 
@@ -159,14 +255,36 @@ impl ReputationManager {
         self.get_or_create(peer_id).record_failure();
     }
 
-    /// Get the best peer from a list (lowest score = best)
+    /// Lift every ban that has expired by `now` and reset those peers'
+    /// counters (see [`PeerReputation::expire_ban_at`]). Returns the peers
+    /// whose ban was lifted.
+    pub fn expire_bans_at(&mut self, now: Instant) -> Vec<PeerId> {
+        self.peers
+            .iter_mut()
+            .filter_map(|(peer, rep)| rep.expire_ban_at(now).then_some(*peer))
+            .collect()
+    }
+
+    /// [`Self::expire_bans_at`] with the current time.
+    pub fn expire_bans(&mut self) -> Vec<PeerId> {
+        self.expire_bans_at(Instant::now())
+    }
+
+    /// Get the best peer from a list (lowest score = best).
+    ///
+    /// Banned peers are skipped unless every candidate is banned, in which
+    /// case bans are ignored and the best-scoring candidate is returned
+    /// (#1819): a ban is a preference between peers, and must never leave
+    /// the caller with no peer at all.
     pub fn best_peer<'a>(
         &self,
         candidates: impl IntoIterator<Item = &'a PeerId>,
     ) -> Option<PeerId> {
+        let candidates: Vec<&PeerId> = candidates.into_iter().collect();
+        let all_banned = candidates.iter().all(|p| self.is_banned(p));
         candidates
             .into_iter()
-            .filter(|p| !self.is_banned(p))
+            .filter(|p| all_banned || !self.is_banned(p))
             .min_by(|a, b| {
                 let score_a = self.peers.get(a).map(|r| r.score()).unwrap_or(500.0);
                 let score_b = self.peers.get(b).map(|r| r.score()).unwrap_or(500.0);
@@ -547,8 +665,147 @@ mod tests {
             manager.get_or_create(&peer2).record_failure();
         }
 
+        // #1819: when every candidate is banned, bans are ignored rather than
+        // leaving the caller with no peer at all.
         let candidates = vec![peer1, peer2];
-        assert!(manager.best_peer(&candidates).is_none());
+        let best = manager.best_peer(&candidates);
+        assert!(best == Some(peer1) || best == Some(peer2), "got {best:?}");
+        assert!(manager.best_peer(&Vec::<PeerId>::new()).is_none());
+    }
+
+    // ========================================================================
+    // #1819: bans expire, with per-peer backoff
+    // ========================================================================
+
+    /// Ban `rep` at `now` with failures only; returns the ban's end.
+    fn ban_at(rep: &mut PeerReputation, now: Instant) -> Instant {
+        for _ in 0..MIN_SAMPLES {
+            rep.record_failure_at(now);
+        }
+        assert!(rep.is_banned_at(now));
+        rep.banned_until.expect("banned")
+    }
+
+    #[test]
+    fn test_ban_duration_doubles_and_caps() {
+        assert_eq!(ban_duration(0), BAN_BASE_DURATION, "defensive: as the 1st");
+        assert_eq!(ban_duration(1), Duration::from_secs(5 * 60));
+        assert_eq!(ban_duration(2), Duration::from_secs(10 * 60));
+        assert_eq!(ban_duration(3), Duration::from_secs(20 * 60));
+        assert_eq!(ban_duration(4), Duration::from_secs(40 * 60));
+        assert_eq!(ban_duration(5), BAN_MAX_DURATION, "80 min capped to 60");
+        assert_eq!(ban_duration(6), BAN_MAX_DURATION);
+        assert_eq!(ban_duration(u32::MAX), BAN_MAX_DURATION, "no overflow");
+        assert!(BAN_BASE_DURATION < BAN_MAX_DURATION);
+    }
+
+    #[test]
+    fn test_ban_expires_after_base_duration() {
+        let t0 = Instant::now();
+        let mut rep = PeerReputation::new();
+        let until = ban_at(&mut rep, t0);
+        assert_eq!(until, t0 + BAN_BASE_DURATION);
+        assert_eq!(rep.ban_count, 1);
+
+        let just_before = until - Duration::from_secs(1);
+        assert!(rep.is_banned_at(just_before));
+        assert!(!rep.expire_ban_at(just_before), "not yet");
+        assert!(!rep.is_banned_at(until), "a ban ends at banned_until");
+    }
+
+    #[test]
+    fn test_expiry_resets_counters_so_one_failure_does_not_reban() {
+        let t0 = Instant::now();
+        let mut rep = PeerReputation::new();
+        let until = ban_at(&mut rep, t0);
+
+        assert!(rep.expire_ban_at(until));
+        assert_eq!((rep.successes, rep.failures), (0, 0), "counters reset");
+        assert_eq!(rep.banned_until, None);
+        assert_eq!(rep.ban_count, 1, "the ban count carries the memory");
+        assert_eq!(rep.score(), PeerReputation::new().score(), "fresh score");
+
+        // One (and two) further failures do not re-ban; the third does.
+        rep.record_failure_at(until);
+        rep.record_failure_at(until);
+        assert!(!rep.is_banned_at(until));
+        rep.record_failure_at(until);
+        assert!(rep.is_banned_at(until));
+    }
+
+    #[test]
+    fn test_failure_after_expiry_resets_lazily() {
+        // Without an explicit expire_ban_at call, the next failure after the
+        // ban's end resets the counters first.
+        let t0 = Instant::now();
+        let mut rep = PeerReputation::new();
+        let until = ban_at(&mut rep, t0);
+        rep.record_failure_at(until);
+        assert_eq!(rep.failures, 1);
+        assert!(!rep.is_banned_at(until));
+    }
+
+    #[test]
+    fn test_repeat_bans_back_off_and_cap() {
+        let mut now = Instant::now();
+        let mut rep = PeerReputation::new();
+        let expected_minutes = [5, 10, 20, 40, 60, 60];
+        for (i, minutes) in expected_minutes.into_iter().enumerate() {
+            let until = ban_at(&mut rep, now);
+            assert_eq!(rep.ban_count, i as u32 + 1);
+            assert_eq!(
+                until - now,
+                Duration::from_secs(minutes * 60),
+                "ban #{}",
+                i + 1
+            );
+            now = until;
+            assert!(rep.expire_ban_at(now));
+        }
+    }
+
+    #[test]
+    fn test_failures_while_banned_do_not_extend_the_ban() {
+        let t0 = Instant::now();
+        let mut rep = PeerReputation::new();
+        let until = ban_at(&mut rep, t0);
+        rep.record_failure_at(t0 + Duration::from_secs(60));
+        assert_eq!(rep.banned_until, Some(until));
+        assert_eq!(rep.ban_count, 1);
+    }
+
+    #[test]
+    fn test_manager_expire_bans_reports_lifted_peers() {
+        let mut manager = ReputationManager::new();
+        let banned = PeerId::random();
+        let fine = PeerId::random();
+        let t0 = Instant::now();
+        let until = ban_at(manager.get_or_create(&banned), t0);
+        manager
+            .get_or_create(&fine)
+            .record_success(Duration::from_millis(50));
+
+        assert!(manager.expire_bans_at(t0).is_empty());
+        assert!(manager.is_banned(&banned));
+        assert_eq!(manager.expire_bans_at(until), vec![banned]);
+        assert!(!manager.is_banned(&banned));
+        assert_eq!(manager.get(&banned).unwrap().failures, 0);
+        assert_eq!(manager.get(&fine).unwrap().successes, 1, "untouched");
+    }
+
+    #[test]
+    fn test_manager_best_peer_skips_single_banned_among_good() {
+        // The all-banned floor only applies when *every* candidate is banned.
+        let mut manager = ReputationManager::new();
+        let good = PeerId::random();
+        let bad = PeerId::random();
+        for _ in 0..4 {
+            manager.get_or_create(&bad).record_failure();
+        }
+        manager
+            .get_or_create(&good)
+            .record_success(Duration::from_secs(20));
+        assert_eq!(manager.best_peer(&[bad, good]), Some(good));
     }
 
     #[test]
