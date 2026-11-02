@@ -179,3 +179,50 @@ import Botho
 #print axioms Botho.Tags.tag_drop_demurrage_factor
 #print axioms Botho.Tags.tag_drop_escapes_import_floor
 #print axioms Botho.Tags.import_floor_invariant_refuted
+
+-- Botho.Difficulty.Step (#1841; status: proven (model); tested by
+-- Botho/Difficulty/Vectors.lean against compute_time_adjusted_difficulty)
+#print axioms Botho.Difficulty.max_difficulty_value
+#print axioms Botho.Difficulty.step_in_bounds
+#print axioms Botho.Difficulty.step_no_overflow
+#print axioms Botho.Difficulty.step_truncates_at_max
+#print axioms Botho.Difficulty.step_ratio
+#print axioms Botho.Difficulty.step_mono_current
+#print axioms Botho.Difficulty.step_mono_observed
+#print axioms Botho.Difficulty.step_slow
+#print axioms Botho.Difficulty.step_fast
+#print axioms Botho.Difficulty.step_on_target
+#print axioms Botho.Difficulty.step_max_absorbing
+#print axioms Botho.Difficulty.floor_entry_requires_hard_block
+#print axioms Botho.Difficulty.step_hardening_bounded
+
+-- Botho.Difficulty.Warp (#1841, #1842; status: proven (model); `run` tested
+-- against EmissionController::record_block; header timestamp rules and the
+-- validator clock `now` are trusted inputs read from the code)
+#print axioms Botho.Difficulty.run_le_pow
+#print axioms Botho.Difficulty.run_ge_div_pow
+#print axioms Botho.Difficulty.run_slow_exact
+#print axioms Botho.Difficulty.run_fast_exact
+#print axioms Botho.Difficulty.easing_to_max_in_8
+#print axioms Botho.Difficulty.no_max_in_7
+#print axioms Botho.Difficulty.sustained_9s_reaches_max_in_10
+#print axioms Botho.Difficulty.sustained_8s_reaches_max_in_12
+#print axioms Botho.Difficulty.sustained_7s_reaches_max_in_17
+#print axioms Botho.Difficulty.sustained_6s_reaches_max_in_31
+#print axioms Botho.Difficulty.sustained_le_5s_never_max
+#print axioms Botho.Difficulty.max_absorbing_run
+#print axioms Botho.Difficulty.applyChain_bounds
+#print axioms Botho.Difficulty.forward_dating_reaches_max_in_8
+#print axioms Botho.Difficulty.time_warp_to_floor_in_55
+#print axioms Botho.Difficulty.no_floor_in_54
+#print axioms Botho.Difficulty.hardening_from_max_in_63
+#print axioms Botho.Difficulty.floor_needs_attacker_block_at_3
+#print axioms Botho.Difficulty.alternating_pair_bound
+#print axioms Botho.Difficulty.forward_date_locks_out_honest
+#print axioms Botho.Difficulty.forward_dated_chain_valid
+
+-- Botho.Consensus.SlotDuration (#1841; status: proven (model); tested by
+-- Botho/Difficulty/Vectors.lean against current_slot_duration)
+#print axioms Botho.Consensus.slot_in_tiers
+#print axioms Botho.Consensus.tierOf_idle_iff
+#print axioms Botho.Consensus.forward_dated_block_forces_idle
