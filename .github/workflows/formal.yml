@@ -11,12 +11,15 @@ name: Formal (Lean)
 #           compiled .olean files, as the artifact `formal-lib`.
 #   verify  TRUSTED. A fresh runner with no cache. It checks out
 #           formal/scripts/ (verify-artifacts.sh, AxiomReport.lean, the
-#           scan, statements.py), axioms-allowlist.txt, statements.txt and
-#           lakefile.toml from the BASE commit, never from the pull request,
+#           scan, statements.py), axioms-allowlist.txt, statements.txt,
+#           Theorems.lean and lakefile.toml from the BASE commit, never from
+#           the pull request,
 #           downloads `formal-lib`, and runs leanchecker, the independent
 #           axiom walk and the statement check (#1805: each listed theorem's
 #           compiled statement must match a block of the base
-#           statements.txt) over it. It never runs `lake` and
+#           statements.txt; #1824: a theorem the base manifest lists and
+#           the base record binds stays listed unless the record retires
+#           it) over it. It never runs `lake` and
 #           never compiles or imports model code through the Lean frontend,
 #           so model code does not run in this job (see "Limits" in
 #           formal/README.md). The pull request's sources are read as data:
@@ -185,7 +188,7 @@ jobs:
       # base of a pull request, otherwise the pushed (already merged) commit.
       TRUSTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
-      - name: Check out gate scripts, allow-list, statement record and lakefile (base commit)
+      - name: Check out gate scripts, allow-list, statement record, manifest and lakefile (base commit)
         uses: actions/checkout@v7
         with:
           ref: ${{ env.TRUSTED_SHA }}
@@ -196,6 +199,7 @@ jobs:
             /formal/scripts/
             /formal/axioms-allowlist.txt
             /formal/statements.txt
+            /formal/Theorems.lean
             /formal/lakefile.toml
             /formal/lakefile.lean
       - name: Check out pull request sources (data only, never built)
@@ -240,7 +244,9 @@ jobs:
         # free of ${{ }} expressions: scripts/selftest-workflow.sh runs it.
         # The statement record is the base's trusted/formal/statements.txt,
         # which verify-artifacts.sh reads next to itself (its default), and
-        # it fails closed if that file is missing (#1805).
+        # it fails closed if that file is missing (#1805). The same holds for
+        # the base manifest, trusted/formal/Theorems.lean (#1824). Never pass
+        # --statements or --base-manifest here.
         run: |
           verifier=trusted/formal/scripts/verify-artifacts.sh
           if [[ ! -f "$verifier" ]]; then

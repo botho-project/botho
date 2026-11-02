@@ -272,16 +272,39 @@ def kindWord : ConstantInfo → String
   | .ctorInfo _ => "constructor"
   | .recInfo _ => "recursor"
 
-/-- Pretty-print `e` for the reviewer, on one logical line where possible.
-The environment was imported with `loadExts := false`, so no notation,
-unexpander or delaborator from the model (or from `Init`'s extensions) is
-used: applications print in prefix form with their instances visible
-(`instLENat.le x y`), and names in full. Only Lean's built-in delaborator
+/-- The pretty-printer options for the record text (#1805, #1824). The text
+should show what the hash binds, so it prints every argument (`pp.explicit`:
+`@Eq.{1} Nat ...`, implicit type arguments included, so a statement over
+`Nat` and the same statement over `Fin 2` print differently), universe
+levels (`pp.universes`), the types of numerals (`pp.numericTypes`; with
+`pp.explicit` most numerals already print as `@OfNat.ofNat Nat ...`), the
+binder types of `fun` and `let` (`pp.funBinderTypes`, `pp.letVarTypes`),
+full names (`pp.fullNames`), and applications in prefix form
+(`pp.fieldNotation false`: `Nat.decLe a b`, not `a.decLe b`). Proofs still
+print as `⋯`: by proof irrelevance two proofs of one proposition are
+definitionally equal, so a proof term cannot change what a statement means,
+and proof terms inside definitions can be large. Changing these options
+changes every record block's text, not its hash; regenerate statements.txt
+with propose-statements.sh --write in the same pull request. -/
+def ppOptions : Options :=
+  ({} : Options)
+    |>.setBool `pp.fullNames true
+    |>.setBool `pp.explicit true
+    |>.setBool `pp.universes true
+    |>.setBool `pp.numericTypes true
+    |>.setBool `pp.funBinderTypes true
+    |>.setBool `pp.letVarTypes true
+    |>.setBool `pp.fieldNotation false
+
+/-- Pretty-print `e` for the reviewer, on one logical line where possible,
+with `ppOptions`. The environment was imported with `loadExts := false`, so
+no notation, unexpander or delaborator from the model (or from `Init`'s
+extensions) is used: applications print in prefix form with every argument
+visible (`@LE.le.{0} Nat instLENat x y`). Only Lean's built-in delaborator
 runs; no model code. -/
 def ppStmt (env : Environment) (e : Expr) : IO String := do
-  let opts : Options := ({} : Options) |>.setBool `pp.fullNames true
   try
-    let f ← PrettyPrinter.ppExprLegacy env {} {} opts e
+    let f ← PrettyPrinter.ppExprLegacy env {} {} ppOptions e
     return f.pretty 100000
   catch err =>
     return s!"<pretty-printer error: {err}>"

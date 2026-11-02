@@ -1,0 +1,1 @@
+#print axioms Botho.implicit_zero

@@ -31,6 +31,10 @@ The first four rows reproduce the bypasses found in the reviews of PR #1783:
 | `definition-swap` | (statement-only, #1805) the same with the body of `Botho.satAdd` changed (`min (b + a) cap`); every theorem's type is unchanged |
 | `statement-missing` | (#1805) an honest new theorem with no block in the base statement record |
 | `record-pending` | (must pass, #1805) the base record holds a second, pending block for `satAdd_le_cap` |
+| `implicit-type-swap` | (statement-only, #1824) the record binds `implicit_zero : (0 : Nat) + 0 = 0`; the artifact is compiled from `(0 : Fin 2) + 0 = 0`. Only an implicit type argument differs: the pre-#1824 printer showed both as `Eq (instHAdd.hAdd 0 0) 0`. The statement check must report that the readable text differs, and print the compiled block with `Fin` in it (`statement.txt`) |
+| `manifest-drop` | (statement-only, #1824) the pull request deletes `#print axioms Botho.satAdd_eq_add` from `Theorems.lean`, which the base manifest lists and the base record binds |
+| `manifest-drop-retired` | (must pass, #1824) the same deletion, with `retired Botho.satAdd_eq_add` in the base record |
+| `retired-swap` | (statement-only, #1824) `retired Botho.satAdd_le_cap` in the base record, while the theorem stays listed and the artifact states `True`: retiring does not unbind a listed theorem |
 
 A `scan-only` fixture leaves an artifact that is an honest build of a
 different source, so no check on the artifact alone can reject it: only
@@ -60,6 +64,9 @@ Fixture files:
 - `Botho/*.lean`: copied into the tree.
 - `imports.txt`: lines appended to `Botho.lean`.
 - `manifest.txt`: lines appended to `Theorems.lean`.
+- `manifest-drop.txt`: theorem names whose `#print axioms` line is deleted
+  from the pull request's `Theorems.lean`. The base manifest is always the
+  clean `Theorems.lean`.
 - `allowlist.txt`: lines appended to the tree's (pull request side)
   `axioms-allowlist.txt`. The verifier never reads that copy.
 - `srcdir`: if present, the model moves to `src/` and the lakefile gets
@@ -82,7 +89,8 @@ Fixture files:
   with `theorem NAME : True := trivial` in the tree that is built only.
 - `forged-replace.txt`: lines `FILE<TAB>OLD<TAB>NEW`, the same for a text
   replacement (`OLD` must occur once).
-- `record.txt`: blocks appended to the base statement record.
+- `record.txt`: blocks (and `retired` lines) appended to the base statement
+  record.
 - `statement.txt`: a regex the run without the scan must also match: the
   statement check's own reason.
 - `statement-only`: a regex. The fixture must pass with `--no-statements`

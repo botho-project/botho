@@ -1,0 +1,1 @@
+Botho/Implicit.lean	(0 : Nat) + 0 = 0	(0 : Fin 2) + 0 = 0

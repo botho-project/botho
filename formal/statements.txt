@@ -7,27 +7,32 @@
 # until they are merged. See "Statement binding" in formal/README.md.
 #
 # Each block: `theorem NAME sha256:HASH`, then the theorem's statement and
-# the library declarations it depends on, pretty-printed (instances shown,
-# no notation). HASH is SHA-256 over the exact serialization of the same
-# declarations (AxiomReport.lean, `statementClosure`). Generate blocks with
-# scripts/propose-statements.sh; review the text against the sources.
+# the library declarations it depends on, pretty-printed (every argument and
+# universe level shown, no notation, proofs as `⋯`). HASH is SHA-256 over the
+# exact serialization of the same declarations (AxiomReport.lean,
+# `statementClosure`). Generate blocks with scripts/propose-statements.sh;
+# review the text against the sources.
+#
+# A line `retired NAME` lets a later pull request drop theorem NAME from
+# Theorems.lean (#1824). Without it, the verify job fails a pull request that
+# stops listing a theorem the base commit lists and this record binds.
 
 theorem Botho.transfer_conserves sha256:a4d02fab9db480986fbd97be9878df42b2494a1c6aa17519a25622ddafae7085
-  : ∀ {src dst amt src' dst' : Nat}, Eq (Botho.transfer src dst amt) (Option.some { fst := src', snd := dst' }) → Eq (instHAdd.hAdd src' dst') (instHAdd.hAdd src dst)
-  def Botho.transfer : Nat → Nat → Nat → Option (Prod Nat Nat)
-    := fun src dst amt => ite (instLENat.le amt src) (Option.some { fst := instHSub.hSub src amt, snd := instHAdd.hAdd dst amt }) Option.none
+  : ∀ {src dst amt src' dst' : Nat}, @Eq.{1} (Option.{0} (Prod.{0, 0} Nat Nat)) (Botho.transfer src dst amt) (@Option.some.{0} (Prod.{0, 0} Nat Nat) (@Prod.mk.{0, 0} Nat Nat src' dst')) → @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) src' dst') (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) src dst)
+  def Botho.transfer : Nat → Nat → Nat → Option.{0} (Prod.{0, 0} Nat Nat)
+    := fun (src dst amt : Nat) => @ite.{1} (Option.{0} (Prod.{0, 0} Nat Nat)) (@LE.le.{0} Nat instLENat amt src) (Nat.decLe amt src) (@Option.some.{0} (Prod.{0, 0} Nat Nat) (@Prod.mk.{0, 0} Nat Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) src amt) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) dst amt))) (@Option.none.{0} (Prod.{0, 0} Nat Nat))
 
 theorem Botho.transfer_isSome_iff sha256:63c26755654d1d0b6758e67ffa482a9f57a3d500505cf88efc00fcb7c33fc8e5
-  : ∀ (src dst amt : Nat), Iff (Eq (Botho.transfer src dst amt).isSome Bool.true) (instLENat.le amt src)
-  def Botho.transfer : Nat → Nat → Nat → Option (Prod Nat Nat)
-    := fun src dst amt => ite (instLENat.le amt src) (Option.some { fst := instHSub.hSub src amt, snd := instHAdd.hAdd dst amt }) Option.none
+  : ∀ (src dst amt : Nat), Iff (@Eq.{1} Bool (@Option.isSome.{0} (Prod.{0, 0} Nat Nat) (Botho.transfer src dst amt)) Bool.true) (@LE.le.{0} Nat instLENat amt src)
+  def Botho.transfer : Nat → Nat → Nat → Option.{0} (Prod.{0, 0} Nat Nat)
+    := fun (src dst amt : Nat) => @ite.{1} (Option.{0} (Prod.{0, 0} Nat Nat)) (@LE.le.{0} Nat instLENat amt src) (Nat.decLe amt src) (@Option.some.{0} (Prod.{0, 0} Nat Nat) (@Prod.mk.{0, 0} Nat Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) src amt) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) dst amt))) (@Option.none.{0} (Prod.{0, 0} Nat Nat))
 
 theorem Botho.satAdd_le_cap sha256:ef778d4287668237e2084827bfc419359f6735ba9ea013ee7330d8c40644b2d2
-  : ∀ (cap a b : Nat), instLENat.le (Botho.satAdd cap a b) cap
+  : ∀ (cap a b : Nat), @LE.le.{0} Nat instLENat (Botho.satAdd cap a b) cap
   def Botho.satAdd : Nat → Nat → Nat → Nat
-    := fun cap a b => instMinNat.min (instHAdd.hAdd a b) cap
+    := fun (cap a b : Nat) => @Min.min.{0} Nat instMinNat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) cap
 
 theorem Botho.satAdd_eq_add sha256:8d8ab72b00a737e1b95eecb0cc77b08908de9414931171514b80e738ac0ccb41
-  : ∀ {cap a b : Nat}, instLENat.le (instHAdd.hAdd a b) cap → Eq (Botho.satAdd cap a b) (instHAdd.hAdd a b)
+  : ∀ {cap a b : Nat}, @LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) cap → @Eq.{1} Nat (Botho.satAdd cap a b) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b)
   def Botho.satAdd : Nat → Nat → Nat → Nat
-    := fun cap a b => instMinNat.min (instHAdd.hAdd a b) cap
+    := fun (cap a b : Nat) => @Min.min.{0} Nat instMinNat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) cap

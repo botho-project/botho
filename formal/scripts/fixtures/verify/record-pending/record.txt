@@ -2,4 +2,4 @@
 # blocks per theorem (how a statement changes in two steps). The current
 # block still matches, so the fixture passes.
 theorem Botho.satAdd_le_cap sha256:0000000000000000000000000000000000000000000000000000000000000000
-  : ∀ (cap a b : Nat), instLENat.le (Botho.satAdd cap a b) (instHAdd.hAdd cap 1)
+  : ∀ (cap a b : Nat), @LE.le.{0} Nat instLENat (Botho.satAdd cap a b) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) cap (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))

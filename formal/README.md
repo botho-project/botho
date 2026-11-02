@@ -234,7 +234,9 @@ and the source scan below, over the pull request's sources as data:
   `verify-artifacts.sh` (even if the pull request has one), and that
   otherwise it runs the base copy with the base allow-list and lakefile and
   no `--no-*` flag. It also checks that the base checkout includes
-  `formal/statements.txt` (#1805). It needs no Lean toolchain.
+  `formal/statements.txt` (#1805) and `formal/Theorems.lean` (the base
+  manifest, #1824), and that the verifier is never called with
+  `--statements` or `--base-manifest`. It needs no Lean toolchain.
 - **Verify self-test** (`scripts/selftest-verify.sh`) runs the verify job's
   checks against the fixtures in `scripts/fixtures/verify/`: the bypasses
   found in the reviews of PR #1783 (an `@[init]` that widens the allow-list,
@@ -267,7 +269,15 @@ and the source scan below, over the pull request's sources as data:
   included, accepts them; the statement check rejects them.
   `statement-missing` (an honest new theorem with no record block) fails
   closed, `record-pending` (a second block for a theorem) passes, and the
-  clean tree fails closed with no record. The self-test also checks that no
+  clean tree fails closed with no record and with no base manifest. Since
+  #1824: `implicit-type-swap` (statement-only) states a theorem over
+  `Fin 2` instead of the recorded `Nat`, a difference only an implicit type
+  argument carries, and the statement check must report that the readable
+  text differs too; `manifest-drop` (statement-only) deletes a bound
+  theorem's `#print axioms` line and fails, `manifest-drop-retired` (the
+  same with a `retired` line in the base record) passes, and
+  `retired-swap` (statement-only) shows that a `retired` line does not
+  unbind a theorem that is still listed. The self-test also checks that no
   fixture initializer runs inside the verifier, and, as a control, that the
   same initializer does run when the library is imported through the Lean
   frontend. The clean tree is also verified with no `lean`, `lake` or `elan`
@@ -277,8 +287,8 @@ and the source scan below, over the pull request's sources as data:
 
 `scripts/verify-artifacts.sh` is the authority for the verdict. The verify job
 checks out `formal/scripts/` (this script, `AxiomReport.lean`,
-`check-sorry.sh`, `statements.py`), `axioms-allowlist.txt`, `statements.txt`
-and `lakefile.toml` from the base commit of the pull request (on a push,
+`check-sorry.sh`, `statements.py`), `axioms-allowlist.txt`, `statements.txt`,
+`Theorems.lean` and `lakefile.toml` from the base commit of the pull request (on a push,
 the pushed commit), never from the pull request head. A pull request that
 edits these files changes nothing the verify job reads until it is merged.
 It then:
@@ -312,8 +322,11 @@ It then:
    statement record (#1805; see [Statement binding](#statement-binding)):
    the block computed from the compiled library must equal a block of the
    base `statements.txt`. A missing or malformed record, or a theorem with
-   no identical block, fails. Steps 5 and 6 both report before the job
-   fails.
+   no identical block, fails. So does (#1824) a theorem that the base
+   `Theorems.lean` lists and the base record binds but the pull request's
+   `Theorems.lean` no longer lists, unless the base record retires it (see
+   [Statement binding](#statement-binding)); a missing base manifest fails
+   closed. Steps 5 and 6 both report before the job fails.
 
 It never runs `lake`, never compiles a model source, installs the toolchain
 fresh (an official `leanprover/lean4` release only) and uses no cache.
@@ -329,9 +342,9 @@ A block of the record looks like this:
 
 ```text
 theorem Botho.satAdd_le_cap sha256:ef778d42...
-  : ∀ (cap a b : Nat), instLENat.le (Botho.satAdd cap a b) cap
+  : ∀ (cap a b : Nat), @LE.le.{0} Nat instLENat (Botho.satAdd cap a b) cap
   def Botho.satAdd : Nat → Nat → Nat → Nat
-    := fun cap a b => instMinNat.min (instHAdd.hAdd a b) cap
+    := fun (cap a b : Nat) => @Min.min.{0} Nat instMinNat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) cap
 ```
 
 - **What the hash covers.** `AxiomReport.lean` computes the theorem's
@@ -349,9 +362,18 @@ theorem Botho.satAdd_le_cap sha256:ef778d42...
   reads the same.
 - **What the reviewer reads.** The indented lines are the same closure,
   pretty-printed by Lean's built-in delaborator without any extension (so
-  without notation: `instLENat.le x y` rather than `x ≤ y`, with instances
-  visible, names in full). The verify job compares the whole block as
-  text, so the readable part cannot drift from the hash.
+  without notation: `@LE.le.{0} Nat instLENat x y` rather than `x ≤ y`).
+  Since #1824 the printer shows every argument, implicit type arguments
+  and instances included (`pp.explicit`), universe levels
+  (`pp.universes`), numeral types (`pp.numericTypes`; under `pp.explicit` a
+  numeral prints as `@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat
+  (nat_lit 0))`), the binder types of `fun` and `let`, and names in full,
+  in prefix form (`AxiomReport.lean`, `ppOptions`). So a statement over
+  `Nat` and the same statement over `Fin 2` read differently; before #1824
+  both read `Eq (instHAdd.hAdd 0 0) 0`. Only proofs still print as `⋯`. The
+  verify job compares the whole block as text, so the readable part cannot
+  drift from the hash, and when a block does not match it says whether the
+  readable text differs from the recorded one or only the hash does.
 - **Proposals.** `scripts/propose-statements.sh` builds the tree and prints
   the record it compiles to (`--check` compares with `statements.txt`,
   `--write` overwrites it). The build job runs `--check` for information and
@@ -369,7 +391,25 @@ theorem Botho.satAdd_le_cap sha256:ef778d42...
      block and may delete the old one.
 
   A toolchain bump that changes how a definition elaborates changes the
-  hash too, and takes the same two steps.
+  hash too, and takes the same two steps. So does a change to the printer
+  options in `AxiomReport.lean` (it changes every block's text, not its
+  hash) unless, as in #1824, the same pull request regenerates
+  `statements.txt`: its verify job runs the base printer against the base
+  record, and the next one runs the new printer against the new record.
+- **Removing a theorem takes two pull requests too** (#1824). The verify
+  job reads the base `Theorems.lean` as well, and fails if a theorem it
+  lists, and the base record binds, is missing from the pull request's
+  `Theorems.lean`, unless the base record holds a line `retired NAME`:
+  1. a pull request that adds `retired Botho.old_theorem` to
+     `statements.txt` (the theorem stays listed and must still match its
+     block: retiring does not unbind it);
+  2. the pull request that deletes the `#print axioms` line (and the
+     theorem, if wanted), and may delete the block and the `retired` line.
+
+  A block for a theorem the base manifest does not list is a pending
+  addition, not a removal, and is not checked. `propose-statements.sh
+  --check` lists `retired` lines; `--write` drops them with the pending and
+  stale blocks.
 - **Bootstrapping (#1805).** The pull request that introduced the record
   could not be checked against it: its verify job ran the base scripts,
   which had no statement check. The first push to `main` after it merged
@@ -424,15 +464,22 @@ only what the record names:
   sources and, before trusting its hash, rebuild a tree they have reviewed
   for build-time code. A malicious block that a reviewer accepts is bound
   as faithfully as an honest one.
-- *The readable text is not the whole binding.* The pretty-printer hides
-  implicit arguments, universe levels, numeral instances (`Eq 1 2`) and
-  proofs inside definitions. The hash covers all of them; the reviewer
-  sees only the text, so a difference that only the hash shows must be
-  found by recomputing the hash.
+- *The readable text is close to, but not the whole, binding.* Since #1824
+  the text shows implicit arguments, instances, universe levels and
+  numeral types, so a swap of an implicit type argument (`Nat` for
+  `Fin 2`) is visible to a reviewer. It still hides proofs (`⋯`; proof
+  terms cannot change what a statement means, by proof irrelevance, but
+  the text does not show them), and it shows binder names, which the hash
+  ignores. The hash covers what the text hides; a reviewer who accepts a
+  block still recomputes its hash on a reviewed tree.
 - *Only listed theorems are bound.* A declaration that no listed theorem's
   statement reaches (a helper lemma, an unused definition) is not in any
   block. It cannot change what a listed theorem states, but it is not
-  checked against the sources either.
+  checked against the sources either. Since #1824 a pull request cannot
+  stop binding a theorem by deleting its `#print axioms` line: the verify
+  job fails unless the base record already retires it, so unbinding takes
+  a reviewed record change first. That rule binds the base manifest's
+  theorems only: a theorem never listed on `main` was never bound.
 - *`Init` is referenced by name.* The verify job loads `Init` from the
   toolchain the pull request picks (an official release only); the record
   binds names such as `instLENat`, not their definitions. A toolchain
@@ -446,7 +493,13 @@ only what the record names:
 - *Pending blocks.* A theorem may have several blocks. An old block left in
   the record after a statement changed still verifies; remove it in the
   second pull request (`propose-statements.sh --check` lists blocks that
-  match no compiled theorem).
+  match no compiled theorem). Likewise a `retired` line left on `main`
+  keeps allowing its theorem's removal; remove it with the theorem.
+- *Code-owner review is advisory today.* The record is only as good as the
+  review of the pull requests that change it, and `main` does not yet
+  require code-owner review (see the branch-protection item below); the
+  two-PR rules make every unbinding a separate, reviewable record change,
+  but do not enforce who reviews it.
 
 The base commit's source scan and review still stand in front of build-time
 code: they keep it from running at all, and the statement check makes it
