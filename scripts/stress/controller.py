@@ -844,10 +844,16 @@ class Controller:
             if (not last or state['since'] is None or now-state['since'] < 300
                     or completed >= last):
                 continue
-            high = row['rss']-base['rss'] > 64*1024**2 and row['rss'] > base['rss']*1.2
+            # Heap against heap when both rows carry it (#1835): total RSS
+            # includes the mapped LMDB ledger, which grows with the chain.
+            # Pre-#1835 rows or baselines keep the total-RSS rule exactly.
+            metric = ('rss_anon' if type(row.get('rss_anon')) is int
+                      and type(base.get('rss_anon')) is int else 'rss')
+            high = row[metric]-base[metric] > 64*1024**2 and row[metric] > base[metric]*1.2
             count = self.j.get('rss_cycles:'+host,0)+1 if high else 0
             with self.j.transaction():
                 self.j.set('rss_cycles:'+host,count)
+                self.j.set('rss_cycles_metric:'+host,metric)
                 self.j.set('memory_cycle:'+host,last)
             if count >= 3:
                 self.halt('post-idle RSS growth across three cycles: '+host)

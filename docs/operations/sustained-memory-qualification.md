@@ -177,11 +177,33 @@ for its live halt gates (`runtime.check_resources`): restarts, binary, config
 or node-key changes, disk headroom, low host memory and sustained swap.
 **That ring cannot replace this qualification's evidence:**
 
-- `observer.py` rows have no `RssAnon`, cgroup memory, cgroup swap,
-  `memory.events`, cgroup CPU or throttling, and no tip height or hash.
+- Since #1835 `observer.py` rows carry `rss_anon` and `rss_file` (bytes,
+  from `RssAnon`/`RssFile`; `None` when absent, never an error row). They
+  still have no cgroup memory, cgroup swap, `memory.events`, cgroup CPU or
+  throttling, and no tip height or hash. `rss_anon` is the heap (the leak signal);
+  `rss_file` is mostly the mapped LMDB ledger, which grows with the chain by
+  design. `report.json` gives a per-node `heap_growth` (first versus last
+  observer row); the final-24 h anon slope comes offline from the retrieved
+  files, oldest first:
+
+  ```sh
+  python3 scripts/stress/reporting.py heap \
+    n1=n1/resources.previous.jsonl,n1/resources.jsonl n2=n2/resources.jsonl
+  ```
+
+  Rows from pre-#1835 observers have no heap sample and report
+  `unavailable`.
 - The ring keeps about 150 s (`latest.json`). `resources.jsonl` rotates at
   64 MiB, and its process identity is systemd's monotonic start time, not
   the boot-ID start-tick identity this manifest binds.
+- The controller's post-idle memory halt (`memory_cycle`) counts a cycle when
+  a host, idle for five minutes after a write, sits more than 64 MiB and more
+  than 1.2x above its launch baseline; three consecutive cycles halt the run.
+  When both the latest row and the baseline carry `rss_anon` it compares heap
+  to heap, so ledger growth in the mapped LMDB file never counts. If either
+  lacks it (a pre-#1835 observer or launch baseline) it keeps the old
+  total-`rss` rule. The journal key `rss_cycles_metric:<host>` and
+  `report.json` `memory_cycles` record which metric each host's last cycle used.
 - During degrade steps the controller deliberately re-baselines a
   scheduled restart (`check_resources` returns a new baseline). The
   sustained gate never re-baselines; any restart makes the run incomplete.

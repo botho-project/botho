@@ -10,11 +10,64 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from controller import Controller
 from discovery import DiscoveryController
-from runtime import Gate, Journal
+from reporting import heap_evidence, heap_growth
+from runtime import HOSTS, Gate, Journal
 
 
 class StopRun(Exception):
     pass
+
+
+MIB = 1024**2
+
+
+def heap_rows(hours, anon, file=lambda h: 300 * MIB):
+    return [{"at": h * 3600.0, "rss": anon(h) + file(h), "rss_anon": anon(h), "rss_file": file(h)}
+            for h in hours]
+
+
+class HeapGrowthTests(unittest.TestCase):
+    def test_flat_heap_with_growing_ledger_is_zero_heap_growth(self):
+        heap = heap_growth(heap_rows(range(49), lambda h: 200 * MIB, lambda h: (300 + 5 * h) * MIB))
+        self.assertEqual(heap["status"], "measured")
+        self.assertEqual(heap["anon_growth_bytes"], 0)
+        self.assertEqual(heap["anon_slope_bytes_per_hour_last_window"], 0)
+        self.assertEqual(heap["file_growth_bytes"], 240 * MIB)
+        self.assertEqual(heap["samples"], 49)
+
+    def test_slope_covers_only_the_final_window(self):
+        # 24 h of 1 MiB/h growth, then 24 h flat: whole-run growth, flat slope.
+        rows = heap_rows(range(49), lambda h: (200 + min(h, 24)) * MIB)
+        heap = heap_growth(rows)
+        self.assertEqual(heap["anon_growth_bytes"], 24 * MIB)
+        self.assertAlmostEqual(heap["anon_slope_bytes_per_hour_last_window"], 0)
+        growing = heap_growth(heap_rows(range(49), lambda h: (200 + 2 * h) * MIB))
+        self.assertAlmostEqual(growing["anon_slope_bytes_per_hour_last_window"], 2 * MIB)
+
+    def test_legacy_error_and_mixed_rows(self):
+        legacy = [{"at": h * 3600.0, "rss": 500 * MIB} for h in range(5)]
+        error = [{"at": 5 * 3600.0, "error": "OSError: gone"}]
+        self.assertEqual(heap_growth(legacy)["status"], "unavailable")
+        self.assertEqual(heap_growth(legacy + error)["status"], "unavailable")
+        self.assertEqual(heap_growth([None, None])["status"], "unavailable")
+        new = heap_rows(range(6, 9), lambda h: (100 + h) * MIB)
+        heap = heap_growth(legacy + error[:1] + new[:1] + error + new[1:])
+        self.assertEqual((heap["first_at"], heap["samples"]), (6 * 3600.0, 3))
+        self.assertEqual(heap["anon_growth_bytes"], 2 * MIB)
+        # A row with rss_anon but no rss_file still counts for heap.
+        heap = heap_growth([{"at": 0, "rss_anon": 1}, {"at": 3600, "rss_anon": 2}])
+        self.assertIsNone(heap["file_growth_bytes"])
+
+    def test_offline_evidence_reads_previous_before_current_and_skips_torn_lines(self):
+        with tempfile.TemporaryDirectory() as name:
+            previous, current = Path(name) / "resources.previous.jsonl", Path(name) / "resources.jsonl"
+            rows = heap_rows(range(4), lambda h: (100 + h) * MIB)
+            previous.write_text("".join(json.dumps(r) + "\n" for r in rows[:2]))
+            current.write_text("".join(json.dumps(r) + "\n" for r in rows[2:]) + '{"at": 9')
+            evidence = heap_evidence({"n1": [str(previous), str(current)]})
+        self.assertEqual(evidence["n1"]["samples"], 4)
+        self.assertEqual(evidence["n1"]["first_rss_anon"], 100 * MIB)
+        self.assertAlmostEqual(evidence["n1"]["anon_slope_bytes_per_hour_last_window"], MIB)
 
 
 class TerminalReportingTests(unittest.TestCase):
@@ -103,6 +156,26 @@ class TerminalReportingTests(unittest.TestCase):
             self.c.j.db.execute("SELECT COUNT(*) FROM reservations").fetchone()[0], 2
         )
         self.assertEqual(report["qualification_status"], "failed")
+
+    def test_report_has_heap_growth_for_every_host_including_legacy_baselines(self):
+        legacy = {"at": 900, "rss": 300 * MIB}
+        for host in HOSTS:
+            self.c.j.set("baseline:" + host, legacy)
+            self.c.j.set("latest:" + host, {"at": 1700, "rss": 500 * MIB,
+                                            "rss_anon": 100 * MIB, "rss_file": 400 * MIB})
+        self.c.j.set("baseline:" + HOSTS[0], {**legacy, "rss_anon": 90 * MIB, "rss_file": 210 * MIB})
+        self.c.j.set("rss_cycles:" + HOSTS[0], 1)
+        self.c.j.set("rss_cycles_metric:" + HOSTS[0], "rss_anon")
+        report = self.early_hold()
+        self.assertEqual(set(report["heap_growth"]), set(HOSTS))
+        heap = report["heap_growth"][HOSTS[0]]
+        self.assertEqual((heap["anon_growth_bytes"], heap["file_growth_bytes"]), (10 * MIB, 190 * MIB))
+        self.assertIsNone(heap["anon_slope_bytes_per_hour_last_window"])  # first vs last only
+        for host in HOSTS[1:]:
+            self.assertEqual(report["heap_growth"][host]["status"], "unavailable")
+        self.assertEqual(report["memory_cycles"][HOSTS[0]], {"count": 1, "metric": "rss_anon"})
+        self.assertEqual(report["memory_cycles"][HOSTS[1]], {"count": None, "metric": None})
+        self.assertEqual(report["resources"][HOSTS[1]]["rss"], 500 * MIB)
 
     def test_opening_zero_is_stale_and_final_accounting_explicitly_unverified(self):
         report = self.early_hold()

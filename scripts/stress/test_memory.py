@@ -23,6 +23,7 @@ class IdleMemoryTests(unittest.TestCase):
         self.c.statuses = {h: {'synced': True, 'mintingActive': False, 'mempoolSize': 0}
                            for h in HOSTS}
         self.rss = {h: 350*MIB for h in HOSTS}
+        self.anon = {h: None for h in HOSTS}  # None: a pre-#1835 observer row
         for host in HOSTS:
             self.j.set('baseline:'+host, {'at': 900, 'rss': 350*MIB})
         self.j.set('last_write', self.now)
@@ -35,7 +36,10 @@ class IdleMemoryTests(unittest.TestCase):
         self.now = at
         self.c.fresh = at-status_age
         for host in HOSTS:
-            self.j.set('latest:'+host, {'at': at-observer_age, 'rss': self.rss[host]})
+            row = {'at': at-observer_age, 'rss': self.rss[host]}
+            if self.anon[host] is not None:
+                row['rss_anon'] = self.anon[host]
+            self.j.set('latest:'+host, row)
         with patch('controller.time.time', return_value=at):
             self.c.memory_cycle()
 
@@ -63,6 +67,53 @@ class IdleMemoryTests(unittest.TestCase):
             self.assertEqual(self.j.get('rss_cycles:'+host), cycle+1)
         self.c.halt.assert_called_once_with('post-idle RSS growth across three cycles: '+host)
         self.assertEqual(self.j.get('baseline:'+host)['rss'], 350*MIB)
+
+    def cycles(self, n=3):
+        for cycle in range(n):
+            start = 1000+cycle*900
+            self.j.set('last_write', start)
+            self.window(start)
+
+    def heap_baselines(self, anon=150*MIB):
+        for host in HOSTS:
+            self.j.set('baseline:'+host, {'at': 900, 'rss': 350*MIB, 'rss_anon': anon})
+
+    def test_ledger_only_growth_is_not_a_heap_cycle(self):
+        # #1835: total RSS up 200 MiB (mapped LMDB), heap flat.
+        self.heap_baselines()
+        self.rss = {h: 550*MIB for h in HOSTS}
+        self.anon = {h: 155*MIB for h in HOSTS}
+        self.cycles()
+        self.c.halt.assert_not_called()
+        for host in HOSTS:
+            self.assertEqual(self.j.get('rss_cycles:'+host), 0)
+            self.assertEqual(self.j.get('rss_cycles_metric:'+host), 'rss_anon')
+
+    def test_heap_growth_over_thresholds_counts_and_holds(self):
+        self.heap_baselines()
+        host = HOSTS[0]
+        self.anon[host] = 250*MIB  # +100 MiB and > 1.2x, total RSS flat
+        for other in HOSTS[1:]:
+            self.anon[other] = 150*MIB
+        self.cycles()
+        self.assertEqual(self.j.get('rss_cycles:'+host), 3)
+        self.assertEqual(self.j.get('rss_cycles:'+HOSTS[1]), 0)
+        self.c.halt.assert_called_once_with('post-idle RSS growth across three cycles: '+host)
+
+    def test_legacy_row_or_baseline_keeps_the_total_rss_rule(self):
+        host, legacy_baseline = HOSTS[:2]
+        self.heap_baselines()
+        self.j.set('baseline:'+legacy_baseline, {'at': 900, 'rss': 350*MIB})
+        self.rss = {h: 450*MIB for h in HOSTS}
+        # host: heap-carrying baseline, legacy row; legacy_baseline: the reverse.
+        self.anon = {h: 150*MIB for h in HOSTS}
+        self.anon[host] = None
+        self.cycles(1)
+        for h in (host, legacy_baseline):
+            self.assertEqual(self.j.get('rss_cycles:'+h), 1)
+            self.assertEqual(self.j.get('rss_cycles_metric:'+h), 'rss')
+        self.assertEqual(self.j.get('rss_cycles:'+HOSTS[2]), 0)
+        self.assertEqual(self.j.get('rss_cycles_metric:'+HOSTS[2]), 'rss_anon')
 
     def test_active_producer_is_excluded_without_consuming_other_host_cycles(self):
         active, passive = HOSTS[:2]

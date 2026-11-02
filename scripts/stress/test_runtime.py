@@ -116,6 +116,11 @@ class ResourceTests(unittest.TestCase):
         swap=[{**self.base,'at':880+i*5,'swap':65*1024**2} for i in range(25)]
         with self.assertRaises(Gate):check_resources(swap,self.base,1000)
 
+    def test_heap_fields_absent_from_baseline_are_invisible_to_resource_gates(self):
+        # #1835: new observer fields never gate against an older baseline.
+        rows=[{**self.base,'at':900+i*5,'rss_anon':900*1024**2,'rss_file':None} for i in range(21)]
+        self.assertIsNone(check_resources(rows,self.base,1000))
+
     def test_network_and_build_identity_are_required(self):
         plan=json.loads(Path(__file__).with_name('testnet-72h-plan.json').read_text())
         status={'network':plan['network'],'gitCommit':plan['node_commit'],'version':'0.6.0'}

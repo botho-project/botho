@@ -1,5 +1,6 @@
 """Durable campaign reporting shared by legacy and discovery profiles."""
 
+import argparse
 import hashlib
 import json
 import math
@@ -399,6 +400,66 @@ def degrade_report(journal, steps):
     return rows
 
 
+HEAP_NOTE = ("rss_anon is the heap (leak signal); rss_file is mostly the mapped "
+             "LMDB ledger, which grows with the chain by design")
+
+
+def heap_growth(rows, window_s=86400):
+    """Heap vs file-backed growth over time-ordered observer rows (#1835).
+
+    Error rows and rows without ``rss_anon`` (pre-#1835 observers) are not
+    heap samples. The anon slope is a least-squares fit over the final
+    ``window_s``, as ``sustained_memory.memory_stats``; None below three rows
+    (two points restate first vs last, which is all ``report.json`` holds).
+    """
+    rows = [r for r in rows if r and not r.get("error")
+            and type(r.get("rss_anon")) is int and type(r.get("at")) in (int, float)]
+    if len(rows) < 2:
+        return {"status": "unavailable", "reason": f"{len(rows)} heap samples (rss_anon)",
+                "note": HEAP_NOTE}
+    first, last = rows[0], rows[-1]
+    recent = [(r["at"], r["rss_anon"]) for r in rows if r["at"] >= last["at"] - window_s]
+    slope = None
+    if len(recent) >= 3:
+        mt = sum(t for t, _ in recent) / len(recent)
+        mv = sum(v for _, v in recent) / len(recent)
+        variance = sum((t - mt) ** 2 for t, _ in recent)
+        if variance:
+            slope = sum((t - mt) * (v - mv) for t, v in recent) / variance * 3600
+    files = [r.get("rss_file") for r in (first, last)]
+    return {
+        "status": "measured",
+        "note": HEAP_NOTE,
+        "first_at": first["at"],
+        "last_at": last["at"],
+        "first_rss_anon": first["rss_anon"],
+        "last_rss_anon": last["rss_anon"],
+        "anon_growth_bytes": last["rss_anon"] - first["rss_anon"],
+        "anon_slope_bytes_per_hour_last_window": slope,
+        "window_s": window_s,
+        "first_rss_file": files[0],
+        "last_rss_file": files[1],
+        "file_growth_bytes": files[1] - files[0] if None not in files else None,
+        "samples": len(rows),
+    }
+
+
+def heap_evidence(hosts, window_s=86400):
+    """``{host: [path, ...]}`` of retrieved resources JSONL, oldest file first."""
+    result = {}
+    for host, paths in hosts.items():
+        rows = []
+        for path in paths:
+            with open(path) as lines:
+                for line in lines:
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        continue  # a torn final line from a live copy
+        result[host] = heap_growth(rows, window_s)
+    return result
+
+
 def controller_report(self):
     rows = self.j.rows()
     artifacts = artifact_evidence(
@@ -461,6 +522,16 @@ def controller_report(self):
         "accounting_status": accounting_status(self.j, rows, time.time(), artifacts),
         "fleet": self.j.get("fleet_latest"),
         "resources": {h: self.j.get("latest:" + h) for h in HOSTS},
+        # First vs last only; the 24 h slope needs ``reporting.py heap`` (#1835).
+        "heap_growth": {
+            h: heap_growth([self.j.get("baseline:" + h), self.j.get("latest:" + h)])
+            for h in HOSTS
+        },
+        "memory_cycles": {
+            h: {"count": self.j.get("rss_cycles:" + h),
+                "metric": self.j.get("rss_cycles_metric:" + h)}
+            for h in HOSTS
+        },
         "controller": {
             "max_rss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             "user_cpu": resource.getrusage(resource.RUSAGE_SELF).ru_utime,
@@ -505,3 +576,20 @@ def workload_complete(journal, events, phases, degrade_steps=()):
             for step in degrade_steps
         )
     )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Per-node heap growth from retrieved observer resources JSONL (#1835).")
+    parser.add_argument("mode", choices=["heap"])
+    parser.add_argument("hosts", nargs="+", metavar="HOST=PATH[,PATH]",
+                        help="resources.previous.jsonl before resources.jsonl")
+    parser.add_argument("--window-s", type=float, default=86400)
+    args = parser.parse_args()
+    hosts = {}
+    for item in args.hosts:
+        host, sep, paths = item.partition("=")
+        if not sep or not host or not paths:
+            parser.error("expected HOST=PATH[,PATH]: " + item)
+        hosts[host] = paths.split(",")
+    print(json.dumps(heap_evidence(hosts, args.window_s), indent=2, sort_keys=True))
