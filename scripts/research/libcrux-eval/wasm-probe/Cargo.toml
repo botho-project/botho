@@ -1,0 +1,30 @@
+[package]
+name = "libcrux-wasm-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Dev-only: does libcrux ML-KEM-768/ML-DSA-65 build for wasm32 and mobile targets? (issue #1715)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = ["libcrux"]
+libcrux = ["dep:libcrux-ml-kem", "dep:libcrux-ml-dsa"]
+# Size baseline: the incumbent crates behind the same three entry points.
+rustcrypto = ["dep:ml-kem", "dep:ml-dsa", "dep:hybrid-array"]
+
+[dependencies]
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"], optional = true }
+libcrux-ml-dsa = { version = "=0.0.11", default-features = false, features = ["mldsa65"], optional = true }
+ml-kem = { version = "=0.2.3", default-features = false, features = ["deterministic"], optional = true }
+ml-dsa = { version = "=0.1.1", default-features = false, optional = true }
+hybrid-array = { version = "0.4", optional = true }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

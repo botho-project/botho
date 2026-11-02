@@ -1,0 +1,4 @@
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/
+fuzz/target/
