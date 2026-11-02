@@ -20,7 +20,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::{discovery::NetworkStats, reputation::ReputationManager};
 use crate::block::Block;
@@ -655,6 +655,13 @@ pub struct ChainSyncManager {
     /// outstanding are excluded from the round (with no reputation charge).
     /// `None` outside a round; reset whenever the round ends.
     discovery_round_clock: Option<Instant>,
+    /// Peers connected at the most recent [`Self::tick`], minus peers that
+    /// disconnected since (#1819). Used only to decide whether every
+    /// connected compatible peer is banned (see [`Self::ban_floor_active`]).
+    connected_peers: HashSet<PeerId>,
+    /// Whether the all-banned floor was active at the last [`Self::tick`]
+    /// (#1819). Only used to log each transition once.
+    ban_floor_logged: bool,
 }
 
 impl ChainSyncManager {
@@ -678,6 +685,70 @@ impl ChainSyncManager {
             status_in_flight: HashSet::new(),
             discovery_unresponsive: HashSet::new(),
             discovery_round_clock: None,
+            connected_peers: HashSet::new(),
+            ban_floor_logged: false,
+        }
+    }
+
+    /// Whether every connected compatible peer is banned (#1819).
+    ///
+    /// "Connected" is the set seen at the last tick plus every peer with a
+    /// known status (statuses are dropped on disconnect), so a peer that
+    /// answered before the first tick still counts. Consensus-incompatible
+    /// peers are never sync sources and do not count either way.
+    ///
+    /// While this holds, peer selection ignores bans ([`Self::is_selectable`]).
+    /// A ban says "prefer another peer"; when there is no other peer, the
+    /// alternative is never downloading again, and Discovery concluding
+    /// Synced (through the genesis branch) at a height the banned peers are
+    /// ahead of. Bans also expire on their own ([`ReputationManager`]); the
+    /// floor covers the time until they do.
+    ///
+    /// The floor does not apply while any connected compatible peer is not
+    /// banned, even one that has not answered (yet): then the ban keeps its
+    /// meaning, and a banned peer's answer alone does not conclude a Discovery
+    /// round (#1813).
+    fn ban_floor_active(&self) -> bool {
+        let mut compatible = self
+            .connected_peers
+            .iter()
+            .chain(self.peer_statuses.keys())
+            .filter(|p| !self.incompatible_peers.contains(p))
+            .peekable();
+        compatible.peek().is_some() && compatible.all(|p| self.reputation.is_banned(p))
+    }
+
+    /// Whether `peer` may be selected as a sync source or counted as a usable
+    /// Discovery answer: it is consensus-compatible, and it is not banned or
+    /// every connected compatible peer is banned ([`Self::ban_floor_active`]).
+    fn is_selectable(&self, peer: &PeerId) -> bool {
+        !self.incompatible_peers.contains(peer)
+            && (!self.reputation.is_banned(peer) || self.ban_floor_active())
+    }
+
+    /// Lift expired reputation bans (#1819), resetting those peers' counters.
+    fn expire_reputation_bans(&mut self) {
+        for peer in self.reputation.expire_bans() {
+            info!(%peer, "Sync reputation ban expired; peer is selectable again");
+        }
+    }
+
+    /// Log each change of the all-banned floor once (#1819).
+    fn log_ban_floor_transition(&mut self) {
+        let active = self.ban_floor_active();
+        if active == self.ban_floor_logged {
+            return;
+        }
+        self.ban_floor_logged = active;
+        if active {
+            warn!(
+                peers = self.connected_peers.len(),
+                "Every connected compatible peer is banned; ignoring bans for sync peer selection"
+            );
+        } else {
+            warn!(
+                "No longer every connected peer is banned; sync peer selection honors bans again"
+            );
         }
     }
 
@@ -707,8 +778,9 @@ impl ChainSyncManager {
     /// peers, and a node whose peers are all banned never downloads again.
     /// Charging here would add nothing: a peer that never answers has no
     /// status and is never selected anyway, and a real 30s transport timeout
-    /// outside the deadline path is still charged as before. Permanent bans
-    /// themselves are tracked in #1819.
+    /// outside the deadline path is still charged as before. Bans now expire
+    /// and an all-banned peer set is never locked out (#1819), but charging
+    /// local stalls to peers would still ban good peers for minutes.
     ///
     /// Peers that already answered, and consensus-incompatible peers (never
     /// waited on), are left alone.
@@ -977,7 +1049,16 @@ impl ChainSyncManager {
     }
 
     /// Handle status response from a peer
+    ///
+    /// A status answer deliberately records no reputation success (#1819).
+    /// Reputation ranks peers as *block sources*: a peer can answer the tiny,
+    /// in-memory `GetStatus` every 30s while timing out or failing every
+    /// `GetBlocks`, and counting those answers would keep its success rate
+    /// above the ban threshold and mask its block-serving failures. Peers
+    /// that only ever answer status are instead kept usable by ban expiry and
+    /// the all-banned floor (see [`Self::ban_floor_active`]).
     pub fn on_status(&mut self, peer: PeerId, height: u64, tip_hash: [u8; 32]) {
+        self.expire_reputation_bans();
         // The peer answered, so its status request is no longer in flight
         // (#1431), whether or not the advertised height is used below.
         self.status_in_flight.remove(&peer);
@@ -1516,6 +1597,7 @@ impl ChainSyncManager {
         // peer can be queried again (#1431).
         self.status_in_flight.remove(peer);
         self.discovery_unresponsive.remove(peer);
+        self.connected_peers.remove(peer);
         // If the in-flight guard awaits a block request sent to this peer
         // (e.g. the download was retargeted away from it, #1579), that request
         // will never resolve once its record is dropped; release the guard so
@@ -1551,21 +1633,22 @@ impl ChainSyncManager {
     /// Get the best peer to sync from
     ///
     /// Selection criteria (in order of priority):
-    /// 1. Exclude banned peers (< 25% success rate)
+    /// 1. Exclude banned peers (< 25% success rate, until the ban expires),
+    ///    unless every connected compatible peer is banned (#1819, see
+    ///    [`Self::ban_floor_active`])
     /// 2. Among peers at similar height (within 10 blocks), prefer better
     ///    reputation
     /// 3. For peers at very different heights, prefer higher height
     fn best_peer(&self) -> Option<(PeerId, &PeerStatus)> {
-        // Filter out banned peers and consensus-incompatible peers. The latter
-        // must never be selected as a sync source: their advertised height is
-        // an old-chain height that would drive the state machine into
-        // `Downloading` and never reach `Synced` (#998 / #1000).
+        // Filter out banned peers (subject to the all-banned floor, #1819) and
+        // consensus-incompatible peers. The latter must never be selected as
+        // a sync source: their advertised height is an old-chain height that
+        // would drive the state machine into `Downloading` and never reach
+        // `Synced` (#998 / #1000).
         let candidates: Vec<_> = self
             .peer_statuses
             .iter()
-            .filter(|(peer, _)| {
-                !self.reputation.is_banned(peer) && !self.incompatible_peers.contains(peer)
-            })
+            .filter(|(peer, _)| self.is_selectable(peer))
             .collect();
 
         if candidates.is_empty() {
@@ -1621,6 +1704,11 @@ impl ChainSyncManager {
     pub fn tick(&mut self, connected_peers: &[PeerId]) -> Option<SyncAction> {
         // Clean up rate limiter periodically
         self.rate_limiter.cleanup();
+
+        // Peer bans are bounded in time and never all-encompassing (#1819).
+        self.connected_peers = connected_peers.iter().copied().collect();
+        self.expire_reputation_bans();
+        self.log_ban_floor_transition();
 
         // Peers excluded from a Discovery round are excluded from that round
         // only (#1723). Every transition out of `Discovery` ends the round;
@@ -1716,16 +1804,15 @@ impl ChainSyncManager {
                     // An answer from a banned peer is not usable (#1813):
                     // `best_peer()` ignores it, so counting it here let one
                     // banned answer plus one silent peer fall through to the
-                    // genesis branch below and report Synced. The case with
-                    // no exclusion at all (every compatible peer answered and
-                    // all are banned) still reaches that branch, unchanged:
-                    // nobody is unaccounted for, and failing it would retry
-                    // forever, since a status answer does not lift a ban.
-                    let any_usable_answer = connected_peers.iter().any(|p| {
-                        !self.incompatible_peers.contains(p)
-                            && !self.reputation.is_banned(p)
-                            && self.peer_statuses.contains_key(p)
-                    });
+                    // genesis branch below and report Synced. Usability
+                    // matches `best_peer()` exactly (`is_selectable`), so when
+                    // every connected compatible peer is banned their answers
+                    // count (#1819): `best_peer()` then selects among them and
+                    // the round downloads from a banned peer that is ahead,
+                    // instead of declaring Synced through the genesis branch.
+                    let any_usable_answer = connected_peers
+                        .iter()
+                        .any(|p| self.is_selectable(p) && self.peer_statuses.contains_key(p));
                     let any_compatible_excluded = connected_peers.iter().any(|p| {
                         !self.incompatible_peers.contains(p)
                             && self.discovery_unresponsive.contains(p)
@@ -1741,7 +1828,11 @@ impl ChainSyncManager {
                     self.end_discovery_round();
                     // `best_peer()` already excludes incompatible peers, so when
                     // every peer is a zombie it returns `None` and we fall to the
-                    // genesis branch below.
+                    // genesis branch below. It never returns `None` merely
+                    // because every peer that answered is banned: then either
+                    // the all-banned floor makes them selectable, or an
+                    // unbanned peer was excluded and nobody usable answered,
+                    // which failed the round above (#1819).
                     if let Some((best_peer, status)) = self.best_peer() {
                         // Initial catch-up: trigger on ANY gap, NOT the
                         // near-tip hysteresis threshold. A fresh joiner at
@@ -4899,11 +4990,16 @@ mod tests {
         assert!(manager.is_synced());
     }
 
-    /// #1813 (pins the per-peer `discovery_unresponsive.remove` in
-    /// `on_status`): a peer that failed and then answered late in the same
-    /// round counts as having answered, so the round ends exactly as if it
-    /// had answered on time. Observable only when the answer does not end
-    /// the round by itself, i.e. the answering peer is banned.
+    /// #1813: a peer that failed and then answered late in the same round
+    /// counts as having answered, so the round ends exactly as if it had
+    /// answered on time.
+    ///
+    /// Under #1813 this pinned the per-peer `discovery_unresponsive.remove`
+    /// in `on_status`, observable only when a banned peer's answer left the
+    /// round open. Since #1819 a lone banned peer is selectable (the
+    /// all-banned floor), so its answer concludes the round in `on_status`
+    /// either way, and that line no longer changes any outcome; the parity
+    /// check is kept as a regression test of the late-answer path.
     #[test]
     fn test_discovery_late_answer_counts_like_an_on_time_answer() {
         fn round(late: bool) -> SyncState {
@@ -4922,7 +5018,6 @@ mod tests {
                 !manager.discovery_unresponsive.contains(&peer),
                 "an answer re-includes the peer"
             );
-            assert!(matches!(manager.state(), SyncState::Discovery));
             manager.tick(&[peer]);
             manager.state().clone()
         }
@@ -5000,6 +5095,265 @@ mod tests {
                     if peer == peers[0] && start_height == 101
             ),
             "expected a block request from the recovered peer, got {action:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // #1819: bans expire, and an all-banned peer set is never locked out
+    // ------------------------------------------------------------------
+
+    /// Skip a `Failed` state's backoff wait (mocked clock).
+    fn skip_backoff(manager: &mut ChainSyncManager) {
+        if let SyncState::Failed { retry_at, .. } = &mut manager.state {
+            *retry_at = Instant::now() - Duration::from_secs(1);
+        }
+    }
+
+    /// Ban every peer the way the PR #1815 judge did: three Discovery rounds
+    /// in which every status request fails at the transport (each failure is
+    /// charged), so each peer ends with 3 failures, 0 successes, banned.
+    fn lock_out(manager: &mut ChainSyncManager, peers: &[PeerId]) {
+        for round in 0..3 {
+            let tokens: Vec<SyncRequestToken> = peers
+                .iter()
+                .map(|_| tick_dispatch(manager, peers))
+                .collect();
+            for token in tokens {
+                assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+            }
+            assert!(manager.tick(peers).is_none());
+            assert!(
+                matches!(manager.state(), SyncState::Failed { .. }),
+                "round {round}: nobody answered, got {:?}",
+                manager.state()
+            );
+            skip_backoff(manager);
+        }
+        for peer in peers {
+            assert!(manager.reputation_mut().is_banned(peer), "{peer} banned");
+        }
+    }
+
+    /// Make `peer`'s ban end in the past (mocked clock).
+    fn expire_ban(manager: &mut ChainSyncManager, peer: &PeerId) {
+        let rep = manager.reputation_mut().get_or_create(peer);
+        assert!(rep.banned_until.is_some(), "{peer} was banned");
+        rep.banned_until = Some(Instant::now() - Duration::from_secs(1));
+    }
+
+    /// #1819 (the PR #1815 judge's lockout): 4 peers banned after 3 failed
+    /// rounds then answer at height 120 while the node is at 100. Before
+    /// #1819 every answer was ignored, the round concluded Synced at 100
+    /// through the genesis branch, and the node stayed there. With every
+    /// connected compatible peer banned, bans are now ignored for selection,
+    /// so the node downloads right away (without waiting for expiry).
+    #[test]
+    fn test_all_banned_lockout_downloads_via_floor() {
+        let mut manager = ChainSyncManager::new(100);
+        let peers: Vec<PeerId> = (0..4).map(|_| make_peer_id()).collect();
+        lock_out(&mut manager, &peers);
+
+        // The peers recover and all answer from a greater height.
+        let tokens: Vec<SyncRequestToken> = peers
+            .iter()
+            .map(|_| tick_dispatch(&mut manager, &peers))
+            .collect();
+        for (peer, token) in peers.iter().zip(tokens) {
+            manager.on_request_resolved(token);
+            manager.on_status(*peer, 120, [6u8; 32]);
+        }
+        let action = manager.tick(&peers);
+
+        assert!(
+            matches!(
+                manager.state(),
+                SyncState::Downloading {
+                    target_height: 120,
+                    ..
+                }
+            ),
+            "an all-banned node must still catch up, got {:?}",
+            manager.state()
+        );
+        assert!(!manager.is_synced());
+        let action = match action {
+            Some(SyncAction::RequestBlocks { .. }) => action,
+            _ => manager.tick(&peers),
+        };
+        assert!(
+            matches!(
+                action,
+                Some(SyncAction::RequestBlocks { peer, start_height: 101, .. })
+                    if peers.contains(&peer)
+            ),
+            "expected a block request from a (banned) peer, got {action:?}"
+        );
+        // The bans themselves still stand; only selection ignores them.
+        assert!(peers.iter().all(|p| manager.reputation.is_banned(p)));
+    }
+
+    /// #1819: the same lockout, but with one unbanned peer at the node's own
+    /// height, so the floor does not apply: the bans are honored and the
+    /// node reports Synced at 100 even though the banned peers claim 120
+    /// (a ban among good peers keeps its meaning). Once the bans expire the
+    /// peers' counters are reset, they are selectable again, and the Synced
+    /// node goes on to download from them.
+    #[test]
+    fn test_all_banned_lockout_recovers_via_expiry() {
+        let mut manager = ChainSyncManager::new(100);
+        let banned: Vec<PeerId> = (0..4).map(|_| make_peer_id()).collect();
+        lock_out(&mut manager, &banned);
+
+        let good = make_peer_id();
+        let mut peers = banned.clone();
+        peers.push(good);
+        let tokens: Vec<SyncRequestToken> = peers
+            .iter()
+            .map(|_| tick_dispatch(&mut manager, &peers))
+            .collect();
+        for (i, (peer, token)) in peers.iter().zip(tokens).enumerate() {
+            manager.on_request_resolved(token);
+            let height = if *peer == good { 100 } else { 120 };
+            manager.on_status(*peer, height, [6u8; 32]);
+            if *peer != good {
+                assert!(
+                    matches!(manager.state(), SyncState::Discovery),
+                    "answer {i}: a banned answer must not conclude the round"
+                );
+            }
+        }
+        assert!(manager.is_synced(), "got {:?}", manager.state());
+        assert!(!manager.ban_floor_active());
+        assert!(manager.tick(&peers).is_none(), "bans honored while Synced");
+        assert!(manager.is_synced());
+
+        for peer in &banned {
+            expire_ban(&mut manager, peer);
+        }
+        assert!(manager.tick(&peers).is_none());
+        assert_eq!(
+            *manager.state(),
+            SyncState::Downloading {
+                peer: manager.best_peer().unwrap().0,
+                target_height: 120
+            },
+        );
+        for peer in &banned {
+            let rep = manager.reputation.get(peer).expect("tracked");
+            assert!(!manager.reputation.is_banned(peer));
+            assert_eq!((rep.successes, rep.failures), (0, 0), "counters reset");
+            assert_eq!(rep.ban_count, 1, "ban count kept for backoff");
+            assert_eq!(rep.banned_until, None);
+        }
+    }
+
+    /// #1819: one bad peer among good ones stays banned. Its (higher) height
+    /// is ignored and the floor does not apply.
+    #[test]
+    fn test_single_banned_peer_among_good_stays_banned() {
+        let mut manager = ChainSyncManager::new(100);
+        let bad = make_peer_id();
+        let good = [make_peer_id(), make_peer_id()];
+        let peers = [bad, good[0], good[1]];
+        ban(&mut manager, bad);
+
+        let tokens: Vec<SyncRequestToken> = peers
+            .iter()
+            .map(|_| tick_dispatch(&mut manager, &peers))
+            .collect();
+        for (peer, token) in peers.iter().zip(tokens) {
+            manager.on_request_resolved(token);
+            let height = if *peer == bad { 500 } else { 100 };
+            manager.on_status(*peer, height, [3u8; 32]);
+        }
+        manager.tick(&peers);
+        assert!(manager.is_synced(), "got {:?}", manager.state());
+        assert!(!manager.ban_floor_active());
+        assert!(!manager.ban_floor_logged);
+        assert!(manager.reputation.is_banned(&bad));
+        let best = manager.best_peer().map(|(p, _)| p);
+        assert!(best.is_some_and(|p| good.contains(&p)), "got {best:?}");
+        assert_eq!(manager.status_snapshot().target_height, Some(100));
+    }
+
+    /// #1819: a Synced node whose peers are all banned still notices, via
+    /// a status refresh, that they moved ahead past the hysteresis threshold.
+    #[test]
+    fn test_synced_all_banned_reenters_download() {
+        let mut manager = ChainSyncManager::new(100);
+        manager.state = SyncState::Synced;
+        let peer = make_peer_id();
+        ban(&mut manager, peer);
+        manager.on_status(peer, 100 + SYNC_BEHIND_THRESHOLD + 1, [4u8; 32]);
+        assert!(
+            matches!(manager.state(), SyncState::Downloading { peer: p, .. } if *p == peer),
+            "got {:?}",
+            manager.state()
+        );
+    }
+
+    /// #1819: the floor follows the connected set. It turns on when every
+    /// connected compatible peer is banned, off when an unbanned peer
+    /// connects (or a ban expires); each transition is logged once.
+    /// Consensus-incompatible peers never count.
+    #[test]
+    fn test_ban_floor_tracks_connected_peers() {
+        let mut manager = ChainSyncManager::new(100);
+        let banned = make_peer_id();
+        let fresh = make_peer_id();
+        let zombie = make_peer_id();
+        ban(&mut manager, banned);
+        manager.mark_incompatible(zombie);
+
+        manager.tick(&[]);
+        assert!(!manager.ban_floor_active(), "no peers: nothing to floor");
+        manager.tick(&[zombie]);
+        assert!(!manager.ban_floor_active(), "zombies are not sync peers");
+
+        manager.tick(&[banned, zombie]);
+        assert!(manager.ban_floor_active());
+        assert!(manager.ban_floor_logged);
+
+        manager.tick(&[banned, zombie, fresh]);
+        assert!(!manager.ban_floor_active(), "an unbanned peer connected");
+        assert!(!manager.ban_floor_logged);
+
+        manager.on_peer_disconnected(&fresh);
+        assert!(manager.ban_floor_active(), "it disconnected again");
+
+        expire_ban(&mut manager, &banned);
+        manager.tick(&[banned]);
+        assert!(!manager.ban_floor_active(), "the ban expired");
+        assert!(!manager.ban_floor_logged);
+    }
+
+    /// #1819: after a ban expires one more failure does not re-ban the peer;
+    /// three do, and the second ban lasts twice as long.
+    #[test]
+    fn test_expired_ban_needs_fresh_failures_and_backs_off() {
+        use crate::network::reputation::{ban_duration, BAN_BASE_DURATION};
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        ban(&mut manager, peer);
+        expire_ban(&mut manager, &peer);
+        manager.tick(&[peer]);
+        assert!(!manager.reputation.is_banned(&peer));
+
+        manager.reputation_mut().request_failed(&peer);
+        assert!(
+            !manager.reputation.is_banned(&peer),
+            "one failure must not re-ban"
+        );
+        manager.reputation_mut().request_failed(&peer);
+        manager.reputation_mut().request_failed(&peer);
+        let rep = manager.reputation.get(&peer).expect("tracked");
+        assert!(manager.reputation.is_banned(&peer));
+        assert_eq!(rep.ban_count, 2);
+        assert_eq!(ban_duration(2), 2 * BAN_BASE_DURATION);
+        let left = rep.banned_until.unwrap() - Instant::now();
+        assert!(
+            left > BAN_BASE_DURATION && left <= ban_duration(2),
+            "{left:?}"
         );
     }
 }
