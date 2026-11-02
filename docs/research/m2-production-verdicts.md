@@ -13,8 +13,9 @@
 |---|---|---|---|
 | ΔGini caused by the mechanism (off − on counterfactual), mean of 3 seeds | +0.0001 to +0.0012 / −0.0006 to +0.0003 | −0.0203 to −0.0027 / −0.0282 to −0.0091 | > 0.05 |
 | Margin vs the bar | short by ≈ 0.049 | short by ≥ 0.053 (best seed-mean −0.0027); single seeds range −0.047 to +0.010 | |
+| Same, at 100x / 1000x the transaction rate (#1790 rule, seed 1696, honest whale) | +0.0001 / +0.0006 and +0.0100 / +0.0185 | −0.085 / −0.137 and −0.093 / −0.147 | > 0.05 |
 | Same, under the node's candidate rule (spent outputs stay eligible; honest whale; #1808, table below) | +0.0005 / −0.0000 | +0.0030 / −0.0002 | > 0.05 |
-| Same, at 100x / 1000x the transaction rate (seed 1696, honest whale) | +0.0001 / +0.0006 and +0.0100 / +0.0185 | −0.085 / −0.137 and −0.093 / −0.147 | > 0.05 |
+| Same, node rule, at 100x / 1000x the transaction rate (seed 1696, honest whale; table below) | +0.0155 / +0.0268 and +0.0425 / +0.0725 | +0.0068 / +0.0123 and +0.0003 / +0.0060 | > 0.05 |
 | Legacy ΔGini (gini0 − giniF), seed 1696 | −0.007 to −0.010 (FAIL) | +0.49 to +0.62 (PASS, but the counterfactual with the mechanism off gives +0.54 to +0.61) | > 0.05 |
 | Share of top-decile value priced below 1.5x | **100% / 100%** | **100% / 100%** | should be small |
 
