@@ -1,0 +1,25 @@
+[package]
+name = "libcrux-eval-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Dev-only: fuzz_mlkem_decapsulation ported to libcrux, differential vs bth-crypto-pq (issue #1715)"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Own workspace: outside both the node workspace and the main fuzz/ crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+libcrux-eval = { path = ".." }
+bth-crypto-pq = { path = "../../../../crypto/pq" }
+
+[[bin]]
+name = "fuzz_mlkem_decapsulation_libcrux"
+path = "fuzz_targets/fuzz_mlkem_decapsulation_libcrux.rs"
+test = false
+doc = false
+bench = false
