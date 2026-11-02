@@ -128,9 +128,13 @@ mkdir -p "$work/out"
   -dest "$work/out" "$work/$name.llbc"
 
 # The checked-in set must stay axiom-free: an `axiom` here is an unmodelled
-# Rust std function or type, about which nothing can be proven.
-if grep -rnE '^(axiom|.*\bsorry\b)' "$work/out"; then
-  echo "FAIL: extraction contains axiom/sorry; it does not belong in generated/" >&2
+# Rust std function or type, about which nothing can be proven. The check is
+# the package's source scan in --generated mode (#1821). It matches `axiom`,
+# `opaque`, `sorry`, `unsafe`, `partial` and friends as tokens anywhere outside
+# comments, so an indented or attribute-prefixed `@[...] axiom` is caught too,
+# not only `axiom` at the start of a line.
+if ! python3 -I "$here/scripts/gate_scan.py" --generated "$work/out" >/dev/null; then
+  echo "FAIL: extraction contains axiom/opaque/sorry (see above); it does not belong in generated/" >&2
   exit 1
 fi
 

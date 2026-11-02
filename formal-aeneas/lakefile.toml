@@ -1,0 +1,21 @@
+name = "botho_aeneas"
+version = "0.1.0"
+defaultTargets = ["MonetaryKernels", "BothoAeneas"]
+
+# The Aeneas Lean library at the commit of the pinned release
+# (AENEAS_COMMIT in toolchain.env; scripts/gate_scan.py checks they are equal).
+# It brings Mathlib in transitively; lake-manifest.json pins every revision.
+[[require]]
+name = "aeneas"
+git = "https://github.com/AeneasVerif/aeneas.git"
+rev = "ab34bd28458a08c150b7cbf1873e59af74588138"
+subDir = "backends/lean"
+
+# The Aeneas extraction, exactly as regen.sh writes it.
+[[lean_lib]]
+name = "MonetaryKernels"
+srcDir = "generated"
+
+# Proofs about the extraction.
+[[lean_lib]]
+name = "BothoAeneas"

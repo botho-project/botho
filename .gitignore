@@ -172,3 +172,6 @@ __pycache__/
 
 # Lean build output (formal/, #1705)
 formal/.lake/
+# formal-aeneas/ (#1821): no trailing slash, so a symlinked .lake (to keep the
+# 7 GB Mathlib checkout off the boot disk) is ignored too.
+formal-aeneas/.lake

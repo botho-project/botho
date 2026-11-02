@@ -40,6 +40,38 @@ its module docstring, and in any document that cites it:
 Never write "verified" on its own. Write "proven (model)", "proven + tested",
 or "trusted (axiom `Botho.sha256`)".
 
+### Proven about the extraction vs proven about the model (#1821)
+
+Some kernels are also proven in `formal-aeneas/`, about Lean that Charon and
+Aeneas generate mechanically from the Rust source (`formal-aeneas/generated/`),
+instead of about a model written by hand here. Those claims carry a
+different label, and the two must not be mixed:
+
+| Label | Meaning |
+|-------|---------|
+| **proven (extraction)** | A theorem in `formal-aeneas/BothoAeneas/`, listed in `formal-aeneas/Theorems.lean` and passing `formal-aeneas/scripts/check-gates.sh` (only the axioms in `formal-aeneas/axioms-allowlist.txt`, today the same three standard ones; no `sorry`, no `axiom` or `opaque` in the package). It is about the generated Lean, which CI keeps identical to a fresh extraction of the current Rust source, so it says something about the Rust code with no DRT step. What it trusts instead: the Charon + Aeneas translation at the pin in `formal-aeneas/toolchain.env`, and the Aeneas library's model of the Rust primitives used (integer arithmetic with panics as `fail`, casts, `max`). An overflow is modelled as a panic, not a wrap, which matches production because release builds keep `overflow-checks = true` (#663). |
+| **proven (model) + tested** | The `formal/` path above: a theorem about a hand-written model, which DRT ties back to the Rust code. |
+
+Rules:
+
+- Cite which one you mean: "proven (extraction): `halving_reward` never
+  panics when ..." or "proven (model) + tested: ...". Plain "proven" means
+  proven (model), as in the table further up.
+- A theorem about the extraction does not upgrade a `formal/` model, and a
+  `formal/` theorem says nothing about `formal-aeneas/generated/`. If both
+  exist for one kernel, keep both labels; agreement between them is not
+  checked by any gate.
+- Use the extraction where Aeneas can reach the code (pure integer kernels
+  in `cluster-tax`, see `formal/aeneas/SPIKE.md`). Use a model + DRT where it
+  cannot (floats, hashing, iterator chains, protocol state machines).
+- The two packages never share a build, a cache or a gate: `formal/` stays
+  dependency-free and its build -> verify trust chain (#1799) is unchanged,
+  while `formal-aeneas/` depends on the Aeneas library and Mathlib and runs
+  in its own CI job (`.github/workflows/aeneas-extract.yml`, job
+  `typecheck`). That job is not a required check and has no separate trusted
+  verify step, so its result is evidence from an untrusted build, like the
+  `formal/` build job's.
+
 ## Building locally
 
 Install elan, the Lean toolchain manager:

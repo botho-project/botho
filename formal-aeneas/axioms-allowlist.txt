@@ -1,0 +1,15 @@
+# Axioms that any declaration of the formal-aeneas package (the extraction in
+# generated/ and the proofs in BothoAeneas/) may depend on.
+#
+# One fully-qualified axiom name per line. '#' starts a comment.
+#
+# Enumerated with `#print axioms` over every theorem in Theorems.lean and
+# every extracted function (#1821): they reach only Lean's three standard
+# axioms. The Aeneas library does declare axioms of its own (for Rust std
+# items it has no model for), but none is reached by the extracted kernels,
+# which is the point of keeping generated/ axiom-free. Add an entry only with
+# a justification comment above it, in the PR that needs it; a proof that
+# depends on it is then "trusted", not "proven" (see formal/README.md).
+propext
+Classical.choice
+Quot.sound
