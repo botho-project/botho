@@ -138,10 +138,19 @@ pub fn demurrage_charge(
         / 10_000
         / (MAX_FACTOR_SCALED - FACTOR_SCALE) as u128;
     // Saturating: absurd elapsed × rate combinations clamp to u64::MAX
-    // rather than panic (the charge is bounded by the balance check anyway)
-    let charge = charge.saturating_mul(time_fraction) / TIME_SCALE;
+    // rather than panic (the charge is bounded by the balance check anyway).
+    // `checked_mul(..).unwrap_or(u128::MAX)` is `saturating_mul` for unsigned
+    // integers, spelled with operations Aeneas models (#1820).
+    #[allow(
+        clippy::manual_saturating_arithmetic,
+        reason = "saturating_mul has no Aeneas model; this spelling extracts to Lean (#1820)"
+    )]
+    let charge = charge.checked_mul(time_fraction).unwrap_or(u128::MAX) / TIME_SCALE;
 
-    u64::try_from(charge).unwrap_or(u64::MAX)
+    // Clamp to u64::MAX. Same result as `u64::try_from(charge)
+    // .unwrap_or(u64::MAX)`, but Aeneas has no model of the u128 -> u64
+    // `TryFrom` and does model `min` and the (here lossless) cast (#1820).
+    charge.min(u64::MAX as u128) as u64
 }
 
 /// Blocks per year at the 5s reference block time (`31_536_000 s / 5 s`).
@@ -1253,5 +1262,239 @@ mod tests {
         assert_eq!(charge(one_m, f1), 99_700_000_000_000_000); // -300 BTH
         assert_eq!(charge(ten_m, 6000), 1_000_000_000_000_000_000); // 1,000,000 BTH
         assert_eq!(charge(ten_m, f10), 983_800_000_000_000_000); // -16,200 BTH
+    }
+}
+
+/// Differential tests for the #1820 Aeneas-friendly rewrites of
+/// `demurrage_charge` (`saturating_mul` -> `checked_mul(..).unwrap_or(MAX)`,
+/// and `u64::try_from(..).unwrap_or(u64::MAX)` -> `min(u64::MAX) as u64`),
+/// which `capitalized_reset_charge` calls. The pre-#1820 implementations are
+/// kept verbatim as reference copies.
+#[cfg(test)]
+mod aeneas_refactor_drt {
+    use super::*;
+
+    /// Pre-#1820 `demurrage_charge` (reference copy).
+    fn demurrage_charge_reference(
+        transfer_value: u64,
+        cluster_factor: u64,
+        elapsed_blocks: u64,
+        rate_bps: u32,
+        blocks_per_year: u64,
+    ) -> u64 {
+        if rate_bps == 0 || elapsed_blocks == 0 || blocks_per_year == 0 {
+            return 0;
+        }
+        let factor = cluster_factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED);
+        let progressivity = factor - FACTOR_SCALE;
+        if progressivity == 0 {
+            return 0;
+        }
+        const TIME_SCALE: u128 = 1_000_000;
+        let time_fraction = (elapsed_blocks as u128 * TIME_SCALE) / blocks_per_year as u128;
+        let charge = transfer_value as u128 * rate_bps as u128 * progressivity as u128
+            / 10_000
+            / (MAX_FACTOR_SCALED - FACTOR_SCALE) as u128;
+        let charge = charge.saturating_mul(time_fraction) / TIME_SCALE;
+        u64::try_from(charge).unwrap_or(u64::MAX)
+    }
+
+    /// Pre-#1820 `capitalized_reset_charge` (reference copy; it was already
+    /// unchanged, but it now reaches the rewritten `demurrage_charge`).
+    fn capitalized_reset_charge_reference(
+        transfer_value: u64,
+        input_floor_factor: u64,
+        output_factor: u64,
+        horizon_blocks: u64,
+        rate_bps: u32,
+        blocks_per_year: u64,
+    ) -> u64 {
+        if output_factor >= input_floor_factor {
+            return 0;
+        }
+        let at_floor = demurrage_charge_reference(
+            transfer_value,
+            input_floor_factor,
+            horizon_blocks,
+            rate_bps,
+            blocks_per_year,
+        );
+        let at_output = demurrage_charge_reference(
+            transfer_value,
+            output_factor,
+            horizon_blocks,
+            rate_bps,
+            blocks_per_year,
+        );
+        at_floor.saturating_sub(at_output)
+    }
+
+    struct Gen(u64);
+
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn edge_u64(&mut self) -> u64 {
+            match self.next() % 6 {
+                0 => [0, 1, 2, u64::MAX, u64::MAX - 1, u64::MAX / 2][(self.next() % 6) as usize],
+                1 => {
+                    let p = 1u64 << (self.next() % 64);
+                    match self.next() % 3 {
+                        0 => p - 1,
+                        1 => p,
+                        _ => p.wrapping_add(1),
+                    }
+                }
+                2 => self.next() % 32,
+                _ => self.next(),
+            }
+        }
+
+        fn factor(&mut self) -> u64 {
+            match self.next() % 3 {
+                0 => [0, 999, 1_000, 1_001, 5_999, 6_000, 6_001, u64::MAX]
+                    [(self.next() % 8) as usize],
+                1 => 1_000 + self.next() % 5_001,
+                _ => self.edge_u64(),
+            }
+        }
+
+        fn rate(&mut self) -> u32 {
+            match self.next() % 3 {
+                0 => [0, 1, 200, 10_000, u32::MAX - 1, u32::MAX][(self.next() % 6) as usize],
+                _ => self.edge_u64() as u32,
+            }
+        }
+    }
+
+    const VALUES: [u64; 7] = [
+        0,
+        1,
+        1_000_000,
+        1_000_000_000_000,
+        u64::MAX / 2,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+    const FACTORS: [u64; 7] = [0, 1_000, 1_001, 3_500, 6_000, 6_001, u64::MAX];
+    const ELAPSED: [u64; 6] = [
+        0,
+        1,
+        6_307_200,
+        SETTLEMENT_HORIZON_BLOCKS,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+    const RATES: [u32; 5] = [0, 1, 200, 10_000, u32::MAX];
+    // Includes the zero divisor (blocks_per_year == 0 returns early).
+    const BPY: [u64; 5] = [0, 1, 2, BLOCKS_PER_YEAR_5S, u64::MAX];
+
+    #[test]
+    fn demurrage_charge_matches_reference_on_grid() {
+        for &v in &VALUES {
+            for &f in &FACTORS {
+                for &e in &ELAPSED {
+                    for &r in &RATES {
+                        for &b in &BPY {
+                            assert_eq!(
+                                demurrage_charge(v, f, e, r, b),
+                                demurrage_charge_reference(v, f, e, r, b),
+                                "v={v} f={f} e={e} r={r} b={b}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The saturating branch is reachable: a full-factor u64::MAX transfer at
+    /// rate u32::MAX over u64::MAX blocks at one block per year overflows the
+    /// u128 product, and both versions clamp it to u64::MAX.
+    #[test]
+    fn demurrage_charge_overflow_saturates_identically() {
+        let (v, f, e, r, b) = (u64::MAX, 6_000, u64::MAX, u32::MAX, 1);
+        let charge = (v as u128 * r as u128 * 5_000) / 10_000 / 5_000;
+        let time_fraction = e as u128 * 1_000_000;
+        assert!(
+            charge.checked_mul(time_fraction).is_none(),
+            "case must hit the overflow"
+        );
+        assert_eq!(demurrage_charge(v, f, e, r, b), u64::MAX);
+        assert_eq!(demurrage_charge_reference(v, f, e, r, b), u64::MAX);
+    }
+
+    /// The clamp rewrite, checked directly at the u64 boundary.
+    #[test]
+    fn min_cast_is_try_from_unwrap_or_max() {
+        let edges = [
+            0u128,
+            1,
+            u64::MAX as u128 - 1,
+            u64::MAX as u128,
+            u64::MAX as u128 + 1,
+            1u128 << 100,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        for &c in &edges {
+            assert_eq!(
+                c.min(u64::MAX as u128) as u64,
+                u64::try_from(c).unwrap_or(u64::MAX),
+                "{c}"
+            );
+        }
+    }
+
+    #[test]
+    fn capitalized_reset_charge_matches_reference_on_grid() {
+        for &v in &VALUES {
+            for &fi in &FACTORS {
+                for &fo in &FACTORS {
+                    for &e in &ELAPSED {
+                        for &r in &RATES {
+                            for &b in &BPY {
+                                assert_eq!(
+                                    capitalized_reset_charge(v, fi, fo, e, r, b),
+                                    capitalized_reset_charge_reference(v, fi, fo, e, r, b),
+                                    "v={v} in={fi} out={fo} e={e} r={r} b={b}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn demurrage_kernels_match_reference_sweep() {
+        let mut g = Gen(0x1820_0020);
+        for _ in 0..200_000 {
+            let (v, f, fo, e, r, b) = (
+                g.edge_u64(),
+                g.factor(),
+                g.factor(),
+                g.edge_u64(),
+                g.rate(),
+                g.edge_u64(),
+            );
+            assert_eq!(
+                demurrage_charge(v, f, e, r, b),
+                demurrage_charge_reference(v, f, e, r, b),
+                "v={v} f={f} e={e} r={r} b={b}"
+            );
+            assert_eq!(
+                capitalized_reset_charge(v, f, fo, e, r, b),
+                capitalized_reset_charge_reference(v, f, fo, e, r, b),
+                "v={v} in={f} out={fo} e={e} r={r} b={b}"
+            );
+        }
     }
 }

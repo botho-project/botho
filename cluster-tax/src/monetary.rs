@@ -251,6 +251,10 @@ impl MonetaryPolicy {
     ///
     /// CONSENSUS-CRITICAL: pure integer math; every validator must compute
     /// the same share.
+    #[allow(
+        clippy::manual_saturating_arithmetic,
+        reason = "saturating_mul has no Aeneas model; this spelling extracts to Lean (#1820)"
+    )]
     pub fn lottery_emission_bps(&self, height: u64) -> u32 {
         /// Per-halving-epoch increase in lottery emission share (10%).
         const LOTTERY_EMISSION_STEP_BPS: u32 = 1_000;
@@ -261,8 +265,11 @@ impl MonetaryPolicy {
             return 0;
         }
         let epoch = (height / self.halving_interval).min(u32::MAX as u64) as u32;
+        // `checked_mul(..).unwrap_or(u32::MAX)` is `saturating_mul` for
+        // unsigned integers, spelled with operations Aeneas models (#1820).
         epoch
-            .saturating_mul(LOTTERY_EMISSION_STEP_BPS)
+            .checked_mul(LOTTERY_EMISSION_STEP_BPS)
+            .unwrap_or(u32::MAX)
             .min(LOTTERY_EMISSION_MAX_BPS)
     }
 
@@ -1837,5 +1844,150 @@ mod tests {
             actual_supply,
             expected_supply
         );
+    }
+}
+
+/// Differential tests for the #1820 Aeneas-friendly rewrite of
+/// `lottery_emission_bps` (`saturating_mul` ->
+/// `checked_mul(..).unwrap_or(MAX)`). The pre-#1820 implementation is kept
+/// verbatim as a reference copy.
+#[cfg(test)]
+mod aeneas_refactor_drt {
+    use super::*;
+
+    /// Pre-#1820 `MonetaryPolicy::lottery_emission_bps` (reference copy).
+    fn lottery_emission_bps_reference(p: &MonetaryPolicy, height: u64) -> u32 {
+        const LOTTERY_EMISSION_STEP_BPS: u32 = 1_000;
+        const LOTTERY_EMISSION_MAX_BPS: u32 = 5_000;
+
+        if p.halving_interval == 0 {
+            return 0;
+        }
+        let epoch = (height / p.halving_interval).min(u32::MAX as u64) as u32;
+        epoch
+            .saturating_mul(LOTTERY_EMISSION_STEP_BPS)
+            .min(LOTTERY_EMISSION_MAX_BPS)
+    }
+
+    /// Pre-#1820 `MonetaryPolicy::lottery_emission_share` (reference copy).
+    fn lottery_emission_share_reference(p: &MonetaryPolicy, height: u64, reward: u64) -> u64 {
+        (reward as u128 * lottery_emission_bps_reference(p, height) as u128 / 10_000) as u64
+    }
+
+    struct Gen(u64);
+
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn edge_u64(&mut self) -> u64 {
+            match self.next() % 6 {
+                0 => [0, 1, 2, u64::MAX, u64::MAX - 1, u64::MAX / 2][(self.next() % 6) as usize],
+                1 => {
+                    let p = 1u64 << (self.next() % 64);
+                    match self.next() % 3 {
+                        0 => p - 1,
+                        1 => p,
+                        _ => p.wrapping_add(1),
+                    }
+                }
+                2 => self.next() % 32,
+                _ => self.next(),
+            }
+        }
+    }
+
+    fn check(p: &MonetaryPolicy, height: u64, reward: u64) {
+        assert_eq!(
+            p.lottery_emission_bps(height),
+            lottery_emission_bps_reference(p, height),
+            "interval {} height {height}",
+            p.halving_interval
+        );
+        assert_eq!(
+            p.lottery_emission_share(height, reward),
+            lottery_emission_share_reference(p, height, reward),
+            "interval {} height {height} reward {reward}",
+            p.halving_interval
+        );
+    }
+
+    #[test]
+    fn lottery_emission_matches_reference_at_edges() {
+        let mut p = mainnet_policy_mirror();
+        let intervals = [0u64, 1, 2, 3, p.halving_interval, u64::MAX / 2, u64::MAX];
+        let heights = [
+            0u64,
+            1,
+            2,
+            4_294_967,
+            4_294_968,
+            u32::MAX as u64,
+            u32::MAX as u64 + 1,
+            u64::MAX,
+        ];
+        let rewards = [0u64, 1, 9_999, 10_000, u64::MAX];
+        for &i in &intervals {
+            p.halving_interval = i;
+            for &h in &heights {
+                for &r in &rewards {
+                    check(&p, h, r);
+                }
+                // Each epoch boundary up to and past the 50% cap, and the
+                // u32 saturation point of epoch * 1000.
+                for e in [1u64, 2, 4, 5, 6, 4_294_967, 4_294_968, u32::MAX as u64] {
+                    let h = i.saturating_mul(e);
+                    check(&p, h, u64::MAX);
+                    check(&p, h.saturating_sub(1), u64::MAX);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lottery_emission_matches_reference_sweep() {
+        let mut p = mainnet_policy_mirror();
+        let mut g = Gen(0x1820_0010);
+        for _ in 0..200_000 {
+            p.halving_interval = g.edge_u64();
+            check(&p, g.edge_u64(), g.edge_u64());
+        }
+    }
+
+    /// The equivalence the rewrite rests on, exhaustive over the u32 edges.
+    #[test]
+    #[allow(
+        clippy::manual_saturating_arithmetic,
+        reason = "the spelling under test"
+    )]
+    fn checked_mul_unwrap_or_max_is_saturating_mul_u32() {
+        let edges = [
+            0u32,
+            1,
+            2,
+            1_000,
+            4_294_967,
+            4_294_968,
+            u16::MAX as u32,
+            u16::MAX as u32 + 1,
+            u32::MAX / 2,
+            u32::MAX / 2 + 1,
+            u32::MAX - 1,
+            u32::MAX,
+        ];
+        for &a in &edges {
+            for &b in &edges {
+                assert_eq!(
+                    a.checked_mul(b).unwrap_or(u32::MAX),
+                    a.saturating_mul(b),
+                    "{a} * {b}"
+                );
+            }
+        }
     }
 }

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Regenerate (or check) the Aeneas Lean extraction of the cluster-tax kernels
-# that Charon + Aeneas accept unchanged (#1712, epic #1704).
+# Regenerate (or check) the Aeneas Lean extraction of the consensus kernels
+# that Charon + Aeneas accept with an axiom-free result (#1712, #1820, epic
+# #1704): the cluster-tax kernels (generated/MonetaryKernels.lean) and the
+# botho pool accounting (generated/PoolAccounting.lean).
 #
 # Usage:
 #   formal-aeneas/regen.sh            # rewrite formal-aeneas/generated/
@@ -43,14 +45,32 @@ case "${1:-}" in
 esac
 
 # Kernels extracted into generated/. Only kernels whose extraction is accepted
-# unchanged AND whose output type-checks against the pinned Aeneas library AND
-# contains no `axiom` belong here (see formal/aeneas/SPIKE.md for the others).
-crate_dir="$repo/cluster-tax"
-package="bth-cluster-tax"
-name="monetary_kernels"   # -> generated/MonetaryKernels.lean
-start_from=(
+# AND whose output type-checks against the pinned Aeneas library AND contains
+# no `axiom` belong here (see formal/aeneas/SPIKE.md for the others).
+#
+# One extraction per crate: Charon translates one crate at a time, and each
+# run becomes one generated/<Name>.lean (and one lean_lib in lakefile.toml).
+
+# bth-cluster-tax -> generated/MonetaryKernels.lean. The first two kernels
+# extract unchanged; the rest after the #1820 rewrites (saturating_mul spelled
+# as checked_mul(..).unwrap_or(MAX); count_eligible's body as the integer-only,
+# f64-free count_eligible_in / is_eligible_at with an explicit while loop).
+# demurrage_charge comes in through capitalized_reset_charge, and
+# lottery_emission_bps through lottery_emission_share.
+cluster_tax_start_from=(
   "bth_cluster_tax::monetary::MonetaryPolicy::halving_reward"
   "bth_cluster_tax::monetary::MonetaryPolicy::calculate_tail_reward_u128"
+  "bth_cluster_tax::monetary::MonetaryPolicy::lottery_emission_share"
+  "bth_cluster_tax::lottery::sybil_reward_cap"
+  "bth_cluster_tax::lottery::count_eligible_in"
+  "bth_cluster_tax::demurrage::capitalized_reset_charge"
+)
+
+# botho -> generated/PoolAccounting.lean. compute_pool_accounting_permille is
+# the integer-only kernel behind compute_pool_accounting (#1820), which takes
+# the whole LotteryFeeConfig and so reaches f64.
+botho_start_from=(
+  "botho::consensus::lottery::compute_pool_accounting_permille"
 )
 
 platform_asset() {
@@ -111,21 +131,30 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-args=()
-for p in "${start_from[@]}"; do args+=(--start-from "$p"); done
-
-echo "== charon ($package)"
-(
-  cd "$crate_dir"
-  CARGO_TARGET_DIR="${CHARON_TARGET_DIR:-$repo/target/aeneas-charon}" \
-    "$charon" cargo --preset aeneas "${args[@]}" \
-      --dest-file "$work/$name.llbc" -- -p "$package" --lib
-)
-
-echo "== aeneas (lean backend)"
 mkdir -p "$work/out"
-"$aeneas" -backend lean -no-progress-bar -warnings-as-errors \
-  -dest "$work/out" "$work/$name.llbc"
+
+# extract CRATE_DIR PACKAGE NAME START_FROM... -> $work/out/<Name>.lean
+extract() {
+  local crate_dir="$1" package="$2" name="$3"
+  shift 3
+  local args=() p
+  for p in "$@"; do args+=(--start-from "$p"); done
+
+  echo "== charon ($package)"
+  (
+    cd "$crate_dir"
+    CARGO_TARGET_DIR="${CHARON_TARGET_DIR:-$repo/target/aeneas-charon}" \
+      "$charon" cargo --preset aeneas "${args[@]}" \
+        --dest-file "$work/$name.llbc" -- -p "$package" --lib
+  )
+
+  echo "== aeneas (lean backend, $name)"
+  "$aeneas" -backend lean -no-progress-bar -warnings-as-errors \
+    -dest "$work/out" "$work/$name.llbc"
+}
+
+extract "$repo/cluster-tax" bth-cluster-tax monetary_kernels "${cluster_tax_start_from[@]}"
+extract "$repo/botho" botho pool_accounting "${botho_start_from[@]}"
 
 # The checked-in set must stay axiom-free: an `axiom` here is an unmodelled
 # Rust std function or type, about which nothing can be proven. The check is

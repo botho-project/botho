@@ -1,6 +1,6 @@
 name = "botho_aeneas"
 version = "0.1.0"
-defaultTargets = ["MonetaryKernels", "BothoAeneas"]
+defaultTargets = ["MonetaryKernels", "PoolAccounting", "BothoAeneas"]
 
 # The Aeneas Lean library at the commit of the pinned release
 # (AENEAS_COMMIT in toolchain.env; scripts/gate_scan.py checks they are equal).
@@ -11,9 +11,14 @@ git = "https://github.com/AeneasVerif/aeneas.git"
 rev = "ab34bd28458a08c150b7cbf1873e59af74588138"
 subDir = "backends/lean"
 
-# The Aeneas extraction, exactly as regen.sh writes it.
+# The Aeneas extraction, exactly as regen.sh writes it: one library per
+# extracted crate (bth-cluster-tax, botho).
 [[lean_lib]]
 name = "MonetaryKernels"
+srcDir = "generated"
+
+[[lean_lib]]
+name = "PoolAccounting"
 srcDir = "generated"
 
 # Proofs about the extraction.

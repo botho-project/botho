@@ -1,3 +1,5 @@
 import BothoAeneas.Basic
 import BothoAeneas.HalvingReward
 import BothoAeneas.TailReward
+import BothoAeneas.LotteryKernels
+import BothoAeneas.PoolAccounting

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # sorry / axiom gate for the formal-aeneas package (#1821).
 #
-# The package is the Aeneas extraction (generated/, lean_lib MonetaryKernels)
+# The package is the Aeneas extraction (generated/, lean_libs MonetaryKernels
+# and PoolAccounting)
 # plus proofs about it (BothoAeneas/, lean_lib BothoAeneas). It depends on the
 # Aeneas Lean library and Mathlib, so it is kept out of formal/ and its gates.
 # This gate mirrors formal/scripts/ in shape, scaled to what the package needs:
@@ -10,7 +11,7 @@
 #      `sorry` / `admit` / `axiom` / `opaque` / `unsafe` / `partial` / native
 #      evaluation / metaprogramming in any package source, matched as tokens
 #      anywhere on a line (so `@[simp] axiom` and indented forms are caught).
-#   1. `lake build` of both libraries.
+#   1. `lake build` of all three libraries.
 #   2. Axiom walk (AxiomReport.lean): imports the compiled package with
 #      environment extensions off and walks declaration bodies. Every package
 #      declaration (generated and proofs alike, listed or not) may reach only
@@ -73,7 +74,7 @@ src = os.environ["GATE_MANIFEST"]
 if "/-" in src:
     print("FAIL: Theorems.lean: block comments are not allowed", file=sys.stderr)
     sys.exit(1)
-IMPORT = re.compile(r"import\s+(BothoAeneas(\.[A-Za-z_][A-Za-z0-9_]*)*|MonetaryKernels)\s*\Z")
+IMPORT = re.compile(r"import\s+(BothoAeneas(\.[A-Za-z_][A-Za-z0-9_]*)*|MonetaryKernels|PoolAccounting)\s*\Z")
 PRINT = re.compile(r"#print\s+axioms\s+([A-Za-z_][A-Za-z0-9_'.]*)\s*\Z")
 errors, seen, rows, imports_done = [], set(), [], False
 for lineno, raw in enumerate(src.split("\n"), 1):

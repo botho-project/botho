@@ -3,7 +3,7 @@ name: Aeneas extraction drift
 # Two jobs over formal-aeneas/ (#1712, #1821, epic #1704):
 #
 # drift: re-runs the Charon + Aeneas Rust -> Lean extraction of the
-#   cluster-tax kernels checked in under formal-aeneas/generated/ and fails if
+#   cluster-tax and botho kernels checked in under formal-aeneas/generated/ and fails if
 #   the fresh output differs from what is committed. A Rust edit to a mirrored
 #   kernel therefore cannot silently invalidate Lean proofs written against
 #   the extraction: the PR must regenerate (formal-aeneas/regen.sh) and the
@@ -24,6 +24,7 @@ on:
   pull_request:
     paths:
       - "cluster-tax/**"
+      - "botho/src/consensus/lottery.rs"
       - "formal-aeneas/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -32,6 +33,7 @@ on:
     branches: [main]
     paths:
       - "cluster-tax/**"
+      - "botho/src/consensus/lottery.rs"
       - "formal-aeneas/**"
       - "Cargo.toml"
       - "Cargo.lock"

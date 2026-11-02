@@ -11,15 +11,16 @@ call. It is a token scan, so it is a first layer: the axiom gate
 
 1. Layout (package mode only). There is no `lakefile.lean` (a Lean program
    that would run on every `lake` call). `lakefile.toml` declares exactly the
-   two libraries `MonetaryKernels` (`srcDir = "generated"`) and `BothoAeneas`
-   (no `srcDir`, `roots`, `globs`), no executables, and exactly one
+   generated libraries `MonetaryKernels` and `PoolAccounting` (each
+   `srcDir = "generated"`) and `BothoAeneas` (no `srcDir`, `roots`, `globs`), no executables, and exactly one
    dependency, `aeneas`. The sources are `generated/*.lean`, `BothoAeneas.lean`,
    `BothoAeneas/**/*.lean` and `Theorems.lean`, all regular files, and no
    other `.lean` file exists outside `.lake/` and `scripts/`.
 2. Imports. Generated files import only `Aeneas` (`module` and
    `public import`, which Aeneas emits, are accepted there). Proof files
-   import only `Aeneas`, `MonetaryKernels`, `BothoAeneas` and `BothoAeneas.*`;
-   `Theorems.lean` only the last three.
+   import only `Aeneas`, `MonetaryKernels`, `PoolAccounting`, `BothoAeneas`
+   and `BothoAeneas.*`;
+   `Theorems.lean` only the last four.
 3. Tokens. Outside comments and string literals, no scanned file contains:
    - an escape hatch: `sorry`, `sorryAx`, `admit`, `native_decide`;
    - a declaration that adds an unchecked or hidden constant: the keywords
@@ -82,6 +83,8 @@ IMPORT = re.compile(
     r"(?<![A-Za-z0-9_'!?.«»])((?:public\s+|meta\s+|private\s+)*)import\s+(all\s+)?"
     r"([A-Za-z_«][A-Za-z0-9_'.«»]*)")
 ROOT_PREFIX = "_root_."
+# The lean_libs built from generated/ (one per crate regen.sh extracts).
+GENERATED_LIBS = ("MonetaryKernels", "PoolAccounting")
 
 
 def ident_char(ch):
@@ -230,7 +233,7 @@ def allowed_import(kind, mod):
         return mod == "Aeneas"
     if kind == "proof" and mod == "Aeneas":
         return True
-    return mod in ("MonetaryKernels", "BothoAeneas") or mod.startswith("BothoAeneas.")
+    return mod in GENERATED_LIBS + ("BothoAeneas",) or mod.startswith("BothoAeneas.")
 
 
 def scan_file(path, kind, errors):
@@ -302,13 +305,14 @@ def check_lakefile(root, errors):
             errors.append(f"lakefile.toml: key `{k}` not allowed")
     libs = cfg.get("lean_lib", [])
     names = sorted(lib.get("name", "") for lib in libs)
-    if names != ["BothoAeneas", "MonetaryKernels"]:
-        errors.append(f"lakefile.toml: libraries must be BothoAeneas and MonetaryKernels, got {names}")
+    if names != sorted(("BothoAeneas",) + GENERATED_LIBS):
+        errors.append(f"lakefile.toml: libraries must be BothoAeneas, "
+                      f"{', '.join(GENERATED_LIBS)}, got {names}")
     for lib in libs:
         extra = set(lib) - {"name", "srcDir"}
         if extra:
             errors.append(f"lakefile.toml: lean_lib {lib.get('name')}: keys {sorted(extra)} not allowed")
-        want = "generated" if lib.get("name") == "MonetaryKernels" else None
+        want = "generated" if lib.get("name") in GENERATED_LIBS else None
         if lib.get("srcDir") != want:
             errors.append(f"lakefile.toml: lean_lib {lib.get('name')}: srcDir must be {want!r}")
     reqs = cfg.get("require", [])
