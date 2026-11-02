@@ -59,11 +59,11 @@ So **on the node, a spent output stays a lottery candidate until it ages out of 
 
 That finding matters on every axis:
 
-- **Gini.** The node-rule baseline differs from #1790's published baseline. The study reports both (§3.2). The #1790 rule stays the default, so R0 reproduces #1790 exactly as the ruling requires.
+- **Gini.** The node-rule baseline differs from #1790's published baseline. The study reports both (§3.2). This study's runs use the #1790 rule unless marked (`redistribution-redesign --spent-eligible` selects the node rule), so R0 reproduces #1790 exactly as the ruling requires.
 - **Splitting.** Under a value-linear weight, the node rule lets a holder re-spend the same capital every block and mint fresh weight each time, because the spent copies keep counting. The splitting grid shows this "churn" attack is profitable at every point (§4).
 - **Privacy.** "Spent outputs leave the draw" can only be enforced if the winner proves its output is unspent. That means either revealing the key image or a zero-knowledge non-membership proof against the key-image set. §5.1 measures the reveal.
 
-Tracked as #1808: correct #1790's record and decide whether the harness default should follow the node.
+#1808 corrected #1790's record and made `m2-production` default to the node's rule (`--candidate-rule 1790` reproduces #1790; the `redistribution-redesign` subcommand is unchanged).
 
 ## 3. Axis 1: Gini (m2-production, #1790 harness)
 

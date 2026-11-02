@@ -434,8 +434,9 @@ coin's cluster factor ($1\times$--$6\times$). Cluster-scaled demurrage charges
 high-factor coins in proportion to value and holding time, from the second
 halving epoch on; factor-1 coins are exempt. The lottery pool receives 80\%
 of fees (demurrage included) and a height-scheduled emission share, and pays four
-outputs per block drawn uniformly from the unspent outputs aged 720 to
-10{,}000 blocks. Cluster tags record each output's provenance; each coinbase
+outputs per block drawn uniformly from the outputs aged 720 to
+10{,}000 blocks. Ring signatures hide which output a spend consumed, so a
+spent output stays a candidate until it ages out (issue \#1808). Cluster tags record each output's provenance; each coinbase
 starts a fresh cluster. These descriptions stand.
 
 \textbf{What is not demonstrated.} A code-faithful re-run (issue \#1696, PR
@@ -444,16 +445,20 @@ starts a fresh cluster. These descriptions stand.
 with payouts as new outputs, coinbase-lineage clusters and an optimal-decoy
 mining whale, and compares each run against the same seed with the mechanism
 switched off. The mechanism's own $\Delta G$ is between $-0.028$ and
-$+0.001$ (three-seed means at 10 and 20 years) against the $0.05$ design
-bar. Even at $1000\times$ the transaction rate it is at most $+0.019$. By
+$+0.003$ (three-seed means at 10 and 20 years) against the $0.05$ design
+bar, both under the record's original candidate rule (a spend removes its
+outputs from the draw) and under the node's, in which spent outputs stay
+eligible (issue \#1808). Even at $1000\times$ the transaction rate no case
+clears the bar at both 10 and 20 years: the largest value, $+0.073$, is at
+20 years only, under the node's rule and wealth-proportional mining. By
 year 10, 100\% of top-decile value is priced below $1.5\times$. The measured
 failure mechanisms are structural:
 \begin{itemize}
   \item lottery tickets track hashpower and output count, because most
     eligible outputs are coinbases and payouts that copy their winner;
-  \item frequent spenders lose their tickets, since a spend removes the
-    spent outputs from the candidate window and new outputs need 720 blocks
-    to become eligible;
+  \item spent outputs stay candidates until they age out, so tickets
+    follow output creation rather than current holdings, and re-spending
+    the same capital adds tickets;
   \item tag decay and coinbase-lineage clusters bring nearly all value to
     factor~1, so demurrage stops, and at high transaction density it
     disappears altogether;

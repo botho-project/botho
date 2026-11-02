@@ -36,7 +36,7 @@ federated consensus and a novel anti-concentration economic mechanism:
 redistribution, demurrage, and a deterministic consensus fee floor, enforced
 at block acceptance. The mechanism's *intended* effect, a measurable reduction
 in inequality, is **not demonstrated** at production parameters (mechanism
-ΔGini −0.028 to +0.001 against a 0.05 bar, #1790), and lottery
+ΔGini −0.028 to +0.003 against a 0.05 bar, #1790, #1808), and lottery
 ticket-splitting is currently profitable (#1761, #1682); a sim-only redesign
 is under study (#1801). Audit the mechanism as implemented, not its intended
 outcome. The active transaction format uses CLSAG ring signatures

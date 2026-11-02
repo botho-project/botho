@@ -10,14 +10,16 @@ as described elsewhere, but measurable inequality reduction is **not
 demonstrated at production parameters**:
 
 - The code-faithful re-run ([M2 at production parameters](../research/m2-production-verdicts.md),
-  #1696 / PR #1790) measures the mechanism's own ΔGini at −0.028 to +0.001
-  (3-seed means, 10 and 20 years) against the 0.05 bar, and at most +0.019
-  even at 1000x the transaction rate.
+  #1696 / PR #1790; node candidate rule #1808) measures the mechanism's own
+  ΔGini at −0.028 to +0.003 (3-seed means, 10 and 20 years) against the 0.05
+  bar, and even at 1000x the transaction rate no case clears the bar at both
+  10 and 20 years.
 - Lottery ticket-splitting is profitable at all 192 points of the
   faithful-to-code grid (#1761, issue #1682).
 - A sim-only redesign study is under way (#1801), targeting tickets
   proportional to hashpower and output count, frequent spenders losing their
-  tickets, tag decay erasing demurrage at high transaction density, and
+  tickets (a sim artifact: the node keeps ring-spent outputs in the draw,
+  #1808), tag decay erasing demurrage at high transaction density, and
   per-output splitting. No constant or consensus rule changes until a
   candidate passes the #1790 harness and the #1761 grid.
 
@@ -171,12 +173,12 @@ share of a cluster's coins raises that cluster's wealth and hence its factor.
 > 6.3M blocks/yr, mainnet emission and lottery-share ramp, the uniform V2
 > draw with payouts as new outputs, coinbase-lineage clusters, and an
 > optimal-decoy mining whale), the mechanism's own ΔGini against a
-> mechanism-off counterfactual is between −0.028 and +0.001 (3-seed means,
-> 10 and 20 years), and 100% of top-decile value prices below 1.5x. At 100x
-> and 1000x the transaction rate it stays below +0.019. The uniform lottery
-> pays in proportion to hashpower (less the tickets frequent spenders lose
-> when they spend), and coinbase-lineage clusters keep mined wealth at
-> about 1x. See
+> mechanism-off counterfactual is between −0.028 and +0.003 (3-seed means,
+> 10 and 20 years, under #1790's candidate rule and the node's, #1808), and
+> 100% of top-decile value prices below 1.5x. At 100x and 1000x the
+> transaction rate no case clears the bar at both 10 and 20 years. The
+> uniform lottery pays in proportion to output creation, which is mostly
+> hashpower, and coinbase-lineage clusters keep mined wealth at about 1x. See
 > [`m2-production-verdicts.md`](../research/m2-production-verdicts.md).
 > The operator ruling on #1727 (2026-11-01) restated the claim: the
 > redistribution is not demonstrated, and a sim-only redesign is under study

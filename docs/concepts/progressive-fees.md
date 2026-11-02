@@ -2,7 +2,7 @@
 
 Botho implements a novel **provenance-based progressive fee system** that prices coins by the wealth of their origin cluster, without enabling Sybil attacks on the fee rate or compromising privacy.
 
-> **Status:** the fee schedule is progressive as specified, but the redistribution mechanism it feeds is **not demonstrated** to measurably reduce inequality at production parameters (mechanism ΔGini −0.028 to +0.001 against a 0.05 bar; at most +0.019 even at 1000x the transaction rate; #1790). Lottery ticket-splitting is currently profitable (#1761, #1682), and a redesign is under study (#1801). See [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
+> **Status:** the fee schedule is progressive as specified, but the redistribution mechanism it feeds is **not demonstrated** to measurably reduce inequality at production parameters (mechanism ΔGini −0.028 to +0.003 against a 0.05 bar; even at 1000x the transaction rate no case clears the bar at both 10 and 20 years; #1790, #1808). Lottery ticket-splitting is currently profitable (#1761, #1682), and a redesign is under study (#1801). See [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
 
 ![System Overview](../../cluster-tax/docs/figures/system_overview.png)
 
@@ -158,7 +158,7 @@ These early sweeps compared curve *shapes*; all performed within a fraction of a
 
 Progressive fees are the *intake* side of Botho's anti-concentration design. The *outflow* side is a redistribution lottery. Each block, collected fees (including the cluster-demurrage charges described below) are split deterministically by `LotteryFeeConfig` (`botho/src/consensus/lottery.rs`):
 
-- **80% → redistribution lottery pool**, paid back out to four outputs per block drawn uniformly from eligible unspent outputs (neither value nor cluster factor enters the draw weight; the earlier cluster-tilted draw is retired).
+- **80% → redistribution lottery pool**, paid back out to four outputs per block drawn uniformly from eligible outputs (aged 720–10,000 blocks; ring-spent outputs stay eligible, because the node cannot tell which ring member was spent; neither value nor cluster factor enters the draw weight; the earlier cluster-tilted draw is retired).
 - **20% → burned** (deflationary).
 
 Only the 20% burn share is destroyed; the redistributed 80% stays in circulating supply as new payout UTXOs (audit cycle 6, M4). A height-scheduled fraction of the block reward is also routed into the same pool (`lottery_emission_share`), and the pool carries over between blocks under a per-block payout cap.
