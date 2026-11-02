@@ -62,8 +62,9 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// - `GetStatus` is a tiny request answered from in-memory chain state. A
 ///   healthy peer answers in well under a second, even between continents (the
 ///   testnet spans us/eu/ap). 10s leaves an order of magnitude of margin for a
-///   busy peer or a slow connection setup, so a merely slow peer is not charged
-///   a failure.
+///   busy peer or a slow connection setup. (The deadline only excludes a peer
+///   from the round; it never records a reputation failure, see
+///   `expire_discovery_status_requests`.)
 /// - It must stay well below [`REQUEST_TIMEOUT`] or it never fires before the
 ///   transport does. 10s cuts the delay a silent peer imposes from 30s to about
 ///   10-12s (the deadline is checked on the ~2s sync tick).
@@ -650,8 +651,9 @@ pub struct ChainSyncManager {
     /// Reference time for the current Discovery round's deadline (#1813):
     /// when the round's most recent `GetStatus` was sent, or when the round
     /// started if it has sent none yet. Once [`DISCOVERY_STATUS_DEADLINE`]
-    /// has passed since then, status requests still outstanding are treated
-    /// as failed. `None` outside a round; reset whenever the round ends.
+    /// has passed since then, peers whose status requests are still
+    /// outstanding are excluded from the round (with no reputation charge).
+    /// `None` outside a round; reset whenever the round ends.
     discovery_round_clock: Option<Instant>,
 }
 
@@ -687,14 +689,26 @@ impl ChainSyncManager {
         self.discovery_round_clock = None;
     }
 
-    /// Treat every status request still outstanding at the Discovery round
-    /// deadline as failed (#1813), through the same path as a transport
-    /// failure ([`Self::on_request_failed`]): the in-flight guard and the
-    /// correlation record are dropped, one reputation failure is recorded,
-    /// and the peer is excluded for the rest of the round. Dropping the
-    /// record means the transport's own timeout for the request, when it
-    /// arrives later, is ignored as unknown, so the peer is not charged
-    /// twice. A late *answer* still counts ([`Self::on_status`]).
+    /// Exclude every peer whose status request is still outstanding at the
+    /// Discovery round deadline from the rest of the round (#1813): the
+    /// in-flight guard and the correlation record are dropped and the peer
+    /// joins `discovery_unresponsive`, so the round concludes from the peers
+    /// that answered. Dropping the record means the transport's own timeout
+    /// for the request, when it arrives later, is ignored as unknown. A late
+    /// *answer* still counts ([`Self::on_status`]).
+    ///
+    /// The deadline is reputation-neutral: no reputation failure is recorded.
+    /// It is a scheduling decision, not evidence against the peer. It is
+    /// measured on the local clock in `tick`, so a stall in this node's own
+    /// event loop (replies sitting unread in the swarm while `sync_tick`
+    /// fires first) would otherwise be charged to every peer. A peer that
+    /// was never downloaded from has no successes, so three such charges
+    /// ban it for the life of the process; `best_peer()` ignores banned
+    /// peers, and a node whose peers are all banned never downloads again.
+    /// Charging here would add nothing: a peer that never answers has no
+    /// status and is never selected anyway, and a real 30s transport timeout
+    /// outside the deadline path is still charged as before. Permanent bans
+    /// themselves are tracked in #1819.
     ///
     /// Peers that already answered, and consensus-incompatible peers (never
     /// waited on), are left alone.
@@ -712,10 +726,16 @@ impl ChainSyncManager {
         // Deterministic order (dispatch order) for logs and tests.
         expired.sort_by_key(|token| token.0);
         for token in expired {
-            self.on_request_failed(
-                Some(token),
-                "Discovery status deadline exceeded".to_string(),
-            );
+            // Deliberately NOT routed through `on_request_failed`: that would
+            // charge `reputation.request_failed`. See the doc comment above.
+            if let Some((peer, _)) = self.outstanding_requests.remove(&token) {
+                self.status_in_flight.remove(&peer);
+                self.discovery_unresponsive.insert(peer);
+                warn!(
+                    %peer,
+                    "Discovery status deadline exceeded; excluding peer from this round"
+                );
+            }
         }
     }
 
@@ -1624,10 +1644,17 @@ impl ChainSyncManager {
                 // Round deadline (#1813). The clock starts with the round and
                 // is pushed forward by each status request the round sends
                 // (below), so it only runs out once the round has stopped
-                // asking and is merely waiting. Requests still outstanding
-                // then are treated as failed, exactly like a transport
-                // failure, instead of holding the round open for the full
-                // 30s transport timeout.
+                // asking and is merely waiting. Peers still outstanding then
+                // are excluded from the round (reputation-neutral, see
+                // `expire_discovery_status_requests`) instead of holding the
+                // round open for the full 30s transport timeout.
+                //
+                // Each peer is asked once per round, so the clock moves at
+                // most about #peers x 2s past the round start. The exception
+                // is churn: `on_peer_disconnected` forgets a peer's exclusion
+                // and in-flight guard, so a peer reconnecting more often than
+                // every 10s is re-asked and pushes the clock each time. Any
+                // usable answer still ends the round.
                 if has_connected_peer {
                     let clock = *self.discovery_round_clock.get_or_insert_with(Instant::now);
                     if clock.elapsed() >= DISCOVERY_STATUS_DEADLINE {
@@ -1682,8 +1709,9 @@ impl ChainSyncManager {
                     // peers exist but none of them gave a usable answer. That
                     // is not evidence we are at the tip, so do not declare
                     // Synced. Fail the round as before #1723 (backoff, then a
-                    // fresh round that asks every peer again). The reputation
-                    // failures were already recorded per peer.
+                    // fresh round that asks every peer again). Transport
+                    // failures were already charged per peer; deadline
+                    // exclusions are not charged (#1813).
                     //
                     // An answer from a banned peer is not usable (#1813):
                     // `best_peer()` ignores it, so counting it here let one
@@ -4752,11 +4780,11 @@ mod tests {
         assert!(manager.retry_backoff > backoff, "nobody usable answered");
     }
 
-    /// #1813: a peer still silent at the round deadline is excluded through
-    /// the explicit-failure path, so the round concludes from the peer that
-    /// answered well before the 30s transport timeout. The backoff does not
-    /// grow, the peer is charged once, and the transport's own timeout for
-    /// the same request, arriving later, is ignored.
+    /// #1813: a peer still silent at the round deadline is excluded from the
+    /// round, so it concludes from the peer that answered well before the
+    /// 30s transport timeout. The backoff does not grow, no reputation
+    /// failure is recorded, and the transport's own timeout for the same
+    /// request, arriving later, is ignored (so nothing is charged at all).
     #[test]
     fn test_discovery_deadline_excludes_silent_peer() {
         let mut manager = ChainSyncManager::new(100);
@@ -4787,11 +4815,11 @@ mod tests {
         assert!(manager.discovery_unresponsive.is_empty(), "round ended");
         assert_eq!(manager.discovery_round_clock, None, "round ended");
         let failures = |m: &mut ChainSyncManager| m.reputation_mut().get(&silent).unwrap().failures;
-        assert_eq!(failures(&mut manager), 1, "charged once at the deadline");
+        assert_eq!(failures(&mut manager), 0, "the deadline is not charged");
 
-        // The transport timeout lands later: unknown, ignored, no 2nd charge.
+        // The transport timeout lands later: unknown, ignored, no charge.
         assert!(!manager.on_request_failed(Some(t_silent), "Timeout".into()));
-        assert_eq!(failures(&mut manager), 1);
+        assert_eq!(failures(&mut manager), 0);
         assert!(manager.is_synced());
     }
 
@@ -4816,12 +4844,12 @@ mod tests {
         assert!(matches!(manager.state(), SyncState::Failed { .. }));
         assert!(!manager.is_synced());
         assert!(manager.retry_backoff > backoff, "backoff must grow");
-        // Late transport timeouts are ignored; one failure per peer.
+        // Late transport timeouts are ignored; the deadline charged nothing.
         assert!(!manager.on_request_failed(Some(ta), "Timeout".into()));
         assert!(!manager.on_request_failed(Some(tb), "Timeout".into()));
         for peer in peers {
             let rep = manager.reputation_mut().get(&peer).expect("tracked");
-            assert_eq!(rep.failures, 1, "one reputation failure per peer");
+            assert_eq!(rep.failures, 0, "no reputation failure at the deadline");
         }
 
         // The next round asks each peer exactly once again.
@@ -4905,6 +4933,73 @@ mod tests {
             std::mem::discriminant(&on_time),
             std::mem::discriminant(&late),
             "late answer: {late:?}, on-time answer: {on_time:?}"
+        );
+    }
+
+    /// #1813 (PR #1815 review): the round deadline must not ban slow peers.
+    /// A peer this node never downloaded from has no successes, so three
+    /// reputation failures ban it for the life of the process, and
+    /// `best_peer()` ignores banned peers. If the deadline charged a failure,
+    /// a few rounds in which every peer was still outstanding at the deadline
+    /// (slow peers, or a stall in our own event loop) would ban all of them.
+    /// Their later prompt answers, from a greater height, would then be
+    /// unusable, and the node would report Synced at a stale height forever.
+    #[test]
+    fn test_discovery_deadline_never_bans_slow_peers() {
+        let mut manager = ChainSyncManager::new(100);
+        let peers: Vec<PeerId> = (0..4).map(|_| make_peer_id()).collect();
+
+        for round in 0..4 {
+            // Each round asks every peer once. Nobody answers by the deadline.
+            let tokens: Vec<SyncRequestToken> = peers
+                .iter()
+                .map(|_| tick_dispatch(&mut manager, &peers))
+                .collect();
+            assert!(manager.tick(&peers).is_none());
+            age_round_clock(&mut manager, DISCOVERY_STATUS_DEADLINE);
+            assert!(manager.tick(&peers).is_none());
+            assert!(
+                matches!(manager.state(), SyncState::Failed { .. }),
+                "round {round}: nobody answered, got {:?}",
+                manager.state()
+            );
+            // The transport timeouts land later and are ignored.
+            for token in tokens {
+                assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+            }
+            // Skip the backoff wait.
+            if let SyncState::Failed { retry_at, .. } = &mut manager.state {
+                *retry_at = Instant::now() - Duration::from_secs(1);
+            }
+        }
+
+        for peer in &peers {
+            let rep = manager.reputation_mut().get(peer).expect("tracked");
+            assert_eq!(rep.failures, 0, "the deadline records no failure");
+            assert!(!manager.reputation_mut().is_banned(peer));
+        }
+
+        // The peers recover and answer promptly from a greater height.
+        let first = tick_dispatch(&mut manager, &peers);
+        manager.on_request_resolved(first);
+        manager.on_status(peers[0], 120, [6u8; 32]);
+        assert_eq!(
+            *manager.state(),
+            SyncState::Downloading {
+                peer: peers[0],
+                target_height: 120
+            },
+            "the node must go on to download"
+        );
+        assert!(!manager.is_synced());
+        let action = manager.tick(&peers);
+        assert!(
+            matches!(
+                action,
+                Some(SyncAction::RequestBlocks { peer, start_height, .. })
+                    if peer == peers[0] && start_height == 101
+            ),
+            "expected a block request from the recovered peer, got {action:?}"
         );
     }
 }
