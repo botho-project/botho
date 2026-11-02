@@ -4160,7 +4160,6 @@ fn ledger_storage_usage(node: &Node) -> crate::ledger::LedgerStorageUsage {
         .unwrap_or_default()
 }
 
-/// The committed ledger height, or `None` if it cannot be read.
 /// Classify why a sync batch from a peer failed to apply (#1832): a block
 /// fault ([`crate::ledger::LedgerError::is_block_fault`]) is charged to the
 /// peer, anything else is local and is not. A block at or below the current
@@ -4182,6 +4181,7 @@ fn classify_sync_apply_failure(
     }
 }
 
+/// The committed ledger height, or `None` if it cannot be read.
 fn ledger_tip_height(node: &Node) -> Option<u64> {
     node.shared_ledger()
         .read()
