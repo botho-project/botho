@@ -111,6 +111,14 @@ extraction, so an unmodelled item cannot enter `generated/` in any spelling.
   `toolchain.env`, `lean-toolchain` and `lake-manifest.json`), runs
   `lake exe cache get`, then `check-gates.sh` and `selftest-gates.sh`.
 
+`typecheck` compiles the PR's Lean in the same job that runs the gates. There
+is no isolated build -> verify split like `formal.yml`'s (#1799): code that
+runs during the build (the package, or the Aeneas and Mathlib lakefiles, which
+are Lean programs) could in principle affect the gate's result. So a green
+`typecheck` gives less assurance than `formal/`'s isolated `verify` job. It is
+a correctness check for honest contributors, it is informational, and it is
+not a required check.
+
 If you edit a mirrored Rust kernel (see `start_from` in `regen.sh`), run
 `formal-aeneas/regen.sh` and commit the regenerated file in the same PR. If the
 proofs then break, repair them in the same PR.
