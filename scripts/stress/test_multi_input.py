@@ -62,7 +62,7 @@ class MultiInputDecoyTests(unittest.TestCase):
         self.assertEqual(len(self.c.spendable(0, 170, 1, 2)), 2)
 
     def test_partially_overlapping_bands_check_each_ring(self):
-        # Ages 70 and 60 have bands 63..77 and 54..66. The age-60
+        # Ages 70 and 60 have window envelopes 64..76 and 54..66. The age-60
         # real input lies outside the first band, but the age-70 input lies
         # outside the second too: their overlapping decoys can be reused.
         self.pool([(0, 100), (0, 110)], [106] * 18 + [100, 110])
@@ -71,9 +71,9 @@ class MultiInputDecoyTests(unittest.TestCase):
         self.assertEqual(self.c.spendable(0, 170, 1, 2), [])
 
     def test_overlap_checks_each_ring_not_only_the_larger_pool(self):
-        # Age 70's upper edge is 77; age 77's lower edge is 70.
+        # Age 80's envelope upper edge is 88; age 88's lower edge is 80.
         # Both real inputs count as decoys alone but neither may enter a ring.
-        self.pool([(0, 100), (0, 93)], [100] * 18 + [86])
+        self.pool([(0, 90), (0, 82)], [90] * 18 + [74])
         self.assertEqual(len(self.c.spendable(0, 170)), 2)
         self.assertEqual(self.c.spendable(0, 170, 1, 2), [])
 

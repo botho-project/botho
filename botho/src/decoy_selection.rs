@@ -43,10 +43,11 @@
 //!
 //! The ring producers (`GammaDecoySelector::select_decoys_for_input`, the
 //! `botho-wallet` CLI and the web/Snap picker) do NOT gamma-weight decoys for a
-//! known real input. They draw a random-offset age window of width ±10%
-//! ([`draw_age_similarity_window`]) that contains the real input's age at a
-//! uniformly random position, and sample decoys uniformly inside it, so the
-//! real input's age rank in the ring is uniform. The gamma model below still
+//! known real input. They draw a random-offset age window of half-width ±5%
+//! (total width 10% of the real age, [`draw_age_similarity_window`]) that
+//! contains the real input's age at a uniformly random position, and sample
+//! decoys uniformly inside it, so the real input's age rank in the ring is
+//! uniform. The gamma model below still
 //! backs [`GammaDecoySelector::select_decoys`] and the anonymity estimators.
 
 use rand::{seq::SliceRandom, Rng, RngExt};
@@ -253,8 +254,8 @@ const SPEND_HISTORY_SIZE: usize = 10_000;
 const DEFAULT_GAMMA_SHAPE: f64 = 19.28;
 const DEFAULT_GAMMA_SCALE_DAYS: f64 = 1.61;
 
-/// Age-similarity policy: maximum relative spread, in basis points, of a
-/// selected decoy's age around the real input's age (1000 bps = ±10%).
+/// Age-similarity policy: half-width, in basis points of the real input's
+/// age, of the decoy age window (500 bps = ±5%; total window width 10%).
 ///
 /// # Why this exists (issue #596, consensus-economic dependency of #577-B1)
 ///
@@ -281,31 +282,38 @@ const DEFAULT_GAMMA_SCALE_DAYS: f64 = 1.61;
 /// | ±35%                    | 1.277                          | 1.299                | no                     |
 /// | ±50%                    | 1.388                          | 1.426                | no                     |
 ///
-/// ±10% is the widest empirically-safe band (1.086 ≤ 1.15 at ring 20). We
-/// adopt ±10% as the policy: it maximizes the eligible decoy pool (and hence
-/// anonymity) among the #314-safe bands.
+/// That table measures a band CENTRED on the real age. ±10% was the widest
+/// #314-safe centred band and was the policy until #1692.
 ///
-/// # Random-offset placement (#1692 / #1755, operator ruling 2026-11-01)
+/// # Random-offset placement (#1692 / #1755, operator rulings 2026-11-01 and
+/// 2026-11-02)
 ///
-/// The band's total width stays `2 × spread` (20% of the real age), but its
+/// The window's total width is `2 × spread` (10% of the real age) and its
 /// POSITION is drawn per ring so the real input sits at a uniformly random
-/// point inside it ([`draw_age_similarity_window`]), and decoys are drawn
+/// point inside it ([`draw_age_similarity_window`]); decoys are drawn
 /// uniformly from the candidates inside it. A band centred on the real input
 /// makes the real input the median-age ring member under any symmetric in-band
 /// draw (#1755), and the old gamma-target-clamped-into-the-band draw made it
-/// the youngest or oldest member at most ages (#1692). With the offset band,
+/// the youngest or oldest member at most ages (#1692). With the offset window,
 /// all ring members are exchangeable given the window, so over a pool of
 /// locally uniform age density the real input's age rank is uniform.
 ///
-/// Over-charge under `@max`: the realized over-charge is bounded by
-/// `max_ring_age / real_age`, which the offset window caps at
-/// `1 + 2 × spread` = 1.20 for a single ring (real input at the window's young
-/// edge), versus 1.10 for the centred band. The #314 tolerance is checked on
-/// the aggregate honest over-charge (`cluster-tax-sim decoy-quantile-sweep
-/// --ring-size 20 --honest-jitter-bps 1000 --honest-band-offset`): 1.0825 at
-/// ring 20, against 1.0855 for the centred band; about 19% of individual
-/// honest spends exceed 1.15.
-pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
+/// Over-charge under `@max`: the realized over-charge of a single spend is
+/// bounded by `max_ring_age / real_age ≤ 1 + 2 × spread` = 1.10 (real input at
+/// the window's young edge), strictly inside the #314 bound of 1.15 for EVERY
+/// spend, not just on aggregate. A random-offset window of the old ±10% width
+/// would reach 1.20 on a single spend, with about 19% of honest spends above
+/// 1.15; that is why the band was narrowed to ±5% when the offset placement
+/// landed (operator ruling 2026-11-02). Measured with `cluster-tax-sim
+/// decoy-quantile-sweep --ring-size 20 --honest-jitter-bps 500
+/// --honest-band-offset`:
+///
+/// | placement                    | aggregate @max | worst single spend | spends > 1.15 |
+/// |------------------------------|----------------|--------------------|---------------|
+/// | ±10% centred (before #1692)  | 1.0855         | 1.1000             | 0%            |
+/// | ±10% random offset (rejected)| 1.0825         | 1.1985             | 19.2%         |
+/// | ±5% random offset (policy)   | 1.0413         | 1.0992             | 0%            |
+pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 500;
 
 /// Half-width `delta = real_age × spread` of the age band, in blocks.
 fn age_similarity_delta(real_input_age: u64) -> u64 {
@@ -413,11 +421,13 @@ pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
 /// the honest false-positive rate stays at **exactly 0%** for every band up to
 /// ±90% (the nearest wealthy class, 1.939×, only enters the band at ±100%),
 /// while the same-class background pool is retained at 100% at every width
-/// (factor is class-quantized, unlike continuous age). ±10% is adopted to match
-/// the established [`AGE_SIMILARITY_SPREAD_BPS`] convention with a ~9× safety
-/// margin to the first contaminating class, and it caps any in-band decoy's
-/// factor at 1.100× — so a worst-case admitted decoy can lift the floor by at
-/// most 10% of the 1× minimum. The gamma/OSPEAD age distribution and the
+/// (factor is class-quantized, unlike continuous age). ±10% was adopted to
+/// match the then-current ±10% [`AGE_SIMILARITY_SPREAD_BPS`] convention (the
+/// age band is ±5% since #1692; the factor band does not need to follow it,
+/// since a factor-band decoy does not move the `@max` age clock) with a ~9×
+/// safety margin to the first contaminating class, and it caps any in-band
+/// decoy's factor at 1.100× — so a worst-case admitted decoy can lift the floor
+/// by at most 10% of the 1× minimum. The gamma/OSPEAD age distribution and the
 /// [`AGE_SIMILARITY_SPREAD_BPS`] age band still apply WITHIN the factor band.
 pub const FACTOR_SIMILARITY_SPREAD: u64 = 1_000;
 
@@ -835,9 +845,9 @@ impl GammaDecoySelector {
     /// Under the `ring_elapsed_quantile@max` demurrage kernel (#577-B1 / PR
     /// #595) the charge is driven by the OLDEST ring member's age. A decoy much
     /// older than the real input therefore over-charges an honest spender. The
-    /// window bounds every in-window decoy to at most `1 + 2 × spread` (1.20×)
-    /// the real age; the aggregate honest over-charge stays inside the #314
-    /// tolerance (see [`AGE_SIMILARITY_SPREAD_BPS`]).
+    /// window bounds every in-window decoy to at most `1 + 2 × spread` (1.10×)
+    /// the real age, so every honest spend's over-charge stays inside the #314
+    /// tolerance of 1.15 (see [`AGE_SIMILARITY_SPREAD_BPS`]).
     ///
     /// # Liveness fallback
     ///
@@ -1734,21 +1744,25 @@ mod tests {
 
     #[test]
     fn test_age_similarity_band_bounds() {
-        // ±10% band around a 30-day (~21600-block) input.
+        // ±5% band around a 21600-block input.
         let (min_age, max_age) = age_similarity_band(21_600);
-        assert_eq!(min_age, 19_440); // 21600 - 10%
-        assert_eq!(max_age, 23_760); // 21600 + 10%
+        assert_eq!(min_age, 20_520); // 21600 - 5%
+        assert_eq!(max_age, 22_680); // 21600 + 5%
 
         // Proportional band for a small age.
-        let (min_small, max_small) = age_similarity_band(50);
-        assert_eq!(min_small, 45); // 50 - 10%
-        assert_eq!(max_small, 55); // 50 + 10%
+        let (min_small, max_small) = age_similarity_band(100);
+        assert_eq!(min_small, 95); // 100 - 5%
+        assert_eq!(max_small, 105); // 100 + 5%
 
-        // Lower bound floors at the confirmation minimum when the proportional
-        // band would dip below it.
-        let (min_floor, max_floor) = age_similarity_band(11);
-        assert_eq!(min_floor, MIN_DECOY_AGE_BLOCKS); // max(11 - 1, 10) = 10
-        assert_eq!(max_floor, 12);
+        // At ±5% the half-width rounds to 0 below age 20, so the band collapses
+        // to the real age itself.
+        assert_eq!(age_similarity_band(11), (11, 11));
+
+        // Lower bound floors at the confirmation minimum: a real age below the
+        // floor gives a degenerate band (min > max).
+        let (min_floor, max_floor) = age_similarity_band(5);
+        assert_eq!(min_floor, MIN_DECOY_AGE_BLOCKS);
+        assert_eq!(max_floor, 5);
     }
 
     /// Shared web<->native conformance fixture (#1693). The web wallet / Snap /
@@ -1855,10 +1869,11 @@ mod tests {
     /// The #596 guarantee under the random-offset window (#1692): for an
     /// honest spender, the realized demurrage over-charge under the
     /// `ring_elapsed_quantile@max` kernel (PR #595) is capped per ring at
-    /// `1 + 2 × spread` (1.20) by construction, even when the candidate pool
-    /// contains decoys far older than the real input, and the AGGREGATE
-    /// over-charge (Σ realized / Σ true, the metric the #314 tolerance and the
-    /// `decoy-quantile-sweep` gate use) stays within 1.15.
+    /// `1 + 2 × spread` (1.10) by construction, even when the candidate pool
+    /// contains decoys far older than the real input. Both the worst single
+    /// spend and the AGGREGATE over-charge (Σ realized / Σ true, the metric
+    /// the `decoy-quantile-sweep` gate uses) stay within the #314 bound of
+    /// 1.15 (operator ruling 2026-11-02: ±5%, not ±10%, for exactly this).
     #[test]
     fn test_honest_overcharge_under_max_within_314_bound() {
         use bth_cluster_tax::demurrage::{demurrage_charge, ring_elapsed_quantile};
@@ -1935,12 +1950,18 @@ mod tests {
             aggregate <= 1.15,
             "aggregate over-charge {aggregate} breaches the #314 tolerance"
         );
-        // The window caps a single ring at 1 + 2 × spread = 1.20 by
-        // construction (small slack for integer rounding in demurrage_charge).
+        // The window caps a single ring at 1 + 2 × spread = 1.10 by
+        // construction (small slack for integer rounding in demurrage_charge),
+        // and that cap is itself inside the #314 per-spend bound.
         let cap = 1.0 + 2.0 * AGE_SIMILARITY_SPREAD_BPS as f64 / 10_000.0;
+        assert!(cap <= 1.15, "window ceiling {cap} is above the #314 bound");
         assert!(
             worst_overcharge <= cap + 0.001,
             "over-charge {worst_overcharge} exceeds the window ceiling {cap}"
+        );
+        assert!(
+            worst_overcharge <= 1.15,
+            "worst single-spend over-charge {worst_overcharge} breaches the #314 tolerance"
         );
     }
 
@@ -2027,21 +2048,24 @@ mod tests {
     fn test_age_similarity_window_bounds() {
         let real = 21_600u64;
         let width = age_similarity_window_width(real);
-        assert_eq!(width, 4_320);
-        assert_eq!(age_similarity_window(real, 0), (21_600, 25_920));
-        assert_eq!(age_similarity_window(real, width), (17_280, 21_600));
+        assert_eq!(width, 2_160);
+        assert_eq!(age_similarity_window(real, 0), (21_600, 23_760));
+        assert_eq!(age_similarity_window(real, width), (19_440, 21_600));
         assert_eq!(
             age_similarity_window(real, width / 2),
             age_similarity_band(real)
         );
         // Offsets past the width clamp to the old-edge window.
-        assert_eq!(age_similarity_window(real, width + 9), (17_280, 21_600));
-        assert_eq!(age_similarity_envelope(real), (17_280, 25_920));
+        assert_eq!(age_similarity_window(real, width + 9), (19_440, 21_600));
+        assert_eq!(age_similarity_envelope(real), (19_440, 23_760));
         // Below the confirmation floor the window is degenerate.
         let (lo, hi) = age_similarity_window(9, 0);
         assert!(lo > hi);
-        // Near the floor the lower bound clamps but the window keeps the real age.
-        assert_eq!(age_similarity_window(11, 2), (10, 11));
+        // Below age 20 the ±5% half-width rounds to 0: the window is the real
+        // age alone and any offset clamps to 0.
+        assert_eq!(age_similarity_window_width(19), 0);
+        assert_eq!(age_similarity_window(11, 2), (11, 11));
+        assert_eq!(age_similarity_window(20, 2), (18, 20));
 
         let mut rng = rand::rng();
         for real in [10u64, 11, 50, 1_000, 1_000_000] {
@@ -2229,18 +2253,25 @@ mod tests {
             );
         }
 
-        // AC-5: age 10 is the first NON-degenerate value. The band is [10, 11]
-        // (delta = 10 * 1000 / 10000 = 1), so phase 1 runs. Confirm phase-1
-        // in-band selection by giving the pool a dense supply at ages 10 and 11
-        // and asserting every decoy lands inside the band.
+        // AC-5: age 10 is the first NON-degenerate value. The band is [10, 10]
+        // (delta = 10 * 500 / 10000 = 0), so phase 1 runs. Confirm phase-1
+        // in-band selection by giving the pool a dense supply at age 10 plus
+        // out-of-band ages, and asserting every decoy lands inside the band.
         let (min10, max10) = age_similarity_band(10);
-        assert_eq!((min10, max10), (10, 11), "band for age 10 must be [10, 11]");
+        assert_eq!((min10, max10), (10, 10), "band for age 10 must be [10, 10]");
         let mut in_band_pool = Vec::new();
         for i in 0..30u64 {
             let mut key = [0u8; 32];
             key[0] = (i % 251) as u8;
             key[1] = (i / 251) as u8;
-            let age = 10 + (i % 2); // alternate 10 and 11, both in-band
+            let age = 10; // every candidate in-band
+            in_band_pool.push(make_candidate(key, age, current_height));
+        }
+        for i in 30..40u64 {
+            let mut key = [0u8; 32];
+            key[0] = (i % 251) as u8;
+            key[1] = (i / 251) as u8;
+            let age = 11 + (i % 2); // out of band: never needed
             in_band_pool.push(make_candidate(key, age, current_height));
         }
         for _ in 0..50 {

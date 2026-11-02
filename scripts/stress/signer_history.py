@@ -18,9 +18,12 @@ only for these purposes. The bounded history keeps each one:
   non-canonical selection is therefore still rejected as "input is not
   canonical".
 * Each ring draws ``MIN_RING_SIZE - 1 = 19`` decoys uniformly, through an
-  OsRng shuffle, from the canonical outputs whose age lies in the input's
-  +/-10% band (ten-block floor). The selected target keys are excluded. Only
-  outputs inside some band can become decoys.
+  OsRng shuffle, from the canonical outputs inside one random-offset age
+  window (#1692): 10% of the input's age wide (+/-5%), placed so the input's
+  age is uniform inside it. The "band" below is the union of every window the
+  signer can draw for the input (``age_similarity_envelope``: the input's age
+  +/- the window width, ten-block floor). The selected target keys are
+  excluded. Only outputs inside some band can become decoys.
 * No check needs contiguous heights, a start at height 0, global output
   indices, or unselected outputs. Structural validation and the
   duplicate-id and duplicate-height rules apply to whatever is sent.
@@ -98,10 +101,16 @@ DECOY_GROUP_CEILING = 2048
 SCAN_OPERATIONS = ('scan', 'restore_check')
 
 
+# decoy_selection.rs ``AGE_SIMILARITY_SPREAD_BPS`` (+/-5% since #1692).
+AGE_SIMILARITY_SPREAD_BPS = 500
+
+
 def age_band(age):
-    """stress.rs/decoy_selection.rs ``age_similarity_band``: +/-10%, ten-block floor."""
-    delta = age * 1000 // 10_000
-    return max(age - delta, MIN_DECOY_AGE), age + delta
+    """decoy_selection.rs ``age_similarity_envelope``: every age a random-offset
+    window can cover, i.e. age +/- the window width ``2 * floor(age * 5%)``,
+    ten-block floor."""
+    width = 2 * (age * AGE_SIMILARITY_SPREAD_BPS // 10_000)
+    return max(age - width, MIN_DECOY_AGE), age + width
 
 
 def output_id(output):
@@ -171,7 +180,7 @@ def prepare_blocks(blocks, height, selected_ids, rng=None,
     intervals = sorted((height - high, height - low) for low, high in map(age_band, ages))
     groups = []
     # Comparing with the previous interval's high is enough: a band's high
-    # rises monotonically with its low (+/-10% with a floor), so sorted
+    # rises monotonically with its low (+/- a fixed share, with a floor), so sorted
     # intervals that overlap anything earlier overlap the last one.
     for low, high in intervals:
         if groups and low <= groups[-1][-1][1]:

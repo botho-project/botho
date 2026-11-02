@@ -1221,9 +1221,10 @@ class Controller:
             if height-utxo['created_at'] < 10:
                 continue
             age = height-utxo['created_at']
-            # Match production age_similarity_band: integer +/-10%, ten-block floor.
-            delta = age//10
-            low,high = max(10,age-delta),age+delta
+            # Match production age_similarity_envelope (#1692): every age a
+            # random-offset +/-5% window can cover, ten-block floor.
+            width = 2*(age*500//10_000)
+            low,high = max(10,age-width),age+width
             keys = {key for key, (created, row) in canonical.items()
                     if low <= height-created <= high and key != '0'*64 and decoy_row(row)}
             keys.discard(bytes(utxo['target_key']).hex())

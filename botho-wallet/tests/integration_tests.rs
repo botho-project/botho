@@ -1088,7 +1088,7 @@ mod decoy_selection {
 
     #[test]
     fn test_decoy_selection_integration() {
-        // Real input age 1000 -> ±10% band [900, 1100].
+        // Real input age 1000 -> ±5% window envelope [900, 1100].
         let real_utxo = create_utxo(0, 9_000, 25);
         let pool = in_band_pool(25, 25);
 
@@ -1183,7 +1183,7 @@ mod decoy_selection {
             let age = decoy.age(CURRENT_BLOCK);
             assert!(
                 (900..=1100).contains(&age),
-                "Decoy age {} outside ±10% band",
+                "Decoy age {} outside the ±5% window envelope",
                 age
             );
         }

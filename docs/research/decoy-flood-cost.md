@@ -38,12 +38,12 @@ magnitude. This is a real threat to ring privacy, not a modelling artefact.
    outputs per block gave P = 1.000 at every age, for any h, at 3.46 BTH/day
    gross (#1771). #1786 shuffles the eligible candidates once per ring before
    selection, so ties are now uniform. Re-run on the port at full chain width
-   (§5 of the output, re-run again after #1692), the ground-key P matches the
-   uniform-key P within Monte Carlo noise: at h = 1 and a = 19 it is
-   0.387 / 0.382 / 0.376 at ages 1,000 / 22,000 / 60,000 (exact uniform-key
-   value: 0.378 / 0.377 / 0.377). The minimal flood for P ≥ 0.5 is
-   28 / 27 / 28 outputs per block with ground keys and 27 / 27 / 27 with
-   uniform keys, against 19 / 8 / 19 before #1786. The node picker is bounded
+   (§5 of the output, re-run again after #1692 at the ±5% window), the
+   ground-key P matches the uniform-key P within Monte Carlo noise: at h = 1
+   and a = 19 it is 0.368 / 0.391 / 0.378 at ages 1,000 / 22,000 / 60,000
+   (exact uniform-key value: 0.379 / 0.377 / 0.377). The minimal flood for
+   P ≥ 0.5 is 27 / 28 / 27 outputs per block with ground keys and
+   27 / 27 / 27 with uniform keys, against 19 / 8 / 19 before #1786. The node picker is bounded
    by finding 2, like the others. Ground keys still cluster the attacker in
    the lottery's key-order candidate scan, which only lowers its ticket share,
    so the criterion uses uniform keys.
@@ -95,7 +95,7 @@ In short:
   `cluster-tax/src/simulation/privacy_routes.rs`, which
   `botho/tests/privacy_sim_route_parity.rs` pins to production.
   - Since #1692 every picker draws one random-offset age window per ring
-    (width 20% of the real age, real input uniform inside it) and takes a
+    (width 10% of the real age, real input uniform inside it) and takes a
     uniform sample of it. Given the window, the probability that all 19
     decoys are the attacker's is exactly hypergeometric over the window's
     `(W + 1)·(a + h) − 1` other outputs, and it does not depend on the
@@ -157,6 +157,17 @@ The default run uses seed 1701 and 4,000 node-picker rings per (chain width,
 age) for the §5 Monte Carlo. It runs in about a second. The output below is
 verbatim.
 
+### Re-run at the ±5% window (2026-11-02)
+
+The operator ruling of 2026-11-02 narrowed the random-offset window from ±10%
+to ±5% (total width 10% of the real age) so that no honest spend's `@max`
+over-charge exceeds 1.10×. The flood probability is a hypergeometric count
+over the window, so halving the window barely moves it: only the small-window
+finite-size terms change (for example P at h = 1, a = 19, age 1,000 goes from
+0.378 to 0.379), and every minimal flood (27 / 108 / 431 outputs per block at
+h = 1 / 4 / 16) and every verdict is unchanged. The §5 ground-key Monte Carlo
+was re-run on the new port.
+
 ### Re-run after #1692 (2026-11-01)
 
 #1692 replaced every picker's centred ±10% band with a random-offset window.
@@ -183,7 +194,7 @@ The sweep was re-run after these merged to main:
 
 ## Output (`decoy-flood-sweep`, seed 1701)
 
-Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool-enforced since #1780, not by block validation); ring size = 20 (19 decoys); ±10% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
+Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool-enforced since #1780, not by block validation); ring size = 20 (19 decoys); ±5% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
 
 Node-picker rings per (chain width, age) for the §5 ground-key Monte Carlo: 4000; seed 1701.
 
@@ -202,22 +213,22 @@ The CT1 docs' 2.5e11 pico per attacker output is 40000× the relay cost of a 16-
 
 | h | a | f | f^19 | real age | CLI / web | node |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 0.5000 | 1.9e-6 | 1000 | 1.3e-6 | 1.3e-6 |
-| 1 | 1 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.9e-6 |
+| 1 | 1 | 0.5000 | 1.9e-6 | 1000 | 8.3e-7 | 8.3e-7 |
+| 1 | 1 | 0.5000 | 1.9e-6 | 22000 | 1.8e-6 | 1.8e-6 |
 | 1 | 1 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 1.9e-6 |
 | 1 | 9 | 0.9000 | 0.135 | 1000 | 0.135 | 0.135 |
 | 1 | 9 | 0.9000 | 0.135 | 22000 | 0.135 | 0.135 |
 | 1 | 9 | 0.9000 | 0.135 | 60000 | 0.135 | 0.135 |
-| 1 | 19 | 0.9500 | 0.377 | 1000 | 0.378 | 0.378 |
+| 1 | 19 | 0.9500 | 0.377 | 1000 | 0.379 | 0.379 |
 | 1 | 19 | 0.9500 | 0.377 | 22000 | 0.377 | 0.377 |
 | 1 | 19 | 0.9500 | 0.377 | 60000 | 0.377 | 0.377 |
-| 1 | 27 | 0.9643 | 0.501 | 1000 | 0.502 | 0.502 |
+| 1 | 27 | 0.9643 | 0.501 | 1000 | 0.503 | 0.503 |
 | 1 | 27 | 0.9643 | 0.501 | 22000 | 0.501 | 0.501 |
 | 1 | 27 | 0.9643 | 0.501 | 60000 | 0.501 | 0.501 |
-| 1 | 99 | 0.9900 | 0.826 | 1000 | 0.827 | 0.827 |
+| 1 | 99 | 0.9900 | 0.826 | 1000 | 0.828 | 0.828 |
 | 1 | 99 | 0.9900 | 0.826 | 22000 | 0.826 | 0.826 |
 | 1 | 99 | 0.9900 | 0.826 | 60000 | 0.826 | 0.826 |
-| 4 | 4 | 0.5000 | 1.9e-6 | 1000 | 1.7e-6 | 1.7e-6 |
+| 4 | 4 | 0.5000 | 1.9e-6 | 1000 | 1.6e-6 | 1.6e-6 |
 | 4 | 4 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.9e-6 |
 | 4 | 4 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 1.9e-6 |
 | 4 | 36 | 0.9000 | 0.135 | 1000 | 0.135 | 0.135 |
@@ -226,13 +237,13 @@ The CT1 docs' 2.5e11 pico per attacker output is 40000× the relay cost of a 16-
 | 4 | 76 | 0.9500 | 0.377 | 1000 | 0.378 | 0.378 |
 | 4 | 76 | 0.9500 | 0.377 | 22000 | 0.377 | 0.377 |
 | 4 | 76 | 0.9500 | 0.377 | 60000 | 0.377 | 0.377 |
-| 4 | 108 | 0.9643 | 0.501 | 1000 | 0.501 | 0.501 |
+| 4 | 108 | 0.9643 | 0.501 | 1000 | 0.502 | 0.502 |
 | 4 | 108 | 0.9643 | 0.501 | 22000 | 0.501 | 0.501 |
 | 4 | 108 | 0.9643 | 0.501 | 60000 | 0.501 | 0.501 |
-| 4 | 396 | 0.9900 | 0.826 | 1000 | 0.826 | 0.826 |
+| 4 | 396 | 0.9900 | 0.826 | 1000 | 0.827 | 0.827 |
 | 4 | 396 | 0.9900 | 0.826 | 22000 | 0.826 | 0.826 |
 | 4 | 396 | 0.9900 | 0.826 | 60000 | 0.826 | 0.826 |
-| 16 | 16 | 0.5000 | 1.9e-6 | 1000 | 1.9e-6 | 1.9e-6 |
+| 16 | 16 | 0.5000 | 1.9e-6 | 1000 | 1.8e-6 | 1.8e-6 |
 | 16 | 16 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.9e-6 |
 | 16 | 16 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 1.9e-6 |
 | 16 | 144 | 0.9000 | 0.135 | 1000 | 0.135 | 0.135 |
@@ -352,23 +363,23 @@ The node port at full chain width (a + h outputs per block), with the attacker's
 
 | h | a | real age | node, ground keys | node, uniform keys |
 |---:|---:|---:|---:|---:|
-| 1 | 8 | 1000 | 0.104 | 0.107 |
-| 1 | 19 | 1000 | 0.387 | 0.378 |
-| 1 | 27 | 1000 | 0.499 | 0.502 |
-| 1 | 38 | 1000 | 0.616 | 0.612 |
-| 1 | 8 | 22000 | 0.105 | 0.107 |
-| 1 | 19 | 22000 | 0.382 | 0.377 |
-| 1 | 27 | 22000 | 0.503 | 0.501 |
+| 1 | 8 | 1000 | 0.112 | 0.106 |
+| 1 | 19 | 1000 | 0.368 | 0.379 |
+| 1 | 27 | 1000 | 0.502 | 0.503 |
+| 1 | 38 | 1000 | 0.610 | 0.613 |
+| 1 | 8 | 22000 | 0.104 | 0.107 |
+| 1 | 19 | 22000 | 0.391 | 0.377 |
+| 1 | 27 | 22000 | 0.498 | 0.501 |
 | 1 | 38 | 22000 | 0.609 | 0.611 |
-| 1 | 8 | 60000 | 0.108 | 0.107 |
-| 1 | 19 | 60000 | 0.376 | 0.377 |
-| 1 | 27 | 60000 | 0.493 | 0.501 |
-| 1 | 38 | 60000 | 0.603 | 0.610 |
+| 1 | 8 | 60000 | 0.100 | 0.107 |
+| 1 | 19 | 60000 | 0.378 | 0.377 |
+| 1 | 27 | 60000 | 0.503 | 0.501 |
+| 1 | 38 | 60000 | 0.617 | 0.611 |
 
 Minimal attacker outputs per block for P ≥ 0.5 (ground keys searched up to a + h = 256; pre-#1786 ground-key minima were 19 / 8 / 19 at ages 1000 / 22000 / 60000).
 
 | h | real age | a_min, ground keys | a_min, uniform keys |
 |---:|---:|---:|---:|
-| 1 | 1000 | 28 | 27 |
-| 1 | 22000 | 27 | 27 |
-| 1 | 60000 | 28 | 27 |
+| 1 | 1000 | 27 | 27 |
+| 1 | 22000 | 28 | 27 |
+| 1 | 60000 | 27 | 27 |

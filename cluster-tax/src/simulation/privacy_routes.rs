@@ -61,7 +61,7 @@
 //! # Placement rule (#1692 / #1755)
 //!
 //! All three production pickers draw one random-offset age window per ring
-//! (width 20% of the real age, real age uniform inside it) and sample decoys
+//! (width 10% of the real age, real age uniform inside it) and sample decoys
 //! uniformly inside it. Before #1692 the node clamped a gamma target into a
 //! band centred on the real age (real input youngest/oldest at most ages), and
 //! the CLI and web sampled that centred band uniformly (real input the median
@@ -98,8 +98,9 @@ pub const NODE_GAMMA_SCALE_DAYS: f64 = 1.61;
 pub const NODE_BLOCKS_PER_DAY: f64 = (crate::consensus_fee::MAINNET_BLOCKS_PER_YEAR / 365) as f64;
 /// `MIN_DECOY_AGE_BLOCKS` (node and `botho-wallet`).
 pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
-/// `AGE_SIMILARITY_SPREAD_BPS` (node and `botho-wallet`): ±10%.
-pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
+/// `AGE_SIMILARITY_SPREAD_BPS` (node and `botho-wallet`): ±5% (total window
+/// width 10%; ±10% before #1692).
+pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 500;
 
 /// χ² critical value for 19 degrees of freedom at p = 0.01. A rank histogram
 /// whose χ² exceeds this is distinguishable from uniform at the 1% level.
@@ -1330,7 +1331,7 @@ pub fn sample_route_ring_ages(
     let mut rng = ChaCha8Rng::seed_from_u64(row_seed(seed, route, spec, 2));
     let gamma = node_gamma().expect("valid gamma");
     let fixed_ctx = match spec {
-        RealAgeSpec::Fixed(a) => Some(RowContext::new(chain, a.min(chain.max_age()), 0)),
+        RealAgeSpec::Fixed(a) => Some(RowContext::new(chain, a.min(chain.max_age()), 0, true)),
         RealAgeSpec::GammaSpend => None,
     };
     let mut out = Vec::with_capacity(n);
@@ -1342,7 +1343,7 @@ pub fn sample_route_ring_ages(
                 let age =
                     (gamma.sample(&mut rng) as u64).clamp(MIN_DECOY_AGE_BLOCKS, chain.max_age());
                 let j = rng.random_range(0..chain.outputs_per_block);
-                gamma_ctx = RowContext::new(chain, age, j);
+                gamma_ctx = RowContext::new(chain, age, j, false);
                 &gamma_ctx
             }
         };
@@ -1473,17 +1474,17 @@ mod tests {
 
     #[test]
     fn band_matches_production_policy() {
-        assert_eq!(age_similarity_band(100), (90, 110));
-        assert_eq!(age_similarity_band(1_000_000), (900_000, 1_100_000));
+        assert_eq!(age_similarity_band(100), (95, 105));
+        assert_eq!(age_similarity_band(1_000_000), (950_000, 1_050_000));
         // Degenerate band for an input below the confirmation floor.
         assert_eq!(age_similarity_band(5), (10, 5));
         // Random-offset window (#1692).
-        assert_eq!(age_similarity_window_width(100), 20);
-        assert_eq!(age_similarity_window(100, 0), (100, 120));
-        assert_eq!(age_similarity_window(100, 20), (80, 100));
-        assert_eq!(age_similarity_window(100, 10), age_similarity_band(100));
-        assert_eq!(age_similarity_window(100, 99), (80, 100));
-        assert_eq!(age_similarity_envelope(100), (80, 120));
+        assert_eq!(age_similarity_window_width(100), 10);
+        assert_eq!(age_similarity_window(100, 0), (100, 110));
+        assert_eq!(age_similarity_window(100, 10), (90, 100));
+        assert_eq!(age_similarity_window(100, 5), age_similarity_band(100));
+        assert_eq!(age_similarity_window(100, 99), (90, 100));
+        assert_eq!(age_similarity_envelope(100), (90, 110));
         assert!(age_similarity_window(5, 0).0 > age_similarity_window(5, 0).1);
     }
 
@@ -1908,7 +1909,8 @@ mod tests {
     fn web_banded_path_equals_literal_port() {
         let mut gen = StdRng::seed_from_u64(1735);
         let mut checked = 0;
-        for trial in 0..80u64 {
+        // 160 trials: the ±5% window fills a ring less often than ±10% did.
+        for trial in 0..160u64 {
             let pool = aged_pool(&mut gen, trial);
             let real_age = pool[gen.random_range(0..pool.len())].age_blocks;
             for seed in 0..4u32 {

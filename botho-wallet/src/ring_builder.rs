@@ -5,10 +5,11 @@
 //! ledger, so it reconstructs the same decoy pool via `chain_getOutputs` and
 //! applies the identical age policy the node uses:
 //!
-//! - **Age-similarity band** (`±10%`, [`AGE_SIMILARITY_SPREAD_BPS`]): decoys
-//!   are drawn from the height window whose ages fall within ±10% of the real
-//!   input's age. This keeps CLI-wallet rings indistinguishable from
-//!   node-wallet rings under a ring-age-spread adversary (issue #614 item 4).
+//! - **Age-similarity window** (`±5%`, [`AGE_SIMILARITY_SPREAD_BPS`]): decoys
+//!   are drawn from one random-offset age window, 10% of the real input's age
+//!   wide, that contains the real input's age at a uniformly random position.
+//!   This keeps CLI-wallet rings indistinguishable from node-wallet rings under
+//!   a ring-age-spread adversary (issue #614 item 4).
 //! - **Confirmation floor** ([`MIN_DECOY_AGE_BLOCKS`]): decoys (and the real
 //!   input) must be at least 10 blocks deep. Inputs younger than this get a
 //!   clean user-facing error instead of a degenerate band / panic (mirrors the
@@ -98,7 +99,7 @@ pub async fn fetch_decoy_ring_members(
     count: usize,
 ) -> Result<Vec<RingMember>> {
     // Young-input guard (mirrors node decoy_selection.rs guard; #611/#618).
-    // Under the ±10% band the lower bound is floored at MIN_DECOY_AGE_BLOCKS,
+    // Under the ±5% window the lower bound is floored at MIN_DECOY_AGE_BLOCKS,
     // so any input younger than that yields a degenerate band. Fail cleanly.
     if real_input_age < MIN_DECOY_AGE_BLOCKS {
         return Err(anyhow!(
@@ -160,7 +161,7 @@ pub fn canonical_rpc_history(blocks: &[BlockOutputs]) -> Vec<BlockOutputs> {
 ///
 /// The window is the random-offset age window shared with the node and web
 /// pickers (#1692 / #1755): one `draw_age_similarity_window` draw per ring
-/// places the real input's age uniformly inside a window 20% of the real age
+/// places the real input's age uniformly inside a window 10% of the real age
 /// wide, and decoys are a uniform sample of the canonical outputs inside it.
 /// The window is drawn from `rng` before the pool is shuffled.
 pub fn select_rpc_decoys_from_history<R: Rng + ?Sized>(

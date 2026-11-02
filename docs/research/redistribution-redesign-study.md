@@ -17,7 +17,7 @@ None of the five candidates passes all three axes, and none passes the Gini axis
 | R1 | tickets ∝ value × age | **FAIL** (0/6 cells; best mean +0.0317) | **FAIL** on the node (192/192, by re-spending capital); PASS (0/192) only with a spend reveal | **FAIL** as specified: needs the hidden spent set (a claim-time reveal, §5.1, or a ZK non-membership proof); under CT, also a ZK sort | low on public amounts; very high to make it split-safe or CT-compatible |
 | R2 | tickets ∝ value × (7 − factor) | **FAIL** (0/6 cells; best mean +0.0265) | **FAIL** on the node (192/192); PASS only with a spend reveal | **FAIL**, as R1 | lowest (the `ClusterWeighted` kernel already exists); very high for the same reasons as R1 |
 | R3 | uniform tickets priced at their expected payout | **FAIL** (0/6 cells; best mean +0.0033) | **PASS** (0/192) | PASS if purchase is mandatory; a small leak if opt-in | medium |
-| R4 | tag decay per block, allowance keyed to the real input's age | **FAIL** (1/6 cells; best mean +0.0780) | **FAIL** (192/192, lottery unchanged) | **FAIL** (95–100% of rings identified, §5.3) | medium |
+| R4 | tag decay per block, allowance keyed to the real input's age | **FAIL** (1/6 cells; best mean +0.0780) | **FAIL** (192/192, lottery unchanged) | **FAIL** (93–100% of rings identified at real ages ≥ 30,000 blocks, §5.3) | medium |
 | R4p | tag decay per block, allowance keyed to the ring's youngest member (tags effectively never decay) | **FAIL** (0/6 cells; best mean +0.0163) | **FAIL** (192/192, lottery unchanged) | PASS (the allowance is a function of public ring ages) | medium |
 | R5 | R2 + R4 | **FAIL** (0/6 cells; best mean +0.0290) | **FAIL** on the node; PASS only with a spend reveal | **FAIL**, as R2 and R4 | as R2 plus R4 |
 | R5p | R2 + R4p | **FAIL** (0/6 cells; best mean +0.0405) | **FAIL** on the node; PASS only with a spend reveal | **FAIL**, as R2 | as R2 plus R4 |
@@ -74,7 +74,7 @@ How each candidate is modelled:
 - **R1 value-age.** An eligible output's weight is its value × its age in blocks. Within an owner, wins go to entries in proportion to weight.
 - **R2 inverse-factor.** Weight = value × (7 − factor), the `SelectionMode::ClusterWeighted` kernel (a unit test checks it against `LotteryCandidate::weight`). The factor is taken when the output enters the window, from its tags and the current W. W only grows, so this slightly overweights high-W outputs.
 - **R3 ticket-price.** Uniform draw. An output of at least `min_utxo_value` is eligible only if it buys its ticket at creation, and the price is burned. The price is set once per step: the previous step's total lottery payout divided by the number of tickets bought in that step (`p = R / T`). A ticket stays eligible for 9,281 blocks, about 12.9 steps, so in steady state that price equals a ticket's expected payout. Wallets buy rationally: not for an output worth no more than the price, and, under #1790's rule (where a spent ticket stops counting), not for an output whose owner's median holding time is shorter than the 10,000-block window. Coinbase and payout outputs pay too.
-- **R4 time-decay, keyed to the real input's age (`--decay-key real`, the default).** The honest wallet decays tags by `0.95^(elapsed / 525,600)`, where elapsed is the number of blocks since the position's last spend, instead of 5% per hop. The reference interval is the 1x whale's mean time between spends, so the 1x whale decays about as it does now. Pricing semantics are unchanged: the gap from the undecayed inputs is still charged as a #925 downgrade. **This is the non-private form of R4.** For the node to check it, the allowance must be keyed to the real input's age, and §5.3 shows that the resulting tag weight identifies 95–100% of rings. Every row labelled "R4" or "R5" in §3.1–§3.5 measures this form.
+- **R4 time-decay, keyed to the real input's age (`--decay-key real`, the default).** The honest wallet decays tags by `0.95^(elapsed / 525,600)`, where elapsed is the number of blocks since the position's last spend, instead of 5% per hop. The reference interval is the 1x whale's mean time between spends, so the 1x whale decays about as it does now. Pricing semantics are unchanged: the gap from the undecayed inputs is still charged as a #925 downgrade. **This is the non-private form of R4.** For the node to check it, the allowance must be keyed to the real input's age, and §5.3 shows that the resulting tag weight identifies 93–100% of rings at real ages of 30,000 blocks and more. Every row labelled "R4" or "R5" in §3.1–§3.5 measures this form.
 - **R4p time-decay, keyed to the ring's youngest member (`--decay-key youngest`).** The private form of R4 (§5.3): the allowance is a function of the youngest ring member's age, which is public. The harness models it at its floor, a youngest member at the 10-block decoy minimum (`MIN_DECOY_AGE_BLOCKS`), so each spend may decay tags by at most `1 − 0.95^(10 / 525,600)`, about 1e-6. In practice R4p means tags essentially never decay. A ring whose youngest member is older allows more decay, up to R4 itself when the real input is the youngest member, so R4p and R4 bracket the private rule's decay allowance. R5p is R2's weight with R4p's decay. §3.1.1 reports both.
 - **R5** = R2's weight + R4's decay.
 
@@ -357,46 +357,46 @@ Production routes (#1757 ports), chain of 1 output/block to height 1200000, 4000
 
 | route | real age | Band-Center ID, no reveal | rho | q | direct reveal | survivors (of 20) | ID uniform-over-survivors | ID Band-Center-over-survivors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| node | 1000 | 0.0% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 2.5% |
-| node | 1000 | 0.0% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 0.5% |
-| node | 1000 | 0.0% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 0.1% |
-| node | 30000 | 60.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.8% |
-| node | 30000 | 60.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 70.1% |
-| node | 30000 | 60.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 61.7% |
-| node | 100000 | 0.0% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 55.0% |
-| node | 100000 | 0.0% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 17.9% |
-| node | 100000 | 0.0% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 2.1% |
-| node | gamma-spend | 84.2% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 93.9% |
-| node | gamma-spend | 84.2% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 87.3% |
-| node | gamma-spend | 84.2% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 84.4% |
-| cli | 1000 | 52.0% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 71.7% |
-| cli | 1000 | 52.0% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 57.4% |
-| cli | 1000 | 52.0% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 52.6% |
-| cli | 30000 | 50.0% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 86.7% |
-| cli | 30000 | 50.0% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 63.2% |
-| cli | 30000 | 50.0% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.9% |
-| cli | 100000 | 49.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 86.6% |
-| cli | 100000 | 49.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 62.8% |
-| cli | 100000 | 49.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.4% |
-| cli | gamma-spend | 49.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.9% |
-| cli | gamma-spend | 49.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 62.9% |
-| cli | gamma-spend | 49.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.3% |
-| web | 1000 | 51.5% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 71.2% |
-| web | 1000 | 51.5% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 56.2% |
-| web | 1000 | 51.5% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 52.0% |
-| web | 30000 | 49.9% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.9% |
-| web | 30000 | 49.9% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 62.8% |
-| web | 30000 | 49.9% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 51.5% |
-| web | 100000 | 51.5% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 86.9% |
-| web | 100000 | 51.5% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 64.7% |
-| web | 100000 | 51.5% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 53.2% |
-| web | gamma-spend | 50.9% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 85.7% |
-| web | gamma-spend | 50.9% | 20 | 18.1% | 17.9% | 13.8 | 22.9% | 63.2% |
-| web | gamma-spend | 50.9% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 52.3% |
+| node | 1000 | 5.1% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 13.0% |
+| node | 1000 | 5.1% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 6.5% |
+| node | 1000 | 5.1% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 5.3% |
+| node | 30000 | 4.8% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 59.6% |
+| node | 30000 | 4.8% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.1% |
+| node | 30000 | 4.8% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.0% |
+| node | 100000 | 5.3% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 60.3% |
+| node | 100000 | 5.3% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.2% |
+| node | 100000 | 5.3% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.4% |
+| node | gamma-spend | 5.5% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 59.5% |
+| node | gamma-spend | 5.5% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.3% |
+| node | gamma-spend | 5.5% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.6% |
+| cli | 1000 | 5.0% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 14.0% |
+| cli | 1000 | 5.0% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 6.6% |
+| cli | 1000 | 5.0% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 5.3% |
+| cli | 30000 | 4.7% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 60.7% |
+| cli | 30000 | 4.7% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.0% |
+| cli | 30000 | 4.7% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 6.9% |
+| cli | 100000 | 5.3% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 60.6% |
+| cli | 100000 | 5.3% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.7% |
+| cli | 100000 | 5.3% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.5% |
+| cli | gamma-spend | 5.2% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 60.4% |
+| cli | gamma-spend | 5.2% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.2% |
+| cli | gamma-spend | 5.2% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.3% |
+| web | 1000 | 5.5% | 5 | 55.1% | 2.5% | 9.3 | 13.4% | 13.8% |
+| web | 1000 | 5.5% | 20 | 18.1% | 0.5% | 16.5 | 6.6% | 7.0% |
+| web | 1000 | 5.5% | 200 | 2.0% | 0.1% | 19.6 | 5.2% | 5.6% |
+| web | 30000 | 4.9% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 59.7% |
+| web | 30000 | 4.9% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 22.6% |
+| web | 30000 | 4.9% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.0% |
+| web | 100000 | 4.3% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 60.1% |
+| web | 100000 | 4.3% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 22.5% |
+| web | 100000 | 4.3% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 6.5% |
+| web | gamma-spend | 5.6% | 5 | 55.1% | 55.0% | 4.8 | 60.0% | 60.7% |
+| web | gamma-spend | 5.6% | 20 | 18.1% | 17.9% | 13.8 | 23.0% | 23.5% |
+| web | gamma-spend | 5.6% | 200 | 2.0% | 2.1% | 19.2 | 7.1% | 7.6% |
 
 Reading it, per real-input age:
 
-- **Real age 1,000** (spent 280 blocks into its window): the real input is revealed directly in 2.5% of rings at ρ = 5, 0.5% at ρ = 20 and 0.1% at ρ = 200. The first version of this table used the full-window rate, 55%, 18% and 2%, for these rows; that overstated direct deanonymization of young inputs by a factor of about 20 to 35. The decoys are still eliminated at rate q, so the real input is now usually among *fewer* survivors: a uniform guess over survivors identifies it in 13.4%, 6.6% and 5.2% of rings, against 5% today. On the CLI and web routes the Band-Center guess over survivors goes from about 52% to 71–72% at ρ = 5, 56–57% at ρ = 20 and 52–53% at ρ = 200. On the node route it stays near zero, because that route's young real inputs are never the band center.
+- **Real age 1,000** (spent 280 blocks into its window): the real input is revealed directly in 2.5% of rings at ρ = 5, 0.5% at ρ = 20 and 0.1% at ρ = 200. The first version of this table used the full-window rate, 55%, 18% and 2%, for these rows; that overstated direct deanonymization of young inputs by a factor of about 20 to 35. The decoys are still eliminated at rate q, so the real input is now usually among *fewer* survivors: a uniform guess over survivors identifies it in 13.4%, 6.6% and 5.2% of rings, against 5% today. Since the random-offset age window (#1692) the real input is not the band center on any route (Band-Center with no reveal: 4.3–5.6%, against 50–52% on the CLI and web routes and up to 84% on the node route before), so the Band-Center guess over survivors only matches the uniform one: 13.0–14.0% at ρ = 5, 6.5–7.0% at ρ = 20 and 5.3–5.6% at ρ = 200.
 - **Real ages 30,000 and 100,000** (spent after the window closed): unchanged from the first version. The real input had its whole window to win, so it is revealed directly in 55%, 18% and 2% of rings, and a uniform guess over survivors identifies it in 60%, 23% and 7%.
 - **Gamma-spend ages** (the node's spend-age distribution): almost unchanged. Direct reveal is 55.0%, 17.9% and 2.1%, because nearly all sampled spend ages are past the window. The first version's overstatement here is below the table's resolution.
 
@@ -414,20 +414,20 @@ The published tag weight reveals the real input's age to within 11 blocks for a 
 
 | route | real age | rings | ID, full-weight tag | ID, 1% tag | real input is youngest |
 |---|---|---:|---:|---:|---:|
-| node | 1000 | 4000 | 100.0% | 5.0% | 100.0% |
-| node | 30000 | 4000 | 99.6% | 65.4% | 0.0% |
-| node | 100000 | 4000 | 100.0% | 100.0% | 0.0% |
-| node | gamma-spend | 4000 | 98.7% | 43.0% | 4.5% |
-| cli | 1000 | 4000 | 40.5% | 5.0% | 0.0% |
-| cli | 30000 | 4000 | 96.5% | 14.7% | 0.0% |
-| cli | 100000 | 4000 | 99.1% | 43.3% | 0.0% |
-| cli | gamma-spend | 4000 | 95.2% | 10.7% | 0.0% |
-| web | 1000 | 4000 | 40.4% | 5.0% | 0.0% |
-| web | 30000 | 4000 | 96.6% | 14.7% | 0.0% |
-| web | 100000 | 4000 | 98.9% | 43.3% | 0.0% |
-| web | gamma-spend | 4000 | 95.3% | 10.9% | 0.0% |
+| node | 1000 | 4000 | 23.7% | 5.0% | 5.2% |
+| node | 30000 | 4000 | 93.4% | 9.2% | 4.8% |
+| node | 100000 | 4000 | 97.8% | 25.9% | 5.5% |
+| node | gamma-spend | 4000 | 99.6% | 70.7% | 4.9% |
+| cli | 1000 | 4000 | 23.7% | 5.0% | 5.1% |
+| cli | 30000 | 4000 | 93.1% | 9.2% | 5.1% |
+| cli | 100000 | 4000 | 97.8% | 25.8% | 4.8% |
+| cli | gamma-spend | 4000 | 99.7% | 70.6% | 4.9% |
+| web | 1000 | 4000 | 23.4% | 5.0% | 4.3% |
+| web | 30000 | 4000 | 93.1% | 9.3% | 5.1% |
+| web | 100000 | 4000 | 97.9% | 25.4% | 4.7% |
+| web | gamma-spend | 4000 | 99.5% | 69.6% | 5.3% |
 
-Reading it: keyed to the real input's age, R4 identifies 95–100% of rings on every route at ordinary ages. That holds even after cluster fingerprinting is fixed (#1756), because the leak is the decay, not the cluster. Only very young inputs (age 1,000 on the CLI and web routes) and weak tags blur it. Keyed to the youngest member, the allowance adds nothing to what the ring ages already show. On the node route that is already 100% at young ages, through the picker's own leak (#1692). The Gini of this private form (R4p, with R5p as its R2 combination) is measured separately in §3.1.1: it passes no cell.
+Reading it: keyed to the real input's age, R4 identifies 93–100% of rings on every route at real ages of 30,000 blocks and more. That holds even after cluster fingerprinting is fixed (#1756), because the leak is the decay, not the cluster. Only young inputs (23–24% at age 1,000, where the ±5% age window is only 100 blocks wide) and weak tags blur it. The 1% tag column rises to 70–71% at gamma-spend ages because #1692 also moved the gamma spend model from 720 to 17,280 blocks per day, so sampled spend ages are 24 times larger in blocks and their age windows are far wider than the 1,025-block tag quantum: fewer decoys share the real input's quantum. Keyed to the youngest member, the allowance adds nothing to what the ring ages already show: since the random-offset window (#1692) the real input is the youngest member in 4.3–5.5% of rings on every route, the uniform rate. (Before #1692 the node picker made it the youngest in 100% of rings at age 1,000.) The Gini of this private form (R4p, with R5p as its R2 combination) is measured separately in §3.1.1: it passes no cell.
 
 ## 6. Node-side implementation complexity
 
@@ -472,7 +472,7 @@ This ranking orders the candidates by how much of the operator's requirement eac
 1. **R3 (tickets priced at their expected payout).** This is the only candidate that passes two axes: splitting (0/192 profitable, by construction) and privacy (if purchase is mandatory, it reads only public counts). It works the same with or without confidential amounts, and its complexity is medium. It fails Gini by design. A fairly priced ticket returns on average what it costs, so the lottery stops being a redistribution channel (best 3-seed mean +0.0033). Adopting it would close the splitting hole (#1682) and would amount to retiring the lottery's redistributive role, which is consistent with the restatement in #1800. If the operator wants the lottery to redistribute, R3 is not the answer.
 2. **R2 (value × (7 − factor)), with R5 as its variant.** It has the best lottery-side Gini (up to +0.0265 for R2 and +0.0290 for R5 as 3-seed means, under wealth mining at 1x; at most +0.0294 under the node rule), and on public amounts it is a configuration switch, because the kernel and the per-candidate factor already exist. But it is split-safe only if spent value stops counting. That requires a claim-time key-image reveal (privacy FAIL; §5.1: for inputs held past the window, which is typical under the gamma spend-age distribution, 2–55% of rings are deanonymized outright and a uniform guess identifies the real input in 7–60% of rings instead of 5%, depending on output density; for an input spent at age 1,000, 0.1–2.5% outright and 5.2–13.4% by a uniform guess) or a ZK non-membership proof (very high complexity, no existing support). Under CT it also needs the #902 ZK sort. Even with all of that, it does not reach 0.05.
 3. **R1 (value × age).** Same blockers as R2, with no tilt and slightly more code. Its Gini numbers are similar (best +0.0317, under wealth mining at 1x). The age term adds nothing in steady state and penalizes frequent spenders.
-4. **R4 (per-block tag decay).** Its two forms differ. Keyed to the real input's age (R4), it addresses the stated density mechanism, since demurrage survives churn, and it is the only rule with a passing cell (wealth, 1000x). But it identifies 95–100% of rings (§5.3), and its net effect is dominated by who pays: strongly regressive under egalitarian mining at density (−0.46 to −0.60). Keyed to the ring's youngest member (R4p), it is private, but tags then effectively never decay, and it passes no cell (best +0.0163; −0.09 to −0.48 under egalitarian mining, §3.1.1). Both leave the lottery unchanged (192/192). It would be worth revisiting only together with a fix for how demurrage falls on payment recipients (the velocity mispricing, #1790 cause 3) and with #1756.
+4. **R4 (per-block tag decay).** Its two forms differ. Keyed to the real input's age (R4), it addresses the stated density mechanism, since demurrage survives churn, and it is the only rule with a passing cell (wealth, 1000x). But it identifies 93–100% of rings at real ages of 30,000 blocks and more (§5.3), and its net effect is dominated by who pays: strongly regressive under egalitarian mining at density (−0.46 to −0.60). Keyed to the ring's youngest member (R4p), it is private, but tags then effectively never decay, and it passes no cell (best +0.0163; −0.09 to −0.48 under egalitarian mining, §3.1.1). Both leave the lottery unchanged (192/192). It would be worth revisiting only together with a fix for how demurrage falls on payment recipients (the velocity mispricing, #1790 cause 3) and with #1756.
 5. **R0 (current rules).** It fails Gini and splitting. Its only advantage is that it exists.
 
 Across all five, the study supports this reading for the candidate families it built: no measured configuration reached the 0.05 bar, including the ones that gave up privacy or split-neutrality (§7). That is a statement about these families under the current fee structure and tag design, not about every possible rule (§7.1).

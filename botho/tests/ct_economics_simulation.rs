@@ -538,7 +538,7 @@ async fn cli_real_fetch_guard_and_native_boundary_behavior() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("too new"));
-    assert_eq!(age_similarity_band(100), (90, 110));
+    assert_eq!(age_similarity_band(100), (95, 105));
     let candidates: Vec<_> = (1..=20)
         .map(|i| OutputCandidate {
             output: output(i),

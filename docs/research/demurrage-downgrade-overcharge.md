@@ -195,7 +195,8 @@ wealthy decoy does not always lift the floor above 1× for a large honest coin.)
 
 §4.5 leaves exactly one wallet-layer lever: a background spender must not draw a high-value
 wealthy coin as a decoy. This is the direct analog of the age-dilution concern PR #595 closed
-for the elapsed term with the **`AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%)** age band. We
+for the elapsed term with the **`AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%)** age band (±5% since
+#1692). We
 close the factor channel the same way: a background (1×) spender draws only decoys whose
 cluster factor sits within a band around its real input's factor. The sweep below applies that
 filter at the **pathological 5% raw contamination** (the §4.5 level that produced a 52.5% FP
@@ -230,8 +231,9 @@ gives a background spender the full same-class background pool (maximal within-c
 with a large margin against cross-class contamination, and by construction caps any admitted
 decoy's factor at 1.100× — so even a worst-case in-band decoy could lift the floor by at most
 10% of the 1× minimum, exactly mirroring the ≤1.10 over-charge bound the age band guarantees.
-(Since #1692 the age window's position is random, which raises the per-ring age bound to 1.20×;
-the factor band here is unchanged.)
+(Since #1692 the age window's position is random and its half-width is ±5%, so the per-spend
+age bound is still 1.10×: the window is 10% wide and the real input can sit at its young edge.
+The factor band here is unchanged.)
 Part 3 wires this constant into `botho/src/decoy_selection.rs`.
 
 ## 5. Read-out: is the keying tight enough?

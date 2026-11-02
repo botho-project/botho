@@ -641,10 +641,11 @@ export async function buildSendTransaction(
       !inputKeys.has(c.targetKey) &&
       !isZeroKey(c.targetKey),
   )
-  // Per-input decoy selection (#1693): confirmed (>= 10 blocks), drawn
-  // uniformly with a CSPRNG from the native wallet's ±10% age band around the
-  // real input's age, nearest-age fill when the band is thin — the same policy
-  // as the native `GammaDecoySelector::select_decoys_for_input`. Replaces the
+  // Per-input decoy selection (#1693, #1692): confirmed (>= 10 blocks), drawn
+  // uniformly with a CSPRNG from one random-offset ±5% age window that holds
+  // the real input's age at a uniform position, nearest-age fill when the
+  // window is thin — the same policy as the native
+  // `GammaDecoySelector::select_decoys_for_input`. Replaces the
   // former chain-ordered `pool[(i*k + j) % len]` window that gave every ring
   // the same oldest outputs. Heights are mandatory: a missing height fails the
   // send closed rather than silently reverting to chain order.

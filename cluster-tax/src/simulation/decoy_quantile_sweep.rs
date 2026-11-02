@@ -53,7 +53,8 @@
 //! Honest over-charge under `quantile@max` against the honest decoy
 //! age-spread (`--honest-jitter-bps`), the table that set the wallet's
 //! `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) band against the #314 ≤15%
-//! tolerance:
+//! tolerance (centred placement; see the random-offset section below for the
+//! ±5% band that replaced it):
 //!
 //! | honest decoy age-spread | ring 11 | ring 20 | within #314 tolerance |
 //! |-------------------------|--------:|--------:|:---------------------:|
@@ -74,6 +75,26 @@
 //! construction. (The ring-11 column differs from PR #595's figures in the
 //! third or fourth decimal, e.g. 1.0386 then vs 1.0390 now, from changes to the
 //! simulation since then; the verdicts are the same.)
+//!
+//! # Random-offset placement (#1692, operator ruling 2026-11-02)
+//!
+//! Since #1692 every production picker draws the band at a random offset so
+//! the real age is uniform inside it (`--honest-band-offset`). The real input
+//! can then sit at the band's young edge, so a single spend's `@max`
+//! over-charge is bounded by `1 + 2 × jitter` rather than `1 + jitter`. At
+//! ±10% that bound is 1.20 and the per-spend #314 bound fails, so the band was
+//! narrowed to ±5% (`AGE_SIMILARITY_SPREAD_BPS = 500`). Default population,
+//! ring 20, `quantile@max`:
+//!
+//! | band, placement     | aggregate | worst single spend | spends > 1.15 |
+//! |---------------------|----------:|-------------------:|--------------:|
+//! | ±5%, centred        | 1.0427    | 1.0499             | 0%            |
+//! | ±5%, random offset  | 1.0413    | 1.0992             | 0%            |
+//! | ±10%, centred       | 1.0855    | 1.1000             | 0%            |
+//! | ±10%, random offset | 1.0825    | 1.1985             | 19.2%         |
+//!
+//! The production row is ±5% random offset: every honest spend stays within
+//! 1.10, inside the #314 bound of 1.15.
 //!
 //! # Why a focused Monte-Carlo (not the agent framework)
 //!
@@ -722,6 +743,47 @@ mod tests {
                 r.honest_overcharge_ratio
             );
         }
+    }
+
+    /// #1692 / operator ruling 2026-11-02: the production ±5% random-offset
+    /// band keeps EVERY honest spend's `@max` over-charge within
+    /// `1 + 2 × jitter` = 1.10, inside the #314 bound of 1.15. The old ±10%
+    /// width breaks the per-spend bound under random-offset placement.
+    #[test]
+    fn random_offset_band_keeps_every_honest_spend_within_314_bound() {
+        let production = run_decoy_sweep(&DecoySweepParams {
+            honest_jitter_bps: 500,
+            honest_band_offset: true,
+            ..Default::default()
+        });
+        let qmax = production
+            .results
+            .iter()
+            .find(|r| r.kernel == Kernel::Quantile(10_000))
+            .unwrap();
+        assert!(qmax.honest_overcharge_ratio <= 1.15);
+        assert!(
+            qmax.honest_worst_overcharge <= 1.10 + 1e-3,
+            "worst single spend {} above the ±5% window ceiling",
+            qmax.honest_worst_overcharge
+        );
+        assert_eq!(qmax.honest_share_over_tolerance, 0.0);
+
+        let wide = run_decoy_sweep(&DecoySweepParams {
+            honest_jitter_bps: 1_000,
+            honest_band_offset: true,
+            ..Default::default()
+        });
+        let wide_max = wide
+            .results
+            .iter()
+            .find(|r| r.kernel == Kernel::Quantile(10_000))
+            .unwrap();
+        assert!(
+            wide_max.honest_worst_overcharge > 1.15,
+            "±10% random offset should breach the per-spend bound: {}",
+            wide_max.honest_worst_overcharge
+        );
     }
 
     #[test]

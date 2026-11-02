@@ -11,7 +11,7 @@
  *
  * - candidates younger than {@link MIN_DECOY_AGE_BLOCKS} are never decoys;
  * - each ring draws ONE random-offset age window
- *   ({@link drawAgeSimilarityWindow}, #1692 / #1755): width 20% of the real
+ *   ({@link drawAgeSimilarityWindow}, #1692 / #1755): width 10% of the real
  *   input's age (2 × {@link AGE_SIMILARITY_SPREAD_BPS} bps), positioned so the
  *   real input's age is uniform inside it, lower bound floored at the
  *   confirmation minimum. Identical integer math to the Rust
@@ -41,10 +41,10 @@ import type { ChainOutput } from './index'
 export const MIN_DECOY_AGE_BLOCKS = 10
 
 /**
- * Age-similarity spread in basis points (1_000 = ±10%). Mirrors
+ * Age-similarity spread in basis points (500 = ±5%). Mirrors
  * `AGE_SIMILARITY_SPREAD_BPS` in `botho/src/decoy_selection.rs`.
  */
-export const AGE_SIMILARITY_SPREAD_BPS = 1_000
+export const AGE_SIMILARITY_SPREAD_BPS = 500
 
 /**
  * Inclusive `[minAge, maxAge]` decoy-age band around a real input's age. A

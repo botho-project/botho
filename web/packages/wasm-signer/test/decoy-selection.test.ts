@@ -91,7 +91,7 @@ describe('selectDecoysForInput', () => {
   it('keeps every ring inside one random-offset window across draws and real ages', () => {
     // Real ages whose window holds >= 19 candidates at every offset (younger
     // ones hit the nearest-age fallback, pinned by the shared fixture above).
-    for (const realAge of [100, 777, 1500, 2400]) {
+    for (const realAge of [400, 777, 1500, 2400]) {
       const [lo, hi] = ageSimilarityEnvelope(realAge)
       const width = ageSimilarityWindowWidth(realAge)
       for (let draw = 0; draw < 200; draw++) {
@@ -170,7 +170,7 @@ describe('drawAgeSimilarityWindow', () => {
         expect(hi - lo).toBeLessThanOrEqual(width)
       }
     }
-    expect(ageSimilarityWindow(1000, 100)).toEqual(ageSimilarityBand(1000))
+    expect(ageSimilarityWindow(1000, 50)).toEqual(ageSimilarityBand(1000))
   })
 })
 
