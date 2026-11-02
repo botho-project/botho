@@ -78,8 +78,8 @@ jobs:
   # Type-check the extraction and check the proofs (#1821).
   #
   # Runs on the runner host, not in a container. The Mathlib dependency
-  # unpacks to about 7.2 GB, and the free-up step below has to delete the
-  # runner's preinstalled toolchains to make room reliably; in a container
+  # unpacks to about 7.2 GB, and when the runner is short of space the disk
+  # step deletes the runner's preinstalled toolchains to make room; in a container
   # job every step runs inside the container and cannot reach the host disk.
   # Isolation is the same as for `drift`: its own job with a read-only token,
   # no secrets, no artifacts consumed elsewhere, an elan toolchain installed
@@ -99,24 +99,24 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Free disk space
+      # Mathlib unpacked (~7.2 GB) + its .ltar cache (~0.5 GB) + git checkouts
+      # of the dependencies + the self-test copies need about 15 GB. Free up
+      # space only when the runner has less than that: deleting the
+      # preinstalled SDKs takes about 2 minutes.
+      - name: Check disk space (free up if needed)
         working-directory: .
         run: |
-          df -h /
-          # Preinstalled SDKs this job never uses.
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
-          df -h /
-      - name: Check disk space
-        working-directory: .
-        run: |
-          # Mathlib unpacked (~7.2 GB) + its .ltar cache (~0.5 GB) + git
-          # checkouts of the dependencies + the self-test copies.
           need_gb=15
-          avail_gb=$(( $(df --output=avail -k "$GITHUB_WORKSPACE" | tail -1) / 1024 / 1024 ))
-          echo "available: ${avail_gb} GB, needed: ${need_gb} GB"
-          if (( avail_gb < need_gb )); then
-            echo "::error::only ${avail_gb} GB free, need ${need_gb} GB for Mathlib"
+          avail() { echo $(( $(df --output=avail -k "$GITHUB_WORKSPACE" | tail -1) / 1024 / 1024 )); }
+          echo "available: $(avail) GB, needed: ${need_gb} GB"
+          if (( $(avail) < need_gb )); then
+            # Preinstalled SDKs this job never uses.
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+              /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+            echo "after free-up: $(avail) GB"
+          fi
+          if (( $(avail) < need_gb )); then
+            echo "::error::only $(avail) GB free, need ${need_gb} GB for Mathlib"
             exit 1
           fi
       - name: Install elan

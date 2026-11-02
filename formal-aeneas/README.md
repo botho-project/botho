@@ -106,7 +106,7 @@ extraction, so an unmodelled item cannot enter `generated/` in any spelling.
 `formal.yml` and its trust chain, and neither a required check:
 
 - `drift` checks that `generated/` matches a fresh extraction.
-- `typecheck` frees and checks runner disk space, installs elan and the
+- `typecheck` checks runner disk space (freeing some if below 15 GB), installs elan and the
   pinned Lean, restores the Mathlib `.ltar` cache (keyed on
   `toolchain.env`, `lean-toolchain` and `lake-manifest.json`), runs
   `lake exe cache get`, then `check-gates.sh` and `selftest-gates.sh`.
