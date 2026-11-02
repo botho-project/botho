@@ -134,7 +134,7 @@ A plena carga sostenida (bloques de 5 segundos; más lentos cuando la red está 
 - **Presión deflacionaria**: la quema del 20 % compensa la emisión de cola
 - **Predecible**: inflación neta = emisión bruta − quemas
 
-> **Estado de la redistribución (no demostrada):** los mecanismos de esta página están especificados e implementados tal como se describen, pero una reducción medible de la desigualdad **no está demostrada** con los parámetros de producción. Una simulación fiel al código (#1790) midió el efecto propio del mecanismo sobre el índice de Gini entre −0,028 y +0,001, frente a un umbral de diseño de 0,05, y como máximo +0,019 incluso a 1000× la tasa de transacciones. Los premios siguen a la creación de salidas, que es sobre todo minería. Dividir una posición en muchas salidas para obtener más boletos de lotería es hoy rentable (#1761, #1682). Se estudia un rediseño (#1801); no ha cambiado ninguna constante.
+> **Estado de la redistribución (no demostrada):** los mecanismos de esta página están especificados e implementados tal como se describen, pero una reducción medible de la desigualdad **no está demostrada** con los parámetros de producción. Una simulación fiel al código (#1790, #1808) midió el efecto propio del mecanismo sobre el índice de Gini entre −0,028 y +0,003, frente a un umbral de diseño de 0,05, e incluso a 1000× la tasa de transacciones ningún caso supera el umbral a 10 y a 20 años a la vez. Los premios siguen a la creación de salidas, que es sobre todo minería. Dividir una posición en muchas salidas para obtener más boletos de lotería es hoy rentable (#1761, #1682). Se estudia un rediseño (#1801); no ha cambiado ninguna constante.
 
 ### ¿Por qué comisiones progresivas por clúster?
 

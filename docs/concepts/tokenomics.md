@@ -109,7 +109,7 @@ fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
 
 Transaction fees are **not** all burned. Each block, collected fees are split deterministically (`LotteryFeeConfig` in `botho/src/consensus/lottery.rs`, 800 permille):
 
-- **80% → redistribution lottery pool**, paid back out to four outputs per block. Winners are drawn **uniformly** from eligible unspent outputs (aged 720–10,000 blocks, at least 10⁶ picocredits, capped at 10,000 candidates); neither value nor cluster factor enters the draw weight. The earlier cluster-tilted draw is retired.
+- **80% → redistribution lottery pool**, paid back out to four outputs per block. Winners are drawn **uniformly** from eligible outputs (aged 720–10,000 blocks, at least 10⁶ picocredits, capped at 10,000 candidates; ring signatures hide which output a spend consumed, so spent outputs stay eligible until they age out); neither value nor cluster factor enters the draw weight. The earlier cluster-tilted draw is retired.
 - **20% → burned**, providing deflationary pressure that partially offsets tail emission.
 
 The lottery pool is consensus state. Each block pays out at most one block reward (the reward cap), and undistributed pool funds carry over to future blocks rather than being destroyed. The burn share (the 20%) is the **only** portion of fees subtracted from supply; the redistributed 80% stays in circulation as new lottery-payout UTXOs.
@@ -120,8 +120,8 @@ In addition, **cluster demurrage** levies a small spend-time holding charge on c
 
 **Measurable inequality reduction is not demonstrated at production parameters.** The mechanisms above (progressive fees, demurrage, the fee-and-emission lottery, cluster tags) are specified and implemented as described, but they are not shown to reduce inequality. This restates the claim per the operator ruling on #1727 and #1682 (2026-11-01); no constant has changed.
 
-- **No measurable Gini reduction.** A code-faithful simulation at production parameters ([M2 at production parameters](../research/m2-production-verdicts.md), #1696 / PR #1790) measured the mechanism's own ΔGini at −0.028 to +0.001 (3-seed means at 10 and 20 years) against a 0.05 design bar. Even at 1000x the transaction rate it is at most +0.019.
-- **Why.** Lottery tickets track hashpower and output count, because most eligible outputs are coinbases and payouts; frequent spenders lose their tickets; tag decay and coinbase-lineage clusters bring nearly all value to factor 1, so demurrage stops (and disappears at high transaction density).
+- **No measurable Gini reduction.** A code-faithful simulation at production parameters ([M2 at production parameters](../research/m2-production-verdicts.md), #1696 / PR #1790) measured the mechanism's own ΔGini at −0.028 to +0.003 (3-seed means at 10 and 20 years, under the simulation's original candidate rule and under the node's, in which ring-spent outputs stay eligible, #1808) against a 0.05 design bar. Even at 1000x the transaction rate no case clears the bar at both 10 and 20 years.
+- **Why.** Lottery tickets track hashpower and output count, because most eligible outputs are coinbases and payouts; ring-spent outputs stay eligible, so tickets follow output creation rather than current holdings; tag decay and coinbase-lineage clusters bring nearly all value to factor 1, so demurrage stops (and disappears at high transaction density).
 - **Lottery splitting is profitable.** A faithful-to-code re-run (#1761, issue #1682) finds splitting a position into many outputs profitable at all 192 grid points: an extra output costs far less than the ticket share it buys, and the reward cap does not bind as built.
 - **Next.** A sim-only redesign study is under way (#1801). No constant or consensus rule moves until a candidate passes the #1790 production-fidelity harness and the #1761 splitting grid.
 
@@ -199,7 +199,7 @@ This means a wash trader executing 100 rapid self-transfers gets 0% decay (all o
 
 ![Gini Reduction](../../cluster-tax/docs/figures/gini_reduction_comparison.png)
 
-The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)). Those legacy harnesses modelled a retired tilted lottery, a flat fee and one cluster per agent, with no mining, and their Gini results do not carry over to the protocol. **At production parameters the mechanism does not measurably reduce inequality** (mechanism ΔGini −0.028 to +0.001 against a 0.05 bar; [M2 at production parameters](../research/m2-production-verdicts.md)). See [Redistribution Status](#redistribution-status).
+The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)). Those legacy harnesses modelled a retired tilted lottery, a flat fee and one cluster per agent, with no mining, and their Gini results do not carry over to the protocol. **At production parameters the mechanism does not measurably reduce inequality** (mechanism ΔGini −0.028 to +0.003 against a 0.05 bar; [M2 at production parameters](../research/m2-production-verdicts.md)). See [Redistribution Status](#redistribution-status).
 
 #### Why It's Sybil-Resistant
 

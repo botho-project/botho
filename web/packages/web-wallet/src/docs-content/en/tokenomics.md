@@ -134,7 +134,7 @@ At sustained full load (5-second blocks; slower when the network is idle):
 - **Deflationary pressure** - The 20% burn offsets tail emission
 - **Predictable** - Net inflation = gross emission − burns
 
-> **Redistribution status (not demonstrated):** the mechanisms on this page are specified and implemented as described, but a measurable reduction in inequality is **not demonstrated** at production parameters. A code-faithful simulation (#1790) measured the mechanism's own effect on the Gini coefficient at −0.028 to +0.001 against a 0.05 design bar, and at most +0.019 even at 1000× the transaction rate. Payouts track output creation, which is mostly mining. Lottery ticket-splitting is currently profitable (#1761, #1682). A redesign is under study (#1801); no constant has changed.
+> **Redistribution status (not demonstrated):** the mechanisms on this page are specified and implemented as described, but a measurable reduction in inequality is **not demonstrated** at production parameters. A code-faithful simulation (#1790, #1808) measured the mechanism's own effect on the Gini coefficient at −0.028 to +0.003 against a 0.05 design bar, and even at 1000× the transaction rate no case clears the bar at both 10 and 20 years. Payouts track output creation, which is mostly mining. Lottery ticket-splitting is currently profitable (#1761, #1682). A redesign is under study (#1801); no constant has changed.
 
 ### Why Progressive Cluster Fees?
 

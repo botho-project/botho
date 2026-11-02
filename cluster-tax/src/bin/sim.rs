@@ -1002,6 +1002,13 @@ mod cli {
             /// fixed). 1 = the M2 rates, about 13k tx/yr or 0.002 tx/block.
             #[arg(long, default_value = "1")]
             tx_scale: f64,
+
+            /// Lottery candidate rule for spent outputs: node (spent outputs
+            /// stay candidates until they age out, what the node does) or
+            /// 1790 (a spend removes its coins from the draw; reproduces the
+            /// numbers published in PR #1790)
+            #[arg(long, default_value = "node")]
+            candidate_rule: String,
         },
     }
 
@@ -1301,6 +1308,7 @@ mod cli {
                 fee_model,
                 validate_days,
                 tx_scale,
+                candidate_rule,
             } => run_m2_production_cli(
                 horizon_years,
                 snapshot_years,
@@ -1311,6 +1319,7 @@ mod cli {
                 fee_model,
                 validate_days,
                 tx_scale,
+                &candidate_rule,
             ),
             Command::RedistributionRedesign {
                 part,
@@ -5032,6 +5041,7 @@ mod cli {
         fee_model: FeeModelArg,
         validate_days: Option<u64>,
         tx_scale: f64,
+        candidate_rule: &str,
     ) {
         use bth_cluster_tax::simulation::m2_production::{
             run_m2_production, run_m2_production_pair, MiningModel, ProdParams, ProdSnapshot,
@@ -5050,6 +5060,16 @@ mod cli {
             "honest" => vec![WhaleStrategy::Honest],
             "optimal-decoy" => vec![WhaleStrategy::OptimalDecoy],
             _ => vec![WhaleStrategy::Honest, WhaleStrategy::OptimalDecoy],
+        };
+        // #1808: spent outputs stay candidates on the node (a ring spend
+        // only records a key image); `1790` reproduces PR #1790's rule.
+        let spent_eligible = match candidate_rule {
+            "node" => true,
+            "1790" => false,
+            _ => {
+                eprintln!("--candidate-rule must be node or 1790");
+                std::process::exit(2);
+            }
         };
 
         let print_snap = |label: &str, s: &ProdSnapshot| {
@@ -5083,7 +5103,8 @@ mod cli {
             let blocks = days * PROD_BLOCKS_PER_YEAR / 365;
             println!(
                 "M2-PRODUCTION aggregation check: {days} days ({blocks} blocks) from height \
-                 {PROD_BLOCKS_PER_YEAR} (epoch 1), seed={seed}, tx-scale={tx_scale}, fee model={}",
+                 {PROD_BLOCKS_PER_YEAR} (epoch 1), seed={seed}, tx-scale={tx_scale}, fee model={}, \
+                 candidate rule={candidate_rule}",
                 fee_model.label()
             );
             for m in &minings {
@@ -5101,6 +5122,7 @@ mod cli {
                             mechanism: true,
                             seed,
                             tx_scale,
+                            spent_eligible,
                             ..ProdParams::years(0, &[])
                         });
                         println!(
@@ -5119,7 +5141,8 @@ mod cli {
 
         println!(
             "M2-PRODUCTION (#1696): horizon={horizon_years}yr  snapshots={snapshot_years:?}  \
-             seed={seed}  step={step_blocks} blocks  tx-scale={tx_scale}  fee model={}",
+             seed={seed}  step={step_blocks} blocks  tx-scale={tx_scale}  fee model={}  \
+             candidate rule={candidate_rule}",
             fee_model.label()
         );
         print_m2_population();
@@ -5134,6 +5157,7 @@ mod cli {
                 p.whale = *w;
                 p.fee_mode = fee_mode;
                 p.tx_scale = tx_scale;
+                p.spent_eligible = spent_eligible;
                 let t = std::time::Instant::now();
                 let pair = run_m2_production_pair(&p);
                 println!(
@@ -5177,7 +5201,7 @@ mod cli {
             }
         }
         println!(
-            "\nSUMMARY (fee model {}, seed {seed}, tx-scale {tx_scale})",
+            "\nSUMMARY (fee model {}, seed {seed}, tx-scale {tx_scale}, candidate rule {candidate_rule})",
             fee_model.label()
         );
         println!(

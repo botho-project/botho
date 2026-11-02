@@ -93,11 +93,18 @@
 //!   to the Gini path.
 //! - **No lottery farming.** No agent splits outputs to farm tickets; that
 //!   attack is #1682.
-//! - **Spent outputs leave the draw.** A spend consumes every coin of the
-//!   position, so those coins drop out of the candidate window and out of the
-//!   not-yet-mature buckets, as on the node, where candidates come only from
-//!   the UTXO set. Each agent carries a spend generation; window entries and
-//!   pending bucket entries from an older generation are spent coins.
+//! - **Spent outputs stay in the draw (default; #1808).** On the node a CLSAG
+//!   spend only records a key image (`writer.rs` `block_effects`); the real
+//!   input is never removed from `utxo_db`, because the node does not know
+//!   which ring member it is, and `lottery_candidates` (`validation.rs`)
+//!   filters only by age and value. So a spent output stays a candidate until
+//!   it ages out of the 10,000-block window, and a win still pays its owner.
+//!   [`ProdParams::spent_eligible`] `= true` models this. `false` is #1790's
+//!   rule (a spend consumes every coin of the position, and those coins drop
+//!   out of the candidate window and out of the not-yet-mature buckets), which
+//!   the node could only enforce with a spend reveal. Each agent carries a
+//!   spend generation; under #1790's rule, window entries and pending bucket
+//!   entries from an older generation are spent coins.
 //! - **Transaction density.** The population makes about 13,000 transactions a
 //!   year against 6.3M blocks, so about 99.6% of window outputs are coinbases
 //!   and lottery payouts. `tx_scale` multiplies every cohort's transaction rate
@@ -301,11 +308,13 @@ pub struct ProdParams {
     pub ticket_rule: TicketRule,
     /// Honest-wallet tag decay (#1801). [`TagDecay::PerHop`] = #1790.
     pub tag_decay: TagDecay,
-    /// `true` = spent outputs stay lottery candidates until they age out of
-    /// the window, which is what the node does: ring inputs only record a
-    /// key image, so `utxo_db` never drops the real input (`writer.rs`).
-    /// `false` = #1790's rule (a spend removes its coins from the draw),
-    /// which the node can only enforce by revealing which output was spent.
+    /// `true` (the default since #1808) = spent outputs stay lottery
+    /// candidates until they age out of the window, which is what the node
+    /// does: ring inputs only record a key image, so `utxo_db` never drops
+    /// the real input (`writer.rs`). `false` = #1790's rule (a spend removes
+    /// its coins from the draw), which the node can only enforce by revealing
+    /// which output was spent. Pass `false` to reproduce #1790's published
+    /// numbers.
     pub spent_eligible: bool,
 }
 
@@ -328,7 +337,8 @@ impl ProdParams {
             tx_scale: 1.0,
             ticket_rule: TicketRule::Uniform,
             tag_decay: TagDecay::PerHop,
-            spent_eligible: false,
+            // The node's rule (#1808). #1790's published numbers need `false`.
+            spent_eligible: true,
         }
     }
 }
@@ -1565,7 +1575,8 @@ mod tests {
         assert!(finish_tags(tiny).is_empty(), "0.05% weights are pruned");
     }
 
-    /// Spent outputs cannot win: a full-consolidation spend drops the
+    /// #1790's rule (`spent_eligible = false`, which `short` sets): spent
+    /// outputs cannot win. A full-consolidation spend drops the
     /// agent's eligible count to zero (eligible coins and the coinbases still
     /// maturing in the pending bucket), no lottery slot goes to it while it
     /// holds nothing eligible, and its count comes back only from outputs
@@ -1615,6 +1626,42 @@ mod tests {
         w.advance_window(2);
         assert_eq!(w.owner_counts[whale], n_tx);
         assert!(w.owner_entries[whale].iter().all(|e| e.step >= 1));
+    }
+
+    /// #1808: the default follows the node, where a ring spend never removes
+    /// the real input from `utxo_db`. The spent coins keep their window
+    /// entries, and the spend's outputs join the pending bucket.
+    #[test]
+    fn node_rule_is_the_default_and_keeps_spent_outputs() {
+        assert!(ProdParams::years(20, &[10, 20]).spent_eligible);
+        let p = ProdParams {
+            mining: MiningModel::WealthProportional,
+            spent_eligible: true,
+            ..short(720, true)
+        };
+        let mut w = World::new(p.clone());
+        let whale = w.agents.iter().position(|a| a.strategic).unwrap();
+        let h1 = p.start_height + p.step_blocks;
+        w.advance_window(0);
+        w.advance_window(1);
+        assert_eq!(w.owner_counts[whale], 1, "genesis output is eligible");
+        w.mine(1, h1);
+        let pending_cb: u64 = w.buckets[(1 - w.bucket_base) as usize]
+            .iter()
+            .filter(|e| e.owner as usize == whale)
+            .map(|e| e.count)
+            .sum();
+        assert!(pending_cb > 0);
+
+        let tx_before = w.transactions;
+        w.spend(1, whale, h1);
+        let n_tx = w.transactions - tx_before;
+        assert_eq!(w.owner_counts[whale], 1, "spent genesis output stays");
+        assert!(!w.owner_entries[whale].is_empty());
+
+        // Step 2: the pre-spend coinbases mature alongside the change.
+        w.advance_window(2);
+        assert_eq!(w.owner_counts[whale], 1 + pending_cb + n_tx);
     }
 
     /// The optimal-decoy whale's floor is never above the honest floor and
@@ -1730,6 +1777,9 @@ mod tests {
                 whale: WhaleStrategy::Honest,
                 mechanism,
                 tx_scale,
+                // #1790's candidate rule, passed explicitly: the default
+                // follows the node since #1808.
+                spent_eligible: false,
                 ..ProdParams::years(0, &[])
             };
             assert_eq!(p.ticket_rule, TicketRule::Uniform);
@@ -1770,6 +1820,7 @@ mod tests {
             let mut p = ProdParams::years(20, &[10, 20]);
             p.mining = mining;
             p.whale = WhaleStrategy::Honest;
+            p.spent_eligible = false; // #1790's rule (#1808)
             let pair = run_m2_production_pair(&p);
             let r4 = |x: f64| (x * 1e4).round() / 1e4;
             assert_eq!(r4(pair.on.snapshots[0].gini), on10, "{mining:?} on 10y");

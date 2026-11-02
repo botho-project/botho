@@ -147,7 +147,7 @@ Fees are split between lottery redistribution and burning:
 | **Hybrid** | Low-medium (α-dependent) | Medium | Simulation only |
 | **EntropyWeighted** | Medium | Medium | Simulation only |
 
-**Consensus mode is `Uniform` (Path C, ADR 0009):** each block draws four winners uniformly from eligible unspent outputs; neither value nor cluster factor enters the draw. `ClusterWeighted` (winner weight `value ÷ cluster_factor`, split-invariant) was the earlier production mode and is retained for simulation only. Because the as-built draw gives one ticket per output, **splitting is profitable**: a faithful-to-code re-run finds it profitable at all 192 grid points (#1761, #1682). Redistribution is not demonstrated at production parameters (#1790); a redesign is under study (#1801). See [Cluster-Tilted Redistribution](../docs/design/cluster-tilted-redistribution.md) (design history) and `experiments/ANALYSIS.md`.
+**Consensus mode is `Uniform` (Path C, ADR 0009):** each block draws four winners uniformly from eligible outputs (ring-spent outputs stay eligible until they age out, #1808); neither value nor cluster factor enters the draw. `ClusterWeighted` (winner weight `value ÷ cluster_factor`, split-invariant) was the earlier production mode and is retained for simulation only. Because the as-built draw gives one ticket per output, **splitting is profitable**: a faithful-to-code re-run finds it profitable at all 192 grid points (#1761, #1682). Redistribution is not demonstrated at production parameters (#1790); a redesign is under study (#1801). See [Cluster-Tilted Redistribution](../docs/design/cluster-tilted-redistribution.md) (design history) and `experiments/ANALYSIS.md`.
 
 ## Monetary Policy
 

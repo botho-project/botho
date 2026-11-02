@@ -1,25 +1,46 @@
 # M2 at Production Parameters (#1696)
 
 **Status:** re-run record. The sims change; consensus code does not.
-**Date:** 2026-10-31; re-run 2026-11-01 after spent outputs were removed from the lottery window (Judge review of PR #1790).
+**Date:** 2026-10-31; re-run 2026-11-01 after spent outputs were removed from the lottery window (Judge review of PR #1790); that removal corrected 2026-11-02 (#1808): the node keeps ring-spent outputs in the window.
 **Parent:** epic #1683, the design-confidence parity review. Follows #1695 / `consensus-fee-model-sim-verdicts.md`.
 **Decision owner:** #1727. This document supplies the numbers. Whether to add a redistribution source or restate the criterion is decided there, not here.
 
 ## Verdict
 
-**The M2 (#605) premise is broken at production parameters.** The mechanism does not reduce Gini by anything close to the 0.05 bar. Under egalitarian mining it raises Gini on average. None of the top decile's value is priced above 1.5x after year 10.
+**The M2 (#605) premise is broken at production parameters.** The mechanism does not reduce Gini by anything close to the 0.05 bar. Under egalitarian mining it raises Gini on average under #1790's candidate rule, and is about neutral under the node's rule (see the correction below). None of the top decile's value is priced above 1.5x after year 10.
 
 | Metric (10 yr / 20 yr) | Wealth-proportional mining | Egalitarian mining | Bar |
 |---|---|---|---|
 | ΔGini caused by the mechanism (off − on counterfactual), mean of 3 seeds | +0.0001 to +0.0012 / −0.0006 to +0.0003 | −0.0203 to −0.0027 / −0.0282 to −0.0091 | > 0.05 |
 | Margin vs the bar | short by ≈ 0.049 | short by ≥ 0.053 (best seed-mean −0.0027); single seeds range −0.047 to +0.010 | |
+| Same, under the node's candidate rule (spent outputs stay eligible; honest whale; #1808, table below) | +0.0005 / −0.0000 | +0.0030 / −0.0002 | > 0.05 |
 | Same, at 100x / 1000x the transaction rate (seed 1696, honest whale) | +0.0001 / +0.0006 and +0.0100 / +0.0185 | −0.085 / −0.137 and −0.093 / −0.147 | > 0.05 |
 | Legacy ΔGini (gini0 − giniF), seed 1696 | −0.007 to −0.010 (FAIL) | +0.49 to +0.62 (PASS, but the counterfactual with the mechanism off gives +0.54 to +0.61) | > 0.05 |
 | Share of top-decile value priced below 1.5x | **100% / 100%** | **100% / 100%** | should be small |
 
 Ranges span the honest and optimal-decoy whale. The legacy definition passes under egalitarian mining only because equal block rewards across 140 agents flatten a 23M-BTH genesis ladder under 690M BTH of emission (10 yr). The mechanism-off run shows a similar drop, so it is not the mechanism's doing.
 
-**Correction (2026-11-01).** The first version of this record (PR #1790 as opened) left spent coins eligible for the lottery until their 10k-block window ran out. On the node, candidates come only from the UTXO set. The bug overstated the mechanism: its 3-seed means spanned −0.009 to +0.020, and seed 1696 egalitarian/honest moved from +0.0273 to −0.0099 once spent coins were removed. Every number in this document is from the corrected sim.
+**Correction (2026-11-02, #1808): the node keeps ring-spent outputs in the lottery.** The first version of this record (PR #1790 as opened) left spent coins eligible for the lottery until their 10k-block window ran out. A review "correction" (2026-11-01) removed them, on the premise that the node draws candidates only from the UTXO set, so a spend takes its coins out of the draw. The first half is true, but the node's UTXO set never loses a ring-spent output:
+
+- `block_effects` (`botho/src/ledger/store/writer.rs:154`), the block writer behind `add_block`, handles each CLSAG input by recording its key image (`record_key_image`, `writer.rs:220-222`) and then `utxo_db.put`s every new output (`writer.rs:235-237`). It deletes nothing from `utxo_db`, and cannot: the node does not know which of the ring members is the real input. (The only `utxo_db` deletes or clears are in tests and in snapshot restore, which replaces the whole set.)
+- `lottery_candidates` (`botho/src/ledger/store/validation.rs:733`) walks `utxo_db` and filters only by age (`min_utxo_age..=circulation_window`) and value (`min_utxo_value`, `validation.rs:800-802`). There is no spent check.
+
+So on the node a spent output stays a lottery candidate until it ages out of the 10,000-block window, and a win still pays its owner. On this point the first version modelled the node correctly. The "corrected" rule (a spend removes its coins from the window and the pending buckets) is one the node could only enforce with a spend reveal or a zero-knowledge non-membership proof (`redistribution-redesign-study.md` §2, §5.1).
+
+The other tables in this record keep #1790's published numbers, which use the removal rule. They are reproducible with `--candidate-rule 1790`. Since #1808, `m2-production` defaults to the node's rule (`--candidate-rule node`). The redesign study re-ran the harness under the node's rule (`redistribution-redesign-study.md` §3.2, R0 rows; honest whale, consensus fees, 3-seed means of seeds 1696, 2 and 3). ΔGini mechanism (off − on) at 10 / 20 years:
+
+| Mining | tx scale | #1790 rule (published) | Node rule | Seed 1696, #1790 rule | Seed 1696, node rule |
+|---|---|---|---|---|---|
+| wealth | 1x | +0.0001 / −0.0006 | +0.0005 / −0.0000 | −0.0002 / −0.0010 | +0.0003 / +0.0010 |
+| wealth | 100x | +0.0006 / +0.0010 | +0.0156 / +0.0273 | +0.0001 / +0.0006 | +0.0155 / +0.0268 |
+| wealth | 1000x | +0.0100 / +0.0176 | +0.0427 / +0.0726 | +0.0100 / +0.0185 | +0.0425 / +0.0725 |
+| egalitarian | 1x | −0.0203 / −0.0283 | +0.0030 / −0.0002 | −0.0099 / −0.0469 | +0.0273 / +0.0311 |
+| egalitarian | 100x | −0.0855 / −0.1385 | +0.0070 / +0.0112 | −0.0848 / −0.1372 | +0.0068 / +0.0123 |
+| egalitarian | 1000x | −0.0921 / −0.1474 | −0.0000 / +0.0050 | −0.0931 / −0.1470 | +0.0003 / +0.0060 |
+
+The node-rule seed 1696 egalitarian figure (+0.0273 at 10 years) is the first version's pre-"correction" figure. **The verdict stands under both rules.** At the M2 transaction rates (1x) the node rule's 3-seed means are −0.0002 to +0.0030, against the 0.05 bar. No cell passes at both 10 and 20 years. The largest node-rule value is +0.0726, at 20 years only, under wealth mining at 1000x the transaction rate. The same cell is +0.0427 at 10 years. The node rule has no optimal-decoy runs. Under #1790's rule the whale strategy moved the 1x 3-seed means by at most 0.02.
+
+The node rule removes the regressive drift described below: frequent spenders no longer lose their tickets, because a spend's inputs keep counting until they age out and its outputs add new tickets. The lottery still follows output creation, and so mostly hashpower, and it opens a new hole. A holder can re-spend the same capital and each spend adds outputs to the draw. Under a value-linear ticket weight this "churn" mints fresh weight every block (`redistribution-redesign-study.md` §4). Unless stated otherwise, everything below this paragraph describes #1790's removal rule.
 
 For comparison, the legacy harness (`m2-cumulative`, honest, seed 626626626) at its own parameters gives:
 
@@ -40,7 +61,7 @@ The legacy `m2-cumulative` / `m2-decay` harness (`cluster-tax/src/simulation/m2.
 | Emission | 50 BTH, 1-yr halvings × 5, then a 2% tail recomputed from `total_mined` (`calculate_block_reward`) | same, via `cluster_tax::mainnet_monetary_policy` (drift-guarded against `botho::monetary::mainnet_policy`) | none |
 | Lottery emission share | `lottery_emission_bps`: 0 in epoch 0, +10%/epoch, cap 50% | same | fixed 1.6 units/block |
 | Epoch-0 demurrage holiday | `demurrage_rate_bps` = 0 below `halving_interval` | same (shared `ConsensusFeeParams`) | demurrage always on |
-| Lottery candidates | unspent outputs aged 720..=10,000 blocks, value ≥ 1e6 pico, capped at 10k (`validation.rs::lottery_candidates`, from `utxo_db`) | same; a spend removes the spent coins from the window and from the pending buckets; a uniform 10k subset when over the cap | all UTXOs |
+| Lottery candidates | outputs in `utxo_db` aged 720..=10,000 blocks, value ≥ 1e6 pico, capped at 10k (`validation.rs::lottery_candidates`). A ring spend only records a key image, so spent outputs stay candidates until they age out (#1808) | default (`--candidate-rule node`, since #1808): same, spent coins stay in the window. `--candidate-rule 1790` (#1790's published numbers): a spend removes the spent coins from the window and from the pending buckets. A uniform 10k subset when over the cap | all UTXOs |
 | Draw | uniform, 4 winners (`LotteryDrawConfig::default`) | same | `ClusterWeighted` |
 | Payout | `min(carry + share + 80% fees, min(ρ·0.25 BTH, reward))`, remainder carried (`reward_cap`, `compute_pool_accounting`) | same, block by block | in-place balance add |
 | Payout output | a new output copying the winner's tags, credited to W (`writer.rs`) | same | none |
@@ -54,6 +75,8 @@ The legacy `m2-cumulative` / `m2-decay` harness (`cluster-tax/src/simulation/m2.
 Population: the legacy M2 ladder (80 × 50 BTH, 30 × 10k, 20 × 5k merchants at 2×/yr velocity, 9 × 2M whales) plus the strategic 5M-BTH whale, as a genesis endowment, each agent in its own cluster with W = holdings. Two hashpower scenarios: proportional to the endowment (`wealth`; the 9 whales hold 77% and the strategic whale 21%), or equal per agent (`egalitarian`).
 
 ## Results
+
+All tables in this section are #1790's published runs, under its removal rule (`--candidate-rule 1790`). The node-rule numbers are in the correction above.
 
 ### Main runs (seed 1696, consensus fee model)
 
@@ -102,13 +125,13 @@ At the M2 rates the 140 agents make about 13,000 transactions a year against 6,3
 
 Every row fails. Density changes the result in three ways:
 
-- **Frequent spenders lose their tickets.** A consolidating wallet that spends more often than every 720 blocks rarely holds a mature output. At 100x a merchant spends about every 170 blocks and wins almost nothing. Tickets move to the agents that spend least often, whatever their wealth. Under egalitarian mining those are the whales and middle holders, so the lottery becomes strongly regressive. Under wealth mining the whales lose some of their own tickets to middle holders, which gives the only positive drift in the table, +0.0185 at 1000x and 20 years.
+- **Frequent spenders lose their tickets** (an artifact of #1790's rule; on the node a spend keeps its coins in the window and adds new outputs). A consolidating wallet that spends more often than every 720 blocks rarely holds a mature output. At 100x a merchant spends about every 170 blocks and wins almost nothing. Tickets move to the agents that spend least often, whatever their wealth. Under egalitarian mining those are the whales and middle holders, so the lottery becomes strongly regressive. Under wealth mining the whales lose some of their own tickets to middle holders, which gives the only positive drift in the table, +0.0185 at 1000x and 20 years.
 - **Demurrage disappears.** The stock wallet decays tags by 5% per hop. At 100x even the whales spend 1,200 times a year, so their endowment tags are gone before the epoch-0 holiday ends, and demurrage drops from 5.9e7 to 2.2e3 BTH (wealth). At 1000x nobody pays any.
 - **The off run gets flatter too.** Smaller, more frequent payments add less noise, so egalitarian giniF off falls from 0.39 to 0.05–0.06 at 20 years. The legacy ΔGini still passes under egalitarian mining, but the mechanism-off run passes by more.
 
 ### Why it fails
 
-**1. The uniform lottery pays in proportion to unspent output creation, which is mostly mining.** At 6.3M blocks/yr every block adds one coinbase and four payout outputs to the window, against about 13,000 transactions a year from the whole population. Payouts copy their winner's owner, so the window's ownership converges to each agent's share of coinbases plus transaction outputs, about its hashpower share, less what it loses each time it spends: a consolidating spend takes all of the agent's coins out of the window. Seed 1696, honest whale, 10 yr:
+**1. The uniform lottery pays in proportion to unspent output creation, which is mostly mining.** At 6.3M blocks/yr every block adds one coinbase and four payout outputs to the window, against about 13,000 transactions a year from the whole population. Payouts copy their winner's owner, so the window's ownership converges to each agent's share of coinbases plus transaction outputs, about its hashpower share, less what it loses each time it spends: under #1790's rule a consolidating spend takes all of the agent's coins out of the window. (On the node, spent coins stay in the window, so this loss does not occur; see the correction above.) Seed 1696, honest whale, 10 yr:
 
 | Cohort | Hashpower (wealth) | Lottery share (wealth) | Hashpower (egalitarian) | Lottery share (egalitarian) |
 |---|---|---|---|---|
@@ -153,17 +176,22 @@ Emission is identical in both modes (5.184e7 BTH). Gini agrees within 0.010, and
 ```bash
 cargo build --release -p bth-cluster-tax --features cli
 B=target/release/cluster-tax-sim
-$B m2-production                                  # 20 yr, snapshots 10/20, both mining models, both whales, seed 1696
-$B m2-production --fee-model consensus-relay
-$B m2-production --seed 2 ; $B m2-production --seed 3
-$B m2-production --validate-days 120 [--seed N]   # exact vs aggregated
-$B m2-production --horizon-years 10 --snapshot-years 1,2,3,4,5,6,7,8,10 --whale honest
-$B m2-production --tx-scale {100,1000} --mining {wealth,egalitarian} --whale honest [--seed N]
+# This record's published numbers use #1790's candidate rule. Since #1808 the
+# default is the node's rule (--candidate-rule node); pass 1790 to reproduce.
+R="--candidate-rule 1790"
+$B m2-production $R                                  # 20 yr, snapshots 10/20, both mining models, both whales, seed 1696
+$B m2-production $R --fee-model consensus-relay
+$B m2-production $R --seed 2 ; $B m2-production $R --seed 3
+$B m2-production $R --validate-days 120 [--seed N]   # exact vs aggregated
+$B m2-production $R --horizon-years 10 --snapshot-years 1,2,3,4,5,6,7,8,10 --whale honest
+$B m2-production $R --tx-scale {100,1000} --mining {wealth,egalitarian} --whale honest [--seed N]
+# node-rule numbers (the correction table)
+$B m2-production --tx-scale {1,100,1000} --mining {wealth,egalitarian} --whale honest [--seed N]
 # legacy comparison
 $B m2-cumulative --horizon-years {10,20} --fee-model {legacy,consensus}
 ```
 
-The runs above were made at `b3404acf` plus this change. After merging `c9190d8b` (#1751 emission-model changes), seed 1696 wealth/honest and egalitarian/optimal-decoy reproduce exactly at 10 and 20 years. A 20-year pair (on and off) takes about 4 minutes. `--mining` and `--whale` take `wealth|egalitarian|both` and `honest|optimal-decoy|both`. Determinism is covered by a unit test.
+The runs above were made at `b3404acf` plus this change. After merging `c9190d8b` (#1751 emission-model changes), seed 1696 wealth/honest and egalitarian/optimal-decoy reproduce exactly at 10 and 20 years. A 20-year pair (on and off) takes about 4 minutes. `--mining` and `--whale` take `wealth|egalitarian|both` and `honest|optimal-decoy|both`; `--candidate-rule` takes `node|1790`. Determinism is covered by a unit test, and `baseline_reproduces_1790_bit_for_bit` pins `--candidate-rule 1790` to the #1790 harness.
 
 ## Approximations, and which way they lean
 
@@ -178,7 +206,7 @@ The module doc in `m2_production.rs` lists them in full. Most lean in the mechan
 - **No lottery farming.** No agent splits to farm tickets. #1682 (re-run in #1761) found that splitting is profitable on the implemented rules, so farming would concentrate the lottery further. *Favours the mechanism.*
 - **Payments go to recipients in proportion to spending flow**, so they move no wealth in expectation but add noise.
 - **Low transaction density.** At the M2 rates there are about 0.002 transactions per block, so about 99.6% of the window's non-payout outputs are coinbases and the lottery follows hashpower. A busier chain would draw more of the window from transaction outputs. *Direction depends on the mining model.* Under wealth mining, low density leans against the lottery leg: at 1000x the mechanism's ΔGini rises to +0.010 / +0.019 (10 / 20 yr), still FAIL. Under egalitarian mining it leans in the mechanism's favour: at 100x and 1000x the mechanism's ΔGini falls to −0.08 to −0.15. At any density above about 100x it also removes the demurrage leg, because the 5%-per-hop wallet decay strips endowment tags before demurrage starts. *That part leans against the mechanism.*
-- **Full consolidation against the 720-block maturity.** Every spend consumes all of the agent's coins, so an agent that spends more often than every 720 blocks seldom holds a mature output and gets almost no tickets. At 1x only merchants come close (one spend per about 17,000 blocks, against a 10,000-block window). At 100x and above it moves the lottery away from all frequent spenders. A coin-selecting wallet that leaves received outputs alone would keep more tickets. *Against the mechanism under egalitarian mining*, because the rare spenders it favours are the whales. *Slightly in its favour under wealth mining*, where it moves tickets from whales to middle holders.
+- **Full consolidation against the 720-block maturity** (#1790's rule only). Every spend consumes all of the agent's coins, so an agent that spends more often than every 720 blocks seldom holds a mature output and gets almost no tickets. At 1x only merchants come close (one spend per about 17,000 blocks, against a 10,000-block window). At 100x and above it moves the lottery away from all frequent spenders. A coin-selecting wallet that leaves received outputs alone would keep more tickets. *Against the mechanism under egalitarian mining*, because the rare spenders it favours are the whales. *Slightly in its favour under wealth mining*, where it moves tickets from whales to middle holders.
 
 ## What this does not decide
 
