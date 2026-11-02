@@ -31,6 +31,17 @@ It writes to the file OUT (not stdout). One line per record, tab-separated:
   AXIOMDECL <name>              each `axiom` declared in such a module
   INIT <mod> <decl>             each `[init]` / `[builtin_init]` declaration
                                 of such a module (recorded, never run)
+  STMT <name> <serialization>   for each NAME given on the command line
+                                that is a declaration: the canonical
+                                serialization of its statement closure
+                                (#1805, see `statementClosure`). The
+                                verifier hashes this field with SHA-256.
+  STMTPP <name> <kind> <decl> <type> <value>
+                                one line per declaration of that closure,
+                                NAME's own first: pretty-printed type and,
+                                for a `def`, value (empty otherwise), with
+                                `\\`, newline, tab and CR escaped. For the
+                                reviewer; the hash is what binds.
   DONE <count>                  last line; <count> is the number of
                                 ROOT-module declarations swept
 
@@ -91,6 +102,208 @@ partial def axiomsOf (env : Environment) (c : Name) : StateM Memo (Array Name) :
   modify (·.insert key result)
   return result
 
+/-! ## Statement binding (#1805)
+
+The verify job checks the `.olean` files an untrusted build uploaded, and
+nothing else ties those files to the sources. So every theorem listed in
+`Theorems.lean` is bound to a reviewed record, `formal/statements.txt`, read
+from the base commit: the verifier recomputes the record entry below from the
+compiled library and requires an identical entry in the base record.
+
+The entry covers the theorem's *statement closure*: the theorem's own type,
+plus every declaration of the ROOT library that the type reaches, followed
+transitively through what each such declaration means:
+
+  * a theorem contributes its type only (a proof is irrelevant; `leanchecker`
+    checked it);
+  * a `def` or `opaque` contributes its type and value;
+  * an inductive contributes its whole mutual block (types and constructor
+    types); a constructor or recursor pulls in its inductive;
+  * any other declaration contributes its type.
+
+Declarations from other modules (only `Init` is importable, and it is loaded
+from the trusted toolchain, never from the artifact) are referenced by name
+and not expanded. So `satAdd_le_cap : satAdd cap a b ≤ cap` is bound both to
+its type and to the body of `Botho.satAdd`: rewriting the body in the
+artifact changes the hash as surely as rewriting the type.
+
+The serialization is exact (de Bruijn indices, structural names, levels and
+literals, every field of each declaration kind) except for binder names and
+metadata, which do not change what a statement means. Strings and name
+components are quoted with `String.quote`, so the serialization never holds
+a raw tab or newline. -/
+
+/-- Escape `\`, newline, tab and CR so that a field fits on one report line. -/
+def escField (s : String) : String :=
+  s.replace "\\" "\\\\" |>.replace "\n" "\\n" |>.replace "\t" "\\t" |>.replace "\r" "\\r"
+
+/-- Structural, unambiguous rendering of a name (string and numeric parts are
+distinguished, so `«a.b»` and `a.b` differ). -/
+def serName : Name → String
+  | .anonymous => "_"
+  | .str p s => serName p ++ "." ++ s.quote
+  | .num p n => serName p ++ "#" ++ toString n
+
+def serLevel : Level → String
+  | .zero => "0"
+  | .succ l => "(s " ++ serLevel l ++ ")"
+  | .max a b => "(m " ++ serLevel a ++ " " ++ serLevel b ++ ")"
+  | .imax a b => "(i " ++ serLevel a ++ " " ++ serLevel b ++ ")"
+  | .param n => "(p " ++ serName n ++ ")"
+  | .mvar _ => "(?l)"
+
+def serBinder : BinderInfo → String
+  | .default => "d"
+  | .implicit => "i"
+  | .strictImplicit => "s"
+  | .instImplicit => "c"
+
+def serLevels (ls : List Level) : String :=
+  "[" ++ " ".intercalate (ls.map serLevel) ++ "]"
+
+def serParams (ns : List Name) : String :=
+  "[" ++ " ".intercalate (ns.map serName) ++ "]"
+
+/-- Exact rendering of an expression up to binder names and metadata. -/
+partial def serExpr (acc : String) : Expr → String
+  | .bvar i => acc ++ s!"(b {i})"
+  | .fvar _ => acc ++ "(?f)"
+  | .mvar _ => acc ++ "(?m)"
+  | .sort l => acc ++ "(S " ++ serLevel l ++ ")"
+  | .const n ls => acc ++ "(C " ++ serName n ++ " " ++ serLevels ls ++ ")"
+  | .app f a => serExpr (serExpr (acc ++ "(A ") f ++ " ") a ++ ")"
+  | .lam _ t b bi => serExpr (serExpr (acc ++ "(L " ++ serBinder bi ++ " ") t ++ " ") b ++ ")"
+  | .forallE _ t b bi =>
+      serExpr (serExpr (acc ++ "(F " ++ serBinder bi ++ " ") t ++ " ") b ++ ")"
+  | .letE _ t v b _ =>
+      serExpr (serExpr (serExpr (acc ++ "(Z ") t ++ " ") v ++ " ") b ++ ")"
+  | .lit (.natVal n) => acc ++ s!"(N {n})"
+  | .lit (.strVal s) => acc ++ "(T " ++ s.quote ++ ")"
+  | .mdata _ e => serExpr acc e
+  | .proj s i e => serExpr (acc ++ "(P " ++ serName s ++ s!" {i} ") e ++ ")"
+
+def serSafety : DefinitionSafety → String
+  | .safe => "safe"
+  | .unsafe => "unsafe"
+  | .partial => "partial"
+
+def serBool (b : Bool) : String := if b then "1" else "0"
+
+def serNames (ns : List Name) : String := serParams ns
+
+/-- Exact rendering of one declaration: kind, name, universe parameters and
+every field that can change what the declaration means. -/
+def serConst (acc : String) (ci : ConstantInfo) : String :=
+  let head (k : String) := acc ++ "(" ++ k ++ " " ++ serName ci.name ++ " " ++
+    serParams ci.levelParams ++ " "
+  match ci with
+  | .defnInfo v =>
+      serExpr (serExpr (head "D" ++ serSafety v.safety ++ " ") v.type ++ " ") v.value ++ ")"
+  | .thmInfo v => serExpr (head "H") v.type ++ ")"
+  | .opaqueInfo v =>
+      serExpr (serExpr (head "O" ++ serBool v.isUnsafe ++ " ") v.type ++ " ") v.value ++ ")"
+  | .axiomInfo v => serExpr (head "X" ++ serBool v.isUnsafe ++ " ") v.type ++ ")"
+  | .quotInfo v =>
+      let k := match v.kind with
+        | .type => "type" | .ctor => "ctor" | .lift => "lift" | .ind => "ind"
+      serExpr (head "Q" ++ k ++ " ") v.type ++ ")"
+  | .inductInfo v =>
+      serExpr (head "I" ++ s!"{v.numParams} {v.numIndices} {v.numNested} " ++
+        serNames v.all ++ " " ++ serNames v.ctors ++ " " ++ serBool v.isRec ++
+        serBool v.isUnsafe ++ serBool v.isReflexive ++ " ") v.type ++ ")"
+  | .ctorInfo v =>
+      serExpr (head "K" ++ serName v.induct ++ s!" {v.cidx} {v.numParams} {v.numFields} " ++
+        serBool v.isUnsafe ++ " ") v.type ++ ")"
+  | .recInfo v =>
+      let acc := serExpr (head "R" ++ serNames v.all ++
+        s!" {v.numParams} {v.numIndices} {v.numMotives} {v.numMinors} " ++
+        serBool v.k ++ serBool v.isUnsafe ++ " ") v.type
+      v.rules.foldl (init := acc) (fun acc r =>
+        serExpr (acc ++ " (r " ++ serName r.ctor ++ s!" {r.nfields} ") r.rhs ++ ")") ++ ")"
+
+/-- Is `c` declared in ROOT or a ROOT.* module of the imported library? -/
+def isLibConst (env : Environment) (root c : Name) : Bool :=
+  match env.getModuleIdxFor? c with
+  | some idx => match env.header.moduleNames[idx.toNat]? with
+    | some m => root.isPrefixOf m
+    | none => false
+  | none => false
+
+/-- The names a declaration's *meaning* refers to (see the section header):
+a theorem's type only, a definition's type and value, an inductive's whole
+block, a constructor's or recursor's inductive. -/
+def meaningDeps (ci : ConstantInfo) : Array Name :=
+  match ci with
+  | .thmInfo v => v.type.getUsedConstants
+  | .defnInfo v => v.type.getUsedConstants ++ v.value.getUsedConstants
+  | .opaqueInfo v => v.type.getUsedConstants ++ v.value.getUsedConstants
+  | .inductInfo v => v.type.getUsedConstants ++ v.all.toArray ++ v.ctors.toArray
+  | .ctorInfo v => v.type.getUsedConstants.push v.induct
+  | .recInfo v =>
+      v.rules.foldl (init := v.type.getUsedConstants ++ v.all.toArray)
+        fun acc r => acc ++ r.rhs.getUsedConstants
+  | ci => ci.type.getUsedConstants
+
+/-- The statement closure of `thm`: `thm` itself, then every ROOT
+declaration reachable through `meaningDeps`, sorted by name. -/
+def statementClosure (env : Environment) (root thm : Name) : Array ConstantInfo := Id.run do
+  let some start := env.find? thm | return #[]
+  let mut seen : NameSet := ({} : NameSet).insert thm
+  let mut todo : Array Name := meaningDeps start
+  let mut found : Array ConstantInfo := #[]
+  while h : 0 < todo.size do
+    let c := todo[todo.size - 1]
+    todo := todo.pop
+    if seen.contains c || !isLibConst env root c then continue
+    seen := seen.insert c
+    let some ci := env.find? c | continue
+    found := found.push ci
+    todo := todo ++ meaningDeps ci
+  let sorted := found.qsort (fun a b => Name.lt a.name b.name)
+  return #[start] ++ sorted
+
+def kindWord : ConstantInfo → String
+  | .defnInfo _ => "def"
+  | .thmInfo _ => "theorem"
+  | .opaqueInfo _ => "opaque"
+  | .axiomInfo _ => "axiom"
+  | .quotInfo _ => "quot"
+  | .inductInfo _ => "inductive"
+  | .ctorInfo _ => "constructor"
+  | .recInfo _ => "recursor"
+
+/-- Pretty-print `e` for the reviewer, on one logical line where possible.
+The environment was imported with `loadExts := false`, so no notation,
+unexpander or delaborator from the model (or from `Init`'s extensions) is
+used: applications print in prefix form with their instances visible
+(`instLENat.le x y`), and names in full. Only Lean's built-in delaborator
+runs; no model code. -/
+def ppStmt (env : Environment) (e : Expr) : IO String := do
+  let opts : Options := ({} : Options) |>.setBool `pp.fullNames true
+  try
+    let f ← PrettyPrinter.ppExprLegacy env {} {} opts e
+    return f.pretty 100000
+  catch err =>
+    return s!"<pretty-printer error: {err}>"
+
+/-- The STMT and STMTPP report lines for `thm`. -/
+def statementLines (env : Environment) (root : Name) (label : String) (thm : Name) :
+    IO (Array String) := do
+  let closure := statementClosure env root thm
+  let ser := closure.foldl (init := "") serConst
+  let mut lines := #[s!"STMT\t{label}\t{ser}"]
+  for ci in closure do
+    -- Recursors are generated by the kernel from their inductive (and
+    -- leanchecker regenerates and compares them), so only the hash covers
+    -- them; their types are long and add nothing for the reviewer.
+    let ty ← if ci matches .recInfo _ then pure "" else ppStmt env ci.type
+    let val ← match ci with
+      | .defnInfo v => ppStmt env v.value
+      | _ => pure ""
+    lines := lines.push
+      s!"STMTPP\t{label}\t{kindWord ci}\t{escField (toString ci.name)}\t{escField ty}\t{escField val}"
+  return lines
+
 def main (args : List String) : IO UInt32 := do
   let out :: root :: names := args
     | IO.eprintln "usage: AxiomReport.lean OUT ROOT [NAME ...]"
@@ -108,6 +321,7 @@ def main (args : List String) : IO UInt32 := do
       let (axs, m) := (axiomsOf env name).run memo
       memo := m
       lines := lines.push s!"AXIOMS\t{n}\t{",".intercalate (axs.toList.map toString)}"
+      lines := lines ++ (← statementLines env rootName n name)
   -- Sweep every declaration owned by ROOT or a ROOT.* module.
   let mut swept := 0
   for (c, _) in env.constants.map₁.toList do

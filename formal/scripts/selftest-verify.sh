@@ -10,7 +10,9 @@
 #   3. keeps only the files the workflow uploads (artifact_files below must
 #      match the `upload-artifact` paths in .github/workflows/formal.yml);
 #   4. runs verify-artifacts.sh from this directory with the clean
-#      allow-list, as the verify job runs the base branch's copy, from a
+#      allow-list and the clean statement record (plus the fixture's
+#      record.txt, standing for blocks a reviewer accepted on the base
+#      branch), as the verify job runs the base branch's copy, from a
 #      directory that holds a canary `axioms-allowlist.txt`.
 #
 # It asserts that the clean tree passes, also with no `lean`, `lake` or `elan`
@@ -18,7 +20,11 @@
 # the reason in its expect.txt, or passes if it is marked `pass`; that the
 # canary allow-list is unchanged; that a `scan-only` fixture (a route that
 # leaves an honest-looking artifact, so only the base branch's scan or
-# lakefile check can stop it) passes the checks without the scan; and that
+# lakefile check can stop it) is rejected by the statement check (#1805)
+# without the scan, and passes only with neither the scan nor the statement
+# check; that a fixture with statement.txt is rejected by the statement
+# check for that reason; that the clean tree fails with no statement record;
+# and that
 # no model initializer ran inside the verifier (the fixtures' initializers
 # write to $BOTHO_INIT_CANARY). As a control it then imports the fixture's
 # library through the Lean frontend (`import Botho`), which does run
@@ -119,6 +125,52 @@ for path, name in rows:
 PY
 }
 
+# forge_theorems TREE SPEC: in TREE, replace each listed theorem (from
+# `theorem NAME` up to the next blank line) with `theorem NAME : True :=
+# trivial`. SPEC lines: FILE NAME, FILE relative to TREE.
+forge_theorems() {
+  python3 -I - "$1" "$2" <<'PY'
+import os
+import sys
+
+tree, spec = sys.argv[1:]
+with open(spec, encoding="utf-8") as fh:
+    rows = [r.split() for r in fh.read().split("\n") if r.strip()]
+for path, name in rows:
+    p = os.path.join(tree, path)
+    with open(p, encoding="utf-8") as fh:
+        s = fh.read()
+    i = s.find(f"theorem {name} ")
+    k = s.find("\n\n", i)
+    if i < 0 or k < 0:
+        sys.exit(f"forge: no theorem {name} followed by a blank line in {path}")
+    s = s[:i] + f"theorem {name} : True := trivial" + s[k:]
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(s)
+PY
+}
+
+# forge_replace TREE SPEC: SPEC lines FILE<TAB>OLD<TAB>NEW; OLD must occur
+# exactly once in FILE.
+forge_replace() {
+  python3 -I - "$1" "$2" <<'PY'
+import os
+import sys
+
+tree, spec = sys.argv[1:]
+with open(spec, encoding="utf-8") as fh:
+    rows = [r.split("\t") for r in fh.read().split("\n") if r.strip()]
+for path, old, new in rows:
+    p = os.path.join(tree, path)
+    with open(p, encoding="utf-8") as fh:
+        s = fh.read()
+    if s.count(old) != 1:
+        sys.exit(f"forge: {old!r} occurs {s.count(old)} times in {path}, wanted 1")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(s.replace(old, new))
+PY
+}
+
 run_case() {
   local name="$1" dir="$tmp/$1" fx=""
   echo "== verify self-test: $name"
@@ -165,6 +217,26 @@ run_case() {
   # build job's tree.
   cp -R "$dir/tree" "$dir/sources"
 
+  # A forgery that leaves no trace (#1805): the build compiles a different
+  # source than the one the verifier reads, as build-time code in a detached
+  # process could, with nothing else in the artifact to give it away.
+  # forged.txt: lines FILE NAME, theorem NAME in FILE becomes `: True`.
+  # forged-replace.txt: lines FILE<TAB>OLD<TAB>NEW, exactly one occurrence.
+  if [[ -n "$fx" && -f "$fx/forged.txt" ]]; then
+    forge_theorems "$dir/tree" "$fx/forged.txt" || return 1
+  fi
+  if [[ -n "$fx" && -f "$fx/forged-replace.txt" ]]; then
+    forge_replace "$dir/tree" "$fx/forged-replace.txt" || return 1
+  fi
+
+  # The base branch's statement record: the clean one, plus the fixture's
+  # record.txt (blocks a reviewer accepted, for example the claimed
+  # `one_eq_two : 1 = 2`).
+  cp "$root/statements.txt" "$dir/record.txt"
+  if [[ -n "$fx" && -f "$fx/record.txt" ]]; then
+    { printf '\n'; cat "$fx/record.txt"; } >>"$dir/record.txt"
+  fi
+
   # Untrusted build: the fixture's code runs here.
   if ! (cd "$dir/tree" && "$lake" build) >"$dir/build.log" 2>&1; then
     cat "$dir/build.log"
@@ -203,16 +275,37 @@ run_case() {
   # but with the fixture's own lakefile.toml as the base's, so the layout
   # check passes. Its output must match expect-same-layout.txt. This shows
   # what the fixture would get past without the layout check.
+  # Run no-record (clean tree only): as full, with no statement record. The
+  # verifier must fail closed.
+  # Run no-scan-no-statements (scan-only fixtures): the checks without the
+  # scan and without the statement check must PASS and match `scan-only`;
+  # the run no-scan (statement check on) must fail and match statement.txt.
+  # Run no-statements (fixtures with a `statement-only` regex): the full
+  # verifier without the statement check must PASS and match it. That shows
+  # the forgery leaves no other trace: the statement check alone stops it.
+  # statement.txt (a regex), where present, must also match the no-scan run:
+  # the statement check rejects the fixture for its own reason, whatever
+  # else catches it.
   local canary="$dir/init-canary" ok=1 expect="" pass=0 scan_only="" run rc log
+  local stmt_re=""
   local runs=(full no-scan)
   if [[ "$name" == clean ]]; then
     pass=1
-    runs=(full no-lean-path)
+    runs=(full no-lean-path no-record)
   elif [[ -f "$fx/pass" ]]; then
     pass=1
   else
     expect="$(cat "$fx/expect.txt")"
-    if [[ -f "$fx/scan-only" ]]; then scan_only="$(cat "$fx/scan-only")"; fi
+    if [[ -f "$fx/statement.txt" ]]; then stmt_re="$(cat "$fx/statement.txt")"; fi
+    if [[ -f "$fx/statement-only" ]]; then runs+=(no-statements); fi
+    if [[ -f "$fx/scan-only" ]]; then
+      scan_only="$(cat "$fx/scan-only")"
+      runs+=(no-scan-no-statements)
+      if [[ -z "$stmt_re" ]]; then
+        echo "  scan-only fixture $name has no statement.txt" >&2
+        return 1
+      fi
+    fi
   fi
   if [[ -n "$fx" && -f "$fx/expect-same-layout.txt" ]]; then runs+=(same-layout); fi
   for run in "${runs[@]}"; do
@@ -220,8 +313,12 @@ run_case() {
     rc=0
     printf 'propext\n' >"$dir/cwd/axioms-allowlist.txt"
     local extra=() base_lakefile="$root/lakefile.toml" env_cmd=(env)
+    local record="$dir/record.txt"
     case "$run" in
       no-scan) extra=(--no-scan) ;;
+      no-scan-no-statements) extra=(--no-scan --no-statements) ;;
+      no-statements) extra=(--no-statements) ;;
+      no-record) record="$dir/no-such-record.txt" ;;
       same-layout) extra=(--no-scan); base_lakefile="$dir/tree/lakefile.toml" ;;
       no-lean-path)
         local nolean
@@ -231,17 +328,35 @@ run_case() {
     (cd "$dir/cwd" && "${env_cmd[@]}" BOTHO_INIT_CANARY="$canary" \
       bash "$here/verify-artifacts.sh" --lib "$dir/artifact" --sources "$dir/sources" \
         --sysroot "$sysroot" --allowlist "$root/axioms-allowlist.txt" \
-        --base-lakefile "$base_lakefile" ${extra[@]+"${extra[@]}"}) >"$log" 2>&1 || rc=$?
-    if [[ "$run" == same-layout ]]; then
+        --base-lakefile "$base_lakefile" --statements "$record" \
+        ${extra[@]+"${extra[@]}"}) >"$log" 2>&1 || rc=$?
+    if [[ "$run" == no-record ]]; then
+      if [[ "$rc" == 0 ]] || ! grep -Eq -- 'FAIL: statement record: missing' "$log"; then
+        echo "  [$run] expected verify to fail closed without a statement record (rc=$rc)" >&2
+        ok=0
+      fi
+    elif [[ "$run" == same-layout ]]; then
       if ! grep -Eq -- "$(cat "$fx/expect-same-layout.txt")" "$log"; then
         echo "  [$run] output does not match expect-same-layout.txt:" \
           "$(cat "$fx/expect-same-layout.txt")" >&2
         ok=0
       fi
-    elif [[ -n "$scan_only" && "$run" == no-scan ]]; then
+    elif [[ "$run" == no-statements ]]; then
+      if [[ "$rc" != 0 ]] || ! grep -Eq -- "$(cat "$fx/statement-only")" "$log"; then
+        echo "  [$run] expected every check but the statement check to pass and" \
+          "match statement-only: $(cat "$fx/statement-only") (rc=$rc)" >&2
+        ok=0
+      fi
+    elif [[ "$run" == no-scan-no-statements ]]; then
       if [[ "$rc" != 0 ]] || ! grep -Eq -- "$scan_only" "$log"; then
-        echo "  [$run] expected the checks without the scan to pass and match" \
-          "scan-only: $scan_only (rc=$rc)" >&2
+        echo "  [$run] expected the checks without the scan and the statement" \
+          "check to pass and match scan-only: $scan_only (rc=$rc)" >&2
+        ok=0
+      fi
+    elif [[ -n "$scan_only" && "$run" == no-scan ]]; then
+      if [[ "$rc" == 0 ]] || ! grep -Eq -- "$stmt_re" "$log"; then
+        echo "  [$run] expected the statement check to reject the forged artifact:" \
+          "$stmt_re (rc=$rc)" >&2
         ok=0
       fi
     elif [[ -n "$scan_only" && "$run" == full ]] && { [[ "$rc" == 0 ]] ||
@@ -258,6 +373,9 @@ run_case() {
       ok=0
     elif [[ "$run" == no-scan ]] && ! grep -Eq -- "$expect" "$log"; then
       echo "  [$run] verify failed, but not for the expected reason: $expect" >&2
+      ok=0
+    elif [[ "$run" == no-scan && -n "$stmt_re" ]] && ! grep -Eq -- "$stmt_re" "$log"; then
+      echo "  [$run] verify failed, but the statement check did not report: $stmt_re" >&2
       ok=0
     fi
     if [[ "$(cat "$dir/cwd/axioms-allowlist.txt")" != propext ]]; then
@@ -303,14 +421,27 @@ run_case() {
   fi
   if [[ "$name" == clean ]]; then
     echo "  ok: clean tree passes, also with no lean, lake or elan on PATH"
+    echo "  ok: fails closed with no statement record ($(grep -E -m1 -- \
+      'FAIL: statement record' "$dir/verify-no-record.log"))"
   elif [[ "$pass" == 1 ]]; then
     echo "  ok: accepted by the full verifier and by the checks without the scan"
   elif [[ -n "$scan_only" ]]; then
     echo "  ok: rejected by the full verifier ($(grep -E -m1 -- "$expect" "$dir/verify-full.log"))"
-    echo "  ok: without the scan the forged artifact passes ($(grep -E -m1 -- "$scan_only" "$dir/verify-no-scan.log"))"
+    echo "  ok: without the scan the statement check rejects it ($(grep -E -m1 -- \
+      "$stmt_re" "$dir/verify-no-scan.log"))"
+    echo "  ok: without the scan and the statement check the forged artifact passes" \
+      "($(grep -E -m1 -- "$scan_only" "$dir/verify-no-scan-no-statements.log"))"
   else
     echo "  ok: rejected by the full verifier ($(grep -m1 '^FAIL' "$dir/verify-full.log"))"
     echo "  ok: rejected without the source scan ($(grep -E -m1 -- "$expect" "$dir/verify-no-scan.log"))"
+    if [[ -n "$stmt_re" ]]; then
+      echo "  ok: rejected by the statement check ($(grep -E -m1 -- "$stmt_re" \
+        "$dir/verify-no-scan.log"))"
+    fi
+    if [[ -f "$dir/verify-no-statements.log" ]]; then
+      echo "  ok: every other check, the scan included, accepts the forgery ($(grep -E -m1 -- \
+        "$(cat "$fx/statement-only")" "$dir/verify-no-statements.log"))"
+    fi
   fi
   if [[ -f "$dir/verify-same-layout.log" ]]; then
     echo "  ok: with its own lakefile as the base's: $(grep -E -m1 -- \

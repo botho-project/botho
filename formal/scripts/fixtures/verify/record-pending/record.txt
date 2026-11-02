@@ -1,0 +1,5 @@
+# A pending block next to the current one: the base record may hold several
+# blocks per theorem (how a statement changes in two steps). The current
+# block still matches, so the fixture passes.
+theorem Botho.satAdd_le_cap sha256:0000000000000000000000000000000000000000000000000000000000000000
+  : ∀ (cap a b : Nat), instLENat.le (Botho.satAdd cap a b) (instHAdd.hAdd cap 1)

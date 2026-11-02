@@ -12,7 +12,11 @@
 #      untrusted/ does not run, even though that stub would pass;
 #   2. with a trusted verifier that passes, the step passes and runs the
 #      trusted copy, with the base allow-list and base lakefile;
-#   3. with a trusted verifier that fails, the step fails.
+#   3. with a trusted verifier that fails, the step fails;
+#   4. the verifier is never called with a flag that switches a check off
+#      (--no-scan, --no-statements);
+#   5. the trusted (base) checkout includes formal/statements.txt, the
+#      statement record verify-artifacts.sh reads next to itself (#1805).
 #
 # Needs only bash, awk and coreutils: no Lean toolchain.
 set -euo pipefail
@@ -118,8 +122,24 @@ done
 
 run_case trusted-fail fail
 
+if grep -q -e '--no-' <<<"$calls"; then
+  echo "SELFTEST FAIL: trusted-pass: the verifier was called with a --no-* flag: $calls" >&2
+  fail=1
+fi
+
+# The sparse-checkout list of the base checkout step must name the record.
+trusted_paths="$(awk '
+  /- name: Check out gate scripts/ { found = 1; next }
+  found && /^ *- (name|uses):/ { exit }
+  found { print }
+' "$workflow")"
+if ! grep -Eq '^ +/formal/statements\.txt$' <<<"$trusted_paths"; then
+  echo "SELFTEST FAIL: the base checkout does not include /formal/statements.txt" >&2
+  fail=1
+fi
+
 if [[ "$fail" != 0 ]]; then
   echo "workflow self-test FAILED" >&2
   exit 1
 fi
-echo "workflow self-test passed (3 cases)"
+echo "workflow self-test passed (3 cases, flags, base record checkout)"
