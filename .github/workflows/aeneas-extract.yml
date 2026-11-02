@@ -1,0 +1,71 @@
+name: Aeneas extraction drift
+
+# Re-runs the Charon + Aeneas Rust -> Lean extraction of the cluster-tax
+# kernels checked in under formal-aeneas/generated/ and fails if the fresh
+# output differs from what is committed (#1712, epic #1704). A Rust edit to a
+# mirrored kernel therefore cannot silently invalidate Lean proofs written
+# against the extraction: the PR must regenerate (formal-aeneas/regen.sh) and
+# the diff of the generated Lean is reviewed alongside the Rust change.
+#
+# Deliberately separate from formal.yml: own job, own toolchain (the pinned
+# Aeneas release and the Rust nightly its charon-driver links against), no
+# shared cache, and it neither builds nor feeds the formal/ lake package or its
+# build -> verify trust chain. The generated Lean is not compiled here (that
+# needs Mathlib; see formal/aeneas/SPIKE.md, "Follow-ups").
+#
+# Not a required check, so a workflow-level paths filter is fine.
+
+on:
+  pull_request:
+    paths:
+      - "cluster-tax/**"
+      - "formal-aeneas/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/aeneas-extract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cluster-tax/**"
+      - "formal-aeneas/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/aeneas-extract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aeneas-extract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Read pinned toolchain
+        run: |
+          set -a; . formal-aeneas/toolchain.env; set +a
+          echo "CHARON_RUST_NIGHTLY=$CHARON_RUST_NIGHTLY" >>"$GITHUB_ENV"
+          echo "CHARON_RUST_COMPONENTS=$CHARON_RUST_COMPONENTS" >>"$GITHUB_ENV"
+      # Adds the nightly next to the runner's default toolchain; the
+      # workspace rust-toolchain file is not used by charon.
+      - name: Install charon's Rust nightly
+        run: |
+          rustup toolchain install "$CHARON_RUST_NIGHTLY" --profile minimal \
+            -c "$CHARON_RUST_COMPONENTS"
+      # The release tarball is sha256-checked by regen.sh on download.
+      - name: Cache Aeneas release
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/botho-aeneas
+          key: aeneas-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('formal-aeneas/toolchain.env') }}
+      - name: Check generated Lean is up to date
+        env:
+          CHARON_TARGET_DIR: ${{ runner.temp }}/charon-target
+        run: formal-aeneas/regen.sh --check
