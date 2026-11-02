@@ -1,17 +1,22 @@
 name: Aeneas extraction drift
 
-# Re-runs the Charon + Aeneas Rust -> Lean extraction of the cluster-tax
-# kernels checked in under formal-aeneas/generated/ and fails if the fresh
-# output differs from what is committed (#1712, epic #1704). A Rust edit to a
-# mirrored kernel therefore cannot silently invalidate Lean proofs written
-# against the extraction: the PR must regenerate (formal-aeneas/regen.sh) and
-# the diff of the generated Lean is reviewed alongside the Rust change.
+# Two jobs over formal-aeneas/ (#1712, #1821, epic #1704):
 #
-# Deliberately separate from formal.yml: own job, own toolchain (the pinned
-# Aeneas release and the Rust nightly its charon-driver links against), no
-# shared cache, and it neither builds nor feeds the formal/ lake package or its
-# build -> verify trust chain. The generated Lean is not compiled here (that
-# needs Mathlib; see formal/aeneas/SPIKE.md, "Follow-ups").
+# drift: re-runs the Charon + Aeneas Rust -> Lean extraction of the
+#   cluster-tax kernels checked in under formal-aeneas/generated/ and fails if
+#   the fresh output differs from what is committed. A Rust edit to a mirrored
+#   kernel therefore cannot silently invalidate Lean proofs written against
+#   the extraction: the PR must regenerate (formal-aeneas/regen.sh) and the
+#   diff of the generated Lean is reviewed alongside the Rust change.
+# typecheck: builds the formal-aeneas lake package (the generated Lean plus
+#   the proofs about it) against the pinned Aeneas Lean library and Mathlib,
+#   and runs its sorry / axiom gates and their self-test.
+#
+# Deliberately separate from formal.yml: own jobs, own toolchains (the pinned
+# Aeneas release, the Rust nightly its charon-driver links against, and an
+# elan install in this job), cache keys that formal.yml never reads, and they
+# neither build nor feed the formal/ lake package or its build -> verify trust
+# chain. formal.yml is unchanged.
 #
 # Not a required check, so a workflow-level paths filter is fine.
 
@@ -69,3 +74,88 @@ jobs:
         env:
           CHARON_TARGET_DIR: ${{ runner.temp }}/charon-target
         run: formal-aeneas/regen.sh --check
+
+  # Type-check the extraction and check the proofs (#1821).
+  #
+  # Runs on the runner host, not in a container. The Mathlib dependency
+  # unpacks to about 7.2 GB, and the free-up step below has to delete the
+  # runner's preinstalled toolchains to make room reliably; in a container
+  # job every step runs inside the container and cannot reach the host disk.
+  # Isolation is the same as for `drift`: its own job with a read-only token,
+  # no secrets, no artifacts consumed elsewhere, an elan toolchain installed
+  # into this job's $HOME from a sha256-pinned installer, and caches keyed
+  # only for this job.
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ELAN_VERSION: v4.2.4
+      # sha256 of elan-init.sh at ELAN_VERSION (the same pin as formal.yml).
+      ELAN_INIT_SHA256: a620ff1641616222c8d37c54845492004bb84d6877cdbc944dd65c1aa685bf53
+    defaults:
+      run:
+        working-directory: formal-aeneas
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        working-directory: .
+        run: |
+          df -h /
+          # Preinstalled SDKs this job never uses.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          df -h /
+      - name: Check disk space
+        working-directory: .
+        run: |
+          # Mathlib unpacked (~7.2 GB) + its .ltar cache (~0.5 GB) + git
+          # checkouts of the dependencies + the self-test copies.
+          need_gb=15
+          avail_gb=$(( $(df --output=avail -k "$GITHUB_WORKSPACE" | tail -1) / 1024 / 1024 ))
+          echo "available: ${avail_gb} GB, needed: ${need_gb} GB"
+          if (( avail_gb < need_gb )); then
+            echo "::error::only ${avail_gb} GB free, need ${need_gb} GB for Mathlib"
+            exit 1
+          fi
+      - name: Install elan
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/leanprover/elan/${ELAN_VERSION}/elan-init.sh" \
+            -o "$RUNNER_TEMP/elan-init.sh"
+          echo "${ELAN_INIT_SHA256}  $RUNNER_TEMP/elan-init.sh" | sha256sum -c -
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none --no-modify-path
+          echo "$HOME/.elan/bin" >>"$GITHUB_PATH"
+      - name: Install pinned Lean toolchain
+        run: |
+          tc="$(tr -d '[:space:]' <lean-toolchain)"
+          if [[ ! "$tc" =~ ^leanprover/lean4:v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::lean-toolchain must name an official Lean release, got $tc"
+            exit 1
+          fi
+          elan toolchain install "$tc"
+          lean --version
+      # Compressed Mathlib oleans (the .ltar files `lake exe cache get`
+      # downloads), keyed on the pinned toolchain and dependency revisions.
+      # On a hit, `cache get` only unpacks them. The unpacked tree is not
+      # cached: at ~7 GB it would cost more to save and restore than to
+      # unpack.
+      - name: Cache Mathlib oleans
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/mathlib
+          key: aeneas-mathlib-${{ runner.os }}-${{ hashFiles('formal-aeneas/toolchain.env', 'formal-aeneas/lean-toolchain', 'formal-aeneas/lake-manifest.json') }}
+      - name: Fetch dependencies and Mathlib oleans
+        run: |
+          time lake exe cache get
+          # The Aeneas library must use the same Lean as this package.
+          aeneas_tc="$(tr -d '[:space:]' <.lake/packages/aeneas/backends/lean/lean-toolchain)"
+          if [[ "$aeneas_tc" != "$(tr -d '[:space:]' <lean-toolchain)" ]]; then
+            echo "::error::Aeneas library wants $aeneas_tc, lean-toolchain pins $(cat lean-toolchain)"
+            exit 1
+          fi
+          df -h "$GITHUB_WORKSPACE"
+      - name: Build, sorry gate and axiom gate
+        run: time scripts/check-gates.sh
+      - name: Gate self-test
+        run: time scripts/selftest-gates.sh

@@ -216,7 +216,8 @@ Fixed costs on top of that:
   views, an explicit loop in `count_eligible`), each with DRT showing the old
   and new functions agree, plus adding each kernel to `regen.sh`.
 - #1821: type-check `formal-aeneas/generated/` in CI (Mathlib cache) and add
-  the first proofs over the extraction in a separate lake package.
+  the first proofs over the extraction in a separate lake package. Done:
+  see `formal-aeneas/README.md`.
 - Possible upstream contributions to AeneasVerif/aeneas, not filed from here:
   a `saturating_mul` model and an opaque `F64`. Either would remove the need
   for the corresponding rewrite in #1820.
