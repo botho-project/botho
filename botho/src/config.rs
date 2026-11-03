@@ -765,27 +765,44 @@ impl QuorumConfig {
     /// `3f + 1 <= n` with `f >= 1` requires `n >= 4`. Below this the quorum is
     /// degenerate (n-of-n or a bare crash-majority) and tolerates *zero*
     /// Byzantine faults regardless of the configured [`FaultModel`].
+    ///
+    /// This is a *necessary* bound, not a sufficient one: whether a given
+    /// `t`-of-`n` set tolerates a fault is [`byzantine_tolerance`]`(n, t) >= 1`
+    /// (e.g. the Crash-majority 3-of-5 tolerates zero, #1843). The status flag
+    /// uses that formula; this constant remains the operator-action
+    /// membership policy floor.
     pub const MIN_BFT_NODES: usize = 4;
 
     /// Whether a `Recommended`-mode cluster of `node_count` participating nodes
     /// (including self) is genuinely Byzantine-fault-tolerant.
     ///
-    /// In `Recommended` mode returns `true` only when `node_count >= 4` (the
-    /// hard 3f+1 >= 4 bound for f=1). In `Explicit` mode `node_count` is
-    /// ignored and the answer comes from the configured threshold and member
-    /// list via [`Self::explicit_byzantine_tolerance`] — an n-of-n quorum
-    /// tolerates zero faults no matter how many nodes it has (#1546).
-    /// `local_peer_id` (base58) lets explicit mode drop self from `members`,
-    /// exactly as the quorum gate does; it is unused in `Recommended` mode.
+    /// In `Recommended` mode returns
+    /// `byzantine_tolerance(n, effective_threshold(n - 1)) >= 1` with
+    /// `n = node_count`: the auto-derived `t`-of-`n` set must tolerate at
+    /// least one Byzantine fault (#1843). Under `Bft` that holds for every
+    /// `n >= 4`. Under the default `Crash` majority (`t = n/2 + 1`) it holds
+    /// only for even `n >= 4`: at odd `n` the majority gives `2t - n = 1`, so
+    /// two quorums may share only one member and `f = 0` (3-of-5, 4-of-7,
+    /// 5-of-9 all tolerate zero Byzantine faults).
     ///
-    /// Below 4 nodes the auto-derived quorum is degenerate — n=2 -> 2-of-2,
-    /// n=3 -> 3-of-3 under `Bft`, or a bare crash-majority under `Crash` — and
-    /// tolerates no Byzantine (arbitrarily malicious) member. See
-    /// [`Self::is_degenerate_quorum`].
+    /// In `Explicit` mode `node_count` is ignored and the answer comes from
+    /// the configured threshold and member list via
+    /// [`Self::explicit_byzantine_tolerance`] — an n-of-n quorum tolerates
+    /// zero faults no matter how many nodes it has (#1546). `local_peer_id`
+    /// (base58) lets explicit mode drop self from `members`, exactly as the
+    /// quorum gate does; it is unused in `Recommended` mode.
+    ///
+    /// Below 4 nodes the auto-derived quorum is always degenerate — n=2 ->
+    /// 2-of-2, n=3 -> 3-of-3 under `Bft`, or a bare crash-majority under
+    /// `Crash`. See [`Self::is_degenerate_quorum`].
     pub fn is_bft_fault_tolerant(&self, node_count: usize, local_peer_id: &str) -> bool {
         match self.mode {
             QuorumMode::Explicit => self.explicit_byzantine_tolerance(local_peer_id) >= 1,
-            QuorumMode::Recommended => node_count >= Self::MIN_BFT_NODES,
+            QuorumMode::Recommended => {
+                node_count >= 1
+                    && byzantine_tolerance(node_count, self.effective_threshold(node_count - 1))
+                        >= 1
+            }
         }
     }
 
@@ -828,8 +845,9 @@ impl QuorumConfig {
     /// Whether the quorum is *degenerate*: it tolerates zero Byzantine faults.
     ///
     /// This is the inverse of [`Self::is_bft_fault_tolerant`]: in
-    /// `Recommended` mode it is `true` below [`Self::MIN_BFT_NODES`]
-    /// participating nodes; in `Explicit` mode it is `true` when
+    /// `Recommended` mode it is `true` when the auto-derived `t`-of-`n` set
+    /// has zero [`byzantine_tolerance`] (every `n <= 3`, and odd `n` under the
+    /// `Crash` majority, #1843); in `Explicit` mode it is `true` when
     /// [`Self::explicit_byzantine_tolerance`] is zero (e.g. n-of-n).
     pub fn is_degenerate_quorum(&self, node_count: usize, local_peer_id: &str) -> bool {
         !self.is_bft_fault_tolerant(node_count, local_peer_id)
@@ -838,10 +856,12 @@ impl QuorumConfig {
     /// Build the loud operator warning for a degenerate quorum, or `None` when
     /// the quorum tolerates at least one Byzantine fault.
     ///
-    /// The wording is deliberately honest (#509 research, #510 Thread A): below
-    /// 4 nodes the cluster is **not Byzantine-fault-tolerant at all** — it
-    /// tolerates *zero* node failures (a degenerate n-of-n quorum), not merely
-    /// "degraded". `3f + 1 >= 4` is a hard bound for f=1.
+    /// The wording is deliberately honest (#509 research, #510 Thread A): a
+    /// degenerate cluster is **not Byzantine-fault-tolerant at all** — it
+    /// tolerates *zero* Byzantine faults, not merely "degraded". The message
+    /// names the real `t`-of-`n` set (#1843): below 4 nodes `3f + 1 >= 4` is
+    /// the hard bound; at odd `n >= 5` under the `Crash` majority the fix is
+    /// an even member count or `fault_model = "bft"`.
     pub fn degenerate_quorum_warning(
         &self,
         node_count: usize,
@@ -859,11 +879,18 @@ impl QuorumConfig {
                  f=1 needs n - t >= 1 and 2t - n >= 2 (e.g. 4-of-5)."
             ));
         }
+        let n = node_count;
+        let t = self.effective_threshold(n.saturating_sub(1));
+        let remedy = if n < Self::MIN_BFT_NODES {
+            "Add a 4th independent operator for f=1 BFT (3f+1>=4)."
+        } else {
+            "Use an even member count or fault_model = \"bft\" for f=1 BFT \
+             (needs 2t - n >= 2)."
+        };
         Some(format!(
-            "WARNING: {node_count}-node cluster in recommended mode is NOT \
-             Byzantine-fault-tolerant — it tolerates ZERO node failures \
-             (degenerate {node_count}-of-{node_count} quorum, crash-stop only, \
-             not BFT). Add a 4th independent operator for f=1 BFT (3f+1>=4)."
+            "WARNING: {n}-node cluster in recommended mode is NOT \
+             Byzantine-fault-tolerant — its {t}-of-{n} quorum tolerates ZERO \
+             Byzantine faults (f=0; crash-stop only, not BFT). {remedy}"
         ))
     }
 
@@ -1691,30 +1718,99 @@ mod tests {
 
     #[test]
     fn test_quorum_degenerate_below_four_recommended() {
-        // Recommended mode (default): below 4 participating nodes the quorum is
-        // degenerate (zero Byzantine-fault tolerance); >= 4 is genuinely BFT.
-        let quorum = QuorumConfig::default();
-        assert_eq!(quorum.mode, QuorumMode::Recommended);
-
-        for n in 1..=3 {
-            assert!(
-                quorum.is_degenerate_quorum(n, ""),
-                "n={n} must be flagged degenerate in recommended mode"
+        // #1843: the flag follows the f of the auto-derived t-of-n set. Under
+        // the default Crash majority (t = n/2 + 1) odd n has 2t - n = 1, so it
+        // tolerates zero Byzantine faults; only even n >= 4 is BFT.
+        let crash = QuorumConfig::default();
+        assert_eq!(crash.mode, QuorumMode::Recommended);
+        assert_eq!(crash.fault_model, FaultModel::Crash);
+        let crash_table = [
+            (1, false),
+            (2, false),
+            (3, false),
+            (4, true),
+            (5, false),
+            (6, true),
+            (7, false),
+            (8, true),
+        ];
+        for (n, bft) in crash_table {
+            assert_eq!(
+                crash.is_bft_fault_tolerant(n, ""),
+                bft,
+                "Crash n={n}: expected is_bft_fault_tolerant={bft}"
             );
-            assert!(
-                !quorum.is_bft_fault_tolerant(n, ""),
-                "n={n} must NOT be BFT in recommended mode"
+            assert_eq!(
+                crash.is_degenerate_quorum(n, ""),
+                !crash.is_bft_fault_tolerant(n, ""),
+                "Crash n={n}: degenerate must be the inverse"
             );
         }
-        for n in 4..=8 {
-            assert!(
-                !quorum.is_degenerate_quorum(n, ""),
-                "n={n} must NOT be flagged degenerate (>= 4 is BFT)"
+
+        // Under Bft (t = n - floor((n-1)/3)) every n >= 4 tolerates f >= 1.
+        let bft = QuorumConfig {
+            fault_model: FaultModel::Bft,
+            ..QuorumConfig::default()
+        };
+        for n in 1..=12 {
+            assert_eq!(
+                bft.is_bft_fault_tolerant(n, ""),
+                n >= 4,
+                "Bft n={n}: expected is_bft_fault_tolerant={}",
+                n >= 4
             );
-            assert!(
-                quorum.is_bft_fault_tolerant(n, ""),
-                "n={n} must be BFT in recommended mode (3f+1 >= 4)"
+            assert_eq!(
+                bft.is_degenerate_quorum(n, ""),
+                !bft.is_bft_fault_tolerant(n, ""),
+                "Bft n={n}: degenerate must be the inverse"
             );
+        }
+    }
+
+    /// #1843: in Recommended mode the flag is exactly "the auto-derived
+    /// t-of-n set has f >= 1", for both fault models — the same formula
+    /// behind `quorumByzantineTolerance`.
+    #[test]
+    fn recommended_flag_matches_byzantine_tolerance() {
+        for fault_model in [FaultModel::Crash, FaultModel::Bft] {
+            let cfg = QuorumConfig {
+                fault_model,
+                ..QuorumConfig::default()
+            };
+            for n in 1..=16usize {
+                let t = cfg.effective_threshold(n - 1);
+                assert_eq!(
+                    cfg.is_bft_fault_tolerant(n, ""),
+                    byzantine_tolerance(n, t) >= 1,
+                    "{fault_model:?} n={n} t={t}"
+                );
+                assert_eq!(
+                    cfg.is_degenerate_quorum(n, ""),
+                    byzantine_tolerance(n, t) == 0,
+                    "{fault_model:?} n={n} t={t}"
+                );
+            }
+        }
+    }
+
+    /// #1843: the flag equals `byzantine_tolerance(n, t) >= 1` over every
+    /// explicit t-of-n with n <= 13 (members excluding self = n - 1).
+    #[test]
+    fn explicit_flag_matches_byzantine_tolerance_all_thresholds() {
+        for n in 1..=13usize {
+            for t in 1..=n {
+                let cfg = explicit(t as u32, n - 1);
+                assert_eq!(
+                    cfg.is_bft_fault_tolerant(0, ""),
+                    byzantine_tolerance(n, t) >= 1,
+                    "explicit {t}-of-{n}"
+                );
+                assert_eq!(
+                    cfg.is_degenerate_quorum(0, ""),
+                    !cfg.is_bft_fault_tolerant(0, ""),
+                    "explicit {t}-of-{n}"
+                );
+            }
         }
     }
 
@@ -1722,8 +1818,8 @@ mod tests {
     fn test_quorum_degenerate_warning_fires_below_four() {
         let quorum = QuorumConfig::default();
 
-        // n < 4 -> loud, honest warning naming the n-of-n quorum and BFT bound.
-        for n in 2..=3 {
+        // n < 4 -> loud, honest warning naming the real t-of-n quorum.
+        for (n, t) in [(2, 2), (3, 2)] {
             let warning = quorum
                 .degenerate_quorum_warning(n, "")
                 .unwrap_or_else(|| panic!("expected warning at n={n}"));
@@ -1737,18 +1833,50 @@ mod tests {
                 "warning must state zero fault tolerance: {warning}"
             );
             assert!(
-                warning.contains(&format!("{n}-of-{n}")),
-                "warning must name the degenerate n-of-n quorum: {warning}"
+                warning.contains(&format!("{t}-of-{n}")),
+                "warning must name the real {t}-of-{n} quorum: {warning}"
+            );
+            assert!(
+                warning.contains("4th independent operator"),
+                "below 4 the remedy is a 4th operator: {warning}"
             );
         }
 
-        // n >= 4 -> no warning (genuine BFT).
-        for n in 4..=6 {
+        // Even n >= 4 under Crash -> no warning (genuine BFT).
+        for n in [4, 6, 8] {
             assert!(
                 quorum.degenerate_quorum_warning(n, "").is_none(),
                 "no warning expected at n={n}"
             );
         }
+
+        // #1843: odd n >= 5 under Crash is a majority with f = 0 -> warning
+        // naming the real t-of-n and the even-n / bft remedy.
+        for (n, t) in [(5, 3), (7, 4), (9, 5)] {
+            let warning = quorum
+                .degenerate_quorum_warning(n, "")
+                .unwrap_or_else(|| panic!("expected warning at Crash n={n}"));
+            assert!(
+                warning.contains(&format!("{t}-of-{n}")),
+                "warning must name {t}-of-{n}: {warning}"
+            );
+            assert!(warning.contains("ZERO"), "{warning}");
+            assert!(
+                warning.contains("even member count") && warning.contains("bft"),
+                "odd-n remedy must be even n or fault_model=bft: {warning}"
+            );
+            assert!(
+                !warning.contains("4th independent operator"),
+                "odd n >= 5 already has 4+ operators: {warning}"
+            );
+        }
+
+        // n = 5 under Bft is 4-of-5 (f = 1) -> no warning.
+        let bft = QuorumConfig {
+            fault_model: FaultModel::Bft,
+            ..QuorumConfig::default()
+        };
+        assert!(bft.degenerate_quorum_warning(5, "").is_none());
     }
 
     fn random_peer_id() -> String {

@@ -874,26 +874,31 @@ pub struct GateVerdict {
     pub auto_members: usize,
     pub suppressed_peers: usize,
     pub max_auto_members: u32,
-    /// Fault-tolerant posture: membership >= 4 (BFT floor). Convenience for the
-    /// dashboard; derived from the counts, not a new gate concept.
+    /// Fault-tolerant posture: the INSTALLED t-of-n set tolerates f >= 1
+    /// Byzantine fault, `byzantine_tolerance(quorum_size, quorum_threshold) >=
+    /// 1` — the same formula as `node_getStatus` `quorumByzantineTolerance`
+    /// (#1843; membership alone overclaims, e.g. 3-of-5 has f = 0).
     pub fault_tolerant: bool,
-    /// Degenerate posture: membership < 4. The complement of `fault_tolerant`.
+    /// Degenerate posture: the installed set tolerates zero Byzantine faults.
+    /// The complement of `fault_tolerant`.
     pub degenerate: bool,
 }
 
 impl GateVerdict {
-    /// Build a verdict from a gate snapshot (`curated_members` + `auto_members`
-    /// + self = membership).
+    /// Build a verdict from a gate snapshot. The posture flags read the
+    /// installed `(quorum_size, quorum_threshold)` (#1843).
     pub fn from_snapshot(snap: &crate::consensus::QuorumGateSnapshot) -> Self {
-        let membership = 1 + snap.curated_members + snap.auto_members;
+        let fault_tolerant =
+            crate::config::byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize)
+                >= 1;
         Self {
             intersection_refused: snap.intersection_refused,
             curated_members: snap.curated_members,
             auto_members: snap.auto_members,
             suppressed_peers: snap.suppressed_peers,
             max_auto_members: snap.max_auto_members,
-            fault_tolerant: membership >= MIN_BFT_NODES,
-            degenerate: membership < MIN_BFT_NODES,
+            fault_tolerant,
+            degenerate: !fault_tolerant,
         }
     }
 }
