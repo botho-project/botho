@@ -21,6 +21,35 @@ import Botho
 #print axioms Botho.satAdd_le_cap
 #print axioms Botho.satAdd_eq_add
 
+-- Botho.Lottery.SybilExpectation (#1851; proven ideal model/counting).
+-- The SHA bridge explicitly assumes IID uniform u128 words; see lottery.md.
+#print axioms Botho.Lottery.pickWinners_eq_pickWinnersF
+#print axioms Botho.Lottery.Ideal.payoutMass_eq
+#print axioms Botho.Lottery.Ideal.expected_share
+#print axioms Botho.Lottery.Ideal.paths_length
+#print axioms Botho.Lottery.Ideal.payoutMass_paths
+#print axioms Botho.Lottery.Ideal.selectAt_uniform_index
+#print axioms Botho.Lottery.Ideal.uniform_path_loop
+#print axioms Botho.Lottery.Ideal.draw_path
+#print axioms Botho.Lottery.Ideal.exact_share
+#print axioms Botho.Lottery.Ideal.base_fee_bound
+#print axioms Botho.Lottery.drawEligible_eq_drawEligibleF
+#print axioms Botho.Lottery.drawEligibleF_uniform
+#print axioms Botho.Lottery.Modulo.residue_count
+#print axioms Botho.Lottery.Modulo.residue_total
+#print axioms Botho.Lottery.Modulo.pathWeight_total
+#print axioms Botho.Lottery.Modulo.expectation_slack
+#print axioms Botho.Lottery.Modulo.u128_iid_bridge
+#print axioms Botho.Lottery.lotteryCandidates_complete
+#print axioms Botho.Lottery.Ideal.observation_share
+#print axioms Botho.Lottery.Ideal.r3_from_model
+#print axioms Botho.Lottery.Ideal.splitUnprofitable_model_iff
+#print axioms Botho.Lottery.Ideal.marginal_common_budget
+#print axioms Botho.Lottery.Ideal.marginal_cap_only_refuted
+#print axioms Botho.Lottery.Ideal.ce2_expected_profit
+#print axioms Botho.Lottery.ideal_draw_regressions
+#print axioms Botho.Lottery.modulo_bias_regression
+
 -- Botho.Supply.Accounting (#1839; scalar model, explicit ledger premises)
 #print axioms Botho.Supply.fee_quotient_le
 #print axioms Botho.Supply.splitFees_exact

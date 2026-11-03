@@ -17,4 +17,5 @@ import Botho.Lottery.Drawing
 import Botho.Lottery.SeedIndependence
 import Botho.Lottery.Determinism
 import Botho.Quorum.Fbas
+import Botho.Lottery.SybilExpectation
 import Botho.Lottery.Sybil
