@@ -1,0 +1,72 @@
+{
+  "issue": 1711,
+  "date": "2026-11-03",
+  "status": "proven (model) + tested; partial #1711",
+  "rust_source_commit": "150e1d37f34ebef4f6abc779e2f7df6a984abcca",
+  "toolchains": {
+    "lean": "leanprover/lean4:v4.35.0",
+    "rust": "rustc 1.98.0-nightly (cb46fbb8c 2026-06-08)"
+  },
+  "command": "botho-formal-drt --cases 100000 --seed 1711 --legs demurrage_charge,default_cluster_factor,ring_centroid_factor --no-write-regressions --json /tmp/botho-1711-drt.json",
+  "sha256": {
+    "formal/Botho/Demurrage/Counterexamples.lean": "860b4944ee30ed77e2e7e432bbaf70d566f1fb0c90ed6618bed2345a81a50e55",
+    "formal-drt/src/demurrage.rs": "ea9941d25214e480946bf56b9a628b04f9d9695bdd0cb33cd4969211239bf48f",
+    "formal-drt/lean/Drt/Codec.lean": "e7e0243f7aae1c138bd88a468f1a33afd625e74a9deaddf67c423bd4b0282d3c",
+    "cluster-tax/src/demurrage.rs": "11697079c69c8f648654f7da6df02271a0dac2cd41ca8b5ead35c2395cae182b",
+    "cluster-tax/src/fee_curve.rs": "d8b649fac7999cb175a23e13b10f167c742b00584452e844ee25452d492591b8",
+    "formal-drt/regressions/demurrage_charge.jsonl": "83d55c531ea3b5f02c7c41fac15ca13720a6583d194cf9742c81b0b2e67d7daf",
+    "formal-drt/regressions/default_cluster_factor.jsonl": "76e37ff9e10d60b2a6e79f39311a33e48977aa634a86e12f225ed41448407925",
+    "formal-drt/regressions/ring_centroid_factor.jsonl": "92fdca67969703501a6ea79b3ed31d75f741f10fd439d74794be818bd6697df0"
+  },
+  "report": {
+    "cases_per_leg": 100000,
+    "legs": [
+      {
+        "cases": 100000,
+        "classes": {
+          "clamped to u64 max": 13566,
+          "positive": 20856,
+          "positive inputs, six-block dead zone": 4509,
+          "zero": 61069
+        },
+        "leg": "demurrage_charge",
+        "mismatches": [],
+        "replayed": 3,
+        "rust": "bth_cluster_tax::demurrage_charge",
+        "seconds": 1.429603334
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "interior": 43346,
+          "maximum": 52087,
+          "minimum": 4567
+        },
+        "leg": "default_cluster_factor",
+        "mismatches": [],
+        "replayed": 6,
+        "rust": "bth_cluster_tax::ClusterFactorCurve::default_params().factor",
+        "seconds": 0.857610958
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "empty": 1170,
+          "weighted numerator exact": 24210,
+          "weighted numerator saturates": 74620
+        },
+        "leg": "ring_centroid_factor",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "bth_cluster_tax::ring_centroid_implied_factor",
+        "seconds": 13.339752417
+      }
+    ],
+    "seed": "1711"
+  },
+  "limits": [
+    "Handwritten model correspondence is tested, not proved.",
+    "No accepted-block attack or reachable ledger history constructed.",
+    "Default curve only. Other #1711 kernels and fuzz-corpus replay remain outstanding."
+  ]
+}

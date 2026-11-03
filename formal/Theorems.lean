@@ -15,6 +15,14 @@ compiled library (`scripts/AxiomReport.lean`).
 -/
 import Botho
 
+-- Botho.Demurrage.Counterexamples (#1711; current arithmetic, not a fix)
+#print axioms Botho.Demurrage.six_block_dead_zone
+#print axioms Botho.Demurrage.churn_counterexample
+#print axioms Botho.Demurrage.charge_exceeds_value
+#print axioms Botho.Demurrage.homogeneous_ring_scale_counterexample
+#print axioms Botho.Demurrage.homogeneous_centroid_counterexample
+#print axioms Botho.Demurrage.saturation_lowers_charge
+
 -- Botho.Basic (scaffold toy; status: proven)
 #print axioms Botho.transfer_conserves
 #print axioms Botho.transfer_isSome_iff

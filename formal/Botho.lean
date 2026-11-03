@@ -18,4 +18,5 @@ import Botho.Lottery.Conservation
 import Botho.Lottery.SeedIndependence
 import Botho.Lottery.Determinism
 import Botho.Quorum.Fbas
+import Botho.Demurrage.Counterexamples
 import Botho.Lottery.Sybil
