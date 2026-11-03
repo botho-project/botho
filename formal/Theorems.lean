@@ -56,3 +56,22 @@ import Botho
 #print axioms Botho.Quorum.prod_4of5_rotate_two_intersects
 #print axioms Botho.Quorum.prod_4of5_rotate_two_not_despite_one
 #print axioms Botho.Quorum.reroster_mixed_fork
+
+-- Lottery seed independence and canonical ordering (#1850; proven (model)).
+-- LMDB ordering and the Rust tie remain trusted/tested; see lottery.md.
+#print axioms Botho.Lottery.seed_body_independent
+#print axioms Botho.Lottery.seed_reads_tip_only
+#print axioms Botho.Lottery.seed_factors
+#print axioms Botho.Lottery.seed_eq_of_pow_fields
+#print axioms Botho.Lottery.candidates_of_postState
+#print axioms Botho.Lottery.drawLotteryWinnersSeeded_ids
+#print axioms Botho.Lottery.winners_ids_independent_of_amounts
+#print axioms Botho.Lottery.bytesLt_irrefl
+#print axioms Botho.Lottery.bytesLt_trans
+#print axioms Botho.Lottery.bytesLt_trichotomy
+#print axioms Botho.Lottery.sortById_sorted
+#print axioms Botho.Lottery.sortById_of_sorted
+#print axioms Botho.Lottery.sortById_perm
+#print axioms Botho.Lottery.drawing_perm_invariant
+#print axioms Botho.Lottery.draw_order_dependent
+#print axioms Botho.Lottery.scan_cap_order_dependent
