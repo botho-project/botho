@@ -181,6 +181,10 @@ How the model is written:
 
 The theorems about this model are #1708.
 
+The separate [demurrage counterexample model](DEMURRAGE.md) covers the
+charge kernel and default ring factor (#1711), including refutations of
+the positive-charge threshold, churn identity and conservative-overflow claim.
+
 ## Differential random testing (DRT)
 
 `formal-drt/` (#1706, #1707) checks that the Lean model and the Rust code

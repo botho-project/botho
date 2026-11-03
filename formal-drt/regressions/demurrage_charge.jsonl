@@ -1,0 +1,3 @@
+{"input": {"value": 1000000000000000000, "factor": 6000, "elapsed": 6, "rate": 200, "year": 6307200}, "note": "Quantization counterexample: elapsed=6"}
+{"input": {"value": 1000000000000000000, "factor": 6000, "elapsed": 12, "rate": 200, "year": 6307200}, "note": "Quantization counterexample: elapsed=12"}
+{"input": {"value": 1000000, "factor": 6000, "elapsed": 321667200, "rate": 200, "year": 6307200}, "note": "Charge exceeds principal after 51 years"}
