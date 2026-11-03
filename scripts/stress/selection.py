@@ -4,6 +4,7 @@ from bisect import bisect_left, bisect_right
 from itertools import combinations
 
 from lottery import decoy_row
+from signer_history import AGE_SIMILARITY_SPREAD_BPS, MIN_DECOY_AGE
 
 ZERO_KEY = "0" * 64
 
@@ -15,6 +16,41 @@ def is_v2_award(canonical, output):
     """Whether a canonical inventory output is a V2 lottery payout (#1643)."""
     entry = canonical.get(bytes(output["utxo"]["target_key"]).hex())
     return entry is not None and entry[1].get("lotteryContext") is not None
+
+
+def thinnest_window_size(created_heights, height, age, removed=()):
+    """Fewest decoys in any window the signer can draw for ``age`` (#1692).
+
+    The signer draws ONE random-offset window ``[max(10, s), s + W]`` (ages,
+    ``s = age - o``, ``o`` uniform in ``0..=W``, ``W = 2*floor(age*5%)``) and
+    refuses below nineteen decoys, so the precheck is the minimum over every
+    window, not the envelope. ``created_heights`` is the sorted creation
+    height of every eligible decoy key; ``removed`` lists creation heights of
+    keys that may not join this ring (the real input and other selected
+    inputs), each subtracted from the windows that contain it. Counted with
+    bisection over the shared sorted list, never materialized (#1633). The
+    count only falls just after the window start passes a decoy age, so the
+    minimum is at ``s = age - W`` or ``s = a + 1`` for a decoy age ``a``.
+    """
+    width = 2 * (age * AGE_SIMILARITY_SPREAD_BPS // 10_000)
+
+    def count(start):
+        # Ages max(10, start)..start+W, as creation heights.
+        lo, hi = height - (start + width), height - max(start, MIN_DECOY_AGE)
+        return (bisect_right(created_heights, hi) - bisect_left(created_heights, lo)
+                - sum(1 for r in removed if lo <= r <= hi))
+
+    best = count(age - width)
+    # Decoy ages age-W..age-1 are creation heights height-age+1..height-age+W.
+    first = bisect_left(created_heights, height - age + 1)
+    last = bisect_right(created_heights, height - age + width)
+    previous = None
+    for i in range(first, last):
+        created = created_heights[i]
+        if created != previous:
+            previous = created
+            best = min(best, count(height - created + 1))
+    return best
 
 
 def choose(controller, wallet, height, amount=0, count=None, headroom=0,
@@ -58,24 +94,39 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
             and window[0] <= entry[0] <= window[1]
         )
 
+    def pool_heights(keys):
+        # Creation heights of the given keys that are eligible decoys.
+        return [canonical[key][0] for key in keys if in_pool(key, (0, height))]
+
     pools, eligible = {}, []
     for output in mature:
         age = height - output["utxo"]["created_at"]
-        low, high = max(10, age - age // 10), age + age // 10
         real = bytes(output["utxo"]["target_key"]).hex()
-        # low <= height - created <= high, as creation heights.
-        window = (height - high, height - low)
-        size = bisect_right(created_heights, window[1]) - bisect_left(
-            created_heights, window[0]
-        )
-        size -= in_pool(real, window)
+        # The thinnest random-offset window the signer can draw (#1692), not
+        # the envelope: an envelope count admits inputs the signer refuses.
+        size = thinnest_window_size(created_heights, height, age, pool_heights([real]))
         if size >= 19 + headroom:
-            pools[output["id"]] = (window, real, size)
+            pools[output["id"]] = (age, real, size)
             eligible.append(output)
 
-    def pool_without(output, excluded):
-        window, real, size = pools[output["id"]]
-        return size - sum(1 for key in excluded if key != real and in_pool(key, window))
+    recounts = {}
+
+    def pool_ok(output, excluded):
+        """Whether every window still holds 19 + headroom without ``excluded``."""
+        age, real, size = pools[output["id"]]
+        width = 2 * (age * AGE_SIMILARITY_SPREAD_BPS // 10_000)
+        # Envelope ages max(10, age-W)..age+W, as creation heights.
+        envelope = (height - age - width, height - max(age - width, MIN_DECOY_AGE))
+        inside = frozenset(key for key in excluded
+                           if key != real and in_pool(key, envelope))
+        # Removing k keys lowers any window by at most k: exact when it holds.
+        if size - len(inside) >= 19 + headroom:
+            return True
+        cache = (output["id"], inside)
+        if cache not in recounts:
+            recounts[cache] = thinnest_window_size(
+                created_heights, height, age, pool_heights({real} | inside))
+        return recounts[cache] >= 19 + headroom
     eligible.sort(key=lambda o: (-o["utxo"]["amount"], o["id"]))
 
     def add_award(selected, excluded):
@@ -99,10 +150,7 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
         )
         for award in awards[: MAX_PAYMENT_INPUTS - 1]:
             widened = excluded | {bytes(award["utxo"]["target_key"]).hex()}
-            if all(
-                pool_without(o, widened) >= 19 + headroom
-                for o in selected + [award]
-            ):
+            if all(pool_ok(o, widened) for o in selected + [award]):
                 selected.append(award)
                 return award
         return None
@@ -128,7 +176,7 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
             if sum(o["utxo"]["amount"] for o in selected) < amount + fee:
                 continue
             excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
-            if all(pool_without(o, excluded) >= 19 + headroom for o in selected):
+            if all(pool_ok(o, excluded) for o in selected):
                 selected = list(selected)
                 extra = {**evidence, "combinations": attempted}
                 if award_input and count is None:

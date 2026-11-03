@@ -1100,16 +1100,17 @@ mod tests {
         }
     }
 
-    /// Issue #596: quantify the ring-anonymity cost of the ±10% age-similarity
-    /// decoy band that the wallet enforces so honest spenders stay within the
-    /// #314 demurrage over-charge bound under the `ring_elapsed_quantile@max`
-    /// kernel (#577-B1 / PR #595).
+    /// Issue #596: quantify the ring-anonymity cost of the ±5% age-similarity
+    /// decoy band (±10% before #1692) that the wallet enforces so honest
+    /// spenders stay within the #314 demurrage over-charge bound under the
+    /// `ring_elapsed_quantile@max` kernel (#577-B1 / PR #595).
     ///
-    /// The wallet policy is a symmetric ±10% band; here we approximate it with
-    /// `max_age_ratio = 1.10` (decoy age within `[real/1.1, real*1.1]`) and
-    /// isolate the AGE constraint by leaving the factor constraint open. We
-    /// report the bits-of-privacy reduction versus unconstrained selection so
-    /// the tradeoff is documented and quantified rather than silent.
+    /// The wallet policy is a ±5% random-offset window; here we approximate it
+    /// with `max_age_ratio = 1.05` (decoy age within `[real/1.05, real*1.05]`)
+    /// and isolate the AGE constraint by leaving the factor constraint
+    /// open. We report the bits-of-privacy reduction versus unconstrained
+    /// selection so the tradeoff is documented and quantified rather than
+    /// silent.
     #[test]
     fn test_age_similarity_band_privacy_cost() {
         let pool = create_test_pool();
@@ -1117,7 +1118,7 @@ mod tests {
 
         let config = ConstraintConfig {
             ring_size: 11,
-            max_age_ratio: 1.10,
+            max_age_ratio: 1.05,
             max_factor_ratio: 1000.0, // effectively no factor constraint
         };
 
@@ -1139,7 +1140,7 @@ mod tests {
                 .unwrap_or(0.0)
         };
 
-        eprintln!("=== #596 age-similarity band (±10% ≈ max_age_ratio 1.10) privacy cost ===");
+        eprintln!("=== #596 age-similarity band (±5% ≈ max_age_ratio 1.05) privacy cost ===");
         for adv in ["Naive", "Age-Heuristic", "Cluster-Fingerprint", "Combined"] {
             eprintln!(
                 "  {adv:<20} constrained {:.3} bits | unconstrained {:.3} bits | reduction {:+.3} bits",
@@ -1161,7 +1162,7 @@ mod tests {
         let combined_reduction = reduction("Combined");
         assert!(
             combined_reduction < 2.0,
-            "±10% age band reduces Combined privacy by {combined_reduction} bits — too costly"
+            "±5% age band reduces Combined privacy by {combined_reduction} bits — too costly"
         );
     }
 

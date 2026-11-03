@@ -1076,22 +1076,19 @@ mod decoy_selection {
         wealth
     }
 
-    /// Build `n` in-band decoy candidates for a real input of the given age.
-    /// Ages are spread evenly across the ±10% band [900, 1100] (real age 1000).
+    /// Build `n` decoy candidates for a real input of age 1000 that every
+    /// random-offset age window contains (#1692: the windows [1000 − o,
+    /// 1200 − o] only share the real age itself, so every candidate sits at
+    /// age 1000).
     fn in_band_pool(n: usize, attribution_pct: u32) -> Vec<UtxoCandidate> {
-        // Real age 1000 -> band [900, 1100].
-        let (min_age, max_age) = (900u64, 1100u64);
         (0..n)
-            .map(|i| {
-                let age = min_age + (i as u64 % (max_age - min_age + 1));
-                create_utxo((i + 1) as u8, CURRENT_BLOCK - age, attribution_pct)
-            })
+            .map(|i| create_utxo((i + 1) as u8, CURRENT_BLOCK - 1_000, attribution_pct))
             .collect()
     }
 
     #[test]
     fn test_decoy_selection_integration() {
-        // Real input age 1000 -> ±10% band [900, 1100].
+        // Real input age 1000 -> ±5% window envelope [900, 1100].
         let real_utxo = create_utxo(0, 9_000, 25);
         let pool = in_band_pool(25, 25);
 
@@ -1186,7 +1183,7 @@ mod decoy_selection {
             let age = decoy.age(CURRENT_BLOCK);
             assert!(
                 (900..=1100).contains(&age),
-                "Decoy age {} outside ±10% band",
+                "Decoy age {} outside the ±5% window envelope",
                 age
             );
         }

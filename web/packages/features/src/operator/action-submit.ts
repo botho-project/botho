@@ -39,6 +39,12 @@ export interface GateVerdict {
   maxAutoMembers: number
   faultTolerant: boolean
   degenerate: boolean
+  /**
+   * Pairwise transitional safety against the installed set (#1845): `true`
+   * safe, `false` overridden by `acknowledgeUnsafeTransition`, `null` when the
+   * node skipped the check (or predates it).
+   */
+  transitionSafe: boolean | null
 }
 
 /**
@@ -110,6 +116,7 @@ function parseGate(v: unknown): GateVerdict | undefined {
     maxAutoMembers: num(o.maxAutoMembers),
     faultTolerant: bool(o.faultTolerant),
     degenerate: bool(o.degenerate),
+    transitionSafe: typeof o.transitionSafe === 'boolean' ? o.transitionSafe : null,
   }
 }
 

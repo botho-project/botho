@@ -6,8 +6,10 @@
 //! `GammaDecoySelector::select_decoys_for_input` and
 //! `select_rpc_decoys_from_history`. These tests feed identical candidate sets
 //! and identically-seeded RNGs to the port and to the production function and
-//! require identical output. If a production picker changes (e.g. #1692), this
-//! fails until the port — and the privacy report — are updated.
+//! require identical output. If a production picker changes, this fails until
+//! the port — and the privacy report — are updated. Since #1692 every picker
+//! draws a random-offset age window; the window math is pinned for the node,
+//! the wallet and the port below.
 //!
 //! The web picker (`web/packages/wasm-signer/src/decoys.ts`
 //! `selectDecoysForInput`, #1735) is TypeScript, so its port is pinned to the
@@ -22,8 +24,9 @@
 //! Synthetic key bytes are identifiers only; no signatures are built.
 
 use botho::decoy_selection::{
-    age_similarity_band, ClusterTags, DecoySelectionError, GammaDecoySelector, OutputCandidate,
-    AGE_SIMILARITY_SPREAD_BPS, FACTOR_SCALE,
+    age_similarity_band, age_similarity_envelope, age_similarity_window,
+    age_similarity_window_width, draw_age_similarity_window, ClusterTags, DecoySelectionError,
+    GammaDecoySelector, OutputCandidate, AGE_SIMILARITY_SPREAD_BPS, BLOCKS_PER_DAY, FACTOR_SCALE,
 };
 use botho_wallet::{
     ring_builder::select_rpc_decoys_from_history,
@@ -92,14 +95,54 @@ fn constants_and_band_match_production() {
         port::MIN_DECOY_AGE_BLOCKS,
         botho_wallet::decoy_selection::MIN_DECOY_AGE_BLOCKS
     );
+    use botho_wallet::decoy_selection as wallet;
     for age in (0..2_000).chain([22_000, 1_000_000, u64::MAX / 3]) {
         assert_eq!(
             port::age_similarity_band(age),
             age_similarity_band(age),
             "age {age}"
         );
+        // Random-offset window (#1692): node, wallet and port agree.
+        let width = age_similarity_window_width(age);
+        assert_eq!(port::age_similarity_window_width(age), width, "age {age}");
+        assert_eq!(wallet::age_similarity_window_width(age), width, "age {age}");
+        assert_eq!(
+            port::age_similarity_envelope(age),
+            age_similarity_envelope(age)
+        );
+        assert_eq!(
+            wallet::age_similarity_envelope(age),
+            age_similarity_envelope(age)
+        );
+        for offset in [0, 1, width / 2, width.saturating_sub(1), width, width + 3] {
+            let want = age_similarity_window(age, offset);
+            assert_eq!(
+                port::age_similarity_window(age, offset),
+                want,
+                "{age}@{offset}"
+            );
+            assert_eq!(
+                wallet::age_similarity_window(age, offset),
+                want,
+                "{age}@{offset}"
+            );
+        }
     }
-    // The ported gamma is the selector's default (19.28, 1.61 days × 720).
+    // The window draw consumes the RNG identically everywhere.
+    for (seed, age) in [(1u64, 0u64), (2, 9), (3, 10), (4, 1_000), (5, 1_000_000)] {
+        let want = draw_age_similarity_window(age, &mut StdRng::seed_from_u64(seed));
+        assert_eq!(
+            port::draw_age_similarity_window(age, &mut StdRng::seed_from_u64(seed)),
+            want
+        );
+        assert_eq!(
+            wallet::draw_age_similarity_window(age, &mut StdRng::seed_from_u64(seed)),
+            want
+        );
+    }
+    // The ported gamma is the selector's default (19.28, 1.61 days at the
+    // policy block time, #1692).
+    assert_eq!(port::NODE_BLOCKS_PER_DAY, BLOCKS_PER_DAY as f64);
     let selector = GammaDecoySelector::new();
     assert_eq!(selector.distribution().shape(), port::NODE_GAMMA_SHAPE);
     assert_eq!(
@@ -383,8 +426,8 @@ fn web_port_matches_recorded_decoys_ts_rings() {
     assert_eq!(rings_compared, 15 * 3);
 }
 
-/// The shared web<->native conformance vectors (#1693): the band math and the
-/// RNG-independent fallback selections.
+/// The shared web<->native conformance vectors (#1693, #1692): the band and
+/// window math and the RNG-independent fallback selections.
 #[test]
 fn web_port_matches_decoy_age_band_fixture() {
     let fixture: serde_json::Value = serde_json::from_str(DECOY_AGE_BAND).unwrap();
@@ -402,6 +445,22 @@ fn web_port_matches_decoy_age_band_fixture() {
         assert_eq!(lo, band["minAge"].as_u64().unwrap(), "age {age}");
         assert_eq!(hi, band["maxAge"].as_u64().unwrap(), "age {age}");
         assert_eq!(lo > hi, band["degenerate"].as_bool().unwrap(), "age {age}");
+    }
+    for w in fixture["windows"].as_array().unwrap() {
+        let age = w["realAge"].as_u64().unwrap();
+        let offset = w["offset"].as_u64().unwrap();
+        assert_eq!(
+            port::age_similarity_window_width(age),
+            w["width"].as_u64().unwrap()
+        );
+        let (lo, hi) = port::age_similarity_window(age, offset);
+        assert_eq!(lo, w["minAge"].as_u64().unwrap(), "{age}@{offset}");
+        assert_eq!(hi, w["maxAge"].as_u64().unwrap(), "{age}@{offset}");
+        assert_eq!(
+            lo > hi,
+            w["degenerate"].as_bool().unwrap(),
+            "{age}@{offset}"
+        );
     }
     for case in fixture["fallback"].as_array().unwrap() {
         let ages: Vec<u64> = serde_json::from_value(case["poolAges"].clone()).unwrap();

@@ -66,7 +66,7 @@ The **only** channel to an honest over-charge: a wealthy decoy contaminating a b
 
 ### Factor-similarity decoy band (picks `FACTOR_SIMILARITY_SPREAD`)
 
-The §4.5 contamination channel is closed at the wallet layer by a factor band mirroring the shipped `AGE_SIMILARITY_SPREAD_BPS` (±10%) age band: a background (1×) spender draws only decoys whose cluster factor sits within the band around its real input's factor. This sweep applies that filter at the pathological 5.0% raw contamination (the §4.5 level that gave a 52.5% FP rate UNFILTERED) and finds the widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` clamped to 6×; same-class (background) pool retention is 1.00 at every band because factor is class-quantized.
+The §4.5 contamination channel is closed at the wallet layer by a factor band mirroring the `AGE_SIMILARITY_SPREAD_BPS` age band (±10% when chosen; ±5% since #1692): a background (1×) spender draws only decoys whose cluster factor sits within the band around its real input's factor. This sweep applies that filter at the pathological 5.0% raw contamination (the §4.5 level that gave a 52.5% FP rate UNFILTERED) and finds the widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` clamped to 6×; same-class (background) pool retention is 1.00 at every band because factor is class-quantized.
 
 | factor band | band edge (×) | wealthy classes admitted | eligible pool | same-class pool | honest FP rate | mean over-charge @5yr | FP-safe |
 |------------:|--------------:|-------------------------:|--------------:|----------------:|---------------:|----------------------:|:-------:|

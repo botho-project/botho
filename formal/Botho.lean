@@ -15,3 +15,4 @@ import Botho.Lottery.Window
 import Botho.Lottery.Drawing
 import Botho.Quorum.Fbas
 import Botho.Demurrage.Counterexamples
+import Botho.Lottery.Sybil

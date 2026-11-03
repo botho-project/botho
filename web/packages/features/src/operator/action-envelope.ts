@@ -99,6 +99,13 @@ export interface EnvelopeFields {
    * "not acknowledged" and the node treats absence as `false`.
    */
   acknowledgeDegenerate?: true
+  /**
+   * Only set (to `true`) to override the node's transitional-safety check
+   * (#1845): a candidate quorum set that fails the pairwise rotation
+   * condition against the node's installed set. Distinct from
+   * `acknowledgeDegenerate`. Absent otherwise; never emit `false`.
+   */
+  acknowledgeUnsafeTransition?: true
 }
 
 /** A fully-produced signed envelope: the exact bytes + detached signature. */
@@ -187,6 +194,9 @@ export function canonicalizeEnvelope(fields: EnvelopeFields): string {
   if (fields.acknowledgeDegenerate === true) {
     obj.acknowledgeDegenerate = true
   }
+  if (fields.acknowledgeUnsafeTransition === true) {
+    obj.acknowledgeUnsafeTransition = true
+  }
   return canonicalizeValue(obj)
 }
 
@@ -268,6 +278,8 @@ export interface ComposeActionRequest {
   signerKeyId: string
   /** Set `true` when the operator acknowledges a degenerate result. */
   acknowledgeDegenerate?: boolean
+  /** Set `true` to override the node's transitional-safety refusal (#1845). */
+  acknowledgeUnsafeTransition?: boolean
   /** Envelope lifetime; defaults to {@link DEFAULT_ENVELOPE_LIFETIME_SECS}. */
   lifetimeSecs?: number
 }
@@ -336,6 +348,9 @@ export function buildEnvelopeFields(
   }
   if (req.acknowledgeDegenerate === true) {
     fields.acknowledgeDegenerate = true
+  }
+  if (req.acknowledgeUnsafeTransition === true) {
+    fields.acknowledgeUnsafeTransition = true
   }
   return fields
 }

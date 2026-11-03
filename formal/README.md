@@ -123,8 +123,10 @@ The scripts take an optional `LAKE=/path/to/lake` environment variable if the
 
 The toolchain is pinned to an exact stable release in `lean-toolchain`. Bump it
 deliberately in its own PR. Never use `stable` or `nightly`. The project has no
-dependencies (no Mathlib). Whether to add Mathlib is decided in #1708, because
-it adds substantial CI time.
+dependencies (no Mathlib). #1708 decided against adding Mathlib: its proofs
+need only `omega`, `decide`, core `List.Perm` and `Nat` lemmas, and Mathlib
+would add CI time and break the dependency-free build -> verify trust chain
+(#1799). `formal-aeneas/` uses Mathlib in its own package and CI job.
 
 ## The lottery model
 
@@ -182,7 +184,11 @@ How the model is written:
   fixes it at 4), and the candidate read's rows sorted strictly by key (as
   LMDB iterates them).
 
-The theorems about this model are #1708.
+The theorems about this model are #1708. [`lottery.md`](lottery.md) says in
+plain words what each one guarantees and what it does not. Part C1, the
+Sybil split, is `Botho/Lottery/Sybil.lean`: a counterexample to the
+"splitting is net-zero" claim, the inert reward cap, profit as a function of
+the split count, and the premise of #1837's R3 option.
 
 ## The quorum model
 
