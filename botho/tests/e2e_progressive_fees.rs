@@ -450,8 +450,11 @@ fn test_fee_rejection_wealthy_sender() {
 
     let send_amount = 5 * PICOCREDITS_PER_CREDIT;
 
-    // Create a cluster tag representing a wealthy holder
-    let wealthy_cluster_id = 12345u64;
+    // Create a cluster tag representing a wealthy holder. Since protocol
+    // 8.0.0 (#1857 Rule 2) an output may only name a cluster some ring member
+    // carries, so use the spent coinbase's own cluster (formerly a fresh id,
+    // 12345, that no input carried).
+    let wealthy_cluster_id = utxo.output.cluster_tags.entries[0].cluster_id.0;
     let wealthy_tags = single_cluster_tags(wealthy_cluster_id);
 
     // Compute fees for different wealth levels (in nanoBTH)
