@@ -162,6 +162,16 @@ use crate::{
 /// (`is_consensus_compatible` is major-only) with
 /// `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 8.0.0 in lockstep; no storage
 /// format change from #1857.
+/// #1848, block timestamps: the lower bound is now `timestamp > median time
+/// past of the last 11 blocks`, which REPLACES `timestamp >= parent`; the
+/// future bound shrinks from 2 h to 60 s; the difficulty controller floors
+/// the observed inter-block gap at `MIN_OBSERVED_BLOCK_TIME_SECS` (3 s); and
+/// honest minters stamp `max(now, MTP + 1)`. The 7.x parent rule let one
+/// forward-dated tip lock every honest minter out. A 7.x peer rejects
+/// backward-of-parent blocks the 8.0.0 chain accepts and accepts blocks up to
+/// 2 h ahead that it rejects, so the two fork. #1848 adds a storage guard: a
+/// ledger store past genesis without the persisted timestamp window is
+/// refused at open.
 pub const PROTOCOL_VERSION: &str = "8.0.0";
 
 /// Minimum supported protocol version.
@@ -192,9 +202,11 @@ pub const PROTOCOL_VERSION: &str = "8.0.0";
 /// roots, so they must be refused at the identify handshake rather than left
 /// connected to fork.
 ///
-/// Raised to 8.0.0 for the output cluster-tag rules (#1857) and #1848: 7.x
-/// peers accept blocks whose outputs credit clusters absent from the ring, so
-/// they must be refused at the identify handshake rather than left to fork.
+/// Raised to 8.0.0 for the output cluster-tag rules (#1857) and the
+/// median-time-past timestamp rules (#1848): 7.x peers accept blocks whose
+/// outputs credit clusters absent from the ring, and enforce `timestamp >=
+/// parent` with a 2 h future bound, so they must be refused at the identify
+/// handshake rather than left to fork.
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "8.0.0";
 
 /// Topic for block announcements
@@ -3012,8 +3024,8 @@ mod tests {
         // are disconnected rather than left forking.
         //
         // Bumped to 8.0.0 (MAJOR) for the output cluster-tag rules (#1857)
-        // and #1848. MAJOR so 7.x peers are disconnected rather than left
-        // forking.
+        // and the median-time-past timestamp rules (#1848). MAJOR so 7.x
+        // peers are disconnected rather than left forking.
         assert_eq!(PROTOCOL_VERSION, "8.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
         assert_eq!(parsed.major, 8);
@@ -3047,7 +3059,10 @@ mod tests {
     /// #1857 is a consensus-breaking MAJOR bump (7.x → 8.0.0): 7.x peers
     /// accept blocks whose outputs name clusters absent from the ring (or
     /// carry out-of-range tag vectors) that the 8.0.0 chain rejects, so they
-    /// must be DISCONNECTED, not merely warned.
+    /// must be DISCONNECTED, not merely warned. The same bump carries #1848:
+    /// 7.x peers also enforce `timestamp >= parent` with a 2 h future bound,
+    /// so they reject blocks the median-time-past chain accepts (and vice
+    /// versa).
     #[test]
     fn test_v7_peers_are_consensus_incompatible_after_issue_1857() {
         let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();

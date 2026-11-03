@@ -65,6 +65,9 @@ fn next_block(ledger: &Ledger, minter: &Wallet, transactions: Vec<Transaction>) 
     );
     block.header.height = state.height + 1;
     block.header.prev_block_hash = state.tip_hash;
+    // Protocol 8.0.0 (#1848): above the median, behind the future bound.
+    block.header.timestamp = state.fast_chain_timestamp();
+    block.minting_tx.timestamp = block.header.timestamp;
     block.minting_tx.block_height = block.header.height;
     block.minting_tx.prev_block_hash = state.tip_hash;
     block

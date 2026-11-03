@@ -99,7 +99,11 @@ fn mine_block(
     let prev_hash = prev_block.hash();
     let height = state.height + 1;
 
-    let minting_tx = create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+    let mut minting_tx =
+        create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+    // Protocol 8.0.0 (#1848): strictly after the median time past, like the
+    // minter (`max(now, MTP + 1)`). The timestamp is not in the PoW preimage.
+    minting_tx.timestamp = minting_tx.timestamp.max(state.next_min_timestamp());
 
     let tx_root = if transactions.is_empty() {
         [0u8; 32]
@@ -977,12 +981,13 @@ fn test_c2_block_rejected_when_reward_inflated() {
     );
 }
 
-/// C2b: A block whose timestamp is earlier than its parent's must be
-/// rejected. Without monotonicity an adversary can backdate blocks to bias
-/// any timestamp-derived state.
+/// C2b (protocol 8.0.0, #1848): a block whose timestamp is not strictly after
+/// the median time past of the last 11 blocks must be rejected. (This replaced
+/// the 7.x `>= parent` rule, under which one forward-dated tip locked out
+/// every honest minter.)
 #[test]
 #[serial]
-fn test_c2_block_rejected_when_timestamp_before_parent() {
+fn test_c2_block_rejected_when_timestamp_not_after_median_time_past() {
     let temp_dir = TempDir::new().unwrap();
     let mut ledger = Ledger::open(temp_dir.path()).unwrap();
     // RandomX genesis difficulty is real-hashrate sized; pin the chain to
@@ -992,18 +997,24 @@ fn test_c2_block_rejected_when_timestamp_before_parent() {
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
-    // Add a valid block 1 with a real wall-clock timestamp.
+    // Six valid blocks with real wall-clock timestamps: the zero-padded
+    // median of the window is now their minimum (block 1's stamp).
     let block1 = mine_block(&ledger, &miner_address, vec![]);
     let block1_timestamp = block1.header.timestamp;
     assert!(block1_timestamp > 0);
     ledger.add_block(&block1).expect("Failed to add block 1");
+    for _ in 0..5 {
+        let block = mine_block(&ledger, &miner_address, vec![]);
+        ledger.add_block(&block).expect("Failed to add block");
+    }
 
-    // Construct block 2 that backdates one second before block 1.
+    // Construct block 7 stamped exactly at the median time past.
     let state = ledger.get_chain_state().unwrap();
+    assert_eq!(state.median_time_past(), block1_timestamp);
     let prev_hash = state.tip_hash;
-    let bad_timestamp = block1_timestamp - 1;
+    let bad_timestamp = state.median_time_past();
     let mut minting_tx = MintingTx::new(
-        2,
+        7,
         TEST_BLOCK_REWARD,
         &miner_address,
         prev_hash,
@@ -1022,7 +1033,7 @@ fn test_c2_block_rejected_when_timestamp_before_parent() {
             prev_block_hash: prev_hash,
             tx_root: [0u8; 32],
             timestamp: bad_timestamp,
-            height: 2,
+            height: 7,
             difficulty: TRIVIAL_DIFFICULTY,
             nonce: minting_tx.nonce,
             minter_view_key: minting_tx.minter_view_key,
@@ -1036,17 +1047,17 @@ fn test_c2_block_rejected_when_timestamp_before_parent() {
 
     let err = ledger
         .add_block(&bad_block)
-        .expect_err("Backdated block must be rejected");
+        .expect_err("Block at the median time past must be rejected");
     let msg = format!("{}", err);
     assert!(
-        msg.contains("timestamp") && msg.contains("before parent"),
-        "Error should mention timestamp monotonicity, got: {}",
+        msg.contains("timestamp") && msg.contains("median time past"),
+        "Error should mention the median-time-past bound, got: {}",
         msg
     );
 }
 
-/// C2b: A block timestamped far in the future (beyond the 2h skew tolerance)
-/// must be rejected.
+/// C2b: A block timestamped far in the future (beyond the 60 s skew
+/// tolerance, protocol 8.0.0) must be rejected.
 #[test]
 #[serial]
 fn test_c2_block_rejected_when_timestamp_far_in_future() {
@@ -1063,7 +1074,7 @@ fn test_c2_block_rejected_when_timestamp_far_in_future() {
     let prev_block = ledger.get_tip().unwrap();
     let prev_hash = prev_block.hash();
 
-    // 3 hours ahead — beyond the 2h tolerance.
+    // 3 hours ahead — far beyond the 60 s tolerance.
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()

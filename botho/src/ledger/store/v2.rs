@@ -68,6 +68,19 @@ pub(in crate::ledger) fn v1_store_refusal(path: &Path) -> LedgerError {
     ))
 }
 
+/// Operator-facing refusal for a `botho.ledger.2` store past genesis that
+/// carries no median-time-past window: it was written by a pre-8.0.0 binary
+/// (#1848).
+pub(in crate::ledger) fn pre_protocol_8_refusal(path: &Path) -> LedgerError {
+    LedgerError::UnsupportedSchema(format!(
+        "the ledger at {} was written before protocol 8.0.0: it has blocks but no \
+         median-time-past window (#1848). There is no migration (protocol 8.0.0 \
+         starts fresh chains from genesis). Stop the node, wipe/reset the ledger \
+         by deleting that directory, and restart to resync from genesis",
+        path.display()
+    ))
+}
+
 /// Classify the store inside the opening write transaction, BEFORE any table
 /// creation or initialization write. Returning an error aborts that
 /// transaction, so a refused store is left byte-for-byte untouched.
@@ -101,6 +114,26 @@ pub(in crate::ledger) fn classify(
                 return Err(LedgerError::InconsistentRecord(
                     "botho.ledger.2 store is missing its derivation_contexts table".into(),
                 ));
+            }
+            // Protocol 8.0.0 (#1848): every block write since 8.0.0 persists
+            // the median-time-past window, so a store past genesis without
+            // it was written by a 7.x binary. Its blocks were accepted under
+            // the old timestamp rules and its window cannot be trusted to
+            // exist; refuse it like an unmarked V1 store (the 8.0.0 reset is
+            // fresh-chain only). A genesis-only store has an empty window.
+            let height = meta
+                .get(txn, META_HEIGHT)
+                .map_err(db_op("schema read height"))?
+                .map(|b| fixed(b).map(u64::from_le_bytes))
+                .transpose()?
+                .unwrap_or(0);
+            if height > 0
+                && meta
+                    .get(txn, META_RECENT_TIMESTAMPS)
+                    .map_err(db_op("schema read timestamp window"))?
+                    .is_none()
+            {
+                return Err(pre_protocol_8_refusal(path));
             }
             return Ok(StoreSchema::V2);
         }

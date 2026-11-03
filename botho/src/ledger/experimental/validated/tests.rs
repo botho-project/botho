@@ -17,13 +17,17 @@ fn wallet() -> WalletKeys {
 fn template(store: &ValidatedStore, wallet: &WalletKeys, transactions: Vec<Transaction>) -> Block {
     let txn = store.store.env.read_txn().unwrap();
     let state = store.view(&txn).state().unwrap();
-    Block::new_template_with_txs(
+    let mut block = Block::new_template_with_txs(
         &store.store.envelope(&txn, state.height).unwrap().block,
         &wallet.public_address(),
         state.difficulty,
         calculate_block_reward(state.height + 1, state.total_mined),
         transactions,
-    )
+    );
+    // Protocol 8.0.0 (#1848): above the median, behind the future bound.
+    block.header.timestamp = state.fast_chain_timestamp();
+    block.minting_tx.timestamp = block.header.timestamp;
+    block
 }
 fn raw_snapshot(store: &ExperimentalStore) -> Vec<Vec<(Vec<u8>, Vec<u8>)>> {
     let txn = store.env.read_txn().unwrap();

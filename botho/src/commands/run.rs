@@ -4645,7 +4645,8 @@ mod tests {
     /// #1640: a protocol-6 (V1 lottery payout, flat tx root) peer is refused
     /// at the identify handshake, alongside unparseable and other-major
     /// agents. The 6.x entries are the V1 peers of the 7.0.0 reset; the 7.x
-    /// entries are the unbounded-output-tag peers of the 8.0.0 reset (#1857).
+    /// entries are the unbounded-output-tag (#1857) and parent-timestamp-rule
+    /// (#1848) peers of the 8.0.0 reset.
     #[test]
     fn peer_metadata_missing_or_incompatible_identify_removes_rpc_entry() {
         for agent in [

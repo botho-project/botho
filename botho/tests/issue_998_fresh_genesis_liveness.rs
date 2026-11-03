@@ -56,11 +56,20 @@ fn pq_minter_address() -> PublicAddress {
 
 /// Build a valid minting-only block for `height` on top of `prev_hash`, mining
 /// a trivial-difficulty PoW. The coinbase is a hybrid ML-KEM output.
-fn mine_minting_block(height: u64, prev_hash: [u8; 32], minter: &PublicAddress) -> Block {
+///
+/// `min_timestamp` is the chain's `next_min_timestamp()` (protocol 8.0.0,
+/// #1848): the block is stamped `max(now, MTP + 1)`, like the minter.
+fn mine_minting_block(
+    height: u64,
+    prev_hash: [u8; 32],
+    minter: &PublicAddress,
+    min_timestamp: u64,
+) -> Block {
     let timestamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
-        .as_secs();
+        .as_secs()
+        .max(min_timestamp);
 
     let mut minting_tx = MintingTx::new(
         height,
@@ -115,9 +124,18 @@ fn fresh_6_0_0_genesis_advances_past_height_6() {
     const N: u64 = 12;
     for height in 1..=N {
         let prev_hash = ledger.get_tip().expect("tip").hash();
+        let min_timestamp = ledger
+            .get_chain_state()
+            .expect("chain state")
+            .next_min_timestamp();
         // Protocol 7.0.0 (#1640): the V2 body root is sealed by the producer.
         let block = ledger
-            .seal_block(mine_minting_block(height, prev_hash, &minter))
+            .seal_block(mine_minting_block(
+                height,
+                prev_hash,
+                &minter,
+                min_timestamp,
+            ))
             .expect("seal V2 block body");
         ledger
             .add_block(&block)

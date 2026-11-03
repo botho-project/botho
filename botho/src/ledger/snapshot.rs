@@ -1181,6 +1181,7 @@ mod tests {
             epoch_emission: 10000,
             epoch_burns: 1000,
             current_reward: 1000,
+            recent_timestamps: (0..11).map(|i| 1234567880 + i).collect(),
         }
     }
 

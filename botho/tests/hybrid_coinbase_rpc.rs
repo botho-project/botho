@@ -25,6 +25,8 @@ use std::{
 
 fn mine(ledger: &Ledger, address: &PublicAddress, transactions: Vec<Transaction>) -> Block {
     let tip = ledger.get_tip().unwrap();
+    // Protocol 8.0.0 (#1848): strictly after the median time past.
+    let min_timestamp = ledger.get_chain_state().unwrap().next_min_timestamp();
     let mut mint = MintingTx::new(
         tip.height() + 1,
         50 * COIN,
@@ -34,7 +36,8 @@ fn mine(ledger: &Ledger, address: &PublicAddress, transactions: Vec<Transaction>
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
-            .as_secs(),
+            .as_secs()
+            .max(min_timestamp),
     );
     for nonce in 0..100_000 {
         mint.nonce = nonce;

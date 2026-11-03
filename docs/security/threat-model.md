@@ -474,7 +474,7 @@ in `botho/src/ledger/store.rs`).
 |------|-----------------------------------|-----------|--------|
 | C1: Difficulty | `header.difficulty == chain-expected difficulty`, then `is_valid_pow` | `store.rs` C1 (`#553` controller) | Mitigated |
 | C2: Reward | `minting_tx.reward == calculate_block_reward(...)`; reject mismatch | `store.rs` (expected_reward) | Mitigated |
-| C2: Timestamp | minting/header timestamps agree; `>= parent`; `<= now + MAX_FUTURE_TIMESTAMP_SECS` | `store.rs` | Mitigated |
+| C2: Timestamp | minting/header timestamps agree; `> median time past` of the last 11 blocks (protocol 8.0.0, #1848; replaced `>= parent`); `<= now + MAX_FUTURE_TIMESTAMP_SECS` (60 s) | `store.rs` | Mitigated |
 | C3: Ring members | Every ring member resolved against the UTXO set (`verify_ring_members`) | `store.rs` | Mitigated |
 | C4: tx_root | `header.tx_root == Block::compute_tx_root(&transactions)` | `store.rs` | Mitigated |
 | C5: Difficulty controller | Single integer (u128 bps) controller; f64 eliminated from live path | `#553` | Mitigated |
