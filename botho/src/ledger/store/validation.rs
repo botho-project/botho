@@ -100,7 +100,11 @@ pub(in crate::ledger) trait ValidationReads {
         }
         Ok(())
     }
-    fn verify_cluster_tag_inheritance(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+    fn verify_cluster_tag_inheritance(
+        &self,
+        tx: &BothoTransaction,
+        height: u64,
+    ) -> Result<(), LedgerError> {
         let mut input_rings: Vec<Vec<(ClusterTagVector, u64)>> = Vec::new();
         for input in tx.inputs.clsag() {
             let mut ring: Vec<(ClusterTagVector, u64)> = Vec::new();
@@ -111,7 +115,11 @@ pub(in crate::ledger) trait ValidationReads {
             }
             input_rings.push(ring);
         }
-        check_cluster_tag_inheritance(&input_rings, &tx.outputs)
+        check_cluster_tag_inheritance(
+            &input_rings,
+            &tx.outputs,
+            bth_cluster_tax::import_cluster_id_for_height(height).0,
+        )
     }
     fn verify_settlement(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         let Some(settlement) = &tx.settlement else {
@@ -631,13 +639,32 @@ pub(in crate::ledger) trait ValidationReads {
         // so a proposer and a validator reach the same verdict (no fork). It
         // runs after C3, which has already bound every ring member to a real
         // UTXO. See `check_cluster_tag_inheritance`.
+        //
+        // Protocol 8.0.0 (#1857) adds two rules on output tags here:
+        // - Rule 1, first: every output's vector is `ClusterTagVector::is_valid` (at
+        //   most 16 sorted, unique entries totalling at most 100%), so the C6 and
+        //   fee-floor arithmetic below never see out-of-range vectors and one output
+        //   can credit at most its own value to cluster wealth.
+        // - Rule 2, inside the C6 call: an output may name a cluster absent from every
+        //   ring member only if it is the bridge-import cluster of this block's epoch
+        //   (`import_cluster_id_for_height(block.height())`).
         for (tx_idx, tx) in block.transactions.iter().enumerate() {
-            self.verify_cluster_tag_inheritance(tx).map_err(|e| {
-                LedgerError::InvalidBlock(format!(
-                    "Transaction {} cluster-tag inheritance validation failed: {}",
-                    tx_idx, e
-                ))
-            })?;
+            if let Some(i) = first_malformed_output_tags(&tx.outputs) {
+                return Err(LedgerError::InvalidBlock(format!(
+                    "Transaction {} output {} has malformed cluster tags ({} entries); \
+                     every output must satisfy ClusterTagVector::is_valid (#1857)",
+                    tx_idx,
+                    i,
+                    tx.outputs[i].cluster_tags.len()
+                )));
+            }
+            self.verify_cluster_tag_inheritance(tx, block.height())
+                .map_err(|e| {
+                    LedgerError::InvalidBlock(format!(
+                        "Transaction {} cluster-tag inheritance validation failed: {}",
+                        tx_idx, e
+                    ))
+                })?;
         }
 
         // C7 (issue #578, H1-B4): deterministic consensus fee floor.

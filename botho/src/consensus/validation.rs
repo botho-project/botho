@@ -132,6 +132,14 @@ pub enum ValidationError {
         len: usize,
     },
 
+    // Output cluster-tag rules (protocol 8.0.0, #1857)
+    /// An output's cluster-tag vector fails `ClusterTagVector::is_valid`
+    /// (Rule 1): more than 16 entries, a weight below the stored minimum,
+    /// unsorted, a duplicate cluster id, or total weight above 100%.
+    MalformedOutputClusterTags {
+        output: usize,
+    },
+
     // General errors
     DeserializationFailed(String),
     ChainStateUnavailable,
@@ -171,6 +179,11 @@ impl std::fmt::Display for ValidationError {
                 f,
                 "Output ML-KEM ciphertext has wrong length: {} (expected {})",
                 len, ML_KEM_768_CIPHERTEXT_BYTES
+            ),
+            Self::MalformedOutputClusterTags { output } => write!(
+                f,
+                "Output {} has malformed cluster tags (must satisfy ClusterTagVector::is_valid)",
+                output
             ),
             Self::DeserializationFailed(e) => write!(f, "Deserialization failed: {}", e),
             Self::ChainStateUnavailable => write!(f, "Chain state unavailable"),
@@ -448,6 +461,17 @@ impl TransactionValidator {
             check_kem_ciphertext(&output.kem_ciphertext)?;
         }
 
+        // Rule 1 (protocol 8.0.0, #1857): every output's cluster tags satisfy
+        // `ClusterTagVector::is_valid`. A pure function of the value, so it
+        // holds the no-fork invariant above, and it keeps a tx the block
+        // validator would reject (taking the whole block with it) from ever
+        // being nominated. Rule 2 (output clusters must appear on the ring)
+        // reads ring-member tags, which are ledger state, so it is NOT checked
+        // here: it runs at mempool admission and block validation.
+        if let Some(output) = crate::ledger::first_malformed_output_tags(&tx.outputs) {
+            return Err(ValidationError::MalformedOutputClusterTags { output });
+        }
+
         // UTXO existence, double-spend, and signature verification are NOT done
         // here. They happen in mempool.add_tx() and at block-apply, which have
         // ledger access and verify:
@@ -711,6 +735,64 @@ mod tests {
             result_high.is_ok(),
             "transfer-tx validity must be identical regardless of local tip height"
         );
+    }
+
+    /// Rule 1 (protocol 8.0.0, #1857) is part of SCP intrinsic validity: a
+    /// transfer whose output tags fail `ClusterTagVector::is_valid` is
+    /// rejected (so it is never nominated into a block every node would
+    /// reject), and a valid vector, including one naming a cluster no ring
+    /// member carries (Rule 2 is ledger state, checked at admission and
+    /// block validation, not here), is accepted.
+    #[test]
+    fn test_transfer_tx_rule1_output_tags() {
+        use bth_transaction_types::{ClusterId, ClusterTagEntry, TAG_WEIGHT_SCALE};
+        let validator = TransactionValidator::new(mock_chain_state());
+        let tx_with = |tags: ClusterTagVector| {
+            let mut ok = test_output(1000, 1);
+            ok.cluster_tags = ClusterTagVector::single(ClusterId(7));
+            let mut out = test_output(1000, 2);
+            out.cluster_tags = tags;
+            Transaction::new_clsag(vec![test_clsag_input(1)], vec![ok, out], MIN_TX_FEE, 10)
+        };
+        let raw = |entries: Vec<(u64, u32)>| ClusterTagVector {
+            entries: entries
+                .into_iter()
+                .map(|(id, weight)| ClusterTagEntry {
+                    cluster_id: ClusterId(id),
+                    weight,
+                })
+                .collect(),
+            decay_state: None,
+        };
+
+        for (name, tags) in [
+            ("over 100%", raw(vec![(9, TAG_WEIGHT_SCALE + 1)])),
+            ("u32::MAX weight", raw(vec![(9, u32::MAX)])),
+            ("duplicate id", raw(vec![(9, 1000), (9, 1000)])),
+            ("unsorted", raw(vec![(9, 1000), (8, 2000)])),
+            (
+                "17 entries",
+                raw((0..17).map(|i| (100 + i, 1000)).collect()),
+            ),
+        ] {
+            assert!(!tags.is_valid(), "{name}");
+            assert!(
+                matches!(
+                    validator.validate_transfer_tx(&tx_with(tags)),
+                    Err(ValidationError::MalformedOutputClusterTags { output: 1 })
+                ),
+                "{name}"
+            );
+        }
+
+        for tags in [
+            ClusterTagVector::empty(),
+            raw(vec![(9, TAG_WEIGHT_SCALE)]),
+            raw((0..16).map(|i| (100 + i, 1000)).collect()),
+        ] {
+            assert!(tags.is_valid());
+            assert!(validator.validate_transfer_tx(&tx_with(tags)).is_ok());
+        }
     }
 
     /// The intrinsic SCP path must yield the same result regardless of tip,

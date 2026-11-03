@@ -152,7 +152,17 @@ use crate::{
 /// single block. MAJOR bump (`is_consensus_compatible` is major-only) with
 /// `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 7.0.0 in lockstep; fresh chains
 /// only (the binary refuses unmarked V1 ledger stores, no migration).
-pub const PROTOCOL_VERSION: &str = "7.0.0";
+/// PROTOCOL 8.0.0 (#1857, #1848): fresh chains from genesis (testnet reset).
+/// #1857, output cluster tags: every transfer output's tag vector must satisfy
+/// `ClusterTagVector::is_valid` (Rule 1; block validation and SCP intrinsic
+/// validity), and an output may name a cluster absent from every ring member
+/// only if it is the including block's epoch bridge-import cluster (Rule 2;
+/// block validation). A 7.x peer accepts blocks crediting arbitrary clusters
+/// that the 8.0.0 chain rejects, so the two fork. MAJOR bump
+/// (`is_consensus_compatible` is major-only) with
+/// `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 8.0.0 in lockstep; no storage
+/// format change from #1857.
+pub const PROTOCOL_VERSION: &str = "8.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -181,7 +191,11 @@ pub const PROTOCOL_VERSION: &str = "7.0.0";
 /// (#1286 P3, #1640): 6.x peers build and accept V1 payouts and flat tx
 /// roots, so they must be refused at the identify handshake rather than left
 /// connected to fork.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "7.0.0";
+///
+/// Raised to 8.0.0 for the output cluster-tag rules (#1857) and #1848: 7.x
+/// peers accept blocks whose outputs credit clusters absent from the ring, so
+/// they must be refused at the identify handshake rather than left to fork.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "8.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2996,9 +3010,13 @@ mod tests {
         // Bumped to 7.0.0 (MAJOR) for LotteryV2 + the body root + complete-
         // output signing (#1286 P3, #1640). MAJOR so 6.x (V1-payout) peers
         // are disconnected rather than left forking.
-        assert_eq!(PROTOCOL_VERSION, "7.0.0");
+        //
+        // Bumped to 8.0.0 (MAJOR) for the output cluster-tag rules (#1857)
+        // and #1848. MAJOR so 7.x peers are disconnected rather than left
+        // forking.
+        assert_eq!(PROTOCOL_VERSION, "8.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 7);
+        assert_eq!(parsed.major, 8);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
@@ -3019,11 +3037,30 @@ mod tests {
                 Some(peer)
             );
         }
-        let v2_peer = ProtocolVersion::parse("7.0.1").unwrap();
+        let current_peer = ProtocolVersion::parse("8.0.1").unwrap();
         assert_eq!(
-            ProtocolVersion::consensus_incompatibility(&Some(v2_peer), &local),
+            ProtocolVersion::consensus_incompatibility(&Some(current_peer), &local),
             None
         );
+    }
+
+    /// #1857 is a consensus-breaking MAJOR bump (7.x → 8.0.0): 7.x peers
+    /// accept blocks whose outputs name clusters absent from the ring (or
+    /// carry out-of-range tag vectors) that the 8.0.0 chain rejects, so they
+    /// must be DISCONNECTED, not merely warned.
+    #[test]
+    fn test_v7_peers_are_consensus_incompatible_after_issue_1857() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let min = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
+        for unbounded_tag_peer in ["7.0.0", "7.9.9"] {
+            let peer = ProtocolVersion::parse(unbounded_tag_peer).unwrap();
+            assert!(!peer.is_consensus_compatible(&local));
+            assert!(!peer.is_compatible_with(&min));
+            assert_eq!(
+                ProtocolVersion::consensus_incompatibility(&Some(peer.clone()), &local),
+                Some(peer)
+            );
+        }
     }
 
     /// #925 is a consensus-breaking MAJOR bump (5.x → 6.0.0): 5.x peers price
@@ -3057,9 +3094,9 @@ mod tests {
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "7.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "8.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 7);
+        assert_eq!(parsed.major, 8);
         assert_eq!(parsed.minor, 0);
     }
 

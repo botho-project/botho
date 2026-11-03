@@ -4595,14 +4595,14 @@ mod tests {
         let identified = identify_peer(
             &mut discovery,
             &key,
-            "botho/7.0.0/5/transport-caps/1/webrtc,plain/open",
+            "botho/8.0.0/5/transport-caps/1/webrtc,plain/open",
         )
         .expect("Identify must notify the RPC snapshot consumer");
         assert!(matches!(identified, NetworkEvent::PeerMetadataUpdated(p) if p == peer));
         refresh_peer_snapshot_for_event(&identified, &discovery, &snapshot);
         assert_eq!(
             snapshot.read().unwrap()[0].protocol_version.as_deref(),
-            Some("7.0.0 (block v5)")
+            Some("8.0.0 (block v5)")
         );
         assert!(!snapshot.read().unwrap()[0].version_warning);
         assert_eq!(discovery.peer_count(), 1);
@@ -4616,7 +4616,7 @@ mod tests {
             build_peer_snapshot(&discovery)[0]
                 .protocol_version
                 .as_deref(),
-            Some("7.0.0 (block v5)")
+            Some("8.0.0 (block v5)")
         );
         assert!(discovery.peer_table()[0].transport_capabilities.is_some());
         for remaining in [1, 0] {
@@ -4644,7 +4644,8 @@ mod tests {
 
     /// #1640: a protocol-6 (V1 lottery payout, flat tx root) peer is refused
     /// at the identify handshake, alongside unparseable and other-major
-    /// agents. The 6.x entries are the V1 peers of the 7.0.0 reset.
+    /// agents. The 6.x entries are the V1 peers of the 7.0.0 reset; the 7.x
+    /// entries are the unbounded-output-tag peers of the 8.0.0 reset (#1857).
     #[test]
     fn peer_metadata_missing_or_incompatible_identify_removes_rpc_entry() {
         for agent in [
@@ -4653,7 +4654,9 @@ mod tests {
             "botho/5.0.0/5",
             "botho/6.0.0/5",
             "botho/6.0.0/5/transport-caps/1/webrtc,plain/open",
-            "botho/8.0.0/5",
+            "botho/7.0.0/5",
+            "botho/7.0.0/5/transport-caps/1/webrtc,plain/open",
+            "botho/9.0.0/5",
         ] {
             let mut discovery = NetworkDiscovery::new(0, vec![]);
             let key = libp2p::identity::Keypair::generate_ed25519();

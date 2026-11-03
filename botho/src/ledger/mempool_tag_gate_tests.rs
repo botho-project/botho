@@ -6,8 +6,9 @@
 //! an output whose cluster tags it chose, exactly as a modified wallet would.
 //!
 //! These pin the #1858 fix: `Mempool::add_tx` rejects malformed output tags
-//! cleanly (no panic), an honest wallet's spend is unaffected, and block
-//! acceptance is unchanged (relay policy only; the consensus rule is #1857).
+//! cleanly (no panic) and an honest wallet's spend is unaffected. Since
+//! protocol 8.0.0 (#1857) block acceptance rejects the same transaction too
+//! (Rule 1); `cluster_tag_rules_tests.rs` reuses these helpers for that.
 //! Kept out of `store.rs` so the tests do not churn that file's SHA-256 pin in
 //! `scripts/research/fixtures/ct-contract-inventory.json`.
 
@@ -26,13 +27,13 @@ use tempfile::TempDir;
 // Public deterministic test mnemonic, used only for temporary fixtures.
 const WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
-fn open(dir: &std::path::Path) -> Ledger {
+pub(super) fn open(dir: &std::path::Path) -> Ledger {
     let ledger = Ledger::open(dir).unwrap();
     ledger.set_difficulty(u64::MAX).unwrap();
     ledger
 }
 
-fn template(ledger: &Ledger, wallet: &Wallet, txs: Vec<Transaction>) -> Block {
+pub(super) fn template(ledger: &Ledger, wallet: &Wallet, txs: Vec<Transaction>) -> Block {
     let state = ledger.get_chain_state().unwrap();
     let tip = ledger.get_tip().unwrap();
     let mut block = Block::new_template_with_txs(
@@ -47,11 +48,11 @@ fn template(ledger: &Ledger, wallet: &Wallet, txs: Vec<Transaction>) -> Block {
     block
 }
 
-fn mine(ledger: &Ledger, wallet: &Wallet) -> Block {
+pub(super) fn mine(ledger: &Ledger, wallet: &Wallet) -> Block {
     mine_with(ledger, wallet, vec![]).unwrap()
 }
 
-fn mine_with(
+pub(super) fn mine_with(
     ledger: &Ledger,
     wallet: &Wallet,
     txs: Vec<Transaction>,
@@ -62,7 +63,7 @@ fn mine_with(
 }
 
 /// A chain of `n` mined blocks (enough coinbases for a full ring of decoys).
-fn chain(n: usize) -> (TempDir, Ledger, Wallet, Vec<Block>) {
+pub(super) fn chain(n: usize) -> (TempDir, Ledger, Wallet, Vec<Block>) {
     let dir = TempDir::new().unwrap();
     let ledger = open(dir.path());
     let wallet = Wallet::from_mnemonic(WORDS).unwrap();
@@ -70,7 +71,7 @@ fn chain(n: usize) -> (TempDir, Ledger, Wallet, Vec<Block>) {
     (dir, ledger, wallet, blocks)
 }
 
-fn coinbase(ledger: &Ledger, block: &Block) -> Utxo {
+pub(super) fn coinbase(ledger: &Ledger, block: &Block) -> Utxo {
     ledger
         .get_utxo(&UtxoId::new(block.hash(), 0))
         .unwrap()
@@ -79,7 +80,7 @@ fn coinbase(ledger: &Ledger, block: &Block) -> Utxo {
 
 /// The stock wallet's signed one-input spend of `input` to one output of
 /// `input.amount - fee` (its tags are the wallet's inherited tags).
-fn stock_spend(ledger: &Ledger, wallet: &Wallet, input: &Utxo, fee: u64) -> Transaction {
+pub(super) fn stock_spend(ledger: &Ledger, wallet: &Wallet, input: &Utxo, fee: u64) -> Transaction {
     let height = ledger.get_chain_state().unwrap().height;
     wallet
         .create_private_transaction(
@@ -102,7 +103,7 @@ fn stock_spend(ledger: &Ledger, wallet: &Wallet, input: &Utxo, fee: u64) -> Tran
 /// What a modified wallet sends: the stock wallet's ring and output, with
 /// the output's cluster tags replaced by `tags`, signed again over the new
 /// signing hash (which commits to the tags, #1638).
-fn with_tags(
+pub(super) fn with_tags(
     ledger: &Ledger,
     wallet: &Wallet,
     input: &Utxo,
@@ -134,7 +135,7 @@ fn with_tags(
 
 /// The clusters any ring member of `tx` is tagged with: the only clusters C6
 /// bounds.
-fn ring_clusters(ledger: &Ledger, tx: &Transaction) -> BTreeSet<u64> {
+pub(super) fn ring_clusters(ledger: &Ledger, tx: &Transaction) -> BTreeSet<u64> {
     let mut out = BTreeSet::new();
     for input in tx.inputs.clsag() {
         for member in &input.ring {
@@ -150,7 +151,7 @@ fn ring_clusters(ledger: &Ledger, tx: &Transaction) -> BTreeSet<u64> {
     out
 }
 
-fn repeated(cluster: u64, weight: u32, count: usize) -> ClusterTagVector {
+pub(super) fn repeated(cluster: u64, weight: u32, count: usize) -> ClusterTagVector {
     ClusterTagVector {
         entries: vec![
             ClusterTagEntry {
@@ -163,7 +164,7 @@ fn repeated(cluster: u64, weight: u32, count: usize) -> ClusterTagVector {
     }
 }
 
-fn add_tx_no_panic(ledger: &Ledger, tx: Transaction) -> Result<[u8; 32], MempoolError> {
+pub(super) fn add_tx_no_panic(ledger: &Ledger, tx: Transaction) -> Result<[u8; 32], MempoolError> {
     let mut mempool = Mempool::new();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mempool.add_tx(tx, ledger)))
         .expect("Mempool::add_tx must not panic on malformed output tags (#1858)")
@@ -174,8 +175,9 @@ fn add_tx_no_panic(ledger: &Ledger, tx: Transaction) -> Result<[u8; 32], Mempool
 /// output (Lean `mergeWeighted_overflow_panics`) and the 4,294-entry one just
 /// below the old overflow boundary are both validly signed and structurally
 /// valid, and `add_tx` now returns `InvalidTransaction` for each, without
-/// panicking. The same 4,295-entry transaction is still a valid block:
-/// `add_block` accepts it exactly as before (no consensus change; #1857).
+/// panicking. Since protocol 8.0.0 (#1857 Rule 1) the same 4,295-entry
+/// transaction is no longer a valid block either: `add_block` rejects it.
+/// (Before #1857 this test pinned that `add_block` still accepted it.)
 #[test]
 fn mempool_rejects_overflowing_output_tags_on_a_signed_transaction() {
     let (_dir, ledger, wallet, blocks) = chain(30);
@@ -208,15 +210,19 @@ fn mempool_rejects_overflowing_output_tags_on_a_signed_transaction() {
         }
     }
 
-    // Consensus is unchanged: the same transaction is still a valid block.
+    // Consensus (protocol 8.0.0, #1857 Rule 1): the same transaction is now
+    // an invalid block, and nothing it would have written lands.
     let tx = at_boundary.unwrap();
     let hash = tx.hash();
-    mine_with(&ledger, &wallet, vec![tx]).expect("add_block still accepts the transaction");
-    let utxo = ledger
-        .get_utxo(&UtxoId::new(hash, 0))
-        .unwrap()
-        .expect("the malformed-tag output is in the UTXO set");
-    assert_eq!(utxo.output.cluster_tags.len(), 4_295);
+    let tip = ledger.get_chain_state().unwrap().height;
+    match mine_with(&ledger, &wallet, vec![tx]) {
+        Err(LedgerError::InvalidBlock(msg)) => {
+            assert!(msg.contains("output 0 has malformed cluster tags"), "{msg}")
+        }
+        other => panic!("expected InvalidBlock (#1857 Rule 1), got {other:?}"),
+    }
+    assert_eq!(ledger.get_chain_state().unwrap().height, tip);
+    assert!(ledger.get_utxo(&UtxoId::new(hash, 0)).unwrap().is_none());
 }
 
 /// #1858: an honest wallet is unaffected. The stock wallet's inherited tags

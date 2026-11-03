@@ -10,6 +10,30 @@ still mutable. Within the `0.x` line, a `MINOR` bump (`0.X.0`) signals
 consensus-breaking changes that require a coordinated network reset; `PATCH`
 bumps (`0.X.Y`) are backwards-compatible.
 
+## Protocol 8.0.0
+
+Consensus-breaking; fresh chains from genesis (testnet reset).
+`PROTOCOL_VERSION` and `MIN_SUPPORTED_PROTOCOL_VERSION` are both 8.0.0, so 7.x
+peers are refused at the identify handshake.
+
+- **Output cluster tags are bounded (#1857).** Until now, consensus did not
+  bound a transfer output's cluster tags. One spend could credit any other
+  holder's cluster with an unlimited amount of wealth, which raised that
+  cluster's fee and demurrage factor. Two rules now apply:
+  - Rule 1: every output's tag vector must satisfy
+    `ClusterTagVector::is_valid` (at most 16 sorted, unique entries totalling
+    at most 100%). Block validation, SCP intrinsic validity and mempool
+    admission all enforce it.
+  - Rule 2: an output may name a cluster that no ring member carries only if
+    it is the bridge-import cluster of the including block's epoch. Block
+    validation enforces it, and mempool admission checks it at `tip + 1`.
+    Admission also refuses an import-tagged tx whose inclusion window
+    crosses an epoch.
+  Honest wallets (`merge_weighted` inheritance), the web signer (empty tags),
+  the bridge release (`single(import cluster)` plus empty change), coinbase,
+  lottery and settlement outputs already satisfy both rules. No storage
+  format change.
+
 ## [Unreleased]
 
 ### Added
