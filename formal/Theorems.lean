@@ -42,6 +42,15 @@ import Botho
 #print axioms Botho.Supply.issuance_step_fits
 #print axioms Botho.Supply.arbitrary_pool_saturates
 
+-- Botho.Lottery.Conservation (#1849; proven (model), including saturation loss).
+#print axioms Botho.Lottery.splitFees_conserves
+#print axioms Botho.Lottery.splitFees_canonical_conserves
+#print axioms Botho.Lottery.totalPaid_drawEligible
+#print axioms Botho.Lottery.drawing_paid
+#print axioms Botho.Lottery.drawing_conserves
+#print axioms Botho.Lottery.drawing_conserves_no_loss
+#print axioms Botho.Lottery.drawing_widths
+
 -- Botho.Quorum.Fbas (#1714: flat FBAS quorum intersection, despite-f, curated
 -- rotation; status: proven (model); Rust ties are tested, see the module docstring)
 #print axioms Botho.Quorum.delete_satisfies_iff
