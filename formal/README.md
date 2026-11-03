@@ -8,6 +8,9 @@ which mirrors the node's lottery draw, reward cap and pool accounting and is
 differentially tested against the Rust code (see
 [The lottery model](#the-lottery-model) and
 [Differential random testing](#differential-random-testing-drt)).
+It also holds the flat-FBAS quorum model (`Botho/Quorum/`, #1714), which
+decides the quorum gate's intersection, fault-tolerance and rotation questions
+(see [The quorum model](#the-quorum-model)).
 
 The approach follows Cedar's verification-guided development: write a small
 executable Lean model of a Rust component, prove properties about the model,
@@ -180,6 +183,64 @@ How the model is written:
   LMDB iterates them).
 
 The theorems about this model are #1708.
+
+## The quorum model
+
+`Botho/Quorum/Fbas.lean` (#1714) models a federated Byzantine agreement
+system with flat quorum sets (a threshold over a member set, no inner sets),
+which is the shape of Botho's `QuorumSet` and of `bth_quorum_sim`. Byzantine
+faults follow Mazieres' SCP paper: `delete F B` is `(V, Q)^B`,
+`IntersectsDespite`, `AvailableDespite` and `IsDSet` are its "quorum
+intersection despite B", "quorum availability despite B" and DSet. SCP's
+federated-voting safety and liveness given these properties are out of scope
+(the paper and the Ivy and TLA+ proofs cover them). The module decides the
+FBAS-level questions the quorum gate depends on, several of which come out
+"no":
+
+| Question | Theorem | Result |
+|----------|---------|--------|
+| `t`-of-`n` intersects iff `2t > n` (both branches of `symmetric_quorum_has_intersection`) | `sym_intersects_iff_pos`, `analytic_rule_eq` | proven |
+| `t`-of-`n` intersects despite `f` faulty iff `2t - n > f` | `sym_despite_iff` | proven |
+| `byzantine_tolerance` is the largest tolerated `f` | `byzTol_iff_dset` (needs two honest nodes; `byzTol_conservative_edge` shows the edge is conservative) | proven |
+| `quorumFaultTolerant` agrees with it (lead A) | `recommended_crash_flag_overclaims` | refuted for the pre-#1864 flag at odd `n >= 5`, Crash mode: #1843 (historical; fixed by #1864) |
+| The node-local gate makes the fleet intersect (lead B) | `recommended_crash_bowtie_fork`, `recommended_bft_bowtie_fork` | refuted: #1844 |
+| Pairwise checker sound / complete | `checker_sound`, `checkDespite_sound`, `checker_complete_sym`, `checker_not_complete` | sound; complete for symmetric only |
+| Exact checker (the sim's enumeration) | `bruteIntersects_iff` | proven |
+| Mixed A/B rotation: `t_A + t_B > \|S_A ∪ S_B\| + f` suffices | `rotation_sound`, `nested_rotation_safe` | proven |
+| ... and is necessary (`f = 0`) | `rotation_condition_necessary` | proven |
+| The gate checks transitional safety | `reroster_mixed_fork`, `prod_4of5_rotate_two_not_despite_one` | refuted: #1845 |
+| 4-of-5 production instance | `prod_4of5_*` | `f = 1`; a one-member swap is safe despite 1, a two-member swap is not |
+
+**Abstraction in the rotation theorems.** `mixed N A B runsB` gives every
+node `A` or `B` verbatim. The node's Explicit gate always adds the local node
+to the configured roster, so a node that is not on roster `S` really runs
+`S ∪ {self}`. "Every split" in `rotation_sound`, `nested_rotation_safe` and
+`prod_4of5_rotate_*` therefore covers some quorum sets no node would run and
+misses the one an off-roster node does run. The counterexamples and
+`rotation_condition_necessary` use only self-listed nodes and are unaffected,
+and for the production instances the real-gate quorum sets are checked in
+Rust (below): the one-member swap stays despite-1 safe in all 64 splits and
+the two-member swap intersects in all 128.
+
+Status: every theorem is proven (model). The Rust side is tested by
+`#[cfg(test)]` checks in `botho/src/commands/run.rs`:
+
+- an exhaustive check of `symmetric_quorum_has_intersection` and
+  `byzantine_tolerance` against the proven closed forms for `n <= 64`;
+- a re-check of each heterogeneous instance with `bth_quorum_sim`, through a
+  test-only mirror of `delete`;
+- the three bugs through the node's own code: `gated_scp_quorum_set`,
+  `QuorumConfig::is_bft_fault_tolerant` and `byzantine_tolerance` (#1843,
+  odd-`n` Crash fleets flagged fault-tolerant with tolerance 0), the per-node
+  gate on bowtie views (#1844), and two Explicit configurations during a
+  re-roster and a two-member swap (#1845). These tests assert the current
+  behaviour, bugs included, and link the issue; fixing a bug means updating
+  its test. #1843 is fixed on main by #1864: the Lean flag model
+  (`recommendedFaultTolerant`) describes the flag as it was before #1864, and
+  the Rust test `crash_odd_n_flag_matches_tolerance_through_gate` now asserts
+  the fixed flag (not tolerant, degenerate) on the same odd-`n` fleets.
+
+A random heterogeneous `formal-drt` leg is a follow-up.
 
 The separate [demurrage counterexample model](DEMURRAGE.md) covers the
 charge kernel and default ring factor (#1711), including refutations of

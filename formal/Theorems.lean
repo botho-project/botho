@@ -21,6 +21,42 @@ import Botho
 #print axioms Botho.satAdd_le_cap
 #print axioms Botho.satAdd_eq_add
 
+-- Botho.Quorum.Fbas (#1714: flat FBAS quorum intersection, despite-f, curated
+-- rotation; status: proven (model); Rust ties are tested, see the module docstring)
+#print axioms Botho.Quorum.delete_satisfies_iff
+#print axioms Botho.Quorum.sym_intersects_iff
+#print axioms Botho.Quorum.sym_intersects_iff_pos
+#print axioms Botho.Quorum.analytic_rule_eq
+#print axioms Botho.Quorum.seed_fallback_intersects
+#print axioms Botho.Quorum.sym_despite_iff
+#print axioms Botho.Quorum.sym_available_iff
+#print axioms Botho.Quorum.byzTol_iff_dset
+#print axioms Botho.Quorum.byzTol_conservative_edge
+#print axioms Botho.Quorum.byzTol_pos_iff
+#print axioms Botho.Quorum.recommended_gate_never_refuses
+#print axioms Botho.Quorum.recommended_crash_flag_overclaims
+#print axioms Botho.Quorum.recommended_crash_flag_even_sound
+#print axioms Botho.Quorum.recommended_bft_byzTol
+#print axioms Botho.Quorum.checkDespite_sound
+#print axioms Botho.Quorum.checker_sound
+#print axioms Botho.Quorum.checker_complete_sym
+#print axioms Botho.Quorum.checkDespite_sym_iff
+#print axioms Botho.Quorum.bruteIntersects_iff
+#print axioms Botho.Quorum.checker_not_complete
+#print axioms Botho.Quorum.rotation_sound
+#print axioms Botho.Quorum.rotation_condition_necessary
+#print axioms Botho.Quorum.nested_rotation_safe
+#print axioms Botho.Quorum.recommended_crash_bowtie_fork
+#print axioms Botho.Quorum.recommended_bft_bowtie_fork
+#print axioms Botho.Quorum.prod_4of5_intersects
+#print axioms Botho.Quorum.prod_4of5_byzTol
+#print axioms Botho.Quorum.prod_4of5_dset_one
+#print axioms Botho.Quorum.prod_4of5_two_faults
+#print axioms Botho.Quorum.prod_4of5_rotate_one_despite_one
+#print axioms Botho.Quorum.prod_4of5_rotate_two_intersects
+#print axioms Botho.Quorum.prod_4of5_rotate_two_not_despite_one
+#print axioms Botho.Quorum.reroster_mixed_fork
+
 -- Botho.Demurrage.Counterexamples (#1711; current arithmetic, not a fix)
 #print axioms Botho.Demurrage.six_block_dead_zone
 #print axioms Botho.Demurrage.churn_counterexample
