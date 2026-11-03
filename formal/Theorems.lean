@@ -56,7 +56,6 @@ import Botho
 #print axioms Botho.Quorum.prod_4of5_rotate_two_intersects
 #print axioms Botho.Quorum.prod_4of5_rotate_two_not_despite_one
 #print axioms Botho.Quorum.reroster_mixed_fork
-
 -- Lottery seed independence and canonical ordering (#1850; proven (model)).
 -- LMDB ordering and the Rust tie remain trusted/tested; see lottery.md.
 #print axioms Botho.Lottery.seed_body_independent
@@ -75,3 +74,25 @@ import Botho
 #print axioms Botho.Lottery.drawing_perm_invariant
 #print axioms Botho.Lottery.draw_order_dependent
 #print axioms Botho.Lottery.scan_cap_order_dependent
+
+-- Botho.Lottery.Sybil (#1708 part C1; status: proven (model), the lottery
+-- model is tested by the #1818 DRT legs; ST-3 is about a stated economy
+-- model, not the node)
+#print axioms Botho.Lottery.TICKET_LIFE_eq
+#print axioms Botho.Lottery.drawEligible_uniform_all_win
+#print axioms Botho.Lottery.rotate_perm
+#print axioms Botho.Lottery.ce_owner_wins_three_base_fees
+#print axioms Botho.Lottery.sybil_net_zero_refuted
+#print axioms Botho.Lottery.rewardCap_inert
+#print axioms Botho.Lottery.lotteryCandidates_length
+#print axioms Botho.Lottery.countEligible_lotteryCandidates
+#print axioms Botho.Lottery.rewardCap_saturated
+#print axioms Botho.Lottery.splitUnprofitable_iff
+#print axioms Botho.Lottery.split_never_pays_iff
+#print axioms Botho.Lottery.split_never_pays_iff_fixed
+#print axioms Botho.Lottery.break_even_reference
+#print axioms Botho.Lottery.break_even_backlog_reference
+#print axioms Botho.Lottery.split_pays_at_reference
+#print axioms Botho.Lottery.r3_no_split_profit
+#print axioms Botho.Lottery.r3_eligibility_unpriced
+#print axioms Botho.Lottery.r3_pricing_violated
