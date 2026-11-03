@@ -1,0 +1,139 @@
+name: Nightly Formal DRT
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Exact u64 seed, or random'
+        default: 'random'
+      cases:
+        description: 'Generated cases per discovered leg (1..1000000)'
+        default: '1000000'
+      legs:
+        description: 'Optional comma-separated subset from --list'
+        default: ''
+
+permissions:
+  contents: read
+
+# One repository-wide writer, including dispatches from other branches.
+concurrency:
+  group: formal-drt-nightly
+  cancel-in-progress: false
+
+env:
+  ELAN_VERSION: v4.2.4
+  CARGO_BUILD_JOBS: '2'
+
+jobs:
+  drt:
+    if: >-
+      github.repository == 'botho-project/botho' &&
+      ((github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    outputs:
+      artifact_url: ${{ steps.upload.outputs.artifact-url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Record exact seed and run context before setup
+        env:
+          SEED: ${{ github.event_name == 'schedule' && 'random' || inputs.seed || 'random' }}
+          CASES: ${{ github.event_name == 'schedule' && '1000000' || inputs.cases || '1000000' }}
+          LEGS: ${{ github.event_name == 'schedule' && '' || inputs.legs || '' }}
+        run: |
+          python3 formal-drt/scripts/nightly.py prepare --out "$RUNNER_TEMP/nightly" \
+            --seed "$SEED" --cases "$CASES" --legs "$LEGS"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-09
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: formal-drt
+          workspaces: formal-drt -> target
+      - name: Cache elan toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/.elan
+          key: elan-${{ runner.os }}-${{ env.ELAN_VERSION }}-${{ hashFiles('formal/lean-toolchain') }}
+      - name: Install elan
+        run: |
+          if [[ ! -x "$HOME/.elan/bin/elan" ]]; then
+            curl -sSfL "https://raw.githubusercontent.com/leanprover/elan/${ELAN_VERSION}/elan-init.sh" -o elan-init.sh
+            sh elan-init.sh -y --default-toolchain none --no-modify-path
+            rm elan-init.sh
+          fi
+          echo "$HOME/.elan/bin" >>"$GITHUB_PATH"
+      - name: Build pinned model
+        timeout-minutes: 15
+        working-directory: formal-drt/lean
+        run: |
+          set -euo pipefail
+          elan toolchain install "$(cat lean-toolchain)"
+          lake build 2>&1 | tee "$RUNNER_TEMP/nightly/build-lean.log"
+      - name: Build pinned runner
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          cp Cargo.lock formal-drt/Cargo.lock
+          cargo build --release --manifest-path formal-drt/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/nightly/build-rust.log"
+      - name: Run every selected leg and collect failures
+        timeout-minutes: 165
+        run: |
+          python3 formal-drt/scripts/nightly.py run --out "$RUNNER_TEMP/nightly" \
+            --runner formal-drt/target/release/botho-formal-drt \
+            --model formal-drt/lean/.lake/build/bin/botho-model \
+            --regressions formal-drt/regressions --workers 4 \
+            --leg-timeout 3600 --total-timeout 9600
+      - name: Upload diagnostics on clean or failed execution
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: formal-drt-nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nightly/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize coverage and artifact
+        if: always()
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          python3 formal-drt/scripts/nightly.py summary --out "$RUNNER_TEMP/nightly" \
+            --summary "$GITHUB_STEP_SUMMARY" --artifact-url "$ARTIFACT_URL"
+
+  report:
+    needs: drt
+    if: >-
+      always() && !cancelled() && needs.drt.outputs.artifact_url != '' &&
+      github.repository == 'botho-project/botho' &&
+      ((github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # The write-token job executes only the trusted default-branch helper.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: formal-drt/scripts
+      - uses: actions/download-artifact@v8
+        with:
+          name: formal-drt-nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nightly
+      - name: Publish only validated differential findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_URL: ${{ needs.drt.outputs.artifact_url }}
+        run: |
+          python3 formal-drt/scripts/nightly.py report --out "$RUNNER_TEMP/nightly" \
+            --summary "$GITHUB_STEP_SUMMARY" --artifact-url "$ARTIFACT_URL"

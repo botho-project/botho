@@ -340,10 +340,112 @@ for each epoch of the parent headers (a few seconds); everything else needs no
 special setup. The legs are independent, so a long run can be split across
 processes with `--legs`.
 
-CI (`.github/workflows/formal-drt.yml`) runs the per-PR tier: seed 1707,
-10,000 cases per leg, about a minute of run time. The nightly random-seed
-tier of 1M cases per leg, and the leg that feeds the same inputs to the
-`cluster-tax` simulation code (#1709), are follow-ups of #1706.
+CI (`.github/workflows/formal-drt.yml`) retains the per-PR tier: seed 1707,
+10,000 cases per leg and a five-minute run budget. Lightweight nightly-helper
+tests run alongside it; PRs do not run the million-case tier or receive an
+issue-writing token. Simulation parity remains tracked in #1709.
+
+### Nightly tier and reproduction (#1817)
+
+`.github/workflows/formal-drt-nightly.yml` schedules `main` at **03:23 UTC**.
+It builds the pinned Rust runner and Lean model once, discovers a nonempty,
+unique leg list through `--list`, resolves one random u64 seed, and requests
+**1,000,000 generated cases per discovered leg**, plus every committed replay
+fixture. The decimal seed remains a string, including 0 and `u64::MAX`.
+Dispatch accepts the same defaults or a numeric seed, 1–1,000,000 cases and
+a validated comma-separated subset of discovered legs. No fixed leg list is
+embedded in the workflow.
+
+`formal-drt/scripts/nightly.py` uses at most four runner/model process groups.
+Each leg has a 60-minute deadline; the orchestration has a 160-minute total
+deadline inside a 165-minute step and 240-minute job. Separate build budgets
+are 15 minutes for Lean and 45 for Rust, leaving collection time. A leg that
+cannot start or finish within those bounds is an explicit infrastructure
+failure; its requested case budget is never silently reduced. These initial
+budgets still require a full Linux measurement after registration. The
+reporter has ten minutes. Repository-wide concurrency serializes scheduled
+and dispatched runs with cancellation disabled.
+
+To exercise the same helper locally, from the repository root after the
+build commands above:
+
+```sh
+python3 formal-drt/scripts/nightly.py prepare --out /tmp/drt-nightly \
+  --seed 18446744073709551615 --cases 100 --sha "$(git rev-parse HEAD)"
+python3 formal-drt/scripts/nightly.py run --out /tmp/drt-nightly \
+  --runner formal-drt/target/release/botho-formal-drt \
+  --model formal-drt/lean/.lake/build/bin/botho-model \
+  --regressions formal-drt/regressions --workers 4
+python3 formal-drt/scripts/nightly.py summary --out /tmp/drt-nightly \
+  --summary /tmp/drt-nightly-summary.md
+```
+
+Use a fresh output directory for each attempt. If Cargo uses a custom target
+directory, pass the actual runner path reported by `cargo metadata`.
+The helper leaves committed fixtures unchanged. The artifact contains
+metadata (seed, source SHA/ref, run/attempt URL, budgets and selected legs),
+original fixture copies, per-leg logs/reports/statuses, appended JSONL records
+and diffs, and `failing/<leg>.jsonl` for every confirmed witness. Replayed
+mismatches are included even when no new line was appended. Artifacts have
+unique run/attempt names and 14-day retention on clean and failed runs.
+Ordinary failures still collect and upload; hard cancellation or runner loss
+can prevent final upload.
+
+A clean leg requires exit 0, a valid report with the exact seed/leg/budget,
+exact original replay count, no mismatches and the full generated count.
+Missing, malformed, unwritable, truncated or inconsistent reports fail as
+infrastructure even when the runner returned 0. A confirmed mismatch requires
+exit 1 and complete unequal Lean/Rust observations; caught `rust_panic` values
+are explicitly identified. `lean_err`, timeouts, model-start/protocol failures
+and other statuses are infrastructure, never semantic-counterexample issues.
+Other independently valid legs are still collected and may be reported.
+Mismatch counts describe generated batches; early stopping can leave part of
+the last batch uncompared. Shrinking has the existing 5,000-step bound and is
+not a claim of global minimality.
+
+Only the separate reporter job has `issues: write`. It checks out the
+**trusted default-branch helper**, reads artifacts as data, verifies their
+run identity against the Actions context, and never executes artifact
+binaries or branch scripts. Events are restricted to this repository's
+schedule and authorized same-repository dispatches. No PAT or
+`pull_request_target` is used. Reporting success cannot erase a failed test
+job, and API/publication failures fail the reporter.
+
+Witness identity v1 is SHA-256 of UTF-8 canonical JSON
+`{"leg":...,"input":...}`: recursively sorted keys, compact separators,
+array order preserved and exact integer/string values. Seed, outputs, SHA
+and run identity are excluded. The exact issue marker is
+`<!-- botho-drt:v1 sha256:HASH -->`. The reporter paginates all issue states
+and matches the marker in its automation-generated issues, rather than
+relying on search indexing or mutable labels. It creates absent findings
+with `area:testing` and `loom:triage`, updates/reopens recurrent findings, and
+makes the same run attempt a no-op. Issues include observed outputs, the
+exact seed/revision, artifact link and build/replay commands. Large fixtures
+are explicitly truncated in prose; the complete JSONL remains in artifacts.
+
+Pre-merge local evidence is recorded in
+[`formal-drt/nightly-validation.json`](../formal-drt/nightly-validation.json).
+At source `de9b8c33` on 2026-11-03, a real macOS run completed 100 generated
+cases in each of 15 dynamically discovered legs plus 27 fixture replays with
+seed `18446744073709551615`. A temporary Rust-only `split_fees` mutation
+incremented burn by one. Seed 0 found and shrank it to fees 0 / permille 800:
+Lean `["0","0"]`, Rust `["0","1"]`. The saved fixture reproduced the mismatch
+with no new appended record; restored Rust passed the same fixture. The
+mutation was removed and the baseline rebuilt. The receipt preserves binary
+and model hashes, the temporary patch and reports. Mock helper/API tests
+exercise failure handling; they do not establish Rust correspondence.
+
+**Registration handoff:** keep #1817 open after the implementation PR.
+GitHub requires [default-branch registration for dispatch](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch);
+[scheduled workflows run from the default branch](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+Once registered, attach a clean full-default Linux
+dispatch (every discovered leg at 1M plus replay), measured duration/artifacts,
+and the first scheduled main run. Then dispatch a small, isolated mutation
+branch; retain its issue, seed, shrunk witness and reproduction, repeat to
+verify updating the same issue, and remove the branch/close the clearly
+identified validation issue. Local evidence does not claim those live
+publication or schedule checks have happened. DRT remains finite test
+evidence, not a proof of model equivalence.
 
 ### Adding a function
 
