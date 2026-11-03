@@ -186,9 +186,23 @@ const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
 /// validation time. For each cluster present on the inputs, the summed output
 /// tag *mass* (`Σ value · weight / TAG_WEIGHT_SCALE`) may not exceed the
 /// (decayed) input mass plus a small rounding tolerance; otherwise the block is
-/// rejected. New clusters that appear only on the outputs are permitted,
-/// exactly as in the upstream validator (they may arise from background
-/// attribution).
+/// rejected.
+///
+/// # Output-only clusters (Rule 2, issue #1857, protocol 8.0.0)
+///
+/// Before 8.0.0 a cluster that appeared only on the outputs was permitted
+/// (as in the upstream validator), so a spender could name any third party's
+/// cluster on an output and credit it with up to the output's value per entry
+/// (#1857). An output entry may now name a cluster absent from every ring
+/// member of every input only if it is `import_cluster`, the bridge-import
+/// cluster of the including block's epoch
+/// (`bth_cluster_tax::import_cluster_id_for_height(block height)`, ADR 0007):
+/// the one sanctioned fresh attribution, an unwrap's minted output. A cluster
+/// "appears" on the ring when some member carries an entry for it, whatever
+/// its rounded mass, so a member whose `value * weight / SCALE` rounds to 0
+/// still admits it (the honest wallet is never false-rejected). See
+/// [`check_output_clusters_on_ring`]. Rule 1 (every output's vector is
+/// `ClusterTagVector::is_valid`) runs before this in `validate_ordinary_body`.
 ///
 /// # Input bound: per-ring maximum, not global sum (issue #581)
 ///
@@ -225,10 +239,19 @@ const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
 /// mass can exceed `u64::MAX`). No `HashMap`/`HashSet` iteration order, no
 /// `f64`, and no node-local state enter the computation, so a proposer and a
 /// validator applying the same block reach an identical verdict.
-fn check_cluster_tag_inheritance(
+pub(in crate::ledger) fn check_cluster_tag_inheritance(
     input_rings: &[Vec<(ClusterTagVector, u64)>],
     outputs: &[TxOutput],
+    import_cluster: u64,
 ) -> Result<(), LedgerError> {
+    // Rule 2 (#1857): no output-only cluster except the epoch import cluster.
+    check_output_clusters_on_ring(
+        input_rings.iter().flatten().map(|(tags, _)| tags),
+        outputs,
+        import_cluster,
+    )
+    .map_err(LedgerError::InvalidBlock)?;
+
     fn accumulate<'a>(
         items: impl Iterator<Item = (u64, &'a ClusterTagVector)>,
     ) -> BTreeMap<u64, u128> {
@@ -294,6 +317,59 @@ fn check_cluster_tag_inheritance(
         }
     }
 
+    Ok(())
+}
+
+/// Rule 1 (issue #1857, protocol 8.0.0): the index of the first output whose
+/// cluster-tag vector fails [`ClusterTagVector::is_valid`] (more than
+/// `MAX_CLUSTER_TAGS` entries, a weight below `MIN_STORED_WEIGHT`, unsorted,
+/// a duplicate cluster id, or total weight above `TAG_WEIGHT_SCALE`).
+///
+/// Bounding every output's total weight by `TAG_WEIGHT_SCALE` bounds the
+/// cluster wealth any one output can credit by its value. Pure function of the
+/// outputs, so it is both a block-validity rule (`validate_ordinary_body`) and
+/// an SCP-intrinsic one (`TransactionValidator::validate_transfer_tx`).
+pub(crate) fn first_malformed_output_tags(outputs: &[TxOutput]) -> Option<usize> {
+    outputs.iter().position(|o| !o.cluster_tags.is_valid())
+}
+
+/// Rule 2 (issue #1857, protocol 8.0.0): every cluster named on an output
+/// must appear on some entry of some ring member, or be `import_cluster`.
+///
+/// `ring_tags` is every resolved ring member's tag vector, of every input
+/// (decoys included: the real input is hidden among them, so the union is
+/// the only node-agnostic set, and it always contains the real input's
+/// clusters, so an honest `merge_weighted` spend is never rejected). A
+/// cluster "appears" when an entry for it is present, whatever its weight or
+/// rounded mass. `import_cluster` is
+/// `bth_cluster_tax::import_cluster_id_for_height(H).0` for the including
+/// block's height `H` (the same height
+/// `record_bridge_import_clusters_for_output` uses), so the clusters admitted
+/// here are exactly the ones the ledger records as import clusters and floors
+/// at `F`.
+///
+/// Deterministic: `BTreeSet` membership over committed UTXO tags only.
+/// Returns a human-readable reason on rejection.
+pub(crate) fn check_output_clusters_on_ring<'a>(
+    ring_tags: impl IntoIterator<Item = &'a ClusterTagVector>,
+    outputs: &[TxOutput],
+    import_cluster: u64,
+) -> Result<(), String> {
+    let ring_clusters: std::collections::BTreeSet<u64> = ring_tags
+        .into_iter()
+        .flat_map(|tags| tags.entries.iter().map(|e| e.cluster_id.0))
+        .collect();
+    for (i, output) in outputs.iter().enumerate() {
+        for entry in &output.cluster_tags.entries {
+            let cluster = entry.cluster_id.0;
+            if cluster != import_cluster && !ring_clusters.contains(&cluster) {
+                return Err(format!(
+                    "output {} names cluster {} absent from every ring (not the epoch import cluster)",
+                    i, cluster
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1498,9 +1574,17 @@ impl Ledger {
     /// Members are grouped **per ring** (#581): the tag-inheritance bound uses
     /// the sum over rings of each ring's per-cluster maximum member mass, so
     /// the input structure must preserve which members belong to which input.
+    ///
+    /// `height` is the including block's height: it selects the epoch
+    /// bridge-import cluster that Rule 2 (#1857) admits as an output-only
+    /// cluster.
     #[cfg(test)]
-    fn verify_cluster_tag_inheritance(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
-        validation::ValidationReads::verify_cluster_tag_inheritance(self, tx)
+    fn verify_cluster_tag_inheritance(
+        &self,
+        tx: &BothoTransaction,
+        height: u64,
+    ) -> Result<(), LedgerError> {
+        validation::ValidationReads::verify_cluster_tag_inheritance(self, tx, height)
     }
 
     /// C8 (issue #831): structural validity of an explicit demurrage-settlement
@@ -4287,6 +4371,14 @@ mod tests {
         }
     }
 
+    /// The bridge-import cluster of epoch 0 (#1857 Rule 2's one admitted
+    /// output-only cluster for a block in the first import epoch). None of the
+    /// C6 tests below name it; it only fills the new argument.
+    #[cfg(test)]
+    fn epoch0_import() -> u64 {
+        bth_cluster_tax::import_cluster_id_for_height(0).0
+    }
+
     /// Cluster tag vector attributing 100% of value to a single cluster.
     #[cfg(test)]
     fn full_tag(cluster: u64) -> ClusterTagVector {
@@ -4317,7 +4409,7 @@ mod tests {
             ClusterTagVector::from_pairs(&[(ClusterId(1), 950_000)]),
         )];
         assert!(
-            check_cluster_tag_inheritance(&inputs, &legit).is_ok(),
+            check_cluster_tag_inheritance(&inputs, &legit, epoch0_import()).is_ok(),
             "a legitimately decayed-inheritance tx must pass"
         );
 
@@ -4325,7 +4417,7 @@ mod tests {
         // air. output mass = 2_000_000 > input mass 1_000_000 + tolerance →
         // rejected.
         let inflated = vec![mk_tagged_output(2_000_000, 2, full_tag(1))];
-        let err = check_cluster_tag_inheritance(&inputs, &inflated)
+        let err = check_cluster_tag_inheritance(&inputs, &inflated, epoch0_import())
             .expect_err("a tag-inflated-output tx must be rejected");
         assert!(
             matches!(err, LedgerError::InvalidBlock(_)),
@@ -4392,7 +4484,7 @@ mod tests {
             settlement: None,
         };
         assert!(
-            ledger.verify_cluster_tag_inheritance(&legit_tx).is_ok(),
+            ledger.verify_cluster_tag_inheritance(&legit_tx, 0).is_ok(),
             "a conserving tx must pass the ledger-resolved guard"
         );
 
@@ -4411,7 +4503,7 @@ mod tests {
             settlement: None,
         };
         let err = ledger
-            .verify_cluster_tag_inheritance(&decoy_inflated_tx)
+            .verify_cluster_tag_inheritance(&decoy_inflated_tx, 0)
             .expect_err("decoy-sourced tag inflation must now be rejected (#581)");
         assert!(
             matches!(err, LedgerError::InvalidBlock(_)),
@@ -4428,7 +4520,7 @@ mod tests {
             settlement: None,
         };
         let err = ledger
-            .verify_cluster_tag_inheritance(&inflated_tx)
+            .verify_cluster_tag_inheritance(&inflated_tx, 0)
             .expect_err("a tag-inflated-output tx must be rejected by the ledger guard");
         assert!(
             matches!(err, LedgerError::InvalidBlock(_)),
@@ -4456,7 +4548,8 @@ mod tests {
         ]];
         let inflated = vec![mk_tagged_output(3_000_000, 1, full_tag(1))];
         assert!(
-            check_cluster_tag_inheritance(&one_ring_three_decoys, &inflated).is_err(),
+            check_cluster_tag_inheritance(&one_ring_three_decoys, &inflated, epoch0_import())
+                .is_err(),
             "ring-size-multiplied decoy inflation must be rejected (bound is the \
              per-ring max 1_000_000, not the sum 3_000_000)"
         );
@@ -4464,7 +4557,8 @@ mod tests {
         // ceiling.
         let at_ceiling = vec![mk_tagged_output(1_000_000, 2, full_tag(1))];
         assert!(
-            check_cluster_tag_inheritance(&one_ring_three_decoys, &at_ceiling).is_ok(),
+            check_cluster_tag_inheritance(&one_ring_three_decoys, &at_ceiling, epoch0_import())
+                .is_ok(),
             "an output at the per-ring-max ceiling must pass"
         );
 
@@ -4480,7 +4574,7 @@ mod tests {
         ];
         let merged = vec![mk_tagged_output(3_000_000, 3, full_tag(1))];
         assert!(
-            check_cluster_tag_inheritance(&three_real_inputs, &merged).is_ok(),
+            check_cluster_tag_inheritance(&three_real_inputs, &merged, epoch0_import()).is_ok(),
             "merging three real single-input rings into one output must not \
              false-reject (bound = sum of per-ring maxima = 3_000_000)"
         );
@@ -4499,7 +4593,7 @@ mod tests {
             ClusterTagVector::from_pairs(&[(ClusterId(1), TAG_WEIGHT_SCALE)]),
         )];
         assert!(
-            check_cluster_tag_inheritance(&bg_input_one_decoy, &over).is_err(),
+            check_cluster_tag_inheritance(&bg_input_one_decoy, &over, epoch0_import()).is_err(),
             "output above the single decoy's cluster-1 mass must be rejected"
         );
 
@@ -4523,7 +4617,7 @@ mod tests {
         let dup_entry_member = vec![vec![(dup_tags, 1_000_000u64)]];
         let at_full = vec![mk_tagged_output(1_000_000, 5, full_tag(1))];
         assert!(
-            check_cluster_tag_inheritance(&dup_entry_member, &at_full).is_ok(),
+            check_cluster_tag_inheritance(&dup_entry_member, &at_full, epoch0_import()).is_ok(),
             "a member's duplicate cluster entries must SUM (per-member mass), \
              not max — else a valid tx is false-rejected (#581 liveness)"
         );

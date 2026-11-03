@@ -29,10 +29,18 @@ mod consensus_fee_parity_tests;
 #[cfg(test)]
 mod mempool_tag_gate_tests;
 
+// #1857 consensus rules on output cluster tags (protocol 8.0.0), kept out of
+// the SHA-pinned store.rs.
+#[cfg(test)]
+mod cluster_tag_rules_tests;
+
 pub use snapshot::{SnapshotError, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2};
 /// Test-only `botho.ledger.2` ledger with V2 lottery payouts (#1286 P7).
 #[cfg(test)]
 pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;
+// Protocol 8.0.0 output-tag rules (#1857), shared with SCP intrinsic
+// validation (Rule 1) and mempool admission (Rule 2).
+pub(crate) use store::{check_output_clusters_on_ring, first_malformed_output_tags};
 pub use store::{
     v2::{DerivationContext, LOTTERY_RULES_VERSION},
     ClusterWealthInfo, EmissionStateUpdate, Ledger, LedgerStorageUsage, TxLocation,

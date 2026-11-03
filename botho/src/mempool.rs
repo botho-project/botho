@@ -41,6 +41,66 @@ use bth_cluster_tax::{
 };
 use bth_transaction_types::TAG_WEIGHT_SCALE;
 
+/// #1857 Rule 2 at admission, for a tx that would be included at
+/// `next_height` (`tip + 1`).
+///
+/// Consensus admits an output-only cluster only when it is the import cluster
+/// of the INCLUDING block's epoch. A tx admitted at `tip + 1` may be included
+/// at any height up to `created_at_height + MAX_TX_AGE` (later blocks drop it
+/// as stale at build time), so a tx that relies on the import exemption is
+/// admitted only if that whole inclusion window lies in `next_height`'s epoch.
+/// Otherwise a tx admitted in the last blocks of an epoch could be included in
+/// the next one, where every node would reject the block. This is exactly the
+/// window the bridge relayer already refuses to build across
+/// (`bth_scan::check_release_height_for_build`, #1740), so honest releases are
+/// unaffected. Relay policy only; the consensus rule is the per-block check in
+/// `check_cluster_tag_inheritance`.
+fn check_output_rule2_for_relay(
+    ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
+    tx: &Transaction,
+    next_height: u64,
+) -> Result<(), MempoolError> {
+    let import_cluster = bth_cluster_tax::import_cluster_id_for_height(next_height).0;
+    crate::ledger::check_output_clusters_on_ring(
+        ring_tags.iter().map(|(tags, _)| tags),
+        &tx.outputs,
+        import_cluster,
+    )
+    .map_err(|reason| MempoolError::InvalidTransaction(format!("{reason} (#1857)")))?;
+
+    // Does the tx rely on the import exemption (an output names the import
+    // cluster while no ring member carries it)?
+    let ring_has_import = ring_tags.iter().any(|(tags, _)| {
+        tags.entries
+            .iter()
+            .any(|e| e.cluster_id.0 == import_cluster)
+    });
+    let names_import = tx.outputs.iter().any(|o| {
+        o.cluster_tags
+            .entries
+            .iter()
+            .any(|e| e.cluster_id.0 == import_cluster)
+    });
+    if names_import && !ring_has_import {
+        let last_inclusion = tx
+            .created_at_height
+            .saturating_add(crate::consensus::MAX_TX_AGE);
+        let epoch = bth_cluster_tax::import_epoch(next_height);
+        if bth_cluster_tax::import_epoch(last_inclusion) != epoch {
+            return Err(MempoolError::InvalidTransaction(format!(
+                "output names import cluster {} of epoch {} but the tx could be included \
+                 up to height {} (import epoch {}); an import-tagged tx must be \
+                 includable only within one import epoch (#1857)",
+                import_cluster,
+                epoch,
+                last_inclusion,
+                bth_cluster_tax::import_epoch(last_inclusion)
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Compute the effective cluster wealth for a transaction using the ledger's
 /// global per-cluster wealth tracker.
 ///
@@ -710,12 +770,11 @@ impl Mempool {
 
         // #1858: every output's cluster tags must be well-formed
         // (`ClusterTagVector::is_valid`: at most 16 entries, unique clusters,
-        // sorted, total weight <= 100%). RELAY POLICY ONLY, not a consensus
-        // rule: block validation does not check this (that is #1857), so a
-        // block carrying such an output is still accepted on every node and a
-        // mixed-version fleet cannot fork on it. Kept here in `add_tx` rather
-        // than in `Transaction::is_valid_structure` so that no block-path
-        // caller of that shared validator silently turns it into consensus.
+        // sorted, total weight <= 100%). Since protocol 8.0.0 this is also a
+        // consensus rule (#1857 Rule 1: SCP intrinsic validity and block
+        // validation both enforce it); this admission check keeps its own
+        // message and runs first. Kept here in `add_tx` rather than in
+        // `Transaction::is_valid_structure`, which has block-path callers.
         //
         // Checked before any signature or ledger work, so a malformed spend
         // costs O(outputs * 16) (`is_valid` rejects an over-long vector on
@@ -774,6 +833,19 @@ impl Mempool {
         // Validate inputs (all transactions use CLSAG ring signatures)
         let (input_sum, ring_members, ring_tags) =
             self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
+
+        // #1857 Rule 2 (protocol 8.0.0): an output may name a cluster absent
+        // from every ring member only if it is the bridge-import cluster of the
+        // epoch of the next block (`tip + 1`). Block validation enforces this at
+        // the including height; checking it here keeps a fresh-cluster spend,
+        // which every node would reject in a block, out of relay and
+        // nomination (otherwise one such tx could poison a whole block).
+        let next_height = ledger
+            .get_chain_state()
+            .map(|s| s.height)
+            .unwrap_or(0)
+            .saturating_add(1);
+        check_output_rule2_for_relay(&ring_tags, &tx, next_height)?;
 
         // Validate outputs + fee <= inputs
         // Use checked arithmetic to detect overflow from malicious transactions
@@ -1637,6 +1709,69 @@ mod tests {
             })
             .collect();
         Transaction::new_clsag(vec![test_clsag_input(3)], outputs, MIN_TX_FEE, 0)
+    }
+
+    /// #1857 Rule 2 at admission (`check_output_rule2_for_relay`): a ring
+    /// cluster is admitted; a fresh non-import cluster is rejected; the
+    /// `tip + 1` epoch's import cluster is admitted only when the tx's whole
+    /// inclusion window (`..= created_at_height + MAX_TX_AGE`) stays in that
+    /// epoch, and with no window restriction when a ring member already
+    /// carries it (it is then an ordinary ring cluster).
+    #[test]
+    fn rule2_relay_check_and_import_epoch_window() {
+        use bth_cluster_tax::{import_cluster_id, BRIDGE_IMPORT_EPOCH_BLOCKS as K};
+        use bth_transaction_types::ClusterId;
+        let max_age = crate::consensus::MAX_TX_AGE;
+        let import0 = import_cluster_id(0).0;
+        let tx = |tags: ClusterTagVector, created: u64| {
+            let mut out = test_output(1_000, 1);
+            out.cluster_tags = tags;
+            Transaction::new_clsag(Vec::new(), vec![out], MIN_TX_FEE, created)
+        };
+        let ring = vec![(ClusterTagVector::single(ClusterId(5)), 1_000u64)];
+        let next = 10;
+        let ok = |ring: &[(ClusterTagVector, u64)], t: &Transaction, next: u64| {
+            check_output_rule2_for_relay(ring, t, next).is_ok()
+        };
+
+        assert!(ok(
+            &ring,
+            &tx(ClusterTagVector::single(ClusterId(5)), 9),
+            next
+        ));
+        assert!(!ok(
+            &ring,
+            &tx(ClusterTagVector::single(ClusterId(6)), 9),
+            next
+        ));
+        assert!(!ok(
+            &ring,
+            &tx(
+                ClusterTagVector::single(ClusterId(import_cluster_id(1).0)),
+                9
+            ),
+            next
+        ));
+        // Import exemption, window inside epoch 0.
+        let imp = ClusterTagVector::single(ClusterId(import0));
+        assert!(ok(&ring, &tx(imp.clone(), 9), next));
+        assert!(ok(
+            &ring,
+            &tx(imp.clone(), K - 1 - max_age),
+            K - 1 - max_age + 1
+        ));
+        // Window reaches epoch 1: refused, even though tip + 1 is in epoch 0.
+        assert!(!ok(&ring, &tx(imp.clone(), K - max_age), K - max_age + 1));
+        let err = check_output_rule2_for_relay(&ring, &tx(imp.clone(), K - 1), K - 1).unwrap_err();
+        assert!(
+            matches!(err, MempoolError::InvalidTransaction(ref m) if m.contains("one import epoch")),
+            "{err:?}"
+        );
+        // A far-future created_at_height never fits one epoch.
+        assert!(!ok(&ring, &tx(imp.clone(), u64::MAX), next));
+        // The same cluster on a ring member is an ordinary ring cluster.
+        let ring_with_import = vec![(imp.clone(), 1_000u64)];
+        assert!(ok(&ring_with_import, &tx(imp, K - 1), K - 1));
     }
 
     /// #1858: an output whose cluster tags fail `is_valid()` is rejected at

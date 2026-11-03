@@ -376,13 +376,13 @@ async fn chain_info_and_identity_report_lottery_rules() {
     // No injected identity: `protocolVersion` comes from the real constant.
     let chain = seeded_chain();
     assert_eq!(LOTTERY_RULES_VERSION, 2);
-    assert_eq!(crate::network::PROTOCOL_VERSION, "7.0.0");
+    assert_eq!(crate::network::PROTOCOL_VERSION, "8.0.0");
     let info = handle_chain_info(json!(1), &chain.state)
         .await
         .result
         .unwrap();
     assert_eq!(info["lotteryRules"], json!(2));
-    assert_eq!(info["protocolVersion"], json!("7.0.0"));
+    assert_eq!(info["protocolVersion"], json!("8.0.0"));
     let identity = handle_node_identity(json!(1), &chain.state)
         .await
         .result
