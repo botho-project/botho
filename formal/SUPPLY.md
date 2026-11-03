@@ -94,3 +94,10 @@ The existing DRT legs `split_fees`, `compute_pool_accounting` and
 `carryover_after` test the Rust primitives reused by this proof. Those legs
 do not test the new aggregate `apply` projection or establish the open
 ledger premises above. Whole-block DRT remains part of #1839.
+
+At source `8085ad6a`, seed 1839 passed 100,000 cases per primitive plus two
+saved regressions, with zero mismatches. The
+[receipt](../formal-drt/results/supply-1839.json) pins the source, toolchains,
+input-file hashes and branch coverage: 8,355 truncating fee casts, 16,344
+pool-saturation cases, and 29,150 carryover underflows. These unrestricted
+helper inputs do not establish that such states are reachable in consensus.

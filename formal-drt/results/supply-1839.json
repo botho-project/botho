@@ -1,0 +1,61 @@
+{
+  "source_commit": "8085ad6ab9e38c7da4751e2cd32cd1976052f0bc",
+  "date_utc": "2026-11-03",
+  "lean_toolchain": "leanprover/lean4:v4.35.0",
+  "rustc": "rustc 1.98.0-nightly (cb46fbb8c 2026-06-08)",
+  "platform": "Darwin arm64",
+  "command": "botho-formal-drt --cases 100000 --seed 1839 --legs split_fees,compute_pool_accounting,carryover_after --model formal-drt/lean/.lake/build/bin/botho-model --no-write-regressions --json REPORT.json",
+  "scope": "Existing Rust/Lean primitives only; not the aggregate Supply.apply projection or accepted-block ledger premises.",
+  "sha256": {
+    "formal/Botho/Supply/Accounting.lean": "fe455e20d1c7ef240a614d3e771129a2461d147f41affeeb2b8bad31e8277804",
+    "formal/Botho/Lottery/Pool.lean": "eec548f77ae263473f8b97951f1a127e7a71d20f3d60268d09504bdecf05552e",
+    "formal/Botho/Lottery/Arith.lean": "86fd230c62286e4bb65803ea94434fe80531b56df9e974201a5f7e13a3bdde59",
+    "botho/src/consensus/lottery.rs": "923a7c476d8d3e5979057ebec0cd8e6cdde09bfa54c56b62aec1d92f6e64bf1c",
+    "formal-drt/src/legs.rs": "6c0fa75c445295ced5da822b3547b38871bbafb210fcb4ee6742e2f556ebccb0",
+    "formal-drt/Cargo.lock": "0a2b2be1a5d4c4e7d48efbff227ca91693e8eff529b9f55e3396cc5aa90cfea2"
+  },
+  "report": {
+    "cases_per_leg": 100000,
+    "legs": [
+      {
+        "cases": 100000,
+        "classes": {
+          "as-u64 truncates": 8355,
+          "permille 800": 44581,
+          "permille other": 47064
+        },
+        "leg": "split_fees",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "botho::consensus::lottery::LotteryFeeConfig::split_fees",
+        "seconds": 0.963986292
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "available exact, payout = available": 12680,
+          "available exact, payout = cap": 70976,
+          "available saturated, payout = cap": 16344
+        },
+        "leg": "compute_pool_accounting",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "botho::consensus::lottery::compute_pool_accounting",
+        "seconds": 3.279339083
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "exact": 70850,
+          "saturates at 0": 29150
+        },
+        "leg": "carryover_after",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "botho::consensus::lottery::LotteryPoolAccounting::carryover_after",
+        "seconds": 2.439150458
+      }
+    ],
+    "seed": "1839"
+  }
+}
