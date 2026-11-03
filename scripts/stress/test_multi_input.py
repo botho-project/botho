@@ -57,25 +57,46 @@ class MultiInputDecoyTests(unittest.TestCase):
                     selected = self.c.spendable(0, 170, 10_000_000_000, count)
                     self.assertEqual(len(selected), count if decoys == 19 else 0)
 
+    def test_age_150_one_output_per_block_waits_for_inventory(self):
+        # #1692 review: ages 130..170, one output per block. The envelope
+        # 136..164 holds 28 decoys, but the signer draws one 15-age window,
+        # which holds at most 14. Admission must wait, not hand the signer a
+        # ring it refuses (which would hold the run).
+        self.pool([(0, 20)], [h for h in range(0, 41) if h != 20])
+        self.assertEqual(self.c.spendable(0, 170), [])
+        self.assertEqual(self.c.spendable(0, 170, 1, 1), [])
+        # Two outputs per block: every window holds 29 decoys.
+        self.pool([(0, 20)], [h for h in range(0, 41) for _ in range(2)])
+        self.assertEqual(len(self.c.spendable(0, 170)), 1)
+        self.assertEqual(len(self.c.spendable(0, 170, 1, 1)), 1)
+
     def test_disjoint_bands_do_not_subtract_unrelated_selected_inputs(self):
         self.pool([(0, 100), (0, 140)], [100] * 19 + [140] * 19)
         self.assertEqual(len(self.c.spendable(0, 170, 1, 2)), 2)
 
     def test_partially_overlapping_bands_check_each_ring(self):
-        # Ages 70 and 60 have window envelopes 64..76 and 54..66. The age-60
-        # real input lies outside the first band, but the age-70 input lies
-        # outside the second too: their overlapping decoys can be reused.
-        self.pool([(0, 100), (0, 110)], [106] * 18 + [100, 110])
+        # Ages 70 and 60 (W = 6) draw windows [s, s+6] with s in 64..70 and
+        # 54..60. Neither real input lies in any of the other's windows, so
+        # decoys in the shared envelope region (ages 64 and 66) can be reused.
+        # Age 70: 18 at 70, age 66 covers s 64..66, age 72 covers s 66..70.
+        # Age 60: 18 at 60, age 58 covers s 54..58, age 64 covers s 58..60.
+        shared = [104, 106]
+        self.pool([(0, 100), (0, 110)], [100] * 18 + [98] + [110] * 18 + [112] + shared)
         self.assertEqual(len(self.c.spendable(0, 170, 1, 2)), 2)
-        self.pool([(0, 100), (0, 110)], [106] * 18 + [100])
+        # Without age 58, the age-60 windows s 54..57 hold only 18.
+        self.pool([(0, 100), (0, 110)], [100] * 18 + [98] + [110] * 18 + shared)
         self.assertEqual(self.c.spendable(0, 170, 1, 2), [])
 
     def test_overlap_checks_each_ring_not_only_the_larger_pool(self):
-        # Age 80's envelope upper edge is 88; age 88's lower edge is 80.
-        # Both real inputs count as decoys alone but neither may enter a ring.
-        self.pool([(0, 90), (0, 82)], [90] * 18 + [74])
+        # Ages 80 and 88 (W = 8) share exactly one window, [80, 88], which
+        # holds both real inputs. Alone, each counts the other as its
+        # nineteenth decoy there, but neither may enter the other's ring.
+        # Age 80: 18 at 80 plus age 79 (s 72..79); age 88: 19 at 89 (s 81..88).
+        self.pool([(0, 90), (0, 82)], [90] * 18 + [91] + [81] * 19)
         self.assertEqual(len(self.c.spendable(0, 170)), 2)
         self.assertEqual(self.c.spendable(0, 170, 1, 2), [])
+        self.pool([(0, 90), (0, 82)], [90] * 19 + [91] + [81] * 19)
+        self.assertEqual(len(self.c.spendable(0, 170, 1, 2)), 2)
 
     def test_conservative_prefix_waits_even_when_alternate_set_is_feasible(self):
         self.pool([(0, 100)] * 2 + [(0, 140)], [100] * 18 + [140] * 19)

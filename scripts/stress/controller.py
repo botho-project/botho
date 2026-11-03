@@ -16,8 +16,8 @@ from plan import expand
 from reporting import legacy_lottery_evidence
 from lottery import (check_lottery_rules, decoy_row, lottery_context, lottery_rows,
                      v2_award_evidence)
-from signer_history import (SCAN_OPERATIONS, history_duplicate, merge_scans,
-                            prepare_blocks, prepare_spent, scan_payloads)
+from signer_history import (SCAN_OPERATIONS, age_band, history_duplicate, merge_scans,
+                            prepare_blocks, prepare_spent, scan_payloads, thinnest_window_count)
 from runtime import (BlockLog, Expired, Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic, atomic_stream, inventory_chunks,
                      RESTART_ACTIONS, QUORUM_GATE_KEYS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
@@ -1221,16 +1221,17 @@ class Controller:
             if height-utxo['created_at'] < 10:
                 continue
             age = height-utxo['created_at']
-            # Match production age_similarity_envelope (#1692): every age a
-            # random-offset +/-5% window can cover, ten-block floor.
-            width = 2*(age*500//10_000)
-            low,high = max(10,age-width),age+width
-            keys = {key for key, (created, row) in canonical.items()
+            # Candidates come from production age_similarity_envelope (#1692):
+            # every age a random-offset +/-5% window can cover, ten-block floor.
+            # The signer draws ONE window and refuses below nineteen decoys, so
+            # admit only when the thinnest drawable window still holds 19.
+            low,high = age_band(age)
+            keys = {key: height-created for key, (created, row) in canonical.items()
                     if low <= height-created <= high and key != '0'*64 and decoy_row(row)}
-            keys.discard(bytes(utxo['target_key']).hex())
-            if len(keys) >= 19:
+            keys.pop(bytes(utxo['target_key']).hex(), None)
+            if thinnest_window_count(age, keys.values()) >= 19:
                 outputs.append(output)
-                decoys[output['id']] = keys
+                decoys[output['id']] = (age, keys)
         outputs.sort(key=lambda u:u['utxo']['amount'],reverse=True)
         # Lottery history can reuse a target key. Distinct RPC IDs do not make
         # two independently spendable inputs when their key images coincide.
@@ -1249,7 +1250,9 @@ class Controller:
             # in any ring. Keep the deterministic largest-value prefix; wait
             # if it is infeasible rather than searching alternative input sets.
             excluded = {bytes(o['utxo']['target_key']).hex() for o in selected}
-            if any(len(decoys[o['id']] - excluded) < 19 for o in selected):
+            if any(thinnest_window_count(decoys[o['id']][0],
+                                         [a for k, a in decoys[o['id']][1].items() if k not in excluded]) < 19
+                   for o in selected):
                 return []
             return selected
         return outputs

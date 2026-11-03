@@ -180,8 +180,10 @@ class CompactInventoryTests(Scenario):
     def test_owned_outputs_drop_only_the_ciphertext_and_history_keeps_it(self):
         h = self.harness(tx_per_block=2)
         c = h.controller()
-        h.sync(30)
-        raw = {o['id']: o for w in range(WALLETS) for o in h.chain.owned(range(31), w)}
+        # Deep enough that the thinnest +/-5% window the signer can draw holds
+        # nineteen decoys (#1692): at five outputs per block, from age 40.
+        h.sync(60)
+        raw = {o['id']: o for w in range(WALLETS) for o in h.chain.owned(range(61), w)}
         owned = [o for w in c.inventory for o in w]
         self.assertEqual(len(owned), len(raw))
         for output in owned:
@@ -211,21 +213,31 @@ class CompactInventoryTests(Scenario):
 
 
 def reference_choose(controller, wallet, height, amount=0, count=None, headroom=0):
-    """selection.choose before #1633: one materialized decoy-pool set per input."""
+    """selection.choose before #1633: one materialized decoy-pool set per input.
+
+    Since #1692 a pool must fill the thinnest random-offset window the signer
+    can draw, checked here by brute force over every offset."""
     from itertools import combinations
     canonical = controller.canonical_history()
     raw = controller.canonical_inventory(wallet, canonical)
     unspent = controller.unspent_setup_inputs(wallet, canonical)
     mature = [o for o in unspent if height - o["utxo"]["created_at"] >= 10]
+
+    def thinnest(age, pool):
+        width = 2 * (age * 500 // 10_000)
+        return min(sum(1 for key in pool
+                       if max(age - o, 10) <= height - canonical[key][0] <= age - o + width)
+                   for o in range(width + 1))
+
     pools, eligible = {}, []
     for output in mature:
         age = height - output["utxo"]["created_at"]
-        low, high = max(10, age - age // 10), age + age // 10
+        low, high = max(10, age - 2 * (age * 500 // 10_000)), age + 2 * (age * 500 // 10_000)
         real = bytes(output["utxo"]["target_key"]).hex()
         pool = {key for key, (created, _) in canonical.items()
                 if key != "0" * 64 and low <= height - created <= high} - {real}
-        if len(pool) >= 19 + headroom:
-            pools[output["id"]] = pool
+        if thinnest(age, pool) >= 19 + headroom:
+            pools[output["id"]] = (age, pool)
             eligible.append(output)
     eligible.sort(key=lambda o: (-o["utxo"]["amount"], o["id"]))
     if not amount:
@@ -236,13 +248,16 @@ def reference_choose(controller, wallet, height, amount=0, count=None, headroom=
             if sum(o["utxo"]["amount"] for o in selected) < amount + fee:
                 continue
             excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
-            if all(len(pools[o["id"]] - excluded) >= 19 + headroom for o in selected):
+            if all(thinnest(pools[o["id"]][0], pools[o["id"]][1] - excluded) >= 19 + headroom
+                   for o in selected):
                 return list(selected)
     return []
 
 
 class SelectionEquivalenceTests(unittest.TestCase):
-    """choose() counts decoy pools instead of building them (#1633): same result."""
+    """choose() counts decoy pools instead of building them (#1633): same result.
+
+    The oracle checks every random-offset window by brute force (#1692)."""
 
     def test_counted_pools_select_exactly_as_materialized_pools(self):
         import random
@@ -273,6 +288,29 @@ class SelectionEquivalenceTests(unittest.TestCase):
                     got = choose(fake, 0, height, amount, count, headroom)[0]
                     self.assertEqual([o['id'] for o in got],
                                      [o['id'] for o in reference_choose(fake, 0, height, amount, count, headroom)])
+
+
+    def test_age_150_one_output_per_block_is_not_eligible(self):
+        # #1692 review: the envelope (ages 136..164) holds 28 decoys, but each
+        # window the signer can draw spans 15 ages and holds 14. choose() must
+        # not offer the input; two outputs per block fill every window.
+        from types import SimpleNamespace
+        from selection import choose
+        for per_block, expected in ((1, 0), (2, 1)):
+            with self.subTest(per_block=per_block):
+                canonical = {'%064x' % (h * 4 + i + 1): (h, {})
+                             for h in range(0, 41) for i in range(per_block)}
+                real = '%064x' % (20 * 4 + 1)
+                owned = [{'id': 'tx:0', 'key_image': 'i', 'utxo': {
+                    'amount': 10**10, 'created_at': 20,
+                    'target_key': list(bytes.fromhex(real))}}]
+                fake = SimpleNamespace(
+                    canonical_history=lambda c=canonical: c,
+                    canonical_inventory=lambda w, c=None, o=owned: o,
+                    unspent_setup_inputs=lambda w, c=None, o=owned: o,
+                    j=SimpleNamespace(limits={'max_single_signed_fee_picocredits': 10**8}))
+                self.assertEqual(len(choose(fake, 0, 170)[0]), expected)
+                self.assertEqual(len(choose(fake, 0, 170, 1, 1)[0]), expected)
 
 
 class InventoryCheckpointTests(Scenario):

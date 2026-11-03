@@ -113,6 +113,36 @@ def age_band(age):
     return max(age - width, MIN_DECOY_AGE), age + width
 
 
+def thinnest_window_count(age, decoy_ages):
+    """Fewest decoys any window the signer can draw for ``age`` holds.
+
+    The signer (``draw_age_similarity_window``) draws ONE window
+    ``[max(10, age - o), age - o + W]`` with ``o`` uniform in ``0..=W`` and
+    refuses when it holds fewer than nineteen decoys. Counting the whole
+    envelope (``age_band``) is necessary but not sufficient, so admission must
+    use the minimum over every offset (#1692 review). ``decoy_ages`` holds one
+    age per eligible decoy (real inputs already removed); ages outside the
+    envelope are ignored.
+
+    The count is piecewise constant in the window start ``s = age - o``: it
+    only falls just after ``s`` passes a decoy age, so the minimum is at
+    ``s = age - W`` or at ``s = a + 1`` for some decoy age ``a`` in range.
+    """
+    width = 2 * (age * AGE_SIMILARITY_SPREAD_BPS // 10_000)
+    ages = sorted(decoy_ages)
+    first, last = age - width, age
+
+    def count(start):
+        return (bisect_right(ages, start + width)
+                - bisect_left(ages, max(start, MIN_DECOY_AGE)))
+
+    best = count(first)
+    for a in ages:
+        if first <= a < last:
+            best = min(best, count(a + 1))
+    return best
+
+
 def output_id(output):
     """The signer's selected-id form: lowercase tx hash and RPC output index."""
     return output['txHash'].lower() + ':' + str(output['outputIndex'])
