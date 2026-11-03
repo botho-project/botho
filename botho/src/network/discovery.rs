@@ -21,7 +21,7 @@ use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity},
     identify, identity,
     multiaddr::Protocol,
-    noise,
+    noise, ping,
     request_response::{self, InboundRequestId, OutboundRequestId, ResponseChannel},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
@@ -234,6 +234,23 @@ const PEX_TOPIC: &str = "botho/pex/1.0.0";
 /// keeps its default (5000): only our own publishes need the longer window.
 /// The root cause (work on the event loop) is tracked in #1550.
 pub const GOSSIPSUB_PUBLISH_QUEUE_DURATION: Duration = Duration::from_secs(30);
+
+/// How often the node pings each connected peer to probe liveness (#1866).
+pub const PING_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long a ping may go unanswered before it fails (#1866).
+///
+/// Without an active probe a blackholed peer (iptables DROP, a lost cloud
+/// route: no RST, no FIN) stayed connected for about 16 minutes. Gossipsub
+/// kept queueing to it, so the 60 s idle timeout never fired.
+///
+/// libp2p-ping reports a failure only on the SECOND consecutive one (the
+/// first is "free"), and the second attempt opens a new substream whose
+/// protocol negotiation has its own 10 s timeout (libp2p's
+/// `SubstreamProtocol` default). Worst case, from just after a successful
+/// ping: interval + timeout (free failure) + interval + negotiation timeout
+/// = 10 + 15 + 10 + 10 = 45 s, inside the 60 s budget.
+pub const PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Build the gossipsub configuration used by the node.
 ///
@@ -461,6 +478,15 @@ pub enum NetworkEvent {
         peer_version: ProtocolVersion,
         min_version: ProtocolVersion,
     },
+    /// A connected peer stopped answering liveness pings (#1866). The caller
+    /// MUST close `connection` (`swarm.close_connection`), so the normal
+    /// `ConnectionClosed` → [`PeerDisconnected`](Self::PeerDisconnected) path
+    /// runs. A blackholed peer (no RST, no FIN) otherwise stays connected for
+    /// many minutes.
+    PeerUnresponsive {
+        peer: PeerId,
+        connection: libp2p::swarm::ConnectionId,
+    },
     /// A peer with a consensus-incompatible protocol version (different
     /// major) was detected. The caller MUST disconnect this peer: major
     /// version bumps mark consensus-breaking changes, and keeping such
@@ -484,6 +510,10 @@ pub struct BothoBehaviour {
     pub sync: request_response::Behaviour<SyncCodec>,
     /// Identify protocol for version negotiation
     pub identify: identify::Behaviour,
+    /// Liveness probe (#1866). A failed ping is surfaced as
+    /// [`NetworkEvent::PeerUnresponsive`] and the caller closes that
+    /// connection.
+    pub ping: ping::Behaviour,
 }
 
 /// Live, node-wide network traffic and connection-direction counters (#542).
@@ -639,6 +669,11 @@ pub struct NetworkDiscovery {
     /// layer via [`stats`](Self::stats); incremented on the send/receive
     /// and connect/disconnect paths.
     stats: Arc<NetworkStats>,
+    /// Ping interval and timeout for the liveness probe (#1866). Defaults to
+    /// [`PING_INTERVAL`] / [`PING_TIMEOUT`]; tests shorten them via
+    /// [`with_ping_timing`](Self::with_ping_timing).
+    ping_interval: Duration,
+    ping_timeout: Duration,
 }
 
 impl NetworkDiscovery {
@@ -716,6 +751,8 @@ impl NetworkDiscovery {
             rate_limit_log: RateLimitLogSummary::default(),
             slow_peer_log: RateLimitLogSummary::default(),
             stats: Arc::new(NetworkStats::new()),
+            ping_interval: PING_INTERVAL,
+            ping_timeout: PING_TIMEOUT,
         }
     }
 
@@ -724,6 +761,16 @@ impl NetworkDiscovery {
     /// Defaults to `0.0.0.0`. Wired from `network.listen_address`.
     pub fn with_listen_address(mut self, ip: IpAddr) -> Self {
         self.listen_ip = ip;
+        self
+    }
+
+    /// Override the liveness-probe ping interval and timeout (#1866).
+    ///
+    /// Production uses [`PING_INTERVAL`] / [`PING_TIMEOUT`]; tests use short
+    /// values so a blackholed peer is detected in seconds.
+    pub fn with_ping_timing(mut self, interval: Duration, timeout: Duration) -> Self {
+        self.ping_interval = interval;
+        self.ping_timeout = timeout;
         self
     }
 
@@ -852,6 +899,9 @@ impl NetworkDiscovery {
         // closure can hand them to the sync codec without borrowing `self`
         // (#549).
         let stats = Arc::clone(&self.stats);
+        let ping_config = ping::Config::new()
+            .with_interval(self.ping_interval)
+            .with_timeout(self.ping_timeout);
         let mut swarm = libp2p::SwarmBuilder::with_existing_identity(self.keypair.clone())
             .with_tokio()
             .with_tcp(
@@ -883,10 +933,16 @@ impl NetworkDiscovery {
                         .with_agent_version(agent_version);
                 let identify = identify::Behaviour::new(identify_config);
 
+                // Liveness probe (#1866). libp2p's ping no longer closes the
+                // connection on failure; `process_event` maps a failure to
+                // `PeerUnresponsive` and the caller closes the connection.
+                let ping = ping::Behaviour::new(ping_config);
+
                 Ok(BothoBehaviour {
                     gossipsub,
                     sync,
                     identify,
+                    ping,
                 })
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
@@ -1858,7 +1914,39 @@ impl NetworkDiscovery {
                 self.slow_peer_log.remove_peer(&peer_id);
                 Some(NetworkEvent::PeerDisconnected(peer_id))
             }
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Ping(event)) => self.on_ping_event(event),
             _ => None,
+        }
+    }
+
+    /// Map a ping result to a node event (#1866).
+    ///
+    /// Only a timeout or an I/O failure marks the connection unresponsive. A
+    /// peer that does not speak the ping protocol (`Unsupported`, e.g. an
+    /// older build) stays connected: libp2p stops pinging it after that one
+    /// report.
+    fn on_ping_event(&mut self, event: ping::Event) -> Option<NetworkEvent> {
+        match event.result {
+            Ok(rtt) => {
+                tracing::trace!(peer = %event.peer, ?rtt, "Ping ok");
+                None
+            }
+            Err(ping::Failure::Unsupported) => {
+                debug!(peer = %event.peer, "Peer does not support ping; not probing liveness");
+                None
+            }
+            Err(err) => {
+                warn!(
+                    peer = %event.peer,
+                    connection = ?event.connection,
+                    error = %err,
+                    "Peer failed liveness ping; closing connection"
+                );
+                Some(NetworkEvent::PeerUnresponsive {
+                    peer: event.peer,
+                    connection: event.connection,
+                })
+            }
         }
     }
 
@@ -1956,6 +2044,215 @@ mod tests {
             config.forward_queue_duration(),
             gossipsub::Config::default().forward_queue_duration()
         );
+    }
+
+    /// #1866: production ping timing detects a blackholed peer within a
+    /// minute, worst case (see the derivation on [`PING_TIMEOUT`]).
+    #[test]
+    fn ping_timing_detects_dead_peer_within_a_minute() {
+        // libp2p's default substream-negotiation timeout, which bounds the
+        // second ping attempt on a blackholed connection.
+        const PING_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(10);
+        let worst_case = PING_INTERVAL + PING_TIMEOUT + PING_INTERVAL + PING_NEGOTIATION_TIMEOUT;
+        assert!(worst_case <= Duration::from_secs(50), "{worst_case:?}");
+        let d = NetworkDiscovery::new(0, Vec::new());
+        assert_eq!(d.ping_interval, PING_INTERVAL);
+        assert_eq!(d.ping_timeout, PING_TIMEOUT);
+    }
+
+    fn ping_event(result: Result<Duration, ping::Failure>) -> (PeerId, ping::Event) {
+        let peer = PeerId::random();
+        let event = ping::Event {
+            peer,
+            connection: libp2p::swarm::ConnectionId::new_unchecked(7),
+            result,
+        };
+        (peer, event)
+    }
+
+    /// #1866: a ping timeout maps to `PeerUnresponsive` for that connection.
+    #[test]
+    fn ping_timeout_marks_connection_unresponsive() {
+        let mut d = NetworkDiscovery::new(0, Vec::new());
+        let (peer, event) = ping_event(Err(ping::Failure::Timeout));
+        match d.process_event(SwarmEvent::Behaviour(BothoBehaviourEvent::Ping(event))) {
+            Some(NetworkEvent::PeerUnresponsive {
+                peer: p,
+                connection,
+            }) => {
+                assert_eq!(p, peer);
+                assert_eq!(connection, libp2p::swarm::ConnectionId::new_unchecked(7));
+            }
+            other => panic!("expected PeerUnresponsive, got {other:?}"),
+        }
+    }
+
+    /// #1866: a successful ping, or a peer without ping support, is not a
+    /// reason to disconnect.
+    #[test]
+    fn ping_success_or_unsupported_keeps_connection() {
+        let mut d = NetworkDiscovery::new(0, Vec::new());
+        for result in [
+            Ok(Duration::from_millis(3)),
+            Err(ping::Failure::Unsupported),
+        ] {
+            let (_, event) = ping_event(result);
+            assert!(d
+                .process_event(SwarmEvent::Behaviour(BothoBehaviourEvent::Ping(event)))
+                .is_none());
+        }
+    }
+
+    /// Byte-forwarding TCP proxy that can be switched to a blackhole: once
+    /// `blackhole` is set it reads and discards everything in both
+    /// directions and never closes either socket, like an iptables DROP
+    /// (no RST, no FIN).
+    async fn spawn_blackhole_proxy(
+        target: std::net::SocketAddr,
+        blackhole: Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn pump(
+            mut from: tokio::net::tcp::OwnedReadHalf,
+            mut to: tokio::net::tcp::OwnedWriteHalf,
+            blackhole: Arc<std::sync::atomic::AtomicBool>,
+        ) {
+            let mut buf = vec![0u8; 16 * 1024];
+            loop {
+                let n = match from.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                if blackhole.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if to.write_all(&buf[..n]).await.is_err() {
+                    break;
+                }
+            }
+            // Never close the other side: hold both halves open.
+            std::future::pending::<()>().await;
+            drop((from, to));
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((inbound, _)) = listener.accept().await {
+                let Ok(outbound) = tokio::net::TcpStream::connect(target).await else {
+                    continue;
+                };
+                let (in_r, in_w) = inbound.into_split();
+                let (out_r, out_w) = outbound.into_split();
+                tokio::spawn(pump(in_r, out_w, Arc::clone(&blackhole)));
+                tokio::spawn(pump(out_r, in_w, Arc::clone(&blackhole)));
+            }
+        });
+        addr
+    }
+
+    /// #1866 regression: a peer whose network path is blackholed (no RST, no
+    /// FIN) is disconnected by the liveness ping, well within 60 s. Before
+    /// the fix such a peer stayed connected for about 16 minutes.
+    #[tokio::test]
+    async fn blackholed_peer_is_disconnected_by_ping() {
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        let interval = Duration::from_millis(500);
+        let timeout = Duration::from_secs(2);
+
+        // Node B listens on loopback.
+        let mut b = NetworkDiscovery::new(0, Vec::new())
+            .with_listen_address(loopback)
+            .with_ping_timing(interval, timeout);
+        let mut swarm_b = b.start().await.expect("swarm b starts");
+        let b_addr = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let SwarmEvent::NewListenAddr { address, .. } =
+                    futures::StreamExt::select_next_some(&mut swarm_b).await
+                {
+                    break address;
+                }
+            }
+        })
+        .await
+        .expect("b listen address");
+        let b_port = match b_addr.iter().nth(1) {
+            Some(Protocol::Tcp(port)) => port,
+            other => panic!("unexpected listen address {other:?} in {b_addr}"),
+        };
+
+        // Node A reaches B only through the proxy.
+        let blackhole = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let proxy = spawn_blackhole_proxy(
+            std::net::SocketAddr::new(loopback, b_port),
+            Arc::clone(&blackhole),
+        )
+        .await;
+        let mut a = NetworkDiscovery::new(0, vec![format!("/ip4/127.0.0.1/tcp/{}", proxy.port())])
+            .with_listen_address(loopback)
+            .with_ping_timing(interval, timeout);
+        let mut swarm_a = a.start().await.expect("swarm a starts");
+        let b_peer = *swarm_b.local_peer_id();
+
+        let mut blackholed_at: Option<Instant> = None;
+        let mut saw_unresponsive = false;
+        let outcome = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                tokio::select! {
+                    event = futures::StreamExt::select_next_some(&mut swarm_a) => {
+                        // Cut the path silently once a ping has succeeded,
+                        // i.e. the ping stream is negotiated, as on a
+                        // long-lived production connection.
+                        if let SwarmEvent::Behaviour(BothoBehaviourEvent::Ping(ping::Event {
+                            peer,
+                            result: Ok(_),
+                            ..
+                        })) = &event
+                        {
+                            if *peer == b_peer && blackholed_at.is_none() {
+                                blackhole.store(true, Ordering::SeqCst);
+                                blackholed_at = Some(Instant::now());
+                            }
+                        }
+                        match a.process_event(event) {
+                            Some(NetworkEvent::PeerUnresponsive { peer, connection }) => {
+                                assert_eq!(peer, b_peer);
+                                assert!(blackholed_at.is_some(), "ping failed before blackhole");
+                                saw_unresponsive = true;
+                                swarm_a.close_connection(connection);
+                            }
+                            Some(NetworkEvent::PeerDisconnected(p)) if p == b_peer => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    event = futures::StreamExt::select_next_some(&mut swarm_b) => {
+                        if let Some(NetworkEvent::PeerUnresponsive { connection, .. }) =
+                            b.process_event(event)
+                        {
+                            swarm_b.close_connection(connection);
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            outcome.is_ok(),
+            "blackholed peer still connected after 60 s"
+        );
+        assert!(saw_unresponsive, "disconnect must come from the ping probe");
+        let elapsed = blackholed_at.expect("connected before blackhole").elapsed();
+        // Expected about 0.5 + 2 + 0.5 + 10 s (the second, reported failure
+        // is the 10 s substream-negotiation timeout; see PING_TIMEOUT).
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "detection took {elapsed:?}"
+        );
+        assert_eq!(a.peer_count(), 0);
     }
 
     fn slow_peer_event(

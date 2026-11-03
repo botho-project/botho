@@ -745,6 +745,10 @@ async fn run_async_with_shutdown(
                         NetworkEvent::PeerVersionIncompatible { peer, .. } => {
                             let _ = swarm.disconnect_peer_id(peer);
                         }
+                        NetworkEvent::PeerUnresponsive { connection, .. } => {
+                            // #1866: a failed liveness ping closes the connection.
+                            swarm.close_connection(connection);
+                        }
                         _ => {}
                     }
                 }
@@ -1980,6 +1984,17 @@ async fn run_async_with_shutdown(
                             // firewalled off (#998 / #1000).
                             sync_manager.mark_incompatible(peer);
                             let _ = swarm.disconnect_peer_id(peer);
+                        }
+
+                        NetworkEvent::PeerUnresponsive { peer, connection } => {
+                            // #1866: the peer stopped answering liveness pings
+                            // (e.g. its network path is blackholed: no RST, no
+                            // FIN). Close the connection so the normal
+                            // ConnectionClosed -> PeerDisconnected path runs
+                            // (sync manager, peer counts, gossipsub mesh)
+                            // instead of holding a dead peer for minutes.
+                            debug!(%peer, ?connection, "Closing unresponsive connection");
+                            swarm.close_connection(connection);
                         }
 
                         NetworkEvent::PexAddresses(addrs) => {
