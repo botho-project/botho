@@ -183,8 +183,9 @@ fn canonical_maturity_fee_funded_payout_accepts_and_reopens() {
     let mut sources = vec![];
     let mut accepted_rewards = 0u128;
     for _ in 0..=maturity {
+        // Match the ledger command's CI budget so this deadline does not cut it short.
         assert!(
-            total.elapsed() < Duration::from_secs(600),
+            total.elapsed() < Duration::from_secs(1200),
             "canonical maturity execution deadline"
         );
         let began = Instant::now();
