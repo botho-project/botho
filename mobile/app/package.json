@@ -19,8 +19,8 @@
     ]
   },
   "dependencies": {
-    "@react-navigation/native": "^7.5.0",
-    "@tanstack/react-query": "^5.104.1",
+    "@react-navigation/native": "^7.5.1",
+    "@tanstack/react-query": "^5.105.0",
     "expo": "~57.0.31",
     "expo-constants": "~57.0.22",
     "expo-linking": "~57.0.13",
@@ -29,10 +29,10 @@
     "expo-secure-store": "~57.0.4",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
-    "react-native": "0.86.3",
+    "react-native": "0.88.1",
     "react-native-safe-area-context": "5.7.0",
     "react-native-screens": "~4.26.2",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
