@@ -2,9 +2,11 @@
 
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import time
 from types import SimpleNamespace
 import unittest
@@ -465,6 +467,87 @@ class Reporting(unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
+    def execute_build_step(self, name, builder, exit_code):
+        """Run the real YAML script under Actions' implicit bash -e shell."""
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/formal-drt-nightly.yml").read_text()
+        step = workflow.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            lean = scratch / "formal-drt/lean"
+            lean.mkdir(parents=True)
+            (lean / "lean-toolchain").write_text("leanprover/lean4:v4.35.0\n")
+            (scratch / "Cargo.lock").write_text("test lockfile\n")
+            diagnostics = scratch / "nightly"
+            diagnostics.mkdir()
+            metadata = diagnostics / "metadata.json"
+            metadata.write_text('{"seed":"0"}\n')
+            fake_bin = scratch / "fake-bin"
+            fake_bin.mkdir()
+            for tool in ("elan", "lake", "cargo"):
+                stub = fake_bin / tool
+                stub.write_text(
+                    f"#!/bin/sh\nprintf '{tool} build diagnostic\\n' >&2\n"
+                    f"exit {exit_code if tool == builder else 0}\n"
+                )
+                stub.chmod(0o755)
+            # Cache restoration happened before the failed build. Running this
+            # executable would falsely attribute stale code to the current SHA.
+            cached = scratch / "formal-drt/target/release/botho-formal-drt"
+            cached.parent.mkdir(parents=True)
+            cached.write_text('#!/bin/sh\ntouch "$DRT_SENTINEL"\n')
+            cached.chmod(0o755)
+            sentinel = scratch / "drt-executed"
+            env = dict(
+                os.environ,
+                PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
+                RUNNER_TEMP=str(scratch),
+                DRT_SENTINEL=str(sentinel),
+            )
+            for option in ("BASH_ENV", "SHELLOPTS", "BASHOPTS"):
+                env.pop(option, None)
+            script_path = scratch / "build-step.sh"
+            script_path.write_text(script)
+            result = subprocess.run(
+                ["bash", "-e", str(script_path)],
+                env=env,
+                cwd=lean if "working-directory: formal-drt/lean" in step else scratch,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            # GitHub's next ordinary step has an implicit success() condition.
+            # Exercise the cached executable if the build incorrectly goes green.
+            if result.returncode == 0:
+                subprocess.run([str(cached)], env=env, check=True, timeout=5)
+            log = diagnostics / (
+                "build-lean.log" if builder == "lake" else "build-rust.log"
+            )
+            self.assertEqual(log.read_text(), f"{builder} build diagnostic\n")
+            self.assertEqual(metadata.read_text(), '{"seed":"0"}\n')
+            self.assertTrue(cached.is_file())
+            self.assertEqual(
+                result.returncode,
+                exit_code,
+                f"{name}: cached DRT executed={sentinel.exists()}",
+            )
+            self.assertEqual(sentinel.exists(), exit_code == 0)
+
+    def test_model_build_failure_skips_cached_drt_and_retains_log(self):
+        self.execute_build_step("Build pinned model", "lake", 37)
+
+    def test_runner_build_failure_skips_cached_drt_and_retains_log(self):
+        self.execute_build_step("Build pinned runner", "cargo", 42)
+
+    def test_successful_build_steps_allow_downstream_drt(self):
+        for name, builder in (
+            ("Build pinned model", "lake"),
+            ("Build pinned runner", "cargo"),
+        ):
+            with self.subTest(builder=builder):
+                self.execute_build_step(name, builder, 0)
+
     def test_permissions_guards_bounds_and_pr_defaults(self):
         root = Path(__file__).resolve().parents[2]
         nightly = (root / ".github/workflows/formal-drt-nightly.yml").read_text()
@@ -485,6 +568,12 @@ class Workflow(unittest.TestCase):
         self.assertIn("timeout-minutes: 240", run)
         self.assertIn("timeout-minutes: 10", report)
         self.assertIn("retention-days: 14", run)
+        for name in (
+            "Upload diagnostics on clean or failed execution",
+            "Summarize coverage and artifact",
+        ):
+            step = run.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
+            self.assertIn("        if: always()", step)
         self.assertIn("github.event.inputs.cases || '10000'", pr)
         self.assertIn("github.event.inputs.seed || '1707'", pr)
         self.assertNotIn("issues: write", pr)
