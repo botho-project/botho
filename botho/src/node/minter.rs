@@ -435,6 +435,24 @@ pub struct MintingWork {
     /// Total minted (gross emission), in picocredits. Used for reward
     /// calculation. `u128` to match `ChainState.total_mined` (see #333).
     pub total_minted: u128,
+    /// Smallest valid timestamp for the block being minted:
+    /// `ChainState::next_min_timestamp()` (= median time past + 1, protocol
+    /// 8.0.0, #1848). The minter stamps `max(now, min_timestamp)`, so an
+    /// honest minting tx is never invalid because of its timestamp alone,
+    /// even while forward-dated blocks hold the median ahead of `now`.
+    pub min_timestamp: u64,
+}
+
+/// The timestamp an honest minter stamps (protocol 8.0.0, #1848, operator
+/// addition A): `max(now, min_timestamp)`.
+///
+/// The PoW preimage (`nonce ‖ prev_hash ‖ view ‖ spend`) does not cover the
+/// timestamp, so choosing it after the PoW is found costs nothing. While the
+/// median sits ahead of `now` (at most the 60 s future bound, because every
+/// window entry was accepted under that bound) this stamps `MTP + 1`, which
+/// is within the future bound on every honest validator.
+pub fn minting_timestamp(now: u64, min_timestamp: u64) -> u64 {
+    now.max(min_timestamp)
 }
 
 /// The minter manages minting threads
@@ -518,6 +536,7 @@ impl Minter {
             height: 1,
             difficulty: INITIAL_DIFFICULTY,
             total_minted: 0,
+            min_timestamp: 1,
         };
 
         let total_hashes = Arc::new(AtomicU64::new(0));
@@ -817,10 +836,12 @@ fn mint_loop(
             // using MonetaryPolicy with 5s block assumption
             let reward = calculate_block_reward(work.height, work.total_minted);
 
-            let timestamp = std::time::SystemTime::now()
+            let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
+            // Protocol 8.0.0 (#1848): never below median time past + 1.
+            let timestamp = minting_timestamp(now, work.min_timestamp);
 
             // Create the minting transaction with stealth output and PoW proof
             // Includes both minter identity (for PoW binding) and stealth keys (for private
@@ -1346,6 +1367,24 @@ mod tests {
         assert_ne!(fast, hasher.hash(&preimage2));
     }
 
+    /// Operator addition A (#1848): the honest stamp is `max(now, MTP + 1)`.
+    #[test]
+    fn minting_timestamp_is_max_of_now_and_min_stamp() {
+        // Median behind the clock: stamp the clock.
+        assert_eq!(minting_timestamp(1_000, 900), 1_000);
+        // Median ahead of the clock (forward-dated majority): MTP + 1.
+        assert_eq!(minting_timestamp(1_000, 1_051), 1_051);
+        // Same-second chain: the minimum wins on a tie-breaking second.
+        assert_eq!(minting_timestamp(1_000, 1_000), 1_000);
+
+        // End to end against chain state: 6 of 11 stamps forward-dated.
+        let mut state = crate::ledger::ChainState::default();
+        state.recent_timestamps = vec![990, 991, 992, 993, 994, 1050, 1050, 1050, 1050, 1050, 1050];
+        let stamp = minting_timestamp(1_000, state.next_min_timestamp());
+        assert_eq!(stamp, 1_051);
+        assert!(stamp > state.median_time_past());
+    }
+
     /// Spin up a minter the way `Node::start_minting` does, run it until it
     /// picks up work and produces at least one minting tx, then stop it.
     /// Returns whether a minting tx was received within the timeout.
@@ -1359,6 +1398,7 @@ mod tests {
             height: 1,
             difficulty: INITIAL_DIFFICULTY,
             total_minted: 0,
+            min_timestamp: 1,
         });
         minter.start();
 

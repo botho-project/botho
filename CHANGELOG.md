@@ -33,6 +33,27 @@ peers are refused at the identify handshake.
   the bridge release (`single(import cluster)` plus empty change), coinbase,
   lottery and settlement outputs already satisfy both rules. No storage
   format change.
+- **Block timestamps use median time past (#1848).** A block or minting tx
+  extending height `h` is valid only if `timestamp > MTP(h)`. `MTP(h)` is the
+  median of the last 11 non-genesis header timestamps, zero-padded on a short
+  chain. This rule replaces the 7.x `timestamp >= parent` rule. Under the old
+  rule, one tip forward-dated up to the future bound rejected every honest
+  `now` stamp, so the forward-dater became the only valid minter (found by the
+  Lean model, #1856). `ChainState` carries the 11-timestamp window. It is
+  written in the block write txn and carried and verified by V2 snapshots.
+  A ledger store past genesis without the window is refused at open, and
+  pre-8.0.0 V2 snapshot files are refused as an unsupported schema.
+- **Future bound 2 h → 60 s (#1848).** `MAX_FUTURE_TIMESTAMP_SECS` is now 60 in
+  both the SCP/gossip path and block apply. Validator and minter clocks must
+  be within about 60 s of real time.
+- **Difficulty floors the observed gap (#1848).** The controller is fed
+  `max(ts - parent, 3 s)` (`MIN_OBSERVED_BLOCK_TIME_SECS`, equal to the slot
+  floor). Zero and backward gaps, which MTP now admits, cost one bounded 0.6x
+  step. `compute_time_adjusted_difficulty` itself is unchanged.
+- **Honest minters stamp `max(now, MTP + 1)` (#1848).** The minter's work
+  carries `min_timestamp`, so an honest minting tx is never invalid on its
+  timestamp alone. This holds even when a forward-dated majority of the window
+  holds the median ahead of the clock.
 
 ## [Unreleased]
 

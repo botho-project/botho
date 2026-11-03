@@ -31,6 +31,9 @@ mod lottery_seed_tests;
 #[path = "store/map_full_tests.rs"]
 mod map_full_tests;
 #[cfg(test)]
+#[path = "store/mtp_tests.rs"]
+mod mtp_tests;
+#[cfg(test)]
 #[path = "store/ring_admission_tests.rs"]
 mod ring_admission_tests;
 #[cfg(test)]
@@ -132,8 +135,19 @@ impl LedgerStorageUsage {
 /// Maximum allowed clock skew for a block timestamp relative to local time.
 ///
 /// Matches the bound enforced on minting transactions in the SCP proposal
-/// path (`consensus::validation::MAX_FUTURE_TIMESTAMP_SECS`).
-const MAX_FUTURE_TIMESTAMP_SECS: u64 = 2 * 60 * 60;
+/// path (`consensus::validation::MAX_FUTURE_TIMESTAMP_SECS`; the assertion
+/// below keeps the two copies equal).
+///
+/// Protocol 8.0.0 (#1848, operator ruling B): 60 s, down from 2 h. Under the
+/// median-time-past rule a forward-dated block can then pull the median at
+/// most about a minute ahead, so the stretch in which honest minters must
+/// stamp `MTP + 1` (and difficulty sees floored gaps) lasts at most about a
+/// minute. Every validator and minter clock must be within ~60 s of real time.
+const MAX_FUTURE_TIMESTAMP_SECS: u64 = 60;
+const _: () = assert!(
+    MAX_FUTURE_TIMESTAMP_SECS == crate::consensus::MAX_FUTURE_TIMESTAMP_SECS,
+    "ledger and consensus future-timestamp bounds must agree"
+);
 
 /// Deterministic height-based staleness backstop (issue #451).
 ///
@@ -572,6 +586,37 @@ const META_EPOCH_BURNS: &[u8] = b"epoch_burns";
 const META_CURRENT_REWARD: &[u8] = b"current_reward";
 // Redistribution lottery carryover pool (consensus state)
 const META_LOTTERY_POOL: &[u8] = b"lottery_pool";
+/// Median-time-past window (protocol 8.0.0, #1848): the header timestamps of
+/// the last <= `MTP_WINDOW` non-genesis blocks, oldest first, as concatenated
+/// u64 LE. Written in the block write txn; absent only on a genesis-only
+/// store (empty window).
+pub(in crate::ledger) const META_RECENT_TIMESTAMPS: &[u8] = b"recent_timestamps";
+
+/// Strict decode of a [`META_RECENT_TIMESTAMPS`] value (`None` = absent =
+/// empty window).
+pub(in crate::ledger) fn decode_recent_timestamps(
+    bytes: Option<&[u8]>,
+) -> Result<Vec<u64>, LedgerError> {
+    let Some(bytes) = bytes else {
+        return Ok(Vec::new());
+    };
+    if bytes.len() % 8 != 0 || bytes.len() > crate::ledger::MTP_WINDOW * 8 {
+        return Err(LedgerError::StorageEncoding(format!(
+            "recent_timestamps has {} bytes, expected a multiple of 8 up to {}",
+            bytes.len(),
+            crate::ledger::MTP_WINDOW * 8
+        )));
+    }
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|c| u64::from_le_bytes(c.try_into().expect("chunk of 8")))
+        .collect())
+}
+
+/// Encode a timestamp window for [`META_RECENT_TIMESTAMPS`].
+pub(in crate::ledger) fn encode_recent_timestamps(window: &[u64]) -> Vec<u8> {
+    window.iter().flat_map(|t| t.to_le_bytes()).collect()
+}
 
 /// Sum a block's per-transaction fees, rejecting on `u64` overflow.
 ///
@@ -959,6 +1004,13 @@ impl Ledger {
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(crate::block::difficulty::INITIAL_REWARD);
 
+        // Median-time-past window (#1848): one small meta row, not 11 block
+        // decodes (this read is hot: RPC, minter work, validation).
+        let recent_timestamps =
+            decode_recent_timestamps(self.meta_db.get(rtxn, META_RECENT_TIMESTAMPS).map_err(
+                |e| LedgerError::Database(format!("Failed to get recent_timestamps: {}", e)),
+            )?)?;
+
         Ok(ChainState {
             height,
             tip_hash,
@@ -971,6 +1023,7 @@ impl Ledger {
             epoch_emission,
             epoch_burns,
             current_reward,
+            recent_timestamps,
         })
     }
 

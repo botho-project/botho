@@ -176,6 +176,12 @@ impl PinnedView<'_, '_> {
             epoch_emission: self.u64(b"epoch_emission")?,
             epoch_burns: self.u64(b"epoch_burns")?,
             current_reward: self.u64(b"current_reward")?,
+            recent_timestamps: crate::ledger::store::decode_recent_timestamps(
+                self.store
+                    .meta
+                    .get(self.txn, crate::ledger::store::META_RECENT_TIMESTAMPS)
+                    .map_err(db)?,
+            )?,
         })
     }
     fn output(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError> {

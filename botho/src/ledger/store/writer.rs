@@ -335,6 +335,19 @@ impl WriteTables {
             .put(wtxn, META_LOTTERY_POOL, &new_lottery_pool.to_le_bytes())
             .map_err(|e| LedgerError::Database(format!("Failed to put lottery_pool: {}", e)))?;
         after_write()?;
+        // Protocol 8.0.0 (#1848): roll the median-time-past window in the
+        // SAME write txn as the block (crash-atomic, like H3 below), so the
+        // next block's lower bound always matches the committed tip.
+        self.meta_db
+            .put(
+                wtxn,
+                META_RECENT_TIMESTAMPS,
+                &encode_recent_timestamps(&state.rolled_timestamps(block.header.timestamp)),
+            )
+            .map_err(|e| {
+                LedgerError::Database(format!("Failed to put recent_timestamps: {}", e))
+            })?;
+        after_write()?;
 
         // H3 (#558): fold the emission-controller state into the SAME write txn
         // as the block. These are the difficulty/reward/epoch counters that are

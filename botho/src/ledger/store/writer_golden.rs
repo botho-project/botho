@@ -5,6 +5,11 @@
 //! `derivation_contexts` table; [`v1_tables`] asserts and strips the marker so
 //! every V1 table is still compared byte-for-byte, and the new context rows
 //! are pinned separately.
+//!
+//! Protocol 8.0.0 (#1848): the fixture file is still UNCHANGED. The shared
+//! writer now also rolls the median-time-past window (`recent_timestamps`
+//! meta row) in the block txn; [`v1_tables`] strips that row too, and the
+//! golden test pins its value separately.
 use super::*;
 use sha2::{Digest, Sha256};
 /// The eight V1 tables with the `botho.ledger.2` marker row asserted and
@@ -21,6 +26,9 @@ fn v1_tables(ledger: &Ledger) -> serde_json::Value {
         .position(|row| *row == marker)
         .expect("V2 marker");
     meta.remove(at);
+    // The 8.0.0 timestamp window row (#1848), pinned separately.
+    let window_key = serde_json::json!(hex::encode(META_RECENT_TIMESTAMPS));
+    meta.retain(|row| row[0] != window_key);
     value
 }
 fn context_rows(ledger: &Ledger) -> serde_json::Value {
@@ -87,6 +95,11 @@ fn v1_writer_pre_extraction_bytes_and_helper_effects() {
     ledger
         .apply_writer_effects_for_test(&block, &[], 0, Some(emission))
         .unwrap();
+    // #1848: the writer rolled the window to exactly the golden block's stamp.
+    assert_eq!(
+        ledger.get_chain_state().unwrap().recent_timestamps,
+        vec![block.header.timestamp]
+    );
     let accepted = v1_tables(&ledger);
     // The only context row: the golden block's coinbase, Direct at height 1.
     let coinbase = UtxoId::new(block.hash(), 0);

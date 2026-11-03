@@ -445,7 +445,7 @@ impl ConsensusService {
         // INTRINSIC properties of the minting tx (well-formedness, PoW vs the
         // tx's stated difficulty, non-future timestamp). The tip-relative
         // checks (prev_block_hash == tip, height == tip+1, chain difficulty,
-        // emission reward, parent-timestamp monotonicity) are enforced
+        // emission reward, median-time-past lower bound) are enforced
         // unconditionally at block-apply (`LedgerStore::add_block`), so a stale
         // or fraudulent block can never be appended even though its minting tx
         // is an acceptable consensus *value*.
