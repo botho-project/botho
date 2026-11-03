@@ -1,0 +1,6 @@
+{"input": {"wealth": "0"}, "note": "Default-curve boundary or counterexample centroid"}
+{"input": {"wealth": "1"}, "note": "Default-curve boundary or counterexample centroid"}
+{"input": {"wealth": "100000000000000000"}, "note": "Default-curve boundary or counterexample centroid"}
+{"input": {"wealth": "17014118346046923173"}, "note": "Default-curve boundary or counterexample centroid"}
+{"input": {"wealth": "100000000000000000000"}, "note": "Default-curve boundary or counterexample centroid"}
+{"input": {"wealth": "340282366920938463463374607431768211455"}, "note": "Default-curve boundary or counterexample centroid"}
