@@ -376,8 +376,9 @@ admits, the chain of 55 blocks all stamped `p` (equal to the parent, which
 `ts >= parent` allows) is valid and takes `INITIAL_DIFFICULTY` to
 `MIN_DIFFICULTY = 1`. Proven (model). This is the record of the bug under
 the protocol ≤ 7.x rules (#1842, finding #1848); fixed in 8.0.0 (#1869),
-where equal stamps are bounded by the median-time-past rule and each feeds
-the floored 3 s gap, not 0. -/
+where equal stamps are still accepted when they exceed the median time
+past; what stops the attack is the 3 s minimum observed gap floor
+(`MIN_OBSERVED_BLOCK_TIME_SECS`), so each equal stamp feeds a 3 s gap, not 0. -/
 theorem time_warp_to_floor_in_55 {p now : Nat} (hp : 0 < p)
     (hf : p ≤ now + MAX_FUTURE_TIMESTAMP_SECS) :
     applyChain INITIAL_DIFFICULTY p (gapsChain p now (List.replicate 55 0)) =
