@@ -114,7 +114,7 @@ async fn receive_prepare_submit_restore_and_respend() {
             LOTTERY_REACHED,
             "funding block lottery payouts must match the fixture's lottery-reaching mode");
         state.mempool.write().unwrap().remove_tx(&grant_hash);
-        for _ in 0..120 {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}
+        for _ in 0..SPEND_AGE_BLOCKS {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}
         let mut fees=0u64;
         for (round,sender,recipient) in [(0,&a,&address_b),(1,&b,&address_a)] {
             let height=state.ledger.read().unwrap().get_chain_state().unwrap().height;
@@ -219,7 +219,7 @@ async fn receive_prepare_submit_restore_and_respend() {
             let initial=adapter(json!({"operation":"scan","wallet":a,"blocks":blocks}));
             let opening=initial["owned"][0]["utxo"]["amount"].as_u64().unwrap();
             assert_eq!(balance+fees,opening,"exact accounting after round {round}");
-            if round==0 {for _ in 0..120 {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}}
+            if round==0 {for _ in 0..SPEND_AGE_BLOCKS {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}}
         }
         server.abort();
     }).await.expect("fixture exceeded eight minute deadline");
@@ -436,6 +436,12 @@ async fn v2_payout_round_trip(source: ContextSource) {
                 .await;
                 let artifact = dir.join(format!("{label}.bin"));
                 let mut rate = if max_fee { 1u64 << 40 } else { 1 };
+                // The random-offset age window (#1692) is redrawn per prepare.
+                // An input near the chain's genesis edge (the oldest coinbase,
+                // a genesis-era lottery source) can draw a window that runs
+                // past genesis and holds fewer than 19 outputs; the CLI has no
+                // nearest-age fill, so a redraw is how it recovers.
+                let mut redraws = 0;
                 let prepared = loop {
                     let request = json!({"operation":"prepare","wallet":a,"blocks":blocks,
                         "height":height,"selected":[owned["id"]],"spent":spent,"reserved":[],
@@ -445,6 +451,12 @@ async fn v2_payout_round_trip(source: ContextSource) {
                     match execute(serde_json::from_value::<Request>(request).unwrap()) {
                         Ok(prepared) => break prepared,
                         Err(error) if rate > 1 && error.to_string().contains("bound") => rate /= 2,
+                        Err(error)
+                            if redraws < 32
+                                && error.to_string().contains("Not enough age-similar decoy") =>
+                        {
+                            redraws += 1
+                        }
                         Err(error) => panic!("{label} prepare: {error:#}"),
                     }
                 };
@@ -482,8 +494,10 @@ async fn v2_payout_round_trip(source: ContextSource) {
             funded["fee"].as_u64().unwrap() > 1_000_000_000,
             "pool funding fee: {funded}"
         );
-        // Age the payouts past the decoy floor with a full age-similar band.
-        for _ in 0..150 {
+        // Age the payouts past the decoy floor with a full age-similar band:
+        // at ±5% (#1692) a window holds 19 one-output blocks from age ~200;
+        // 400 leaves margin.
+        for _ in 0..400 {
             mine_block(
                 &state.ledger.read().unwrap(),
                 &winner.public_address(),
@@ -604,6 +618,11 @@ const LOTTERY_REACHED: bool = true;
 /// Last pre-grant funding height: the grant block at 741 is the first one
 /// whose draw has mature (720-block) candidates.
 const FUNDING_HEIGHT: u64 = 740;
+/// Blocks mined on top of a received output before it is spent. The fixture
+/// chain carries one decoy-eligible output per block, and a ±5% random-offset
+/// age window (#1692) spans `2 × floor(age / 20)` blocks, so it holds the 19
+/// decoys a ring needs once the input is about 200 blocks old.
+const SPEND_AGE_BLOCKS: u64 = 240;
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 /// Create a minting transaction for testing with trivial PoW.

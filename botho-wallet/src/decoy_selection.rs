@@ -7,13 +7,19 @@
 //!
 //! # Age-similarity policy (matches the node)
 //!
-//! Decoys are drawn from within **±10%** of the real input's age
-//! ([`AGE_SIMILARITY_SPREAD_BPS`]), floored at [`MIN_DECOY_AGE_BLOCKS`]
-//! confirmations. This mirrors the node's `GammaDecoySelector`
-//! (`botho/src/decoy_selection.rs`): a wider band (the old 2× ratio) let an
-//! age-heuristic adversary fingerprint CLI-wallet rings by their unusually
-//! broad ring-age spread. Keeping the same ±10% band collapses that distinction
-//! (issue #614 item 4; #314-safe under `ring_elapsed_quantile@max`).
+//! Decoys are drawn from a **±5%** age window
+//! ([`AGE_SIMILARITY_SPREAD_BPS`]; total width 10% of the real input's age),
+//! floored at [`MIN_DECOY_AGE_BLOCKS`] confirmations. This mirrors the node's
+//! `GammaDecoySelector` (`botho/src/decoy_selection.rs`): a wider band (the old
+//! 2× ratio) let an age-heuristic adversary fingerprint CLI-wallet rings by
+//! their unusually broad ring-age spread (issue #614 item 4).
+//!
+//! Since #1692 / #1755 the window's POSITION is random
+//! ([`draw_age_similarity_window`]): the real input's age is uniform inside it,
+//! and decoys are drawn uniformly from it. A window centred on the real input
+//! made it the median-age ring member. The node, this crate's CLI ring builder
+//! (`ring_builder::select_rpc_decoys_from_history`) and the web/Snap picker
+//! use the same rule.
 //!
 //! # Cluster-factor ceiling
 //!
@@ -47,10 +53,10 @@ use crate::fee_estimation::StoredTags;
 pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
 
 /// Half-width of the decoy age-similarity band, in basis points of the real
-/// input's age. `1_000` bps = ±10%. Mirrors the node's
+/// input's age. `500` bps = ±5%. Mirrors the node's
 /// `AGE_SIMILARITY_SPREAD_BPS` (pinned by `botho/tests/sim_code_parity.rs`,
 /// #1702).
-pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
+pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 500;
 
 /// Default (and minimum) ring size, matching the node's consensus
 /// `MIN_RING_SIZE`. A ring of 20 provides a strong anonymity set with compact
@@ -65,6 +71,9 @@ pub const DEFAULT_RING_SIZE: usize = bth_transaction_clsag::DEFAULT_RING_SIZE;
 /// confirmed. A degenerate real age (below the confirmation floor) can produce
 /// `min_age > max_age`, in which case no candidate is in-band; callers must
 /// guard against spending such young inputs before reaching this function.
+///
+/// This is the band CENTRED on the real age. Since #1692 the pickers draw a
+/// random-offset window instead ([`draw_age_similarity_window`]).
 pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
     let delta = (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64;
     let min_age = real_input_age
@@ -72,6 +81,49 @@ pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
         .max(MIN_DECOY_AGE_BLOCKS);
     let max_age = real_input_age.saturating_add(delta);
     (min_age, max_age)
+}
+
+/// Total width `W = 2 × delta` of the decoy age window, in blocks. Mirrors the
+/// node's `age_similarity_window_width` (pinned by
+/// `botho/tests/privacy_sim_route_parity.rs`).
+pub fn age_similarity_window_width(real_input_age: u64) -> u64 {
+    2 * (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64
+}
+
+/// The inclusive decoy-age window at `offset` blocks below the real age:
+/// `[real − offset, real − offset + W]`, lower bound floored at
+/// [`MIN_DECOY_AGE_BLOCKS`], `offset` clamped to `0..=W`. Mirrors the node's
+/// `age_similarity_window`.
+pub fn age_similarity_window(real_input_age: u64, offset: u64) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    let start = real_input_age - offset.min(width);
+    (start.max(MIN_DECOY_AGE_BLOCKS), start + width)
+}
+
+/// Draw the random-offset decoy-age window for one ring (#1692): offset
+/// uniform in `0..=W` (`rng.random_range(0..=W)`, one draw), so the real
+/// input's age is uniform inside the window. Mirrors the node's
+/// `draw_age_similarity_window`.
+pub fn draw_age_similarity_window<R: rand::Rng + ?Sized>(
+    real_input_age: u64,
+    rng: &mut R,
+) -> (u64, u64) {
+    use rand::RngExt;
+    let width = age_similarity_window_width(real_input_age);
+    let offset = rng.random_range(0..=width);
+    age_similarity_window(real_input_age, offset)
+}
+
+/// Union of every window [`draw_age_similarity_window`] can return:
+/// `[real − W, real + W]`, lower bound floored at [`MIN_DECOY_AGE_BLOCKS`].
+pub fn age_similarity_envelope(real_input_age: u64) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    (
+        real_input_age
+            .saturating_sub(width)
+            .max(MIN_DECOY_AGE_BLOCKS),
+        real_input_age.saturating_add(width),
+    )
 }
 
 /// Configuration for decoy selection constraints.
@@ -247,8 +299,10 @@ impl UtxoCandidate {
 ///
 /// # Constraints Applied
 ///
-/// 1. **Age similarity**: decoy age within [`age_similarity_band`] of the real
-///    input's age (±10%, floored at [`MIN_DECOY_AGE_BLOCKS`]).
+/// 1. **Age similarity**: decoy age within one random-offset window
+///    ([`draw_age_similarity_window`]) that contains the real input's age at a
+///    uniformly random position (width 10% of the real age, floored at
+///    [`MIN_DECOY_AGE_BLOCKS`]).
 /// 2. **Factor ceiling**: `decoy_factor <= real_factor * max_factor_ratio`.
 ///
 /// Eligible candidates are shuffled (CSPRNG) before the ring is drawn, so the
@@ -280,7 +334,7 @@ pub fn select_decoys(
     let real_age = real_utxo.age(current_block);
 
     // Young-input guard (mirrors node decoy_selection.rs; #611/#618). Below the
-    // confirmation floor the ±10% band is degenerate (min_age > max_age).
+    // confirmation floor the ±5% band is degenerate (min_age > max_age).
     if real_age < MIN_DECOY_AGE_BLOCKS {
         return Err(DecoySelectionError::InvalidRealUtxo(format!(
             "UTXO is too new to spend privately — wait for at least {} confirmations \
@@ -291,8 +345,9 @@ pub fn select_decoys(
 
     let real_factor = real_utxo.cluster_factor_global(cluster_wealth, total_supply);
 
-    // Age band (±10%, floored at the confirmation minimum).
-    let (min_age, max_age) = age_similarity_band(real_age);
+    // Random-offset age window (#1692), floored at the confirmation minimum.
+    let mut rng = OsRng;
+    let (min_age, max_age) = draw_age_similarity_window(real_age, &mut rng);
 
     // Calculate maximum allowed factor for decoys
     let max_allowed_factor = real_factor * config.max_factor_ratio;
@@ -310,7 +365,7 @@ pub fn select_decoys(
 
             let candidate_age = candidate.age(current_block);
 
-            // Age constraint: within the ±10% band
+            // Age constraint: within the drawn window
             if candidate_age < min_age || candidate_age > max_age {
                 return false;
             }
@@ -336,7 +391,6 @@ pub fn select_decoys(
 
     // Shuffle before taking N so ring membership is randomized, not a
     // deterministic first-N slice of a height-sorted pool.
-    let mut rng = OsRng;
     eligible.shuffle(&mut rng);
     eligible.truncate(decoys_needed);
     Ok(eligible)
@@ -413,6 +467,11 @@ pub fn select_decoys_with_fallback(
 ///
 /// This can be used to verify decoys selected by an external party
 /// (e.g., from a remote node) meet the expected constraints.
+///
+/// Age: each decoy must lie in [`age_similarity_envelope`] (the union of
+/// every window a picker can draw), and the in-envelope decoys together with
+/// the real input must span at most [`age_similarity_window_width`], i.e. fit
+/// in a single window.
 pub fn validate_decoys(
     real_utxo: &UtxoCandidate,
     decoys: &[UtxoCandidate],
@@ -426,8 +485,39 @@ pub fn validate_decoys(
     let real_age = real_utxo.age(current_block);
     let real_factor = real_utxo.cluster_factor_global(cluster_wealth, total_supply);
 
-    let (min_age, max_age) = age_similarity_band(real_age);
+    let (min_age, max_age) = age_similarity_envelope(real_age);
     let max_allowed_factor = real_factor * config.max_factor_ratio;
+
+    // Single-window check over the in-envelope decoys (out-of-envelope ones
+    // are reported individually below).
+    let width = age_similarity_window_width(real_age);
+    let in_envelope: Vec<(usize, u64)> = decoys
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (i, d.age(current_block)))
+        .filter(|&(_, age)| age >= min_age && age <= max_age)
+        .collect();
+    let lowest = in_envelope.iter().map(|&(_, a)| a).chain([real_age]).min();
+    let highest = in_envelope.iter().map(|&(_, a)| a).chain([real_age]).max();
+    if let (Some(lowest), Some(highest)) = (lowest, highest) {
+        if highest - lowest > width {
+            // Attribute the violation to the decoy farthest from the real age.
+            if let Some(&(i, age)) = in_envelope
+                .iter()
+                .max_by_key(|&&(_, a)| a.abs_diff(real_age))
+            {
+                violations.push((
+                    i,
+                    format!(
+                        "Ring age span {} exceeds the window width {} (decoy age {})",
+                        highest - lowest,
+                        width,
+                        age
+                    ),
+                ));
+            }
+        }
+    }
 
     for (i, decoy) in decoys.iter().enumerate() {
         let decoy_age = decoy.age(current_block);
@@ -488,19 +578,14 @@ mod tests {
     const TOTAL_SUPPLY: u64 = 10_000_000_000_000;
     const CURRENT_BLOCK: u64 = 10_000;
 
-    /// Build a pool of `n` decoy candidates whose ages fall inside the ±10%
-    /// band of a real input created at `real_created_at`, all with the given
-    /// tags. Ages are spread across the in-band window.
+    /// Build a pool of `n` decoy candidates that every random-offset window
+    /// of a real input created at `real_created_at` contains, all with the
+    /// given tags. Since #1692 the windows only share the real age itself, so
+    /// every candidate sits at the real age.
     fn in_band_pool(n: usize, real_created_at: u64, tags: &[(u64, u32)]) -> Vec<UtxoCandidate> {
-        let real_age = CURRENT_BLOCK - real_created_at;
-        let (min_age, max_age) = age_similarity_band(real_age);
         let mut pool = Vec::new();
         for i in 0..n {
-            // Distribute ages evenly within [min_age, max_age].
-            let span = max_age - min_age;
-            let age = min_age + (i as u64 % (span + 1));
-            let created_at = CURRENT_BLOCK - age;
-            pool.push(create_utxo((i + 1) as u8, created_at, tags));
+            pool.push(create_utxo((i + 1) as u8, real_created_at, tags));
         }
         pool
     }
@@ -517,16 +602,65 @@ mod tests {
 
     #[test]
     fn test_age_similarity_band() {
-        // ±10% around a healthy age.
-        assert_eq!(age_similarity_band(1000), (900, 1100));
-        assert_eq!(age_similarity_band(100), (90, 110));
-        // ±10% of 50 is ±5 -> [45, 55]; above the confirmation floor.
+        // ±5% around a healthy age.
+        assert_eq!(age_similarity_band(1000), (950, 1050));
+        assert_eq!(age_similarity_band(100), (95, 105));
+        // ±5% of 50 is ±2 (floored) -> [48, 52]; above the confirmation floor.
         let (min_age, max_age) = age_similarity_band(50);
-        assert_eq!(min_age, 45);
-        assert_eq!(max_age, 55);
-        // A lower age hits the confirmation floor: ±10% of 80 is ±8 -> min 72.
+        assert_eq!(min_age, 48);
+        assert_eq!(max_age, 52);
+        // ±5% of 80 is ±4 -> min 76.
         let (min_floor, _) = age_similarity_band(80);
-        assert_eq!(min_floor, 72);
+        assert_eq!(min_floor, 76);
+    }
+
+    #[test]
+    fn test_age_similarity_window_matches_node_rule() {
+        assert_eq!(age_similarity_window_width(1000), 100);
+        assert_eq!(age_similarity_window(1000, 0), (1000, 1100));
+        assert_eq!(age_similarity_window(1000, 100), (900, 1000));
+        assert_eq!(age_similarity_window(1000, 50), age_similarity_band(1000));
+        assert_eq!(age_similarity_window(1000, 999), (900, 1000));
+        assert_eq!(age_similarity_envelope(1000), (900, 1100));
+        let mut rng = OsRng;
+        for _ in 0..200 {
+            let (lo, hi) = draw_age_similarity_window(1000, &mut rng);
+            assert!(lo <= 1000 && 1000 <= hi && hi - lo == 100);
+        }
+    }
+
+    #[test]
+    fn test_validate_decoys_accepts_offset_window_and_rejects_wide_rings() {
+        let real_utxo = create_utxo(0, 9_000, &[]); // age 1000
+        let cluster_wealth = create_cluster_wealth();
+        let config = DecoySelectionConfig::default();
+        // A ring from the window [1000, 1100] (ages 1052..=1088): valid even
+        // though every decoy is older than the centred band's upper bound.
+        let young_edge: Vec<_> = (0..19u8)
+            .map(|i| create_utxo(i + 1, CURRENT_BLOCK - (1_052 + i as u64 * 2), &[]))
+            .collect();
+        assert!(validate_decoys(
+            &real_utxo,
+            &young_edge,
+            CURRENT_BLOCK,
+            &cluster_wealth,
+            TOTAL_SUPPLY,
+            &config
+        )
+        .is_empty());
+        // Decoys at 925 and 1075 both lie in the envelope [900, 1100], but no
+        // single 100-block window holds them both.
+        let wide = vec![create_utxo(1, 9_075, &[]), create_utxo(2, 8_925, &[])];
+        let violations = validate_decoys(
+            &real_utxo,
+            &wide,
+            CURRENT_BLOCK,
+            &cluster_wealth,
+            TOTAL_SUPPLY,
+            &config,
+        );
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].1.contains("span"));
     }
 
     #[test]
@@ -562,7 +696,7 @@ mod tests {
 
     #[test]
     fn test_select_decoys_basic() {
-        // Real input created at 9_000 -> age 1000 -> band [900, 1100].
+        // Real input created at 9_000 -> age 1000 -> window envelope [900, 1100].
         let real_utxo = create_utxo(0, 9_000, &[(1, TAG_WEIGHT_SCALE / 2)]);
         let cluster_wealth = create_cluster_wealth();
         let pool = in_band_pool(25, 9_000, &[(1, TAG_WEIGHT_SCALE / 2)]);
@@ -580,7 +714,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
         let decoys = result.unwrap();
         assert_eq!(decoys.len(), 19);
-        // All within the ±10% band.
+        // All within the ±5% window envelope.
         for d in &decoys {
             let age = d.age(CURRENT_BLOCK);
             assert!((900..=1100).contains(&age), "age {} out of band", age);
@@ -589,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_select_decoys_age_filtering() {
-        // Real age 1000 -> band [900, 1100].
+        // Real age 1000 -> window envelope [900, 1100] (±5% windows).
         let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
@@ -861,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_validate_decoys_all_valid() {
-        // Real age 1000 -> band [900, 1100].
+        // Real age 1000 -> window envelope [900, 1100] (±5% windows).
         let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 
@@ -888,7 +1022,7 @@ mod tests {
 
     #[test]
     fn test_validate_decoys_age_violations() {
-        // Real age 1000 -> band [900, 1100].
+        // Real age 1000 -> window envelope [900, 1100] (±5% windows).
         let real_utxo = create_utxo(0, 9_000, &[]);
         let cluster_wealth = create_cluster_wealth();
 

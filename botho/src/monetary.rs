@@ -62,7 +62,10 @@ use bth_cluster_tax::MonetaryPolicy;
 ///
 /// Derived Phase-1 supply = `R0 * H * (2 - 2^-(K-1))`
 /// = 50 * 6,307,200 * 1.9375 = **611,010,000 BTH** (~611M).
-pub fn mainnet_policy() -> MonetaryPolicy {
+///
+/// `const` so wallet-side constants can be derived from the policy at compile
+/// time (e.g. `decoy_selection::BLOCKS_PER_DAY`, #1692).
+pub const fn mainnet_policy() -> MonetaryPolicy {
     // Constants based on 5-second blocks (minimum block time)
     const SECS_PER_YEAR: u64 = 365 * 24 * 60 * 60;
     const ASSUMED_BLOCK_TIME: u64 = 5;

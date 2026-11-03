@@ -15,6 +15,7 @@ import unittest
 
 from signer_history import (DECOY_GROUP_CEILING, DECOY_SAMPLE_TARGET, RING_DECOYS,
                             SCAN_CHUNK_BYTES, SIGNER_MAX_REQUEST, age_band, history_duplicate,
+                            thinnest_window_count,
                             merge_scans, prepare_blocks, prepare_spent,
                             scan_payloads)
 
@@ -95,6 +96,31 @@ def expected_shared_decoys(blocks, height, inputs):
     pairs = [(a, b) for i, a in enumerate(pools) for b in pools[i + 1:]]
     return sum(len(a & b) * min(RING_DECOYS, len(a)) * min(RING_DECOYS, len(b)) / (len(a) * len(b))
                for a, b in pairs) / len(pairs)
+
+
+class ThinnestWindowTests(unittest.TestCase):
+    """The admission precheck must predict the signer's single drawn window (#1692)."""
+
+    @staticmethod
+    def brute(age, ages):
+        width = 2 * (age * 500 // 10_000)
+        return min(sum(max(age - o, 10) <= a <= age - o + width for a in ages)
+                   for o in range(width + 1))
+
+    def test_matches_every_offset_brute_force(self):
+        rng = random.Random(1692)
+        for _ in range(500):
+            age = rng.randrange(10, 2_000)
+            low, high = age_band(age)
+            ages = [rng.randrange(max(0, low - 5), high + 6) for _ in range(rng.randrange(0, 60))]
+            self.assertEqual(thinnest_window_count(age, ages), self.brute(age, ages), (age, ages))
+
+    def test_age_150_one_output_per_block_is_thin(self):
+        # Envelope 136..164 holds 28 decoys, but every 15-age window holds 14.
+        ages = [a for a in range(130, 171) if a != 150]
+        low, high = age_band(150)
+        self.assertGreaterEqual(sum(low <= a <= high for a in ages), 19)
+        self.assertEqual(thinnest_window_count(150, ages), 14)
 
 
 class XSeriesH72Tests(unittest.TestCase):

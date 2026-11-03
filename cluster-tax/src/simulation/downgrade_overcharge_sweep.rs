@@ -644,11 +644,11 @@ fn evaluate_exploit(
 // §4.5 showed the ONLY honest over-charge channel is a wealthy decoy
 // contaminating a background spender's value-weighted ring floor (14.3% FP at
 // 1% contamination with ring 20; 8.4% at the original ring 11). The
-// wallet-layer fix mirrors the shipped
-// `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) age band in
-// `botho/src/decoy_selection.rs`: draw only decoys whose cluster factor is
-// within a band around the real input's factor, so a background (1×) spender
-// draws only near-1× decoys and the floor stays exact.
+// wallet-layer fix mirrors the
+// `AGE_SIMILARITY_SPREAD_BPS` age band in `botho/src/decoy_selection.rs`
+// (±10% when this band was chosen; ±5% since #1692): draw only decoys whose
+// cluster factor is within a band around the real input's factor, so a
+// background (1×) spender draws only near-1× decoys and the floor stays exact.
 //
 // This sweep finds the widest band that keeps the honest false-positive rate at
 // ~0% while retaining the same-class decoy pool (anonymity). Because factor is
@@ -1080,8 +1080,8 @@ pub fn to_markdown(report: &HonestOverchargeReport) -> String {
     s.push_str("### Factor-similarity decoy band (picks `FACTOR_SIMILARITY_SPREAD`)\n\n");
     s.push_str(&format!(
         "The §4.5 contamination channel is closed at the wallet layer by a factor band \
-         mirroring the shipped `AGE_SIMILARITY_SPREAD_BPS` (±10%) age band: a background (1×) \
-         spender draws only decoys whose cluster factor sits within the band around its real \
+         mirroring the `AGE_SIMILARITY_SPREAD_BPS` age band (±10% when chosen; ±5% since \
+         #1692): a background (1×) spender draws only decoys whose cluster factor sits within the band around its real \
          input's factor. This sweep applies that filter at the pathological {:.1}% raw \
          contamination (the §4.5 level that gave a {:.1}% FP rate UNFILTERED) and finds the \
          widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` \
@@ -1244,7 +1244,8 @@ mod tests {
 
     #[test]
     fn factor_band_recommendation_is_the_age_band_and_is_fp_safe() {
-        // The recommended band (±10%, matching AGE_SIMILARITY_SPREAD_BPS) must
+        // The recommended band (±10%, the AGE_SIMILARITY_SPREAD_BPS width when
+        // it was chosen; the age band is ±5% since #1692) must
         // drive the honest FP rate to exactly 0 at the pathological
         // contamination, and the widest FP-safe band must be at least ±10%.
         let report = run_honest_overcharge_sweep();

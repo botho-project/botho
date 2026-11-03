@@ -142,6 +142,14 @@ async fn genesis_rpc_envelope_has_no_nonexistent_coinbase() {
     assert!(decoded[0].outputs.is_empty());
 }
 
+/// Chain height of the fixture. The miner's coinbase is at height 100, so it
+/// is spent at age `FIXTURE_HEIGHT - 100`.
+const FIXTURE_HEIGHT: u64 = 320;
+/// Blocks mined between the two spends. The fixture chain carries one output
+/// per block, and the ±5% age band (#1692) spans `2 × floor(age / 20) + 1`
+/// blocks, so it holds the 19 decoys a ring needs from an age of about 200.
+const SPEND_AGE_BLOCKS: u64 = 220;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hybrid_coinbase_rpc_scan_spend_filter_restore() {
     let began = Instant::now();
@@ -154,7 +162,7 @@ async fn hybrid_coinbase_rpc_scan_spend_filter_restore() {
     // acceptance still checks the header against this initialized ledger state.
     ledger.set_difficulty(u64::MAX).unwrap();
     let mut reward = None;
-    for h in 1..=220 {
+    for h in 1..=FIXTURE_HEIGHT {
         let b = mine(
             &ledger,
             &if h == 100 {
@@ -191,7 +199,7 @@ async fn hybrid_coinbase_rpc_scan_spend_filter_restore() {
     }));
     tokio::time::sleep(Duration::from_millis(100)).await;
     let url = format!("http://{addr}");
-    let (raw, blocks) = outputs(&url, 220).await;
+    let (raw, blocks) = outputs(&url, FIXTURE_HEIGHT).await;
     let row = &raw
         .as_array()
         .unwrap()
@@ -376,7 +384,7 @@ async fn hybrid_coinbase_rpc_scan_spend_filter_restore() {
         );
         eprintln!("COINBASE_RPC_ACCEPTED round={} height={} tx={} image={} change={} recipient={} fees={}",round+1,accepted.height(),hex::encode(transfer.transaction.hash()),selected_image,selected.amount,expected_recipient,total_fees);
         if round == 0 {
-            for _ in 0..120 {
+            for _ in 0..SPEND_AGE_BLOCKS {
                 mine(
                     &state.ledger.read().unwrap(),
                     &sink.public_address(),
