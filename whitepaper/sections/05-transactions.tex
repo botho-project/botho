@@ -492,14 +492,18 @@ Decoy selection is wallet policy; consensus checks only that ring members
 exist and are unspent. As built:
 
 \begin{enumerate}
-  \item \textbf{Age distribution}: The node and CLI pickers draw decoys from
-    a gamma spend-age model inside a $\pm 10\%$ age band centred on the real
-    input's age (\path{age_similarity_band},
-    \path{botho/src/decoy_selection.rs};
-    \path{botho-wallet/src/ring_builder.rs}). The band bounds the
-    demurrage over-charge of the max-age ring clock, but centring it on the
-    real input makes the real input the ring's median-age member (pending
-    \#1755).
+  \item \textbf{Age distribution}: Every picker (node, CLI, browser, Snap
+    and claim-link signers) draws one random-offset age window per ring,
+    10\% of the real input's age wide ($\pm 5\%$,
+    \path{AGE_SIMILARITY_SPREAD_BPS}), positioned so the real input's age is
+    uniform inside it, and samples decoys uniformly within it
+    (\path{draw_age_similarity_window}, \path{botho/src/decoy_selection.rs};
+    \path{botho-wallet/src/ring_builder.rs};
+    \path{web/packages/wasm-signer/src/decoys.ts}; \#1692, \#1755). Given the
+    window the ring members are exchangeable, so the real input's age rank
+    is uniform. The window also bounds the demurrage over-charge of the
+    max-age ring clock: the oldest member is at most 1.10$\times$ the real
+    age, inside the 1.15 tolerance, on every spend.
 
   \item \textbf{Cluster similarity}: Mempool admission rejects a ring whose
     value-weighted tag centroid has cosine similarity below 0.7 with the
@@ -509,11 +513,8 @@ exist and are unspent. As built:
     tag, and output tags are published in plaintext (pending \#1756).
 
   \item \textbf{Randomization}: Subject to the above constraints, selection
-    is randomized. Browser, Snap and claim-link signers apply the same
-    $\pm 10\%$ age band and pick uniformly inside it with a CSPRNG
-    (\path{web/packages/wasm-signer/src/decoys.ts}; \#1693, \#1735). Their pick is uniform
-    within the band, not the gamma model above, and the median-age caveat
-    (pending \#1755) applies to them too.
+    is randomized with a CSPRNG: one draw places the window, and the
+    decoys are a uniform sample of the candidates inside it.
 \end{enumerate}
 
 Measured identification rates for each production picker are in

@@ -3225,6 +3225,155 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
     QuorumSet::new(threshold, members)
 }
 
+/// The member `NodeID`s of a FLAT quorum set (`QuorumSetMember::Node` only), as
+/// a set. Returns `None` when the set is not flat — it contains an inner set,
+/// an empty member slot, or a duplicated node — so callers can FAIL CLOSED on a
+/// shape the transitional-safety condition does not cover (#1845). The gate
+/// (`gated_scp_quorum_set`) only ever builds flat, de-duplicated sets, so the
+/// `None` path is unreachable today. Production twin of the `member_node_ids`
+/// test helper.
+fn flat_member_ids(qs: &QuorumSet) -> Option<std::collections::BTreeSet<NodeID>> {
+    use bth_consensus_scp_types::QuorumSetMember;
+    let mut ids = std::collections::BTreeSet::new();
+    for member in &qs.members {
+        match &**member {
+            Some(QuorumSetMember::Node(node_id)) => {
+                if !ids.insert(node_id.clone()) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(ids)
+}
+
+/// The pairwise transitional-safety verdict for moving this node from the
+/// installed flat quorum set A = `(S_A, t_A)` to a candidate B = `(S_B, t_B)`
+/// (#1845). See [`transition_safe`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransitionCheck {
+    /// `byzantine_tolerance(|S_A|, t_A)`: the `quorumByzantineTolerance` the
+    /// fleet reports while it still runs A.
+    f: usize,
+    /// `|S_A ∪ S_B|`, member identity by `NodeID`.
+    union: usize,
+    /// Cross term (i): `t_A + t_B > |S_A ∪ S_B| + f`.
+    cross_ok: bool,
+    /// B endpoint (ii): `2·t_B > |S_B| + f`. Not implied by (i): 4-of-5 →
+    /// 3-of-5 on the same members passes (i) (7 > 6) but fails (ii) (6 >
+    /// 6).
+    b_ok: bool,
+    /// A endpoint (iii): `2·t_A > |S_A| + f`. Holds by the definition of `f`
+    /// whenever A itself intersects (`2·t_A > |S_A|`); checked rather than
+    /// asserted so a non-intersecting installed set fails closed instead of
+    /// panicking a debug build.
+    a_ok: bool,
+}
+
+impl TransitionCheck {
+    fn safe(&self) -> bool {
+        self.cross_ok && self.b_ok && self.a_ok
+    }
+}
+
+/// Pairwise transitional-safety condition for a curated quorum rotation
+/// (#1845). Returns `None` (caller must fail closed) when either set is not
+/// flat (see [`flat_member_ids`]).
+///
+/// With `f = byzantine_tolerance(|S_A|, t_A)`, a fleet in which every node runs
+/// A or B verbatim — in ANY split, i.e. in any rollout order — keeps quorum
+/// intersection despite any `<= f` faulty nodes when
+///
+/// - (i) `t_A + t_B > |S_A ∪ S_B| + f`,
+/// - (ii) `2·t_B > |S_B| + f`, and
+/// - (iii) `2·t_A > |S_A| + f`.
+///
+/// Proofs (Lean, `formal/Botho/Quorum/Fbas.lean`, PR #1847 — not yet merged
+/// at the time of writing): `rotation_sound` is the sufficiency direction
+/// (hypotheses `hAB`, `hBB`, `hAA` are exactly (i), (ii), (iii));
+/// `rotation_condition_necessary` is the converse at `f = 0` — if (i) fails
+/// and both thresholds are satisfiable, some split has disjoint quorums even
+/// with every node listing itself, so this check refuses no rotation that is
+/// safe under every rollout order. For `f > 0` it is exact when at least `f`
+/// members are shared (unproven conjecture) and sufficient everywhere: it
+/// never admits an unsafe transition. Worked instances: `reroster_mixed_fork`,
+/// `prod_4of5_rotate_two_not_despite_one` (refused here) and
+/// `prod_4of5_rotate_one_despite_one`, `nested_rotation_safe` (admitted).
+///
+/// LIMIT: the check is PAIRWISE. It compares the candidate with the set THIS
+/// node has installed. A fleet spread over three or more configurations
+/// (nodes applying successive actions at different times) is not covered; the
+/// runbook rule "one member per step, wait for fleet convergence" is still
+/// required (docs/operations/runbooks/quorum-edit-recovery.md).
+fn transition_safe(a: &QuorumSet, b: &QuorumSet) -> Option<TransitionCheck> {
+    let s_a = flat_member_ids(a)?;
+    let s_b = flat_member_ids(b)?;
+    let (n_a, t_a) = (s_a.len(), a.threshold as usize);
+    let (n_b, t_b) = (s_b.len(), b.threshold as usize);
+    let f = crate::config::byzantine_tolerance(n_a, t_a);
+    let union = s_a.union(&s_b).count();
+    Some(TransitionCheck {
+        f,
+        union,
+        cross_ok: t_a + t_b > union + f,
+        b_ok: 2 * t_b > n_b + f,
+        a_ok: 2 * t_a > n_a + f,
+    })
+}
+
+/// Operator-facing refusal text for a transition that fails [`transition_safe`]
+/// (#1845). Names `t_A-of-|S_A|`, `t_B-of-|S_B|`, `|∪|` and `f`, says which
+/// term failed, and points at the one-member-at-a-time runbook.
+fn unsafe_transition_message(
+    a: &QuorumSet,
+    b: &QuorumSet,
+    check: Option<TransitionCheck>,
+) -> String {
+    const HINT: &str = "rotate one member per signed action and wait for the whole fleet to \
+                        converge before the next step \
+                        (docs/operations/runbooks/quorum-edit-recovery.md), or set \
+                        acknowledgeUnsafeTransition:true in the signed envelope to proceed";
+    let Some(c) = check else {
+        return format!(
+            "unsafe quorum transition: the installed or candidate quorum set is not flat, so \
+             transitional safety cannot be checked (fail closed); {HINT}"
+        );
+    };
+    let (t_a, n_a) = (a.threshold as usize, a.members.len());
+    let (t_b, n_b) = (b.threshold as usize, b.members.len());
+    let mut failed = Vec::new();
+    if !c.cross_ok {
+        failed.push(format!(
+            "cross term t_A + t_B = {} must exceed |S_A ∪ S_B| + f = {}",
+            t_a + t_b,
+            c.union + c.f
+        ));
+    }
+    if !c.b_ok {
+        failed.push(format!(
+            "endpoint term 2·t_B = {} must exceed |S_B| + f = {}",
+            2 * t_b,
+            n_b + c.f
+        ));
+    }
+    if !c.a_ok {
+        failed.push(format!(
+            "installed-set term 2·t_A = {} must exceed |S_A| + f = {}",
+            2 * t_a,
+            n_a + c.f
+        ));
+    }
+    format!(
+        "unsafe quorum transition from {t_a}-of-{n_a} to {t_b}-of-{n_b} (|∪| = {}, f = {}): {}; \
+         a fleet mixing the two sets could fork or lose intersection despite f faulty nodes; \
+         {HINT}",
+        c.union,
+        c.f,
+        failed.join("; ")
+    )
+}
+
 /// The PURE decision an operator action produces once the gate has run against
 /// a config clone (#748, §4 apply path). Split out from the side-effecting
 /// wrapper so the whole action decision — including the #510 2-of-4 gate
@@ -3287,7 +3436,7 @@ fn evaluate_operator_action(
         connected_peers,
         Some(previous_qs),
     );
-    let verdict = GateVerdict::from_snapshot(&gate_snapshot);
+    let mut verdict = GateVerdict::from_snapshot(&gate_snapshot);
 
     // Fork-risk (intersection) refusal takes precedence — it is the one failure
     // class this whole path exists to prevent.
@@ -3307,6 +3456,29 @@ fn evaluate_operator_action(
         resulting_membership,
     ) {
         return ActionEvaluation::Rejected(reason);
+    }
+
+    // Transitional safety (#1845): the gate above only checks the candidate on
+    // its own. During a rollout some nodes still run the installed set A while
+    // others run the candidate B, so also require the pairwise condition of
+    // [`transition_safe`] against `previous_qs`. Placed AFTER the membership
+    // floors (their refusals and wording keep precedence) and BEFORE the
+    // dry-run return (a dry run is refused exactly as a real apply would be).
+    // Skipped when A has at most one member (empty seed or solo: not a fleet
+    // configuration to be transitional against).
+    if previous_membership > 1 {
+        let check = transition_safe(previous_qs, &new_qs);
+        let safe = check.map(|c| c.safe()).unwrap_or(false);
+        if !safe && !parsed.acknowledge_unsafe_transition {
+            return ActionEvaluation::Rejected(
+                crate::operator_action::RejectReason::InvalidPayload(unsafe_transition_message(
+                    previous_qs,
+                    &new_qs,
+                    check,
+                )),
+            );
+        }
+        verdict.transition_safe = Some(safe);
     }
 
     if parsed.dry_run {
@@ -6145,6 +6317,7 @@ mod tests {
             signer_key_id: "a1b2c3d4e5f60708".to_string(),
             target_node: "test-target".to_string(),
             acknowledge_degenerate: ack,
+            acknowledge_unsafe_transition: false,
         }
     }
 
@@ -6378,6 +6551,605 @@ mod tests {
             evaluate_operator_action(&with_ack, &cfg, &members, &local, &previous),
             ActionEvaluation::Apply { .. }
         ));
+    }
+
+    // -- Transitional safety of curated rotation (#1845) ----------------------
+
+    /// A flat `t`-of-`ids` quorum set (the shape the gate builds).
+    fn flat_qs(t: u32, ids: &[NodeID]) -> QuorumSet {
+        use bth_consensus_scp_types::QuorumSetMember;
+        QuorumSet::new(
+            t,
+            ids.iter()
+                .map(|id| QuorumSetMember::Node(id.clone()))
+                .collect(),
+        )
+    }
+
+    fn node_ids(n: usize) -> Vec<NodeID> {
+        synthetic_peers(n).iter().map(peer_id_to_node_id).collect()
+    }
+
+    fn pick(ids: &[NodeID], idx: &[usize]) -> Vec<NodeID> {
+        idx.iter().map(|&i| ids[i].clone()).collect()
+    }
+
+    fn parsed_action_unsafe_ack(action: ActionKind, dry_run: bool) -> ParsedEnvelope {
+        ParsedEnvelope {
+            acknowledge_unsafe_transition: true,
+            ..parsed_action(action, dry_run, false)
+        }
+    }
+
+    #[test]
+    fn transition_safe_table() {
+        // Every row of the #1845 Curator table, plus the two Lean
+        // counterexamples and the safe one-member swap, as raw flat sets.
+        // Columns: (name, t_A, S_A, t_B, S_B, f, |∪|, cross_ok, b_ok).
+        let ids = node_ids(9);
+        let r = |a: &[usize]| a.to_vec();
+        let rows: Vec<(
+            &str,
+            u32,
+            Vec<usize>,
+            u32,
+            Vec<usize>,
+            usize,
+            usize,
+            bool,
+            bool,
+        )> = vec![
+            (
+                "explicit 4-of-5 pin -> 4-of-6",
+                4,
+                r(&[0, 1, 2, 3, 4]),
+                4,
+                r(&[0, 1, 2, 3, 4, 5]),
+                1,
+                6,
+                true,
+                true,
+            ),
+            (
+                "explicit 4-of-5 unpin -> 4-of-4",
+                4,
+                r(&[0, 1, 2, 3, 4]),
+                4,
+                r(&[0, 1, 2, 3]),
+                1,
+                5,
+                true,
+                true,
+            ),
+            (
+                "crash 2-of-3 unpin cap0 -> 2-of-2",
+                2,
+                r(&[0, 1, 2]),
+                2,
+                r(&[0, 1]),
+                0,
+                3,
+                true,
+                true,
+            ),
+            (
+                "crash 5-of-9 cap2 -> 2-of-3",
+                5,
+                (0..9).collect(),
+                2,
+                r(&[0, 1, 2]),
+                0,
+                9,
+                false,
+                true,
+            ),
+            (
+                "crash 2-of-3 cap8 -> 5-of-9",
+                2,
+                r(&[0, 1, 2]),
+                5,
+                (0..9).collect(),
+                0,
+                9,
+                false,
+                true,
+            ),
+            (
+                "crash 3-of-4 cap+1 -> 3-of-5",
+                3,
+                r(&[0, 1, 2, 3]),
+                3,
+                r(&[0, 1, 2, 3, 4]),
+                1,
+                5,
+                false,
+                false,
+            ),
+            (
+                "reroster_mixed_fork",
+                2,
+                r(&[0, 1, 2]),
+                2,
+                r(&[2, 3, 4]),
+                0,
+                5,
+                false,
+                true,
+            ),
+            (
+                "prod_4of5_rotate_two_not_despite_one",
+                4,
+                r(&[0, 1, 2, 3, 4]),
+                4,
+                r(&[0, 1, 2, 5, 6]),
+                1,
+                7,
+                false,
+                true,
+            ),
+            (
+                "prod_4of5_rotate_one_despite_one",
+                4,
+                r(&[0, 1, 2, 3, 4]),
+                4,
+                r(&[0, 1, 2, 3, 5]),
+                1,
+                6,
+                true,
+                true,
+            ),
+            (
+                "4-of-5 -> 3-of-5 (f 1 -> 0)",
+                4,
+                r(&[0, 1, 2, 3, 4]),
+                3,
+                r(&[0, 1, 2, 3, 4]),
+                1,
+                5,
+                true,
+                false,
+            ),
+        ];
+        for (name, t_a, s_a, t_b, s_b, f, union, cross_ok, b_ok) in rows {
+            let a = flat_qs(t_a, &pick(&ids, &s_a));
+            let b = flat_qs(t_b, &pick(&ids, &s_b));
+            let c = transition_safe(&a, &b).expect("flat sets");
+            assert_eq!(c.f, f, "{name}: f");
+            assert_eq!(c.union, union, "{name}: |union|");
+            assert_eq!(c.cross_ok, cross_ok, "{name}: cross term");
+            assert_eq!(c.b_ok, b_ok, "{name}: B endpoint");
+            assert!(c.a_ok, "{name}: A endpoint holds by definition of f");
+            assert_eq!(c.safe(), cross_ok && b_ok, "{name}: verdict");
+        }
+    }
+
+    #[test]
+    fn transition_safe_fails_closed_on_non_flat_sets() {
+        use bth_consensus_scp_types::QuorumSetMember;
+        let ids = node_ids(4);
+        let flat = flat_qs(3, &ids);
+        let inner = QuorumSet::new(
+            2,
+            vec![
+                QuorumSetMember::Node(ids[0].clone()),
+                QuorumSetMember::InnerSet(flat_qs(2, &ids[1..4])),
+            ],
+        );
+        assert!(flat_member_ids(&inner).is_none());
+        assert!(transition_safe(&flat, &inner).is_none());
+        assert!(transition_safe(&inner, &flat).is_none());
+        // A duplicated node is not a well-formed flat set either.
+        let dup = flat_qs(2, &[ids[0].clone(), ids[0].clone(), ids[1].clone()]);
+        assert!(flat_member_ids(&dup).is_none());
+        let msg = unsafe_transition_message(&flat, &inner, None);
+        assert!(msg.contains("fail closed"), "{msg}");
+    }
+
+    #[test]
+    fn action_path_unsafe_transition_is_rejected_without_ack() {
+        // Recommended/Crash with 8 connected peers: installed 2-of-3 (cap 2),
+        // then `set_max_auto_members 8` grows to 5-of-9 in one step. The grow
+        // direction is used because a shrink below 4 hits the
+        // acknowledgeDegenerate floor first.
+        let local = ed25519_peer_id([0x45; 32]);
+        let peers = synthetic_peers(8);
+        let mut cfg = action_config(QuorumMode::Recommended, vec![], 2);
+        cfg.network.quorum.fault_model = crate::config::FaultModel::Crash;
+        cfg.network.quorum.max_auto_members = 2;
+        let (previous, prev_snap) = gated_scp_quorum_set(
+            &cfg.network.quorum,
+            &local,
+            &peers,
+            Some(&QuorumSet::new(1, vec![])),
+        );
+        assert!(!prev_snap.intersection_refused);
+        assert_eq!((previous.threshold, previous.members.len()), (2, 3));
+
+        let grow = ActionKind::SetMaxAutoMembers { value: 8 };
+
+        // Without the ack: refused, naming the cross term and the runbook.
+        let no_ack = parsed_action(grow.clone(), false, false);
+        let msg = match evaluate_operator_action(&no_ack, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::Rejected(reason) => reason.message(),
+            _ => panic!("2-of-3 -> 5-of-9 must be refused without acknowledgeUnsafeTransition"),
+        };
+        assert!(msg.contains("2-of-3") && msg.contains("5-of-9"), "{msg}");
+        assert!(msg.contains("cross term"), "{msg}");
+        assert!(msg.contains("|∪| = 9") && msg.contains("f = 0"), "{msg}");
+        assert!(msg.contains("acknowledgeUnsafeTransition"), "{msg}");
+        assert!(msg.contains("quorum-edit-recovery"), "{msg}");
+
+        // A dry run without the ack gets the same refusal.
+        let dry_no_ack = parsed_action(grow.clone(), true, false);
+        match evaluate_operator_action(&dry_no_ack, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::Rejected(reason) => assert_eq!(reason.message(), msg),
+            _ => panic!("a dry run must be refused exactly as a real apply"),
+        }
+
+        // acknowledgeDegenerate is NOT a substitute (distinct semantics).
+        let wrong_ack = parsed_action(grow.clone(), false, true);
+        assert!(matches!(
+            evaluate_operator_action(&wrong_ack, &cfg, &peers, &local, &previous),
+            ActionEvaluation::Rejected(_)
+        ));
+
+        // With the ack: applied, verdict records the override.
+        let ack = parsed_action_unsafe_ack(grow.clone(), false);
+        match evaluate_operator_action(&ack, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::Apply {
+                new_qs, verdict, ..
+            } => {
+                assert_eq!((new_qs.threshold, new_qs.members.len()), (5, 9));
+                assert_eq!(verdict.transition_safe, Some(false));
+            }
+            _ => panic!("acknowledgeUnsafeTransition must override the check"),
+        }
+
+        // Dry run with the ack: accepted, transition_safe == Some(false).
+        let dry_ack = parsed_action_unsafe_ack(grow, true);
+        match evaluate_operator_action(&dry_ack, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::DryRunAccepted { verdict, .. } => {
+                assert_eq!(verdict.transition_safe, Some(false));
+            }
+            _ => panic!("acked dry run must be DryRunAccepted"),
+        }
+    }
+
+    #[test]
+    fn action_path_recommended_3_of_4_cap_plus_one_needs_ack() {
+        // Table row: Recommended/Crash 3-of-4 -> 3-of-5 drops f from 1 to 0, so
+        // both terms fail; refused without the ack, applied with it.
+        let local = ed25519_peer_id([0x46; 32]);
+        let peers = synthetic_peers(4);
+        let mut cfg = action_config(QuorumMode::Recommended, vec![], 2);
+        cfg.network.quorum.fault_model = crate::config::FaultModel::Crash;
+        cfg.network.quorum.max_auto_members = 3;
+        let (previous, _) = gated_scp_quorum_set(
+            &cfg.network.quorum,
+            &local,
+            &peers,
+            Some(&QuorumSet::new(1, vec![])),
+        );
+        assert_eq!((previous.threshold, previous.members.len()), (3, 4));
+        let action = ActionKind::SetMaxAutoMembers { value: 4 };
+        let msg = match evaluate_operator_action(
+            &parsed_action(action.clone(), false, false),
+            &cfg,
+            &peers,
+            &local,
+            &previous,
+        ) {
+            ActionEvaluation::Rejected(reason) => reason.message(),
+            _ => panic!("3-of-4 -> 3-of-5 must be refused"),
+        };
+        assert!(
+            msg.contains("cross term") && msg.contains("endpoint term"),
+            "{msg}"
+        );
+        assert!(matches!(
+            evaluate_operator_action(
+                &parsed_action_unsafe_ack(action, false),
+                &cfg,
+                &peers,
+                &local,
+                &previous
+            ),
+            ActionEvaluation::Apply { .. }
+        ));
+    }
+
+    #[test]
+    fn action_path_single_pin_unpin_on_explicit_4_of_5_passes() {
+        // Table rows 1 and 2: the x-series shape (Explicit 4-of-5) stays operable
+        // one member at a time, with no acknowledgement of any kind.
+        let local = ed25519_peer_id([0x47; 32]);
+        let peers = synthetic_peers(5);
+        let members: Vec<String> = peers[..4].iter().map(|p| p.to_string()).collect();
+        let cfg = action_config(QuorumMode::Explicit, members, 4);
+        let (previous, prev_snap) = gated_scp_quorum_set(
+            &cfg.network.quorum,
+            &local,
+            &peers,
+            Some(&QuorumSet::new(1, vec![])),
+        );
+        assert!(!prev_snap.intersection_refused);
+        assert_eq!((previous.threshold, previous.members.len()), (4, 5));
+
+        // Pin a fifth peer: 4-of-5 -> 4-of-6.
+        let pin = parsed_action(
+            ActionKind::PinMember {
+                peer_id: peers[4].to_string(),
+            },
+            false,
+            false,
+        );
+        match evaluate_operator_action(&pin, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::Apply {
+                new_qs, verdict, ..
+            } => {
+                assert_eq!((new_qs.threshold, new_qs.members.len()), (4, 6));
+                assert_eq!(verdict.transition_safe, Some(true));
+            }
+            _ => panic!("single pin on Explicit 4-of-5 must apply without an ack"),
+        }
+
+        // Unpin one: 4-of-5 -> 4-of-4.
+        let unpin = parsed_action(
+            ActionKind::UnpinMember {
+                peer_id: peers[0].to_string(),
+            },
+            false,
+            false,
+        );
+        match evaluate_operator_action(&unpin, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::Apply {
+                new_qs, verdict, ..
+            } => {
+                assert_eq!((new_qs.threshold, new_qs.members.len()), (4, 4));
+                assert_eq!(verdict.transition_safe, Some(true));
+            }
+            _ => panic!("single unpin on Explicit 4-of-5 must apply without an ack"),
+        }
+
+        // The dry run reports the same verdict.
+        let dry = parsed_action(
+            ActionKind::UnpinMember {
+                peer_id: peers[0].to_string(),
+            },
+            true,
+            false,
+        );
+        match evaluate_operator_action(&dry, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::DryRunAccepted { verdict, .. } => {
+                assert_eq!(verdict.transition_safe, Some(true));
+            }
+            _ => panic!("dry run of a single unpin must be DryRunAccepted"),
+        }
+    }
+
+    #[test]
+    fn action_path_transition_check_skipped_for_solo_previous() {
+        // The carve-out: an installed set with at most one member (empty seed or
+        // solo) is not a fleet configuration, so the check is skipped (None).
+        let local = ed25519_peer_id([0x48; 32]);
+        let peers = synthetic_peers(4);
+        let cfg = action_config(QuorumMode::Recommended, vec![], 2);
+        let solo = QuorumSet::new(
+            1,
+            vec![bth_consensus_scp_types::QuorumSetMember::Node(
+                peer_id_to_node_id(&local),
+            )],
+        );
+        for previous in [QuorumSet::new(1, vec![]), solo] {
+            let pin = parsed_action(
+                ActionKind::PinMember {
+                    peer_id: peers[0].to_string(),
+                },
+                false,
+                false,
+            );
+            match evaluate_operator_action(&pin, &cfg, &peers, &local, &previous) {
+                ActionEvaluation::Apply { verdict, .. } => {
+                    assert_eq!(verdict.transition_safe, None)
+                }
+                _ => panic!("check must be skipped for a <=1-member previous set"),
+            }
+        }
+    }
+
+    /// Explicit 4-of-5 installed as `{local, peers[0..4]}`, with the config's
+    /// member list already moved to `config_members` (e.g. earlier actions
+    /// this node has not yet installed). The action path must compare the
+    /// candidate against the INSTALLED set, not the config.
+    fn explicit_drifted(
+        local: &libp2p::PeerId,
+        peers: &[libp2p::PeerId],
+        config_members: &[usize],
+        config_threshold: u32,
+    ) -> (Config, QuorumSet) {
+        let installed_cfg = action_config(
+            QuorumMode::Explicit,
+            peers[..4].iter().map(|p| p.to_string()).collect(),
+            4,
+        );
+        let (previous, _) = gated_scp_quorum_set(
+            &installed_cfg.network.quorum,
+            local,
+            peers,
+            Some(&QuorumSet::new(1, vec![])),
+        );
+        assert_eq!((previous.threshold, previous.members.len()), (4, 5));
+        let cfg = action_config(
+            QuorumMode::Explicit,
+            config_members
+                .iter()
+                .map(|&i| peers[i].to_string())
+                .collect(),
+            config_threshold,
+        );
+        (cfg, previous)
+    }
+
+    #[test]
+    fn action_path_two_member_swap_on_4_of_5_is_refused() {
+        // prod_4of5_rotate_two_not_despite_one: installed {self,0,1,2,3}; the
+        // candidate {self,0,1,4,5} swaps two members at once (|∪| = 7, f = 1:
+        // 8 > 8 fails).
+        let local = ed25519_peer_id([0x49; 32]);
+        let peers = synthetic_peers(6);
+        let (cfg, previous) = explicit_drifted(&local, &peers, &[0, 1, 4], 4);
+        let pin = ActionKind::PinMember {
+            peer_id: peers[5].to_string(),
+        };
+        let msg = match evaluate_operator_action(
+            &parsed_action(pin.clone(), false, false),
+            &cfg,
+            &peers,
+            &local,
+            &previous,
+        ) {
+            ActionEvaluation::Rejected(reason) => reason.message(),
+            _ => panic!("two-member swap on 4-of-5 must be refused"),
+        };
+        assert!(
+            msg.contains("4-of-5 to 4-of-5") && msg.contains("|∪| = 7"),
+            "{msg}"
+        );
+        assert!(msg.contains("f = 1") && msg.contains("cross term"), "{msg}");
+        assert!(matches!(
+            evaluate_operator_action(
+                &parsed_action_unsafe_ack(pin, false),
+                &cfg,
+                &peers,
+                &local,
+                &previous
+            ),
+            ActionEvaluation::Apply { .. }
+        ));
+    }
+
+    #[test]
+    fn action_path_full_reroster_is_refused_without_ack() {
+        // Installed {self,0,1,2,3}; candidate {self,4,5,6,7} shares only self.
+        let local = ed25519_peer_id([0x4A; 32]);
+        let peers = synthetic_peers(8);
+        let (cfg, previous) = explicit_drifted(&local, &peers, &[4, 5, 6], 4);
+        let pin = ActionKind::PinMember {
+            peer_id: peers[7].to_string(),
+        };
+        match evaluate_operator_action(
+            &parsed_action(pin.clone(), false, false),
+            &cfg,
+            &peers,
+            &local,
+            &previous,
+        ) {
+            ActionEvaluation::Rejected(reason) => {
+                let m = reason.message();
+                assert!(m.contains("|∪| = 9") && m.contains("cross term"), "{m}");
+            }
+            _ => panic!("a full re-roster must be refused without the ack"),
+        }
+        match evaluate_operator_action(
+            &parsed_action_unsafe_ack(pin, true),
+            &cfg,
+            &peers,
+            &local,
+            &previous,
+        ) {
+            ActionEvaluation::DryRunAccepted { verdict, .. } => {
+                assert_eq!(verdict.transition_safe, Some(false))
+            }
+            _ => panic!("acked dry run of a re-roster must be DryRunAccepted"),
+        }
+    }
+
+    #[test]
+    fn action_path_4_of_5_to_3_of_5_refused_by_endpoint_term() {
+        // Same members, threshold 4 -> 3: the cross term holds (7 > 6) but the
+        // B endpoint fails (6 > 6 is false): f would silently drop 1 -> 0.
+        let local = ed25519_peer_id([0x4B; 32]);
+        let peers = synthetic_peers(5);
+        let (cfg, previous) = explicit_drifted(&local, &peers, &[0, 1, 2, 3], 3);
+        // A no-op pin of an existing member: the candidate is the config's
+        // 3-of-5 over the installed members.
+        let pin = ActionKind::PinMember {
+            peer_id: peers[0].to_string(),
+        };
+        match evaluate_operator_action(
+            &parsed_action(pin, false, false),
+            &cfg,
+            &peers,
+            &local,
+            &previous,
+        ) {
+            ActionEvaluation::Rejected(reason) => {
+                let m = reason.message();
+                assert!(m.contains("4-of-5 to 3-of-5"), "{m}");
+                assert!(m.contains("endpoint term"), "{m}");
+                assert!(!m.contains("cross term"), "cross term holds here: {m}");
+            }
+            _ => panic!("4-of-5 -> 3-of-5 must be refused by the endpoint term"),
+        }
+    }
+
+    #[test]
+    fn judge_repro_1845_rotation_through_gate() {
+        // Self-contained port of the #1847 reviewer repro: build each node's A
+        // and B quorum sets through the REAL gate (two Explicit configs, so a
+        // node off a roster runs `S ∪ {self}`) and assert the pairwise verdict
+        // per node. The mixed-fleet `bth_quorum_sim` cross-check of the same
+        // instances stays with #1847's `lean_quorum_instances_match_quorum_sim`.
+        let explicit = |t: u32, members: &[libp2p::PeerId]| QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: t,
+            members: members.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let through_gate = |cfg: &QuorumConfig, me: &libp2p::PeerId, peers: &[libp2p::PeerId]| {
+            let (qs, snap) = gated_scp_quorum_set(cfg, me, peers, None);
+            assert!(!snap.intersection_refused);
+            qs
+        };
+        let verdict = |a: &QuorumConfig, b: &QuorumConfig, v: usize, p: &[libp2p::PeerId]| {
+            let qa = through_gate(a, &p[v], p);
+            let qb = through_gate(b, &p[v], p);
+            transition_safe(&qa, &qb)
+                .expect("gate builds flat sets")
+                .safe()
+        };
+
+        // reroster_mixed_fork: 2-of-{0,1,2} -> 2-of-{2,3,4}. Node 2 lists
+        // itself in both and must refuse.
+        let p = synthetic_peers(5);
+        let a = explicit(2, &p[0..3]);
+        let b = explicit(2, &p[2..5]);
+        assert!(!verdict(&a, &b, 2, &p), "re-roster must be refused");
+
+        // prod_4of5_rotate_two_not_despite_one: 4-of-{0..4} -> 4-of-{0,1,2,5,6}.
+        // Every node refuses, on or off either roster.
+        let p = synthetic_peers(7);
+        let a = explicit(4, &p[0..5]);
+        let b = explicit(4, &[p[0], p[1], p[2], p[5], p[6]]);
+        for v in 0..7 {
+            assert!(
+                !verdict(&a, &b, v, &p),
+                "two-member swap: node {v} must refuse"
+            );
+        }
+
+        // prod_4of5_rotate_one_despite_one: 4-of-{0..4} -> 4-of-{0,1,2,3,5}.
+        // Every node admits it, including the off-roster nodes 4 and 5 whose
+        // gate-built sets are 4-of-6.
+        let p = synthetic_peers(6);
+        let a = explicit(4, &p[0..5]);
+        let b = explicit(4, &[p[0], p[1], p[2], p[3], p[5]]);
+        for v in 0..6 {
+            assert!(
+                verdict(&a, &b, v, &p),
+                "one-member swap: node {v} must admit"
+            );
+        }
     }
 
     #[test]
