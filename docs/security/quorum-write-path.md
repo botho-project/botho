@@ -164,6 +164,14 @@ canonicalization change is intentional (e.g. a new v2 field).
   model is node-local. No legitimate remote-curation use case shrinks a node
   to solo; that remains SSH-only. Evaluated at apply time against the
   then-connected peer set, same as the `acknowledgeDegenerate` rule.
+- **`acknowledgeUnsafeTransition` (optional bool, new, #1845)**: overrides
+  the transitional-safety check (§7.4). Without it, an action whose candidate
+  quorum set fails the pairwise rotation condition against the quorum set the
+  node has installed is refused with `verify_refused:invalid_payload`. Like
+  `acknowledgeDegenerate` it is inside the signed payload, so the override is
+  attributable; the two acknowledgements are independent and neither
+  implies the other. Absent means `false`, so envelopes that predate the
+  field are unchanged.
 
 ## 4. Node-side verification and apply
 
@@ -198,7 +206,9 @@ fail-closed; first failure wins and is audit-logged as a refusal):
 7. **Payload validity**: action is a known v1 action; `peerId` parses as a
    base58 PeerId (mirroring the gate's own parse-and-warn at run.rs:2279);
    `max_auto_members` within sane bounds (0..=64); the
-   `acknowledgeDegenerate` rule and the solo-quorum hard floor (§3).
+   `acknowledgeDegenerate` rule and the solo-quorum hard floor (§3); then
+   the transitional-safety check against the installed quorum set (§7.4),
+   overridable only by the signed `acknowledgeUnsafeTransition` (§3).
 
 **Apply path** — mirrors the #674 relay pattern (RPC → mpsc channel → event
 loop), because `rebuild_scp_quorum_set` needs `NetworkDiscovery` and the
@@ -380,6 +390,60 @@ membership edit against an explicit-mode node, so reaching this failure state
 requires the SSH path, where the operator already sees and edits the whole
 config atomically. Explicit-mode curation graduating into the write path is
 part of the same future-review gate as mode/threshold actions (§3).
+
+### 7.4 Transitional safety of a rotation (#1845)
+
+The gate (§7.1) checks that a candidate quorum set intersects *on its own*.
+During a rollout, though, some nodes still run the old configuration
+A = (S_A, t_A) while others already run the new one B = (S_B, t_B), and both
+endpoints passing the gate does not make the mixed fleet safe. Two proven
+counterexamples (Lean model, `formal/Botho/Quorum/Fbas.lean`, PR #1847):
+
+- `reroster_mixed_fork`: 2-of-{0,1,2} → 2-of-{2,3,4}. With nodes 3 and 4
+  already moved, {0,1} and {3,4} are disjoint quorums — a plain fork.
+- `prod_4of5_rotate_two_not_despite_one`: swapping two members of the
+  production Explicit 4-of-5 at once. The mixed fleet still intersects, but
+  not despite one faulty node, while every node reports
+  `quorumByzantineTolerance = 1`.
+
+The action path therefore also checks, after the membership floors and
+before the dry-run return, with `f = quorumByzantineTolerance` of the
+installed set A:
+
+- (i) cross term: `t_A + t_B > |S_A ∪ S_B| + f`, and
+- (ii) B endpoint: `2·t_B > |S_B| + f` (not implied by (i): 4-of-5 → 3-of-5
+  on the same members passes (i) but silently drops f from 1 to 0).
+
+`rotation_sound` proves the condition sufficient for every rollout order;
+`rotation_condition_necessary` proves it necessary at f = 0, so the check
+refuses no rotation that is safe under every order. A failure is refused
+unless the signed envelope carries `acknowledgeUnsafeTransition: true`; the
+outcome's gate verdict records `transitionSafe` (`true`, `false` when the
+ack overrode a failure, `null` when skipped). The check is skipped when the
+installed set has at most one member, and fails closed on a non-flat set.
+
+What it allows: a single pin or unpin with the threshold unchanged on the
+Explicit 4-of-5 (4-of-5 → 4-of-6 or 4-of-4), and a one-member swap done as
+two converged steps. What it refuses: a full re-roster, a two-member swap
+against the installed set, a large `max_auto_members` grow or shrink in
+`recommended` mode (2-of-3 → 5-of-9), and a 3-of-4 → 3-of-5 grow that drops
+f from 1 to 0.
+
+**Limits.**
+
+- The check is **pairwise**: it compares the candidate with the set *this*
+  node has installed. A fleet spread over three or more configurations —
+  nodes that applied successive actions at different times — is not
+  covered. A two-member swap is four actions, so a staggered rollout can
+  leave five configurations live at once. Operators must therefore **change
+  one member per step and wait for the whole fleet to converge** (every
+  node reports the same installed set) before the next step
+  (`docs/operations/runbooks/quorum-edit-recovery.md`).
+- `recommended`-mode peer-churn rebuilds change the installed set without an
+  operator action and are not gated by this check (see #1844).
+- For f > 0 the condition is exact only when at least f members are shared;
+  elsewhere it is sufficient (it may refuse a rotation that happens to be
+  safe, never the reverse).
 
 ## 8. Threat analysis
 
