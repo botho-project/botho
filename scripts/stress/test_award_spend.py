@@ -46,8 +46,9 @@ class AwardSelectionTests(unittest.TestCase):
             db=db, limits={"max_single_signed_fee_picocredits": 10**9})
         self.c.inventory = [[]]
         self.c.spent = []
-        # Every input is created at height 100: at height 170 the age band is
-        # heights 93..107. 30 ordinary decoys leave room to exclude reals.
+        # Every input is created at height 100 (age 70 at height 170). Any
+        # +/-5% window the signer draws holds the real input's own block, so
+        # 30 ordinary decoys there leave room to exclude reals (#1692).
         self.c.blocks = [{"height": 100, "outputs": [
             {"targetKey": bytes([i] * 32).hex(), "txHash": bytes([i] * 32).hex(),
              "outputIndex": 0} for i in range(100, 130)]}]
@@ -79,7 +80,16 @@ class AwardSelectionTests(unittest.TestCase):
         self.assertEqual(selected, [self.principal[0]])
         self.assertNotIn("award_input", evidence)
 
+    def decoy_block(self, height, tags):
+        self.c.blocks.append({"height": height, "outputs": [
+            {"targetKey": bytes([t] * 32).hex(), "txHash": bytes([t] * 32).hex(),
+             "outputIndex": 0} for t in tags]})
+
     def test_free_shape_payment_adds_the_oldest_mature_award(self):
+        # Each award's own block holds nineteen decoys, so every window the
+        # signer can draw for it is full (#1692); only the age differs.
+        self.decoy_block(104, range(150, 169))
+        self.decoy_block(97, range(170, 189))
         newer = self.own(41, 2 * AWARD, height=104, award=True)
         older = self.own(40, AWARD, height=97, award=True)
         selected, evidence = choose(self.c, 0, 170, 10**9, award_input=True)
@@ -124,24 +134,32 @@ class AwardSelectionTests(unittest.TestCase):
             return {"targetKey": bytes([tag] * 32).hex(), "txHash": bytes([tag] * 32).hex(),
                     "outputIndex": 0, "height": height}
 
-        # Principal ring band at height 170: 93..107; the award (created at
-        # 104) has band 98..110. Nineteen decoys at 95 serve only principal
-        # rings; the award ring holds the three principal keys plus 16 decoys
-        # at 109: exactly 19, so selecting principal[0] leaves it 18.
+        # Random-offset windows at height 180 (#1692). Principal (age 80,
+        # W = 8) windows are [s, s+8] for s in 72..80; the award (created at
+        # 104, age 76, W = 6) windows are [s, s+6] for s in 70..76. Awards
+        # are never decoys, so the widths must differ for the award's ring to
+        # sit at exactly 19 while the principal ring stays complete.
+        # - Award: 16 decoys at age 76 are in every window. Windows from 74
+        #   and 75 also hold the three principal keys (age 80): exactly 19,
+        #   so selecting principal[0] leaves 18. Windows from 70..73 hold three
+        #   decoys at age 73 instead; the window from 76 holds the age-82 ones.
+        # - Principal: 17 decoys at age 82 plus keys 2 and 3 fill windows from
+        #   77..80 (19); the windows from 72..76 also hold the age-76 decoys.
         self.c.blocks[0]["outputs"] = [
             o for o in self.c.blocks[0]["outputs"] if o["outputIndex"] == 0
             and o["targetKey"] in {bytes([t] * 32).hex() for t in (1, 2, 3)}]
         self.c.blocks += [
-            {"height": 95, "outputs": [decoy(t, 95) for t in range(100, 119)]},
-            {"height": 109, "outputs": [decoy(t, 109) for t in range(150, 166)]},
+            {"height": 98, "outputs": [decoy(t, 98) for t in range(100, 117)]},
+            {"height": 104, "outputs": [decoy(t, 104) for t in range(150, 166)]},
+            {"height": 107, "outputs": [decoy(t, 107) for t in range(170, 173)]},
         ]
         award = self.own(40, AWARD, height=104, award=True)
-        selected, evidence = choose(self.c, 0, 170, 10**9, award_input=True)
+        selected, evidence = choose(self.c, 0, 180, 10**9, award_input=True)
         self.assertEqual(selected, [self.principal[0]])
         self.assertIsNone(evidence["award_input"])
-        # One more decoy in the award's band: the complete set holds.
-        self.c.blocks[-1]["outputs"].append(decoy(166, 109))
-        selected, evidence = choose(self.c, 0, 170, 10**9, award_input=True)
+        # One more decoy at the award's age: the complete set holds.
+        next(b for b in self.c.blocks if b["height"] == 104)["outputs"].append(decoy(166, 104))
+        selected, evidence = choose(self.c, 0, 180, 10**9, award_input=True)
         self.assertEqual(selected, [self.principal[0], award])
         self.assertEqual(evidence["award_input"], award["id"])
 

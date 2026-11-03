@@ -1,7 +1,7 @@
 {
-  "_comment": "Shared web<->native decoy age-band conformance vectors (#1693). Checked by web/packages/wasm-signer/test/decoy-selection.test.ts (ageSimilarityBand) AND botho/src/decoy_selection.rs (age_similarity_band). degenerate=true means minAge>maxAge: nothing is in-band and both pickers use nearest-age fallback. Edit only together with both implementations. fallback[]: pools whose selected SET is RNG-independent (count >= in-band size, distinct distances); ages below minDecoyAgeBlocks are ineligible.",
+  "_comment": "Shared web<->native decoy age-band conformance vectors (#1693, #1692). Checked by web/packages/wasm-signer/test/decoy-selection.test.ts (ageSimilarityBand, ageSimilarityWindow) AND botho/src/decoy_selection.rs (age_similarity_band, age_similarity_window). bands[]: the band CENTRED on the real age (reference only since #1692). windows[]: the random-offset window every picker draws (#1692/#1755): width W = 2*floor(realAge*spreadBps/10000), offset clamped to 0..=W, window [realAge-offset, realAge-offset+W] with the lower bound floored at minDecoyAgeBlocks; pickers draw the offset uniformly in 0..=W. degenerate=true means minAge>maxAge: nothing is in-window and both pickers use nearest-age fallback. Edit only together with both implementations. fallback[]: pools whose selected SET is RNG-independent for EVERY window offset (distinct distances); ages below minDecoyAgeBlocks are ineligible.",
   "minDecoyAgeBlocks": 10,
-  "ageSimilaritySpreadBps": 1000,
+  "ageSimilaritySpreadBps": 500,
   "bands": [
     {
       "realAge": 0,
@@ -30,103 +30,929 @@
     {
       "realAge": 10,
       "minAge": 10,
+      "maxAge": 10,
+      "degenerate": false
+    },
+    {
+      "realAge": 11,
+      "minAge": 11,
+      "maxAge": 11,
+      "degenerate": false
+    },
+    {
+      "realAge": 12,
+      "minAge": 12,
+      "maxAge": 12,
+      "degenerate": false
+    },
+    {
+      "realAge": 19,
+      "minAge": 19,
+      "maxAge": 19,
+      "degenerate": false
+    },
+    {
+      "realAge": 20,
+      "minAge": 19,
+      "maxAge": 21,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "minAge": 48,
+      "maxAge": 52,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "minAge": 95,
+      "maxAge": 103,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "minAge": 95,
+      "maxAge": 105,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "minAge": 96,
+      "maxAge": 106,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "minAge": 104,
+      "maxAge": 114,
+      "degenerate": false
+    },
+    {
+      "realAge": 110,
+      "minAge": 105,
+      "maxAge": 115,
+      "degenerate": false
+    },
+    {
+      "realAge": 111,
+      "minAge": 106,
+      "maxAge": 116,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000,
+      "minAge": 950,
+      "maxAge": 1050,
+      "degenerate": false
+    },
+    {
+      "realAge": 4321,
+      "minAge": 4105,
+      "maxAge": 4537,
+      "degenerate": false
+    },
+    {
+      "realAge": 21600,
+      "minAge": 20520,
+      "maxAge": 22680,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000000,
+      "minAge": 950000,
+      "maxAge": 1050000,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "minAge": 8556839292003,
+      "maxAge": 9457559217477,
+      "degenerate": false
+    }
+  ],
+  "windows": [
+    {
+      "realAge": 0,
+      "offset": 0,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 0,
+      "degenerate": true
+    },
+    {
+      "realAge": 0,
+      "offset": 1,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 0,
+      "degenerate": true
+    },
+    {
+      "realAge": 0,
+      "offset": 5,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 0,
+      "degenerate": true
+    },
+    {
+      "realAge": 5,
+      "offset": 0,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 5,
+      "degenerate": true
+    },
+    {
+      "realAge": 5,
+      "offset": 1,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 5,
+      "degenerate": true
+    },
+    {
+      "realAge": 5,
+      "offset": 5,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 5,
+      "degenerate": true
+    },
+    {
+      "realAge": 9,
+      "offset": 0,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 9,
+      "degenerate": true
+    },
+    {
+      "realAge": 9,
+      "offset": 1,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 9,
+      "degenerate": true
+    },
+    {
+      "realAge": 9,
+      "offset": 5,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 9,
+      "degenerate": true
+    },
+    {
+      "realAge": 10,
+      "offset": 0,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 10,
+      "degenerate": false
+    },
+    {
+      "realAge": 10,
+      "offset": 1,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 10,
+      "degenerate": false
+    },
+    {
+      "realAge": 10,
+      "offset": 5,
+      "width": 0,
+      "minAge": 10,
+      "maxAge": 10,
+      "degenerate": false
+    },
+    {
+      "realAge": 11,
+      "offset": 0,
+      "width": 0,
+      "minAge": 11,
       "maxAge": 11,
       "degenerate": false
     },
     {
       "realAge": 11,
-      "minAge": 10,
+      "offset": 1,
+      "width": 0,
+      "minAge": 11,
+      "maxAge": 11,
+      "degenerate": false
+    },
+    {
+      "realAge": 11,
+      "offset": 5,
+      "width": 0,
+      "minAge": 11,
+      "maxAge": 11,
+      "degenerate": false
+    },
+    {
+      "realAge": 12,
+      "offset": 0,
+      "width": 0,
+      "minAge": 12,
       "maxAge": 12,
       "degenerate": false
     },
     {
       "realAge": 12,
-      "minAge": 11,
-      "maxAge": 13,
+      "offset": 1,
+      "width": 0,
+      "minAge": 12,
+      "maxAge": 12,
+      "degenerate": false
+    },
+    {
+      "realAge": 12,
+      "offset": 5,
+      "width": 0,
+      "minAge": 12,
+      "maxAge": 12,
       "degenerate": false
     },
     {
       "realAge": 19,
+      "offset": 0,
+      "width": 0,
+      "minAge": 19,
+      "maxAge": 19,
+      "degenerate": false
+    },
+    {
+      "realAge": 19,
+      "offset": 1,
+      "width": 0,
+      "minAge": 19,
+      "maxAge": 19,
+      "degenerate": false
+    },
+    {
+      "realAge": 19,
+      "offset": 5,
+      "width": 0,
+      "minAge": 19,
+      "maxAge": 19,
+      "degenerate": false
+    },
+    {
+      "realAge": 20,
+      "offset": 0,
+      "width": 2,
+      "minAge": 20,
+      "maxAge": 22,
+      "degenerate": false
+    },
+    {
+      "realAge": 20,
+      "offset": 1,
+      "width": 2,
+      "minAge": 19,
+      "maxAge": 21,
+      "degenerate": false
+    },
+    {
+      "realAge": 20,
+      "offset": 2,
+      "width": 2,
       "minAge": 18,
       "maxAge": 20,
       "degenerate": false
     },
     {
       "realAge": 20,
+      "offset": 7,
+      "width": 2,
       "minAge": 18,
-      "maxAge": 22,
+      "maxAge": 20,
+      "degenerate": false
+    },
+    {
+      "realAge": 40,
+      "offset": 0,
+      "width": 4,
+      "minAge": 40,
+      "maxAge": 44,
+      "degenerate": false
+    },
+    {
+      "realAge": 40,
+      "offset": 1,
+      "width": 4,
+      "minAge": 39,
+      "maxAge": 43,
+      "degenerate": false
+    },
+    {
+      "realAge": 40,
+      "offset": 2,
+      "width": 4,
+      "minAge": 38,
+      "maxAge": 42,
+      "degenerate": false
+    },
+    {
+      "realAge": 40,
+      "offset": 3,
+      "width": 4,
+      "minAge": 37,
+      "maxAge": 41,
+      "degenerate": false
+    },
+    {
+      "realAge": 40,
+      "offset": 4,
+      "width": 4,
+      "minAge": 36,
+      "maxAge": 40,
+      "degenerate": false
+    },
+    {
+      "realAge": 40,
+      "offset": 9,
+      "width": 4,
+      "minAge": 36,
+      "maxAge": 40,
       "degenerate": false
     },
     {
       "realAge": 50,
-      "minAge": 45,
-      "maxAge": 55,
+      "offset": 0,
+      "width": 4,
+      "minAge": 50,
+      "maxAge": 54,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "offset": 1,
+      "width": 4,
+      "minAge": 49,
+      "maxAge": 53,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "offset": 2,
+      "width": 4,
+      "minAge": 48,
+      "maxAge": 52,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "offset": 3,
+      "width": 4,
+      "minAge": 47,
+      "maxAge": 51,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "offset": 4,
+      "width": 4,
+      "minAge": 46,
+      "maxAge": 50,
+      "degenerate": false
+    },
+    {
+      "realAge": 50,
+      "offset": 9,
+      "width": 4,
+      "minAge": 46,
+      "maxAge": 50,
       "degenerate": false
     },
     {
       "realAge": 99,
-      "minAge": 90,
-      "maxAge": 108,
+      "offset": 0,
+      "width": 8,
+      "minAge": 99,
+      "maxAge": 107,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "offset": 1,
+      "width": 8,
+      "minAge": 98,
+      "maxAge": 106,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "offset": 4,
+      "width": 8,
+      "minAge": 95,
+      "maxAge": 103,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "offset": 7,
+      "width": 8,
+      "minAge": 92,
+      "maxAge": 100,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "offset": 8,
+      "width": 8,
+      "minAge": 91,
+      "maxAge": 99,
+      "degenerate": false
+    },
+    {
+      "realAge": 99,
+      "offset": 13,
+      "width": 8,
+      "minAge": 91,
+      "maxAge": 99,
       "degenerate": false
     },
     {
       "realAge": 100,
+      "offset": 0,
+      "width": 10,
+      "minAge": 100,
+      "maxAge": 110,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "offset": 1,
+      "width": 10,
+      "minAge": 99,
+      "maxAge": 109,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "offset": 5,
+      "width": 10,
+      "minAge": 95,
+      "maxAge": 105,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "offset": 9,
+      "width": 10,
+      "minAge": 91,
+      "maxAge": 101,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "offset": 10,
+      "width": 10,
       "minAge": 90,
+      "maxAge": 100,
+      "degenerate": false
+    },
+    {
+      "realAge": 100,
+      "offset": 15,
+      "width": 10,
+      "minAge": 90,
+      "maxAge": 100,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "offset": 0,
+      "width": 10,
+      "minAge": 101,
+      "maxAge": 111,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "offset": 1,
+      "width": 10,
+      "minAge": 100,
       "maxAge": 110,
       "degenerate": false
     },
     {
       "realAge": 101,
+      "offset": 5,
+      "width": 10,
+      "minAge": 96,
+      "maxAge": 106,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "offset": 9,
+      "width": 10,
+      "minAge": 92,
+      "maxAge": 102,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "offset": 10,
+      "width": 10,
       "minAge": 91,
-      "maxAge": 111,
+      "maxAge": 101,
+      "degenerate": false
+    },
+    {
+      "realAge": 101,
+      "offset": 15,
+      "width": 10,
+      "minAge": 91,
+      "maxAge": 101,
       "degenerate": false
     },
     {
       "realAge": 109,
+      "offset": 0,
+      "width": 10,
+      "minAge": 109,
+      "maxAge": 119,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "offset": 1,
+      "width": 10,
+      "minAge": 108,
+      "maxAge": 118,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "offset": 5,
+      "width": 10,
+      "minAge": 104,
+      "maxAge": 114,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "offset": 9,
+      "width": 10,
+      "minAge": 100,
+      "maxAge": 110,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "offset": 10,
+      "width": 10,
       "minAge": 99,
+      "maxAge": 109,
+      "degenerate": false
+    },
+    {
+      "realAge": 109,
+      "offset": 15,
+      "width": 10,
+      "minAge": 99,
+      "maxAge": 109,
+      "degenerate": false
+    },
+    {
+      "realAge": 110,
+      "offset": 0,
+      "width": 10,
+      "minAge": 110,
+      "maxAge": 120,
+      "degenerate": false
+    },
+    {
+      "realAge": 110,
+      "offset": 1,
+      "width": 10,
+      "minAge": 109,
       "maxAge": 119,
       "degenerate": false
     },
     {
       "realAge": 110,
-      "minAge": 99,
-      "maxAge": 121,
+      "offset": 5,
+      "width": 10,
+      "minAge": 105,
+      "maxAge": 115,
       "degenerate": false
     },
     {
-      "realAge": 111,
+      "realAge": 110,
+      "offset": 9,
+      "width": 10,
+      "minAge": 101,
+      "maxAge": 111,
+      "degenerate": false
+    },
+    {
+      "realAge": 110,
+      "offset": 10,
+      "width": 10,
       "minAge": 100,
-      "maxAge": 122,
+      "maxAge": 110,
+      "degenerate": false
+    },
+    {
+      "realAge": 110,
+      "offset": 15,
+      "width": 10,
+      "minAge": 100,
+      "maxAge": 110,
+      "degenerate": false
+    },
+    {
+      "realAge": 200,
+      "offset": 0,
+      "width": 20,
+      "minAge": 200,
+      "maxAge": 220,
+      "degenerate": false
+    },
+    {
+      "realAge": 200,
+      "offset": 1,
+      "width": 20,
+      "minAge": 199,
+      "maxAge": 219,
+      "degenerate": false
+    },
+    {
+      "realAge": 200,
+      "offset": 10,
+      "width": 20,
+      "minAge": 190,
+      "maxAge": 210,
+      "degenerate": false
+    },
+    {
+      "realAge": 200,
+      "offset": 19,
+      "width": 20,
+      "minAge": 181,
+      "maxAge": 201,
+      "degenerate": false
+    },
+    {
+      "realAge": 200,
+      "offset": 20,
+      "width": 20,
+      "minAge": 180,
+      "maxAge": 200,
+      "degenerate": false
+    },
+    {
+      "realAge": 200,
+      "offset": 25,
+      "width": 20,
+      "minAge": 180,
+      "maxAge": 200,
       "degenerate": false
     },
     {
       "realAge": 1000,
-      "minAge": 900,
+      "offset": 0,
+      "width": 100,
+      "minAge": 1000,
       "maxAge": 1100,
       "degenerate": false
     },
     {
+      "realAge": 1000,
+      "offset": 1,
+      "width": 100,
+      "minAge": 999,
+      "maxAge": 1099,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000,
+      "offset": 50,
+      "width": 100,
+      "minAge": 950,
+      "maxAge": 1050,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000,
+      "offset": 99,
+      "width": 100,
+      "minAge": 901,
+      "maxAge": 1001,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000,
+      "offset": 100,
+      "width": 100,
+      "minAge": 900,
+      "maxAge": 1000,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000,
+      "offset": 105,
+      "width": 100,
+      "minAge": 900,
+      "maxAge": 1000,
+      "degenerate": false
+    },
+    {
       "realAge": 4321,
-      "minAge": 3889,
+      "offset": 0,
+      "width": 432,
+      "minAge": 4321,
       "maxAge": 4753,
       "degenerate": false
     },
     {
+      "realAge": 4321,
+      "offset": 1,
+      "width": 432,
+      "minAge": 4320,
+      "maxAge": 4752,
+      "degenerate": false
+    },
+    {
+      "realAge": 4321,
+      "offset": 216,
+      "width": 432,
+      "minAge": 4105,
+      "maxAge": 4537,
+      "degenerate": false
+    },
+    {
+      "realAge": 4321,
+      "offset": 431,
+      "width": 432,
+      "minAge": 3890,
+      "maxAge": 4322,
+      "degenerate": false
+    },
+    {
+      "realAge": 4321,
+      "offset": 432,
+      "width": 432,
+      "minAge": 3889,
+      "maxAge": 4321,
+      "degenerate": false
+    },
+    {
+      "realAge": 4321,
+      "offset": 437,
+      "width": 432,
+      "minAge": 3889,
+      "maxAge": 4321,
+      "degenerate": false
+    },
+    {
       "realAge": 21600,
-      "minAge": 19440,
+      "offset": 0,
+      "width": 2160,
+      "minAge": 21600,
       "maxAge": 23760,
       "degenerate": false
     },
     {
+      "realAge": 21600,
+      "offset": 1,
+      "width": 2160,
+      "minAge": 21599,
+      "maxAge": 23759,
+      "degenerate": false
+    },
+    {
+      "realAge": 21600,
+      "offset": 1080,
+      "width": 2160,
+      "minAge": 20520,
+      "maxAge": 22680,
+      "degenerate": false
+    },
+    {
+      "realAge": 21600,
+      "offset": 2159,
+      "width": 2160,
+      "minAge": 19441,
+      "maxAge": 21601,
+      "degenerate": false
+    },
+    {
+      "realAge": 21600,
+      "offset": 2160,
+      "width": 2160,
+      "minAge": 19440,
+      "maxAge": 21600,
+      "degenerate": false
+    },
+    {
+      "realAge": 21600,
+      "offset": 2165,
+      "width": 2160,
+      "minAge": 19440,
+      "maxAge": 21600,
+      "degenerate": false
+    },
+    {
       "realAge": 1000000,
-      "minAge": 900000,
+      "offset": 0,
+      "width": 100000,
+      "minAge": 1000000,
       "maxAge": 1100000,
       "degenerate": false
     },
     {
+      "realAge": 1000000,
+      "offset": 1,
+      "width": 100000,
+      "minAge": 999999,
+      "maxAge": 1099999,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000000,
+      "offset": 50000,
+      "width": 100000,
+      "minAge": 950000,
+      "maxAge": 1050000,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000000,
+      "offset": 99999,
+      "width": 100000,
+      "minAge": 900001,
+      "maxAge": 1000001,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000000,
+      "offset": 100000,
+      "width": 100000,
+      "minAge": 900000,
+      "maxAge": 1000000,
+      "degenerate": false
+    },
+    {
+      "realAge": 1000000,
+      "offset": 100005,
+      "width": 100000,
+      "minAge": 900000,
+      "maxAge": 1000000,
+      "degenerate": false
+    },
+    {
       "realAge": 9007199254740,
-      "minAge": 8106479329266,
+      "offset": 0,
+      "width": 900719925474,
+      "minAge": 9007199254740,
       "maxAge": 9907919180214,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "offset": 1,
+      "width": 900719925474,
+      "minAge": 9007199254739,
+      "maxAge": 9907919180213,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "offset": 450359962737,
+      "width": 900719925474,
+      "minAge": 8556839292003,
+      "maxAge": 9457559217477,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "offset": 900719925473,
+      "width": 900719925474,
+      "minAge": 8106479329267,
+      "maxAge": 9007199254741,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "offset": 900719925474,
+      "width": 900719925474,
+      "minAge": 8106479329266,
+      "maxAge": 9007199254740,
+      "degenerate": false
+    },
+    {
+      "realAge": 9007199254740,
+      "offset": 900719925479,
+      "width": 900719925474,
+      "minAge": 8106479329266,
+      "maxAge": 9007199254740,
       "degenerate": false
     }
   ],
@@ -169,21 +995,21 @@
       ]
     },
     {
-      "name": "band exactly full: only in-band members",
+      "name": "window always full: only the nearest members, whatever the offset",
       "realAge": 1000,
       "count": 3,
       "poolAges": [
-        900,
+        999,
         1000,
-        1100,
-        899,
-        1101,
+        1001,
+        700,
+        1300,
         5000
       ],
       "expectedAges": [
-        900,
+        999,
         1000,
-        1100
+        1001
       ]
     }
   ]

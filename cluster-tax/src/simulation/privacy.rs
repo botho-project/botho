@@ -238,14 +238,15 @@ pub const GAMMA_SHAPE: f64 = super::privacy_routes::NODE_GAMMA_SHAPE;
 /// Default gamma scale in days.
 pub const GAMMA_SCALE_DAYS: f64 = super::privacy_routes::NODE_GAMMA_SCALE_DAYS;
 
-/// Blocks per day (2-minute blocks).
+/// Blocks per day at the mainnet 5 s target block time (#1692).
 pub const BLOCKS_PER_DAY: f64 = super::privacy_routes::NODE_BLOCKS_PER_DAY;
 
 /// Minimum output age for eligibility (blocks).
 pub const MIN_AGE_BLOCKS: u64 = super::privacy_routes::MIN_DECOY_AGE_BLOCKS;
 
-/// Maximum output age for consideration (blocks, ~2 years).
-pub const MAX_AGE_BLOCKS: u64 = 525_600;
+/// Maximum output age for consideration (blocks, ~2 years at
+/// [`BLOCKS_PER_DAY`]; the node's `MAX_DECOY_AGE_BLOCKS`, #1692).
+pub const MAX_AGE_BLOCKS: u64 = 2 * 365 * BLOCKS_PER_DAY as u64;
 
 /// Default cluster decay rate per hop (5%).
 pub const DEFAULT_DECAY_RATE: f64 = 0.05;
