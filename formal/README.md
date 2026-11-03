@@ -45,6 +45,10 @@ its module docstring, and in any document that cites it:
 Never write "verified" on its own. Write "proven (model)", "proven + tested",
 or "trusted (axiom `Botho.sha256`)".
 
+The [block supply accounting note](SUPPLY.md) records the #1839 fee-split
+results and the conditional block accounting theorem, including the ledger
+and cryptographic premises still needed for an accepted-block claim.
+
 ### Proven about the extraction vs proven about the model (#1821)
 
 Some kernels are also proven in `formal-aeneas/`, about Lean that Charon and

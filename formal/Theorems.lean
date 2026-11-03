@@ -20,3 +20,16 @@ import Botho
 #print axioms Botho.transfer_isSome_iff
 #print axioms Botho.satAdd_le_cap
 #print axioms Botho.satAdd_eq_add
+
+-- Botho.Supply.Accounting (#1839; scalar model, explicit ledger premises)
+#print axioms Botho.Supply.fee_quotient_le
+#print axioms Botho.Supply.splitFees_exact
+#print axioms Botho.Supply.splitFees_total
+#print axioms Botho.Supply.splitFees_conserves
+#print axioms Botho.Supply.splitFees_rounding
+#print axioms Botho.Supply.oversized_fraction_creates_value
+#print axioms Botho.Supply.pool_inflow_fits
+#print axioms Botho.Supply.apply_conserves
+#print axioms Botho.Supply.counters_fit
+#print axioms Botho.Supply.issuance_step_fits
+#print axioms Botho.Supply.arbitrary_pool_saturates
