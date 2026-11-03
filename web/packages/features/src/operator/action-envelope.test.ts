@@ -98,6 +98,28 @@ describe('canonicalization rules', () => {
     expect(c.endsWith('"v":1}')).toBe(true)
   })
 
+  it('sorts acknowledgeUnsafeTransition after acknowledgeDegenerate and before action', () => {
+    const fields: EnvelopeFields = {
+      v: 1,
+      action: 'quorum.unpin_member',
+      params: { peerId: 'P' },
+      targetNode: 'T',
+      signerKeyId: 'S',
+      nonce: 'N',
+      issuedAt: 1,
+      expiresAt: 2,
+      dryRun: false,
+      acknowledgeDegenerate: true,
+      acknowledgeUnsafeTransition: true,
+    }
+    const c = canonicalizeEnvelope(fields)
+    expect(
+      c.startsWith('{"acknowledgeDegenerate":true,"acknowledgeUnsafeTransition":true,"action":'),
+    ).toBe(true)
+    const { acknowledgeDegenerate: _omit, ...onlyUnsafe } = fields
+    expect(canonicalizeEnvelope(onlyUnsafe).startsWith('{"acknowledgeUnsafeTransition":true,"action":')).toBe(true)
+  })
+
   it('omits acknowledgeDegenerate entirely when not set (matches optional node field)', () => {
     const fields: EnvelopeFields = {
       v: 1,
@@ -111,6 +133,7 @@ describe('canonicalization rules', () => {
       dryRun: false,
     }
     expect(canonicalizeEnvelope(fields)).not.toContain('acknowledgeDegenerate')
+    expect(canonicalizeEnvelope(fields)).not.toContain('acknowledgeUnsafeTransition')
   })
 
   it('rejects non-integer numbers (the node rejects floats)', () => {
