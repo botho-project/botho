@@ -3,187 +3,69 @@
 //!
 //! Each test builds a real, signed transaction the way a modified wallet
 //! would: the stock wallet picks the ring and signs, then the test re-signs
-//! the same ring over outputs whose cluster tags it chose. Consensus never
-//! sees the wallet's tag rules (`ClusterTagVector::merge_weighted`), only C6
-//! (`check_cluster_tag_inheritance`) and the fee floor, so this is exactly
-//! what a block may contain.
+//! the same ring over outputs whose cluster tags it chose. The helpers are
+//! the #1858 ones in `mempool_tag_gate_tests.rs`.
 //!
-//! The tests pin the current behaviour. They do not propose a fix; the rule
-//! changes are proposals on the issues they cite (consensus changes are
-//! operator-gated).
+//! The Lean refutations model protocol 7.x and the pre-#1863 wallet merge.
+//! Two of them were bugs, now fixed: #1857 (output tags unbounded by
+//! consensus; Rules 1 and 2, protocol 8.0.0, #1870) and #1858 (the mempool's
+//! `merge_weighted` panic; `is_valid` relay gate and a saturating merge,
+//! #1863). Their tests are kept here as named records of the findings and
+//! now assert the rejection (`*_rejected_since_1863` /
+//! `*_rejected_since_1870`). The #1687 tag drop is unchanged by 8.0.0 and is
+//! still pinned as accepted.
 //!
 //! Kept out of `store.rs` so the tests do not churn that file's SHA-256 pin in
 //! `scripts/research/fixtures/ct-contract-inventory.json`.
 
-use crate::{
-    block::{calculate_block_reward, Block},
-    ledger::{Ledger, LedgerError},
-    mempool::Mempool,
-    transaction::{ClsagRingInput, Transaction, TxOutput, Utxo, UtxoId, PICOCREDITS_PER_CREDIT},
-    wallet::{Wallet, WalletRead},
+use super::mempool_tag_gate_tests::{
+    add_tx_no_panic, chain, coinbase, mine, mine_with, repeated, ring_clusters, stock_spend,
+    with_tags,
 };
-use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector, TAG_WEIGHT_SCALE};
-use bth_util_from_random::OsRng;
-use std::collections::BTreeSet;
-use tempfile::TempDir;
+use crate::{
+    ledger::{Ledger, LedgerError},
+    mempool::MempoolError,
+    transaction::{Transaction, UtxoId, PICOCREDITS_PER_CREDIT},
+    wallet::Wallet,
+};
+use bth_transaction_types::{ClusterId, ClusterTagVector, TAG_WEIGHT_SCALE};
 
-// Public deterministic test mnemonic, used only for temporary fixtures.
-const WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
-
-fn open(dir: &std::path::Path) -> Ledger {
-    let ledger = Ledger::open(dir).unwrap();
-    ledger.set_difficulty(u64::MAX).unwrap();
-    ledger
-}
-
-fn template(ledger: &Ledger, wallet: &Wallet, txs: Vec<Transaction>) -> Block {
-    let state = ledger.get_chain_state().unwrap();
-    let tip = ledger.get_tip().unwrap();
-    let mut block = Block::new_template_with_txs(
-        &tip,
-        &wallet.default_address(),
-        state.difficulty,
-        calculate_block_reward(state.height + 1, state.total_mined),
-        txs,
-    );
-    block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
-    block.minting_tx.timestamp = block.header.timestamp;
-    block
-}
-
-fn mine(ledger: &Ledger, wallet: &Wallet) -> Block {
-    mine_with(ledger, wallet, vec![]).unwrap()
-}
-
-fn mine_with(
-    ledger: &Ledger,
-    wallet: &Wallet,
-    txs: Vec<Transaction>,
-) -> Result<Block, LedgerError> {
-    let block = ledger.seal_block(template(ledger, wallet, txs))?;
-    ledger.add_block(&block)?;
-    Ok(block)
-}
-
-/// A chain of `n` mined blocks (enough coinbases for a full ring of decoys).
-fn chain(n: usize) -> (TempDir, Ledger, Wallet, Vec<Block>) {
-    let dir = TempDir::new().unwrap();
-    let ledger = open(dir.path());
-    let wallet = Wallet::from_mnemonic(WORDS).unwrap();
-    let blocks = (0..n).map(|_| mine(&ledger, &wallet)).collect();
-    (dir, ledger, wallet, blocks)
-}
-
-fn coinbase(ledger: &Ledger, block: &Block) -> Utxo {
-    ledger
-        .get_utxo(&UtxoId::new(block.hash(), 0))
-        .unwrap()
-        .unwrap()
-}
-
-/// The stock wallet's signed one-input spend of `input` to one output of
-/// `input.amount - fee` (its tags are the wallet's inherited tags).
-fn stock_spend(ledger: &Ledger, wallet: &Wallet, input: &Utxo, fee: u64) -> Transaction {
-    let height = ledger.get_chain_state().unwrap().height;
-    wallet
-        .create_private_transaction(
-            std::slice::from_ref(input),
-            vec![TxOutput::new_hybrid_to_address(
-                input.output.amount - fee,
-                &wallet.default_address(),
-                0,
-                None,
-                ClusterTagVector::empty(),
-            )
-            .unwrap()],
-            fee,
-            height,
-            ledger,
-        )
-        .unwrap()
-}
-
-/// What a modified wallet sends: the stock wallet's ring and output, with
-/// the output's cluster tags replaced by `tags`, signed again over the new
-/// signing hash (which commits to the tags, #1638).
-fn with_tags(
-    ledger: &Ledger,
-    wallet: &Wallet,
-    input: &Utxo,
-    stock: &Transaction,
-    tags: ClusterTagVector,
-) -> Transaction {
-    let mut outputs = stock.outputs.clone();
-    outputs[0].cluster_tags = tags;
-    let ring = stock.inputs.clsag()[0].ring.clone();
-    let real = ring
-        .iter()
-        .position(|m| m.target_key == input.output.target_key)
-        .unwrap();
-    let hash = Transaction::new_clsag(
-        Vec::new(),
-        outputs.clone(),
-        stock.fee,
-        stock.created_at_height,
-    )
-    .signing_hash();
-    let key = WalletRead::recover_input(ledger, wallet, input).unwrap();
-    let signed =
-        ClsagRingInput::new(ring, real, &key, input.output.amount, &hash, &mut OsRng).unwrap();
-    let tx = Transaction::new_clsag(vec![signed], outputs, stock.fee, stock.created_at_height);
-    tx.verify_ring_signatures()
-        .expect("the forged spend is validly signed");
-    tx
-}
-
-/// The clusters any ring member of `tx` is tagged with: the only clusters C6
-/// bounds.
-fn ring_clusters(ledger: &Ledger, tx: &Transaction) -> BTreeSet<u64> {
-    let mut out = BTreeSet::new();
-    for input in tx.inputs.clsag() {
-        for member in &input.ring {
-            let utxo = ledger
-                .get_utxo_by_target_key(&member.target_key)
-                .unwrap()
-                .unwrap();
-            for e in &utxo.output.cluster_tags.entries {
-                out.insert(e.cluster_id.0);
-            }
-        }
+/// `add_block` rejects the block holding `tx` with a message containing
+/// `needle`, and nothing it would have written lands.
+fn expect_block_rejected(ledger: &Ledger, wallet: &Wallet, tx: Transaction, needle: &str) {
+    let tip = ledger.get_chain_state().unwrap().height;
+    let hash = tx.hash();
+    match mine_with(ledger, wallet, vec![tx]) {
+        Err(LedgerError::InvalidBlock(msg)) => assert!(msg.contains(needle), "{msg}"),
+        other => panic!("expected InvalidBlock containing {needle:?}, got {other:?}"),
     }
-    out
+    assert_eq!(ledger.get_chain_state().unwrap().height, tip);
+    assert!(ledger.get_utxo(&UtxoId::new(hash, 0)).unwrap().is_none());
 }
 
-fn repeated(cluster: u64, weight: u32, count: usize) -> ClusterTagVector {
-    ClusterTagVector {
-        entries: vec![
-            ClusterTagEntry {
-                cluster_id: ClusterId(cluster),
-                weight,
-            };
-            count
-        ],
-        decay_state: None,
-    }
-}
-
-/// #1857. Lean `Botho.Tags.inherit_admits_fresh_mass_above_one` and
-/// `Botho.Tags.fresh_cluster_credit_unbounded`, end to end: a block holding a
-/// spend whose only output carries 20 entries of weight `u32::MAX` for a
-/// cluster absent from the ring (total weight 85,899x the 100% scale) is
-/// accepted by `add_block`, and the writer credits that cluster with about
-/// 85,899x the output's value. The victim cluster is another miner's
-/// coinbase cluster, so the spend raises a third party's recorded wealth
-/// (and with it the fee factor and lottery weight read from that wealth).
+/// #1857, fixed by #1870 (protocol 8.0.0). Lean
+/// `Botho.Tags.inherit_admits_fresh_mass_above_one` and
+/// `Botho.Tags.fresh_cluster_credit_unbounded` model 7.x C6: a spend whose
+/// only output carries 20 entries of weight `u32::MAX` for a cluster absent
+/// from the ring (85,899x the 100% scale) passed C6, and the writer credited
+/// another holder's cluster with ~85,899x the output's value. Before 8.0.0
+/// this test asserted that `add_block` accepted it. Now:
+///
+/// - Rule 1 (`is_valid` on every output) rejects that block;
+/// - Rule 2 (no output-only cluster but the epoch import cluster) rejects the
+///   same attack kept within `is_valid` (one entry of weight 100% naming the
+///   victim), at relay and in a block;
+///
+/// and the victim cluster's recorded wealth is unchanged.
 #[test]
-fn fresh_cluster_tags_above_unit_mass_are_accepted_and_credit_a_victim_cluster() {
+fn fresh_cluster_tags_above_unit_mass_rejected_since_1870() {
     let (_dir, ledger, wallet, blocks) = chain(30);
     let input = coinbase(&ledger, &blocks[2]);
     let fee = 10 * PICOCREDITS_PER_CREDIT;
 
     // A victim: some other block's coinbase cluster that the ring does not
     // carry (rings are random, so retry the build until one is outside).
-    let (tx, victim) = (0..20)
+    let (stock, victim) = (0..20)
         .find_map(|_| {
             let stock = stock_spend(&ledger, &wallet, &input, fee);
             let in_ring = ring_clusters(&ledger, &stock);
@@ -195,15 +77,21 @@ fn fresh_cluster_tags_above_unit_mass_are_accepted_and_credit_a_victim_cluster()
                         .0
                 })
                 .find(|c| !in_ring.contains(c))?;
-            let tags = repeated(victim, u32::MAX, 20);
-            Some((with_tags(&ledger, &wallet, &input, &stock, tags), victim))
+            Some((stock, victim))
         })
         .expect("some coinbase cluster lies outside the ring");
-    let out = &tx.outputs[0];
-    assert!(
-        !out.cluster_tags.is_valid(),
-        "the node never calls is_valid"
+    let before = ledger.get_cluster_wealth(victim).unwrap();
+
+    // The 7.x counterexample: above unit mass, on a fresh cluster. Rule 1.
+    let tx = with_tags(
+        &ledger,
+        &wallet,
+        &input,
+        &stock,
+        repeated(victim, u32::MAX, 20),
     );
+    let out = &tx.outputs[0];
+    assert!(!out.cluster_tags.is_valid());
     let total_weight: u64 = out
         .cluster_tags
         .entries
@@ -211,25 +99,22 @@ fn fresh_cluster_tags_above_unit_mass_are_accepted_and_credit_a_victim_cluster()
         .map(|e| e.weight as u64)
         .sum();
     assert!(total_weight > 85_000 * TAG_WEIGHT_SCALE as u64);
+    expect_block_rejected(&ledger, &wallet, tx, "malformed cluster tags");
+    assert_eq!(ledger.get_cluster_wealth(victim).unwrap(), before);
 
-    let before = ledger.get_cluster_wealth(victim).unwrap();
-    mine_with(&ledger, &wallet, vec![tx.clone()]).expect("C6 and the fee floor accept it");
-    let after = ledger.get_cluster_wealth(victim).unwrap();
-
-    let per_entry = out.amount as u128 * u32::MAX as u128 / TAG_WEIGHT_SCALE as u128;
-    assert_eq!(after - before, 20 * per_entry);
-    assert!(after - before > 85_000 * out.amount as u128);
-    // The fee curve reads that wealth for every later spend of a coin tagged
-    // to the victim cluster (and for every ring using one as a decoy).
-    let curve = bth_cluster_tax::FeeConfig::default();
-    let (f_before, f_after) = (curve.cluster_factor(before), curve.cluster_factor(after));
-    assert!(f_after > f_before);
-    eprintln!(
-        "victim cluster {victim:#x}: wealth {before} -> {after} (+{}x the output value {}), \
-         cluster factor {f_before} -> {f_after}",
-        (after - before) / out.amount as u128,
-        out.amount
-    );
+    // The same credit within `is_valid`: one 100% entry naming the victim.
+    // Rule 2.
+    let tags = ClusterTagVector::single(ClusterId(victim));
+    assert!(tags.is_valid());
+    let tx = with_tags(&ledger, &wallet, &input, &stock, tags);
+    match add_tx_no_panic(&ledger, tx.clone()) {
+        Err(MempoolError::InvalidTransaction(msg)) => {
+            assert!(msg.contains("absent from every ring"), "{msg}")
+        }
+        other => panic!("expected relay rejection (Rule 2), got {other:?}"),
+    }
+    expect_block_rejected(&ledger, &wallet, tx, "absent from every ring");
+    assert_eq!(ledger.get_cluster_wealth(victim).unwrap(), before);
 }
 
 /// Lean `Botho.Tags.tag_drop_escapes_import_floor`, end to end (#1687): an
@@ -249,8 +134,8 @@ fn import_tag_drop_is_accepted_and_pays_less_than_the_import_floor() {
     let fee = 10 * PICOCREDITS_PER_CREDIT;
 
     // 1. An import-tagged coin: an output fully tagged to the epoch's import
-    //    cluster. (A bridge release writes the same UTXO; C6 also lets any spender
-    //    write it, as a cluster absent from the inputs.)
+    //    cluster. (A bridge release writes the same UTXO; Rule 2 (#1870, 8.0.0)
+    //    still lets any spender write it, as the including epoch's import cluster.)
     let source = coinbase(&ledger, &blocks[2]);
     let import = import_cluster_id_for_height(ledger.get_chain_state().unwrap().height + 1).0;
     let stock = stock_spend(&ledger, &wallet, &source, fee);
@@ -316,58 +201,44 @@ fn import_tag_drop_is_accepted_and_pays_less_than_the_import_floor() {
     mine_with(&ledger, &wallet, vec![dropped]).expect("C6 accepts empty output tags");
 }
 
-/// #1858. Lean `Botho.Tags.mergeWeighted_overflow_panics`, end to end: the node's
-/// mempool calls `ClusterTagVector::merge_weighted` over a transaction's
-/// OUTPUT tags (`mempool.rs`, `validate_clsag_inputs`) after the ring
-/// signature verifies and before any fee or tag check. An output with 4,295
-/// entries of weight `u32::MAX` for one cluster makes the accumulated weight
-/// times the retention overflow `u64`, which panics under
-/// `overflow-checks = true` (release, #663). The transaction is validly
-/// signed and its block is valid (C6 admits it, the cluster being fresh).
+/// #1858, fixed by #1863. Lean `Botho.Tags.mergeWeighted_overflow_panics`
+/// models the pre-#1863 `merge_weighted`: an output with 4,295 entries of
+/// weight `u32::MAX` for one cluster made `w * retention` overflow `u64`, and
+/// the node's mempool, which merges a transaction's OUTPUT tags, panicked
+/// (`overflow-checks = true`, #663) on a validly signed transaction. Before
+/// #1863 this test asserted the panic. Now `Mempool::add_tx` rejects the
+/// transaction at its `is_valid` gate, before `merge_weighted` runs, without
+/// panicking (4,294 entries too); `merge_weighted` itself saturates (the DRT
+/// leg `merge_weighted` compares it with `Botho.Tags.mergeWeightedSafe`); and
+/// since 8.0.0 (#1870 Rule 1) the block holding it is invalid.
 #[test]
-fn mempool_merge_weighted_panics_on_a_signed_transaction() {
+fn mempool_merge_weighted_overflow_rejected_since_1863() {
     let (_dir, ledger, wallet, blocks) = chain(30);
     let input = coinbase(&ledger, &blocks[2]);
     let fee = 10 * PICOCREDITS_PER_CREDIT;
     let stock = stock_spend(&ledger, &wallet, &input, fee);
     let fresh = 0x00DE_AD00_0000_0001;
     assert!(!ring_clusters(&ledger, &stock).contains(&fresh));
-    let tx = with_tags(
-        &ledger,
-        &wallet,
-        &input,
-        &stock,
-        repeated(fresh, u32::MAX, 4_295),
-    );
-    assert!(tx.is_valid_structure().is_ok());
 
-    // One entry fewer does not overflow: the mempool rejects or admits it,
-    // it does not panic.
-    let below = with_tags(
-        &ledger,
-        &wallet,
-        &input,
-        &stock,
-        repeated(fresh, u32::MAX, 4_294),
-    );
-    let mut mempool = Mempool::new();
-    let below_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mempool.add_tx(below, &ledger).map(|_| ())
-    }));
-    assert!(below_result.is_ok(), "4,294 entries must not panic");
+    for count in [4_294usize, 4_295] {
+        let tags = repeated(fresh, u32::MAX, count);
+        // The fixed merge saturates instead of panicking.
+        let merged = ClusterTagVector::merge_weighted(&[(tags.clone(), 1)], 0);
+        assert_eq!(merged.entries.len(), 1, "{count}");
+        assert_eq!(merged.entries[0].weight, u32::MAX, "{count}");
 
-    let mut mempool = Mempool::new();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mempool.add_tx(tx.clone(), &ledger).map(|_| ())
-    }));
-    let panic = result.expect_err("merge_weighted overflows u64 and panics");
-    let msg = panic
-        .downcast_ref::<&str>()
-        .map(|s| s.to_string())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_default();
-    assert!(msg.contains("overflow"), "panic message: {msg}");
-
-    // Consensus has no such check: the same transaction is a valid block.
-    mine_with(&ledger, &wallet, vec![tx]).expect("add_block accepts the transaction");
+        let tx = with_tags(&ledger, &wallet, &input, &stock, tags);
+        assert!(tx.is_valid_structure().is_ok(), "{count}");
+        assert!(!tx.outputs[0].cluster_tags.is_valid(), "{count}");
+        match add_tx_no_panic(&ledger, tx.clone()) {
+            Err(MempoolError::InvalidTransaction(msg)) => assert!(
+                msg.starts_with("output 0 has malformed cluster tags"),
+                "{count}: {msg}"
+            ),
+            other => panic!("{count} entries: expected InvalidTransaction, got {other:?}"),
+        }
+        if count == 4_295 {
+            expect_block_rejected(&ledger, &wallet, tx, "malformed cluster tags");
+        }
+    }
 }

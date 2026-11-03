@@ -5,9 +5,17 @@ Same wire format as `Drt/Codec.lean` (integers as decimal strings). A tag
 vector is a list of `[cluster, weight]` pairs; a coin is
 `{"value": V, "tags": [...]}`. `Drt.dispatch` falls through to
 `Drt.Tags.dispatch` for the names below.
+
+Since #1863 / #1870 the legs compare the fixed code: `merge_weighted`
+against `Botho.Tags.mergeWeightedSafe` (it saturates, never panics), and
+`cluster_tag_inheritance` against the protocol 8.0.0 rules
+`Botho.Tags.inheritOk₈` (Rule 1, Rule 2, then C6). The pre-fix models
+(`mergeWeighted`, `inheritOk` alone) stay in `formal/` as the record of
+#1858 / #1857.
 -/
 import Lean.Data.Json
 import Botho
+import Drt.Sha256
 
 namespace Drt.Tags
 
@@ -47,6 +55,22 @@ def encNat (n : Nat) : Json := Json.str (toString n)
 def encTags (t : TagVec) : Json :=
   Json.arr (t.map fun e => Json.arr #[encNat e.cluster, encNat e.weight]).toArray
 
+/-- `BRIDGE_IMPORT_EPOCH_BLOCKS` (`cluster-tax/src/bridge_import.rs:61`). -/
+def BRIDGE_IMPORT_EPOCH_BLOCKS : Nat := 17280
+
+/-- `n.to_le_bytes()` for a `u64`. -/
+def leBytes8 (n : Nat) : List UInt8 :=
+  (List.range 8).map fun i => (n / 2 ^ (8 * i) % 256).toUInt8
+
+/-- `import_cluster_id_for_height(height).0`: the first 8 bytes,
+little-endian, of `SHA-256("bridge-import" ‖ (height / K).to_le_bytes())`.
+Computed here independently of the Rust (the model takes the import
+cluster as a parameter). -/
+def importClusterForHeight (height : Nat) : Nat :=
+  let pre := "bridge-import".toUTF8.toList ++ leBytes8 (height / BRIDGE_IMPORT_EPOCH_BLOCKS)
+  let d := Drt.Sha256.hashList pre
+  (List.range 8).foldl (fun acc i => acc + (d.getD i 0).toNat * 2 ^ (8 * i)) 0
+
 /-- The first failing cluster in ascending order, as `BTreeMap` iteration
 returns it (the error `check_cluster_tag_inheritance` reports). -/
 def firstFailure (rings : List (List Coin)) (outs : List Coin) : Option Nat :=
@@ -61,21 +85,32 @@ def dispatch (fn : String) (a : Json) : Option (Dec Json) :=
   | "merge_weighted" => some do
     let inputs ← (← arr a "inputs").mapM fun j => do
       pure ((← decTags (← field j "tags")), (← nat j "value"))
-    pure (match mergeWeighted inputs (← nat a "rate") with
-      | none => Json.mkObj [("panic", Json.bool true)]
-      | some t => Json.mkObj [("entries", encTags t)])
+    pure (Json.mkObj [("entries", encTags (mergeWeightedSafe inputs (← nat a "rate")))])
   | "cluster_tag_inheritance" => some do
     let rings ← (← arr a "rings").mapM fun r => do (← asArr r).mapM decCoin
     let outs ← (← arr a "outputs").mapM decCoin
-    let ok := inheritOk rings outs
-    pure (match ok, firstFailure rings outs with
-      | true, _ => Json.mkObj [("accepted", Json.bool true)]
-      | false, none => Json.mkObj [("model_error", Json.str "rejected with no failing cluster")]
-      | false, some c =>
-        let m := inputMass c rings
-        Json.mkObj [("cluster", encNat c), ("actual", encNat (outputMass c outs)),
-          ("expected", encNat (expected m)), ("input", encNat m),
-          ("tolerance", encNat (tolerance m))])
+    let imp := importClusterForHeight (← nat a "height")
+    let ok := inheritOk₈ rings outs imp
+    -- The reported reason, in the order block validation applies the rules;
+    -- `inheritOk₈` must agree with it.
+    let r := match firstMalformed outs with
+      | some i => (false, Json.mkObj [("rule1", encNat i)])
+      | none =>
+        match firstOffRing rings outs imp with
+        | some (i, c) => (false, Json.mkObj [("rule2",
+            Json.mkObj [("output", encNat i), ("cluster", encNat c)])])
+        | none =>
+          match inheritOk rings outs, firstFailure rings outs with
+          | true, _ => (true, Json.mkObj [("accepted", Json.bool true)])
+          | false, none =>
+            (false, Json.mkObj [("model_error", Json.str "rejected with no failing cluster")])
+          | false, some c =>
+            let m := inputMass c rings
+            (false, Json.mkObj [("cluster", encNat c), ("actual", encNat (outputMass c outs)),
+              ("expected", encNat (expected m)), ("input", encNat m),
+              ("tolerance", encNat (tolerance m))])
+    pure (if r.1 == ok then r.2
+      else Json.mkObj [("model_error", Json.str "inheritOk₈ disagrees with the reported rule")])
   | "effective_cluster_wealth" => some do
     let outs ← (← arr a "outputs").mapM decCoin
     let table ← (← arr a "wealth").mapM fun j => do

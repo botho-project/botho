@@ -266,8 +266,8 @@ the privacy and demurrage design assumes. It models two kernels and keeps
 them apart, because a modified wallet need not run the wallet's:
 
 - **Consensus** (`Botho/Tags/Inherit.lean`). Block acceptance applies no
-  tag mixing and no decay. Its only tag rule is C6,
-  `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:228`,
+  tag mixing and no decay. In 7.x its only tag rule was C6,
+  `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:242`,
   `CONSENSUS_TAG_DECAY_RATE = 0`). The ledger also reads output tags for the
   fee floor (`effective_cluster_wealth_from_outputs`,
   `import_floor_factor_from_outputs`, `store/validation.rs:272,305`) and
@@ -275,9 +275,20 @@ them apart, because a modified wallet need not run the wallet's:
   (`update_cluster_wealth_for_output`, `store/writer.rs:469`). The fee curve
   and the ring-centroid factor are parameters (`FeeEnv`), not models (#1711).
 - **Wallet** (`Botho/Tags/Vector.lean`).
-  `ClusterTagVector::merge_weighted` (`transaction/types/src/cluster_tags.rs:355`)
+  `ClusterTagVector::merge_weighted` (`transaction/types/src/cluster_tags.rs:366`)
   and `from_pairs`, which the stock wallets use to choose output tags and
   the mempool uses to compare a transaction's output tags with its ring.
+
+**Scope: the theorems are about protocol ≤ 7.x and the pre-#1863 merge.**
+Two refutations were live bugs, now fixed: #1857 (7.x consensus did not
+bound output tags; fixed by Rules 1 and 2, protocol 8.0.0, #1870) and #1858
+(the mempool's `merge_weighted` could panic; fixed by an `is_valid` relay gate
+and a saturating merge, #1863). The statements are unchanged, as the
+machine-checked record of both findings. The fixed code is modelled by new
+definitions, `inheritOk₈` (Rule 1, Rule 2, then C6) and `mergeWeightedSafe`,
+which the DRT legs `cluster_tag_inheritance` and `merge_weighted` now compare
+against; their theorems are a follow-up (new statements need their records
+on the base branch first).
 
 Not mirrored (no caller outside the simulations): `cluster-tax`'s
 `block_decay.rs`, `age_decay.rs`, `entropy_decay.rs`, the floating-point
@@ -285,14 +296,16 @@ Not mirrored (no caller outside the simulations): `cluster-tax`'s
 
 | Invariant | Kernel | Result | Theorems |
 |---|---|---|---|
-| 1. Output tag mass at most 100%, no attribution to clusters absent from the inputs | C6 + writer | **refuted** | `inherit_admits_fresh_mass_above_one`, `fresh_cluster_credit_unbounded`, `inheritOk_cons_fresh`; what C6 does bound: `inheritOk_bound` |
+| 1. Output tag mass at most 100%, no attribution to clusters absent from the inputs | C6 + writer | **refuted** for 7.x (#1857; fixed by #1870) | `inherit_admits_fresh_mass_above_one`, `fresh_cluster_credit_unbounded`, `inheritOk_cons_fresh`; what C6 does bound: `inheritOk_bound` |
 | 2. Mixing is a value-weighted convex combination | wallet | **refuted** exactly; **proven** as a sub-convex bound | `mergeWeighted_truncation_halves_mass`; `mergeWeighted_sub_convex`, `mergeWeighted_mass_le_scale` |
-| 2'. The merge does not panic | wallet, mempool | **proven** for well-formed inputs, **refuted** in general | `mergeWeighted_isSome`; `mergeWeighted_overflow_panics`, `mergeWeighted_no_panic_4294` |
+| 2'. The merge does not panic | wallet, mempool | **proven** for well-formed inputs, **refuted** in general, pre-#1863 (#1858; fixed by #1863) | `mergeWeighted_isSome`; `mergeWeighted_overflow_panics`, `mergeWeighted_no_panic_4294` |
 | 3. Decay is monotone and never raises a weight | wallet | **proven** below `2^32`, **refuted** (in the rate) above it | `decayEntry_le`, `decayEntry_antitone`; `mergeWeighted_decay_not_antitone` |
-| 4. (#1687) No accepted spend drops a tagged input's mass without paying the demurrage owed | C6 + fee floor | **refuted** | `inheritOk_of_untagged`, `importFloor_of_untagged`, `tag_drop_demurrage_factor`, `tag_drop_escapes_import_floor` (trusted), `import_floor_invariant_refuted` |
+| 4. (#1687) No accepted spend drops a tagged input's mass without paying the demurrage owed | C6 + fee floor | **refuted** (still holds in 8.0.0: empty outputs pass Rules 1 and 2) | `inheritOk_of_untagged`, `importFloor_of_untagged`, `tag_drop_demurrage_factor`, `tag_drop_escapes_import_floor` (trusted), `import_floor_invariant_refuted` |
 
 Every counterexample is also checked end to end, on a real ledger with
-validly signed transactions, in `botho/src/ledger/cluster_tag_invariant_tests.rs`.
+validly signed transactions, in `botho/src/ledger/cluster_tag_invariant_tests.rs`;
+the #1857 and #1858 tests there now assert the rejection
+(`*_rejected_since_1870`, `*_rejected_since_1863`).
 
 ## Differential random testing (DRT)
 
@@ -348,8 +361,8 @@ and `botho::ledger::formal_drt`, which runs the production
 | `draw_lottery_winners_seeded` | `consensus::draw_lottery_winners_seeded` | `drawLotteryWinnersSeeded` |
 | `lottery_candidates` | `Ledger::get_lottery_validation_candidates` over a real LMDB ledger | `lotteryCandidates` |
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
-| `merge_weighted` | `ClusterTagVector::merge_weighted` (a panic is compared as `{"panic": true}`) | `Botho.Tags.mergeWeighted` |
-| `cluster_tag_inheritance` | `ValidationReads::verify_cluster_tag_inheritance` (C6) over the in-memory double `botho::ledger::formal_drt_tags` | `Botho.Tags.inheritOk` (and the first failing cluster's numbers) |
+| `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
+| `cluster_tag_inheritance` | 8.0.0 (#1870): `first_malformed_output_tags` (Rule 1), then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2, C6) over the in-memory double `botho::ledger::formal_drt_tags`; fixtures include #1870's `rules_golden_vectors` | `Botho.Tags.inheritOk₈`, the import cluster derived from the height in the DRT driver (and the failing rule's numbers) |
 | `effective_cluster_wealth` | `ValidationReads::effective_cluster_wealth_from_outputs` over the same double | `Botho.Tags.effectiveWealth` |
 | `import_floor_factor` | `ValidationReads::import_floor_factor_from_outputs` over the same double | `Botho.Tags.importFloor` |
 

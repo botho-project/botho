@@ -1,16 +1,28 @@
 /-
 What consensus checks about cluster tags (#1840, epic #1704).
 
-Consensus applies no tag mixing and no decay. The only tag rule a block must
-pass is C6, `check_cluster_tag_inheritance`; the ledger then reads output
-tags for the fee floor and writes them into the per-cluster wealth index.
-This module mirrors those four pieces, and keeps them apart from the
-wallet's `merge_weighted` (`Botho.Tags.Vector`), which a modified wallet
-need not run.
+**Scope: protocol ≤ 7.x (pre-fix, #1857/#1858; fixed by #1870/#1863).**
+`inheritOk` and the theorems below model the 7.x tag rule: C6's
+conservation-of-mass check alone. Protocol 8.0.0 (#1870) adds Rule 1 (every
+output `is_valid`, in `validate_ordinary_body` before C6) and Rule 2 (an
+output may name a cluster no ring member carries only if it is the including
+block's epoch import cluster, inside `check_cluster_tag_inheritance`). The
+statements are unchanged: they are about `inheritOk`, so they stay true, and
+they are the machine-checked record of #1857. `inheritOk₈` (end of this
+module) models the 8.0.0 rules, and the DRT leg `cluster_tag_inheritance`
+compares against it.
+
+Consensus applies no tag mixing and no decay. In 7.x the only tag rule a
+block had to pass was C6, `check_cluster_tag_inheritance`; the ledger then
+reads output tags for the fee floor and writes them into the per-cluster
+wealth index. This module mirrors those four pieces, and keeps them apart
+from the wallet's `merge_weighted` (`Botho.Tags.Vector`), which a modified
+wallet need not run.
 
 | Lean (`Botho.Tags.*`) | Rust | Status |
 |---|---|---|
-| `inheritOk`, `inputMass`, `outputMass`, `inputClusters` | `check_cluster_tag_inheritance`, `botho/src/ledger/store.rs:228`, reached through `ValidationReads::verify_cluster_tag_inheritance` (`store/validation.rs:103`, C6 in `validate_ordinary_body`) | tested (DRT leg `cluster_tag_inheritance`) |
+| `inheritOk`, `inputMass`, `outputMass`, `inputClusters` | the C6 mass check of `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:242`); in 7.x the whole tag rule | tested, as the last step of `inheritOk₈` |
+| `inheritOk₈`, `tagsValid`, `ruleTwoOk` | 8.0.0: `first_malformed_output_tags` (Rule 1, `store.rs:332`) then `check_cluster_tag_inheritance` (Rule 2 via `check_output_clusters_on_ring`, `store.rs:353`, then C6), reached through `validate_ordinary_body` and `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (`store/validation.rs:103`) | tested (DRT leg `cluster_tag_inheritance`); no recorded theorems yet |
 | `wealthCredit` | `update_cluster_wealth_for_output`, `botho/src/ledger/store/writer.rs:469` | tested (end to end, `cluster_tag_invariant_tests.rs`) |
 | `effectiveWealth` | `ValidationReads::effective_cluster_wealth_from_outputs`, `store/validation.rs:272` | tested (DRT leg `effective_cluster_wealth`) |
 | `importFloor` | `ValidationReads::import_floor_factor_from_outputs`, `store/validation.rs:305` | tested (DRT leg `import_floor_factor`) |
@@ -27,9 +39,9 @@ with plain `+=` on `u128`, which cannot overflow for fewer than `2^52` tag
 entries; the model uses `Nat`. The fee-side functions saturate, and the
 model mirrors each saturation.
 
-Results (#1840):
+Results (#1840; about 7.x C6, see the scope note above):
 
-1. **Mass bound: refuted.** C6 bounds only the clusters present on the
+1. **Mass bound: refuted (7.x; fixed by #1870 Rules 1 and 2).** C6 bounds only the clusters present on the
    ring members (`inputClusters`); for those it is a per-cluster
    conservation-of-mass bound (`inheritOk_bound`, proven). Any other
    cluster is unconstrained (`inheritOk_cons_fresh`), so an output may carry
@@ -38,7 +50,8 @@ Results (#1840):
    named cluster (`wealthCredit`), so a spender can raise a cluster's
    recorded wealth by `k * value * 4294.967` with `k` entries of weight
    `u32::MAX` (`fresh_cluster_credit_unbounded`).
-2. **#1687 tag drop: refuted.** Untagged outputs always pass C6
+2. **#1687 tag drop: refuted (unchanged in 8.0.0: an empty vector passes
+   Rule 1, and Rule 2 trivially).** Untagged outputs always pass C6
    (`inheritOk_of_untagged`). The ADR-0007 import floor is read from
    output tags, so it is 1x for such a spend (`importFloor_of_untagged`),
    and the factor the fee floor charges no longer mentions the import tag
@@ -99,8 +112,9 @@ def tolerance (m : Nat) : Nat := max (m / 1000) 1
 def clusterOk (rings : List (List Coin)) (outs : List Coin) (c : Nat) : Bool :=
   decide (outputMass c outs ≤ expected (inputMass c rings) + tolerance (inputMass c rings))
 
-/-- Mirrors `check_cluster_tag_inheritance` (`store.rs:228`): `true` iff it
-returns `Ok`. -/
+/-- Mirrors the 7.x `check_cluster_tag_inheritance`: `true` iff it returned
+`Ok`. Since 8.0.0 this is only its C6 mass check, which runs after Rule 2
+(`inheritOk₈`). -/
 def inheritOk (rings : List (List Coin)) (outs : List Coin) : Bool :=
   (inputClusters rings).all (clusterOk rings outs)
 
@@ -257,8 +271,9 @@ theorem inheritOk_of_untagged (rings : List (List Coin)) (outs : List Coin)
   intro c _
   simp only [clusterOk, outputMass_untagged c outs h, Nat.zero_le, decide_true]
 
-/-- **Invariant 1 (total mass at most 100%) is refuted** (proven (model)):
-for every set of rings and every cluster `c` no ring member carries, an
+/-- **Invariant 1 (total mass at most 100%) is refuted** for 7.x C6 (proven
+(model); #1857, fixed by #1870: Rule 1 rejects this output): for every set
+of rings and every cluster `c` no ring member carries, an
 output of any value `a` tagged `c` at weight `u32::MAX` (429,497%) passes
 C6, and the writer credits `c` with at least 4,294 times `a`. -/
 theorem inherit_admits_fresh_mass_above_one (rings : List (List Coin)) (c a : Nat)
@@ -277,7 +292,8 @@ theorem inherit_admits_fresh_mass_above_one (rings : List (List Coin)) (c a : Na
     simp only [SCALE, U32_MAX]
     omega
 
-/-- **Unbounded wealth credit** (proven (model)): `k` entries of weight
+/-- **Unbounded wealth credit** under 7.x C6 (proven (model); #1857, fixed
+by #1870: Rules 1 and 2 reject such outputs): `k` entries of weight
 `u32::MAX` for a cluster no ring member carries pass C6, and credit that
 cluster with `k * (a * u32::MAX / SCALE)`. Only the transaction size
 bounds `k`. -/
@@ -457,5 +473,63 @@ theorem import_floor_invariant_refuted : ¬ ImportFloorHonoured flatEnv := by
   rw [(tag_drop_demurrage_factor flatEnv _ _ (by intro x hx; simp at hx; subst hx; rfl)
     (by simp [sumN, U64_MAX])).2] at this
   simp [flatEnv, FACTOR_SCALE, BRIDGE_IMPORT_FACTOR_FLOOR] at this
+
+/-! ## Protocol 8.0.0: Rules 1 and 2 (#1857, #1870; DRT model, no recorded theorems yet)
+
+New definitions, so the records of the 7.x theorems above keep their
+hashes. -/
+
+/-- Each weight at most the previous one (`entry.weight > prev_weight`
+rejects; the first entry is compared with `u32::MAX`, which a `u32` never
+exceeds). -/
+def sortedDesc : TagVec → Bool
+  | [] => true
+  | [_] => true
+  | a :: b :: rest => decide (b.weight ≤ a.weight) && sortedDesc (b :: rest)
+
+/-- Mirrors `ClusterTagVector::is_valid` (`cluster_tags.rs:550`): at most
+`MAX_CLUSTER_TAGS` entries, every weight at least `MIN_STORED_WEIGHT`,
+sorted by weight descending, distinct cluster ids, total at most `SCALE`.
+Rust sums with `u32::saturating_add`; for weights below `2^32` the saturated
+sum is at most `SCALE` iff the exact sum is, so the model uses `mass`. -/
+def tagsValid (t : TagVec) : Bool :=
+  decide (t.length ≤ MAX_CLUSTER_TAGS) &&
+  t.all (fun e => decide (MIN_STORED_WEIGHT ≤ e.weight)) &&
+  sortedDesc t &&
+  decide (t.map Entry.cluster).Nodup &&
+  decide (mass t ≤ SCALE)
+
+/-- Rule 1, `first_malformed_output_tags`: the index of the first output
+whose tags fail `is_valid`. -/
+def firstMalformed (outs : List Coin) : Option Nat :=
+  outs.findIdx? fun o => !tagsValid o.tags
+
+/-- Rule 2 for one entry: its cluster is the import cluster `imp` or is
+named by some entry of some ring member (presence, not mass). -/
+def onRingOrImport (rings : List (List Coin)) (imp c : Nat) : Bool :=
+  c == imp || (inputClusters rings).contains c
+
+/-- Rule 2, `check_output_clusters_on_ring`: the first `(output index,
+cluster)` that names a cluster neither on the ring nor `imp`, scanning
+outputs and then entries in order. -/
+def firstOffRing (rings : List (List Coin)) (outs : List Coin) (imp : Nat) : Option (Nat × Nat) :=
+  let rec go : Nat → List Coin → Option (Nat × Nat)
+    | _, [] => none
+    | i, o :: os =>
+      match o.tags.find? (fun e => !onRingOrImport rings imp e.cluster) with
+      | some e => some (i, e.cluster)
+      | none => go (i + 1) os
+  go 0 outs
+
+/-- Rule 2 holds. -/
+def ruleTwoOk (rings : List (List Coin)) (outs : List Coin) (imp : Nat) : Bool :=
+  outs.all fun o => o.tags.all fun e => onRingOrImport rings imp e.cluster
+
+/-- The 8.0.0 tag verdict of one transfer transaction in a block whose epoch
+import cluster is `imp` (`import_cluster_id_for_height(height)`, not
+modelled: a parameter): Rule 1 on every output, then Rule 2, then the C6
+mass check `inheritOk`, unchanged. -/
+def inheritOk₈ (rings : List (List Coin)) (outs : List Coin) (imp : Nat) : Bool :=
+  outs.all (fun o => tagsValid o.tags) && ruleTwoOk rings outs imp && inheritOk rings outs
 
 end Botho.Tags

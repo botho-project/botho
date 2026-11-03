@@ -1,19 +1,26 @@
 //! DRT legs of the cluster-tag model (`formal/Botho/Tags/`, #1840).
 //!
 //! - `merge_weighted`: the wallet's (and the mempool's) tag merge,
-//!   `ClusterTagVector::merge_weighted`, called directly. A Rust panic is
-//!   compared as `{"panic": true}`, the model's `none`.
-//! - `cluster_tag_inheritance`: consensus C6 as block validation runs it,
-//!   `ValidationReads::verify_cluster_tag_inheritance` over the in-memory
-//!   double `botho::ledger::formal_drt_tags`.
+//!   `ClusterTagVector::merge_weighted`, called directly, against the
+//!   post-#1863 model `Botho.Tags.mergeWeightedSafe` (overflow-safe,
+//!   saturating). The fixed function never panics; a panic is reported as
+//!   `{"panic": true}`, which no model output matches.
+//! - `cluster_tag_inheritance`: the protocol 8.0.0 tag rules (#1870) as block
+//!   validation runs them at a height: Rule 1 (`first_malformed_output_tags`),
+//!   then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2
+//!   with the epoch import cluster, then C6) over the in-memory double
+//!   `botho::ledger::formal_drt_tags`, against `Botho.Tags.inheritOk₈`. The
+//!   Lean side derives the import cluster from the height on its own (SHA-256).
 //! - `effective_cluster_wealth`, `import_floor_factor`: the fee floor's two
 //!   reads of output tags, through the same double.
 //!
 //! Generators are biased to empty vectors, 16 and 17 entries, weights 999,
 //! 1000, `TAG_WEIGHT_SCALE` and `u32::MAX`, duplicate cluster ids (a small id
 //! pool), values 0, 1 and `u64::MAX`, rings of 1 and 20 members, outputs at
-//! a ring member's mass and just above it, and (rarely) the 4,295-entry
-//! vector that overflows `merge_weighted`.
+//! a ring member's mass and just above it, (rarely) the 4,295-entry vector
+//! that overflowed the pre-#1863 `merge_weighted`, heights at the
+//! bridge-import epoch edges, and output entries naming the epoch's (or an
+//! adjacent epoch's) import cluster.
 
 use crate::{
     fixtures::Fixtures,
@@ -22,6 +29,7 @@ use crate::{
     wire::{self, n},
 };
 use botho::ledger::{formal_drt_tags, LedgerError};
+use bth_cluster_tax::{import_cluster_id_for_height, BRIDGE_IMPORT_EPOCH_BLOCKS};
 use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector, TAG_WEIGHT_SCALE};
 use proptest::{collection::vec, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -138,9 +146,9 @@ fn tags() -> BoxedStrategy<Tags> {
 }
 
 /// `tags()`, plus (rarely) one cluster repeated 4,293 to 4,297 times, around
-/// the 4,295 entries of weight `u32::MAX` at which `merge_weighted`
-/// overflows. Only the merge leg uses it: C6's cost grows with the square of
-/// the entry count, in both implementations.
+/// the 4,295 entries of weight `u32::MAX` at which the pre-#1863
+/// `merge_weighted` overflowed (it now saturates). Only the merge leg uses it:
+/// C6's cost grows with the square of the entry count, in both implementations.
 fn merge_tags() -> BoxedStrategy<Tags> {
     prop_oneof![
         60 => tags(),
@@ -199,16 +207,19 @@ impl Leg for MergeWeighted {
         }
     }
     fn classify(i: &MergeIn, r: &Value) -> String {
-        let total: u128 = i.inputs.iter().map(|(_, v)| *v as u128).sum();
         if r.get("panic").is_some() {
-            return if total > u64::MAX as u128 {
-                "panic: value sum".into()
-            } else {
-                "panic: weight * retention".into()
-            };
+            return "panic".into();
         }
-        let len = r["entries"].as_array().map_or(0, Vec::len);
-        match len {
+        // The inputs the pre-#1863 function panicked on: now saturating.
+        let total: u128 = i.inputs.iter().map(|(_, v)| *v as u128).sum();
+        if total > u64::MAX as u128 {
+            return "value sum above u64 (pre-#1863 panic)".into();
+        }
+        let entries = r["entries"].as_array();
+        if entries.is_some_and(|es| es.iter().any(|e| e[1] == json!(n(u32::MAX)))) {
+            return "saturated weight".into();
+        }
+        match entries.map_or(0, Vec::len) {
             0 => "empty".into(),
             16 => "16 entries".into(),
             _ => "1-15 entries".into(),
@@ -236,6 +247,47 @@ impl CoinIn {
     }
 }
 
+/// A tag vector that passes `is_valid` (Rule 1, #1870): distinct clusters,
+/// scaled to a total of at most 100%, normalized by `from_pairs` (which
+/// prunes below `MIN_STORED_WEIGHT`, sorts and truncates to 16).
+fn valid_tags() -> BoxedStrategy<Tags> {
+    vec((cluster(), 1_000u32..=TAG_WEIGHT_SCALE), 0..=18)
+        .prop_map(|pairs| {
+            let mut seen = std::collections::BTreeSet::new();
+            let pairs: Vec<(u64, u32)> =
+                pairs.into_iter().filter(|(c, _)| seen.insert(*c)).collect();
+            let total: u64 = pairs.iter().map(|&(_, w)| w as u64).sum();
+            let scaled: Vec<(ClusterId, u32)> = pairs
+                .iter()
+                .map(|&(c, w)| {
+                    let w = if total > TAG_WEIGHT_SCALE as u64 {
+                        (w as u64 * TAG_WEIGHT_SCALE as u64 / total) as u32
+                    } else {
+                        w
+                    };
+                    (ClusterId(c), w)
+                })
+                .collect();
+            let v = ClusterTagVector::from_pairs(&scaled);
+            debug_assert!(v.is_valid());
+            v.entries
+                .iter()
+                .map(|e| (e.cluster_id.0, e.weight))
+                .collect()
+        })
+        .boxed()
+}
+
+/// A coin for the tag-rule leg: half the time with `is_valid` tags, so that
+/// Rule 2 and C6 are reached past Rule 1.
+fn rule_coin() -> BoxedStrategy<CoinIn> {
+    prop_oneof![
+        1 => coin(),
+        1 => (value(), valid_tags()).prop_map(|(value, tags)| CoinIn { value, tags }),
+    ]
+    .boxed()
+}
+
 fn coin() -> BoxedStrategy<CoinIn> {
     (value(), tags())
         .prop_map(|(value, tags)| CoinIn { value, tags })
@@ -246,6 +298,37 @@ fn coin() -> BoxedStrategy<CoinIn> {
 pub struct InheritIn {
     pub rings: Vec<Vec<CoinIn>>,
     pub outputs: Vec<CoinIn>,
+    /// The including block's height: selects the epoch import cluster that
+    /// Rule 2 admits.
+    pub height: u64,
+}
+
+/// A block height, biased to the bridge-import epoch edges.
+fn height() -> BoxedStrategy<u64> {
+    let k = BRIDGE_IMPORT_EPOCH_BLOCKS;
+    prop_oneof![
+        2 => 0u64..(3 * k),
+        1 => Just(0u64),
+        1 => Just(k - 1),
+        1 => Just(k),
+        1 => Just(2 * k - 1),
+        1 => Just(u64::MAX),
+        1 => any::<u64>(),
+    ]
+    .boxed()
+}
+
+/// An entry naming the import cluster of `height`'s epoch (mostly) or of an
+/// adjacent epoch.
+fn import_entry(height: u64) -> BoxedStrategy<(u64, u32)> {
+    let k = BRIDGE_IMPORT_EPOCH_BLOCKS;
+    let at = |h: u64| import_cluster_id_for_height(h).0;
+    let cluster = prop_oneof![
+        4 => Just(at(height)),
+        1 => Just(at(height.saturating_add(k))),
+        1 => Just(at(height.saturating_sub(k))),
+    ];
+    (cluster, weight()).boxed()
 }
 
 /// An output that copies a ring member, with its weights scaled by
@@ -261,11 +344,21 @@ fn scaled(m: &CoinIn, num: u64) -> CoinIn {
     }
 }
 
+/// An output that copies a ring member's tags unchanged (so they pass Rule 1
+/// whenever the member's do) with its value scaled by `num / 1000`: the C6
+/// mass bound, reached past Rules 1 and 2 (#1870).
+fn scaled_value(m: &CoinIn, num: u64) -> CoinIn {
+    CoinIn {
+        value: (m.value as u128 * num as u128 / 1000).min(u64::MAX as u128) as u64,
+        tags: m.tags.clone(),
+    }
+}
+
 fn ring() -> BoxedStrategy<Vec<CoinIn>> {
     prop_oneof![
-        3 => vec(coin(), 1..=1),
-        1 => vec(coin(), 20..=20),
-        2 => vec(coin(), 0..=5),
+        3 => vec(rule_coin(), 1..=1),
+        1 => vec(rule_coin(), 20..=20),
+        2 => vec(rule_coin(), 0..=5),
     ]
     .boxed()
 }
@@ -273,7 +366,7 @@ fn ring() -> BoxedStrategy<Vec<CoinIn>> {
 impl Leg for Inheritance {
     const NAME: &'static str = "cluster_tag_inheritance";
     const RUST: &'static str =
-        "botho::ledger::store::validation::ValidationReads::verify_cluster_tag_inheritance (check_cluster_tag_inheritance)";
+        "botho::ledger::store::first_malformed_output_tags, then botho::ledger::store::validation::ValidationReads::verify_cluster_tag_inheritance(tx, height) (check_cluster_tag_inheritance)";
     type Input = InheritIn;
     fn strategy() -> BoxedStrategy<InheritIn> {
         let rings = prop_oneof![
@@ -284,30 +377,72 @@ impl Leg for Inheritance {
         rings
             .prop_flat_map(|rings| {
                 let members: Vec<CoinIn> = rings.iter().flatten().cloned().collect();
-                let free = vec(coin(), 0..=4).boxed();
+                let free = vec(rule_coin(), 0..=4).boxed();
                 let outs = if members.is_empty() {
                     free
                 } else {
                     let copied = (
                         0..members.len(),
                         prop_oneof![Just(999u64), Just(1000u64), Just(1001u64), Just(2000u64)],
-                        vec(coin(), 0..=2),
+                        any::<bool>(),
+                        vec(rule_coin(), 0..=1),
                     )
-                        .prop_map(move |(k, num, mut rest)| {
-                            rest.insert(0, scaled(&members[k], num));
+                        .prop_map(move |(k, num, by_value, mut rest)| {
+                            let m = &members[k];
+                            let o = if by_value {
+                                scaled_value(m, num)
+                            } else {
+                                scaled(m, num)
+                            };
+                            rest.insert(0, o);
                             rest
                         });
                     prop_oneof![1 => free, 2 => copied].boxed()
                 };
-                (Just(rings), outs)
+                (Just(rings), outs, height())
             })
-            .prop_map(|(rings, outputs)| InheritIn { rings, outputs })
+            .prop_flat_map(|(rings, outputs, height)| {
+                // Sometimes one output gains an entry naming an import
+                // cluster (an unwrap's minted output, or a release included
+                // in the wrong epoch), either replacing its tags or inserted
+                // at its weight's sorted position, so the vector can stay
+                // `is_valid`.
+                let n = outputs.len();
+                let inject = if n == 0 {
+                    Just(None).boxed()
+                } else {
+                    prop_oneof![
+                        2 => Just(None),
+                        1 => (0..n, import_entry(height), any::<bool>()).prop_map(Some),
+                    ]
+                    .boxed()
+                };
+                (Just(rings), Just(outputs), Just(height), inject)
+            })
+            .prop_map(|(rings, mut outputs, height, inject)| {
+                if let Some((k, (c, w), replace)) = inject {
+                    let tags = &mut outputs[k].tags;
+                    if replace || tags.is_empty() {
+                        *tags = vec![(c, w.min(TAG_WEIGHT_SCALE))];
+                    } else {
+                        // Keep the vector sorted by weight, descending.
+                        let pos = tags.iter().position(|&(_, x)| x < w).unwrap_or(tags.len());
+                        tags.insert(pos, (c, w));
+                    }
+                }
+                InheritIn {
+                    rings,
+                    outputs,
+                    height,
+                }
+            })
             .boxed()
     }
     fn args(_: &Fixtures, i: &InheritIn) -> Value {
         json!({
             "rings": i.rings.iter().map(|r| r.iter().map(CoinIn::wire).collect::<Vec<_>>()).collect::<Vec<_>>(),
             "outputs": i.outputs.iter().map(CoinIn::wire).collect::<Vec<_>>(),
+            "height": n(i.height),
         })
     }
     fn rust(_: &Fixtures, i: &InheritIn) -> Value {
@@ -317,21 +452,45 @@ impl Leg for Inheritance {
             .map(|r| r.iter().map(CoinIn::rust).collect())
             .collect();
         let outs: Vec<formal_drt_tags::Coin> = i.outputs.iter().map(CoinIn::rust).collect();
-        match formal_drt_tags::cluster_tag_inheritance(&rings, &outs) {
+        // Rule 1 first, as `validate_ordinary_body` applies it.
+        if let Some(k) = formal_drt_tags::malformed_output(&outs) {
+            return json!({ "rule1": n(k) });
+        }
+        match formal_drt_tags::cluster_tag_inheritance(&rings, &outs, i.height) {
             Ok(()) => json!({ "accepted": true }),
-            Err(LedgerError::InvalidBlock(msg)) => inflation_wire(&msg),
+            Err(LedgerError::InvalidBlock(msg)) => rejection_wire(&msg),
             Err(e) => json!({ "rust_err": e.to_string() }),
         }
     }
     fn classify(_: &InheritIn, r: &Value) -> String {
         if r.get("accepted").is_some() {
             "accepted".into()
+        } else if r.get("rule1").is_some() {
+            "rejected: rule 1".into()
+        } else if r.get("rule2").is_some() {
+            "rejected: rule 2".into()
         } else if r.get("cluster").is_some() {
-            "rejected".into()
+            "rejected: C6".into()
         } else {
             "other".into()
         }
     }
+}
+
+/// The numbers of Rule 2's error (`"output {i} names cluster {c} absent from
+/// every ring (not the epoch import cluster)"`) or of C6's (below).
+fn rejection_wire(msg: &str) -> Value {
+    if msg.contains("absent from every ring") {
+        let nums: Vec<&str> = msg
+            .split(|ch: char| !ch.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .collect();
+        return match nums.as_slice() {
+            [i, c] => json!({ "rule2": { "output": i, "cluster": c } }),
+            _ => json!({ "rust_err": msg }),
+        };
+    }
+    inflation_wire(msg)
 }
 
 /// The numbers of C6's error, `"cluster {c} tag inflation: output mass {a}

@@ -4,14 +4,19 @@
 //!
 //! Compiled only with the non-default `test-fixtures` feature, like
 //! [`super::formal_drt`], so no node build contains it. It changes no
-//! consensus code: each function calls the production default method of
-//! `ValidationReads` unchanged (`verify_cluster_tag_inheritance`, which runs
-//! `check_cluster_tag_inheritance`; `effective_cluster_wealth_from_outputs`;
+//! consensus code: each function calls the production code unchanged
+//! (Rule 1, `first_malformed_output_tags`; the default methods of
+//! `ValidationReads`: `verify_cluster_tag_inheritance(tx, height)`, which runs
+//! Rule 2 and C6 in `check_cluster_tag_inheritance`;
+//! `effective_cluster_wealth_from_outputs`;
 //! `import_floor_factor_from_outputs`). Only the pre-state those methods read
 //! (UTXOs by target key, per-cluster wealth, the bridge-import cluster set)
 //! is in memory.
 
-use super::{store::validation::ValidationReads, LedgerError};
+use super::{
+    store::{first_malformed_output_tags, validation::ValidationReads},
+    LedgerError,
+};
 use crate::transaction::{
     ClsagRingInput, RingMember, Transaction, TxInputs, TxOutput, Utxo, UtxoId,
 };
@@ -71,11 +76,21 @@ fn outputs(outs: &[Coin]) -> Vec<TxOutput> {
         .collect()
 }
 
-/// C6 as block validation runs it
-/// (`ValidationReads::verify_cluster_tag_inheritance` over a transaction whose
-/// rings resolve to `rings`): one CLSAG input per ring, every member a stored
-/// UTXO. The signature is not checked by C6.
-pub fn cluster_tag_inheritance(rings: &[Vec<Coin>], outs: &[Coin]) -> Result<(), LedgerError> {
+/// Rule 1 (protocol 8.0.0, #1857) as `validate_ordinary_body` runs it before
+/// C6: the index of the first output whose tags fail `is_valid`.
+pub fn malformed_output(outs: &[Coin]) -> Option<usize> {
+    first_malformed_output_tags(&outputs(outs))
+}
+
+/// Rule 2 and C6 as block validation runs them at `height`
+/// (`ValidationReads::verify_cluster_tag_inheritance(tx, height)` over a
+/// transaction whose rings resolve to `rings`): one CLSAG input per ring,
+/// every member a stored UTXO. The signature is not checked by C6.
+pub fn cluster_tag_inheritance(
+    rings: &[Vec<Coin>],
+    outs: &[Coin],
+    height: u64,
+) -> Result<(), LedgerError> {
     let mut double = Double::default();
     let mut inputs = Vec::with_capacity(rings.len());
     for (r, ring) in rings.iter().enumerate() {
@@ -107,7 +122,7 @@ pub fn cluster_tag_inheritance(rings: &[Vec<Coin>], outs: &[Coin]) -> Result<(),
         created_at_height: 0,
         settlement: None,
     };
-    double.verify_cluster_tag_inheritance(&tx)
+    double.verify_cluster_tag_inheritance(&tx, height)
 }
 
 /// `ValidationReads::effective_cluster_wealth_from_outputs` with the given

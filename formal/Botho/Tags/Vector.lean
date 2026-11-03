@@ -7,16 +7,25 @@ What this module mirrors, and what it does not:
 |---|---|---|---|
 | `Entry`, `TagVec` | `ClusterTagEntry`, `ClusterTagVector::entries`, `transaction/types/src/cluster_tags.rs:51,113` | data | - |
 | `fromPairs` | `ClusterTagVector::from_pairs`, `cluster_tags.rs:306` | wallet | tested (through `mergeWeighted`) |
-| `mergeWeighted` | `ClusterTagVector::merge_weighted`, `cluster_tags.rs:355` | wallet, and the node's mempool (`botho/src/mempool.rs:1062`) | tested (DRT leg `merge_weighted`) |
+| `mergeWeighted` | `ClusterTagVector::merge_weighted` **before #1863** (`cluster_tags.rs:355` at the #1840 base) | wallet, and the node's mempool | historical model (the record of #1858) |
+| `mergeWeightedSafe` | `ClusterTagVector::merge_weighted` since #1863 (`cluster_tags.rs:366`, `decay_weight` `:409`) | wallet, and the node's mempool (behind its `is_valid` gate) | tested (DRT leg `merge_weighted`) |
+
+**Scope: pre-fix code (#1858, fixed by #1863).** `mergeWeighted` and every
+theorem below are about the `merge_weighted` of protocol 7.x, before #1863.
+#1863 made it overflow-safe (the value sum in `u128`, the decay in `u128`
+clamped to `u32::MAX`), and the mempool now rejects any output that fails
+`is_valid` before it merges output tags. The statements are unchanged (they
+are the machine-checked record of #1858); `mergeWeightedSafe` models the
+fixed function, and the DRT leg compares against it.
 
 `merge_weighted` is **not a consensus rule**. The stock wallets call it to
 choose output tags (`botho/src/wallet.rs:357`, `botho-wallet/src/transaction.rs:261`,
 decay rate `DEFAULT_CLUSTER_DECAY_RATE = 50_000`), and the mempool calls it
 with rate 0 over a transaction's *output* tags to compare them with the ring
 (`validate_clsag_inputs`). Block acceptance never calls it: a modified wallet
-may write any output tags that pass C6 (`Botho.Tags.Inherit`). So the
-theorems here say what an honest wallet does, and nothing about what a block
-may contain.
+may write any output tags that pass the consensus tag rules
+(`Botho.Tags.Inherit`). So the theorems here say what an honest wallet does,
+and nothing about what a block may contain.
 
 Not mirrored (sim or research only; `git grep` finds no caller under
 `botho/src`, `transaction`, `botho-wallet/src` or `core`): the
@@ -29,8 +38,8 @@ modelled: `merge_weighted` returns `None` for it and no check reads it.
 
 Integers. Weights are `u32` and values `u64` in Rust; the model computes on
 `Nat` and states each width. The products `value * weight` are taken in
-`u128` in Rust and cannot overflow there (`< 2^96`). The Rust operations that
-can overflow are mirrored exactly:
+`u128` in Rust and cannot overflow there (`< 2^96`). The pre-#1863 Rust
+operations that can overflow are mirrored exactly by `mergeWeighted`:
 
 - `inputs.iter().map(|(_, v)| *v).sum()` (`u64`) panics on overflow under
   `overflow-checks = true` (release, #663): `none`;
@@ -62,12 +71,16 @@ Refuted (named counterexamples):
 - `mergeWeighted_overflow_panics`: one input whose vector repeats a cluster
   4,295 times at weight `u32::MAX` makes `w * retention` overflow `u64`, so
   the function panics (4,294 entries do not: `mergeWeighted_no_panic_4294`).
-  Consensus does not bound the entries of an output (`is_valid` has no
-  caller), and the mempool merges output tags, so a validly signed
-  transaction reaches this panic on the node.
+  In protocol 7.x, before #1863 (#1858), consensus did not bound the
+  entries of an output (`is_valid` had no caller), and the mempool merged
+  output tags, so a validly signed transaction reached this panic on the
+  node. Since #1863 the mempool rejects such an output at `is_valid` and
+  `merge_weighted` saturates (`mergeWeightedSafe`); since 8.0.0 (#1870)
+  Rule 1 makes the block invalid too.
 - `mergeWeighted_decay_not_antitone`: on a vector whose accumulated weight
   reaches `2^32` (duplicate entries), rate 0 wraps the weight to 0 while
-  rate 1 keeps it: more decay, more weight.
+  rate 1 keeps it: more decay, more weight. (Pre-#1863: the fixed
+  `decay_weight` clamps instead of wrapping.)
 -/
 namespace Botho.Tags
 
@@ -122,9 +135,11 @@ structure Entry where
   weight : Nat
   deriving DecidableEq, Repr
 
-/-- `ClusterTagVector::entries`, in order. Nothing forces the Rust invariants
-(sorted, distinct, at most 16, total at most `SCALE`) on a vector read from
-the chain: the node never calls `is_valid` (#1840). -/
+/-- `ClusterTagVector::entries`, in order. In protocol 7.x nothing forced the
+Rust invariants (sorted, distinct, at most 16, total at most `SCALE`) on a
+vector read from the chain: the node never called `is_valid` (#1840). Since
+8.0.0 (#1870) Rule 1 requires them of every transfer output, but the model
+stays general (a coinbase or pre-8.0.0 UTXO, and the rules' own inputs). -/
 abbrev TagVec := List Entry
 
 /-- The weight a vector puts on the clusters satisfying `p`, summing
@@ -494,6 +509,28 @@ theorem decayEntry_antitone (e : Entry) (h : e.weight ≤ U32_MAX) {r₁ r₂ : 
 
 /-! ## Counterexamples -/
 
+/-! ## `merge_weighted` since #1863 (DRT model; no recorded theorems yet)
+
+New definitions, so the records of the pre-fix theorems above keep their
+hashes. They reuse `accumulate` and `fromPairs` unchanged: #1863 changed only
+the value sum and the decay. -/
+
+/-- The fixed decay of one accumulated weight, `decay_weight`
+(`cluster_tags.rs:409`): `((w as u128) * (retention as u128) / SCALE)
+.min(u32::MAX) as u32`. The `u128` product cannot overflow (`w < 2^64`). -/
+def decayEntrySafe (r : Nat) (e : Entry) : Entry :=
+  ⟨e.cluster, min (e.weight * r / SCALE) U32_MAX⟩
+
+/-- Mirrors `ClusterTagVector::merge_weighted` since #1863
+(`cluster_tags.rs:366`). It never panics: the value sum is `u128` (no
+overflow for fewer than `2^64` inputs), the per-entry contribution is at most
+the entry's weight (so `as u64` is lossless, as in `mergeWeighted`), the
+accumulator saturates at `u64::MAX` (`addTo`), and the decay clamps. -/
+def mergeWeightedSafe (inputs : List (TagVec × Nat)) (rate : Nat) : TagVec :=
+  let T := totalValue inputs
+  if T = 0 then []
+  else fromPairs ((accumulate T [] inputs).map (decayEntrySafe (retention rate)))
+
 /-- Sixteen distinct clusters `base, ..., base + 15`, each at 6.25%: a valid
 vector of total weight exactly 100%. -/
 def spread16 (base : Nat) : TagVec :=
@@ -541,10 +578,13 @@ theorem totalValue_repeatedMax (k : Nat) : totalValue (repeatedMax k) = 1 := rfl
 
 /-- **`merge_weighted` panics on 4,295 repeated `u32::MAX` entries**
 (proven (model)): the accumulated weight `4295 * (2^32 - 1)` times the
-retention `10^6` exceeds `u64::MAX`. The node's mempool merges a
-transaction's output tags with rate 0, and consensus does not bound an
-output's entries, so this input is reachable from a signed transaction
-(#1840; end to end in `botho/src/ledger/cluster_tag_invariant_tests.rs`). -/
+retention `10^6` exceeds `u64::MAX`. Pre-#1863 (#1858): the node's mempool
+merged a transaction's output tags with rate 0, and 7.x consensus did not
+bound an output's entries, so this input was reachable from a signed
+transaction. Fixed by #1863 (relay `is_valid` gate, saturating merge) and
+#1870 (Rule 1); the end-to-end record is
+`mempool_merge_weighted_overflow_rejected_since_1863` in
+`botho/src/ledger/cluster_tag_invariant_tests.rs`. -/
 theorem mergeWeighted_overflow_panics : mergeWeighted (repeatedMax 4295) 0 = none := by
   unfold mergeWeighted
   simp only [totalValue_repeatedMax, accumulate_repeatedMax 4294]
