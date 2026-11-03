@@ -43,7 +43,7 @@ pub(super) fn template(ledger: &Ledger, wallet: &Wallet, txs: Vec<Transaction>) 
         calculate_block_reward(state.height + 1, state.total_mined),
         txs,
     );
-    block.header.timestamp = block.header.timestamp.max(state.next_min_timestamp());
+    block.header.timestamp = state.fast_chain_timestamp();
     block.minting_tx.timestamp = block.header.timestamp;
     block
 }
