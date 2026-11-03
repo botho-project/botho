@@ -41,6 +41,7 @@ const appliedBody = {
     maxAutoMembers: 8,
     faultTolerant: true,
     degenerate: false,
+    transitionSafe: true,
   },
 }
 
@@ -82,6 +83,13 @@ describe('parseOutcome (truthful outcome parsing, anti-#541)', () => {
     expect(o?.outcome).toBe('applied')
     expect(o?.authenticated).toBe(true)
     expect(o?.gate?.faultTolerant).toBe(true)
+    expect(o?.gate?.transitionSafe).toBe(true)
+  })
+
+  it('reports transitionSafe as null when the node omits or nulls it (#1845)', () => {
+    expect(parseOutcome(refusedBody)?.gate?.transitionSafe).toBeNull()
+    const overridden = { ...appliedBody, gate: { ...appliedBody.gate, transitionSafe: false } }
+    expect(parseOutcome(overridden)?.gate?.transitionSafe).toBe(false)
   })
 
   it('returns null for an unrecognized shape (never fabricates applied)', () => {

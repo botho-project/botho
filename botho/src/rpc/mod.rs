@@ -4800,6 +4800,7 @@ mod tests {
                 max_auto_members: 8,
                 fault_tolerant: true,
                 degenerate: false,
+                transition_safe: None,
             };
             let posture = QuorumPosture {
                 mode: "recommended".to_string(),
@@ -4865,6 +4866,7 @@ mod tests {
                 max_auto_members: 8,
                 fault_tolerant: true,
                 degenerate: false,
+                transition_safe: None,
             };
             let resulting = QuorumPosture {
                 mode: "recommended".to_string(),

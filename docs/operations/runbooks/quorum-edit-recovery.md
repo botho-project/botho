@@ -95,6 +95,37 @@ curl -s http://localhost:7101/ \
 
 ---
 
+## Rotating Quorum Members Safely (#1845)
+
+Every node checks a curated edit against the quorum set it has **installed**,
+not just on its own: the candidate B must satisfy
+`t_A + t_B > |S_A ∪ S_B| + f` and `2·t_B > |S_B| + f`, where A is the installed
+set and `f` is its `quorumByzantineTolerance`. Edits that fail are refused with
+`verify_refused:invalid_payload` and a message such as
+`unsafe quorum transition from 4-of-5 to 4-of-5 (|∪| = 7, f = 1): cross term ...`.
+
+The check is **pairwise** — it cannot see a fleet that is spread across three
+or more configurations. So, when rotating members:
+
+1. **Change one member per step.** A swap is an unpin plus a pin; do them as
+   two steps, never batch several edits across the fleet at once.
+2. **Wait for fleet convergence before the next step.** Every node must report
+   the same installed quorum set (`operator_getQuorumInfo`, or the trust
+   dashboard) and be externalizing (`slotStalled: false`) before you sign the
+   next action.
+3. **Dry-run first.** A dry run is refused exactly as a real apply would be,
+   and an accepted one reports `gate.transitionSafe`.
+
+On the production Explicit 4-of-5, a single pin (→ 4-of-6) or unpin (→ 4-of-4)
+passes without any acknowledgement. A two-member swap in one step, a full
+re-roster, or a 4-of-5 → 3-of-5 threshold drop is refused.
+
+`"acknowledgeUnsafeTransition": true` in the signed envelope overrides the
+refusal. It is separate from `acknowledgeDegenerate` and attributable in the
+audit log, and the applied outcome records `transitionSafe: false`. Use it only
+when the fleet is known not to be mixed (for example, every other node is
+stopped), because a mixed fleet can fork.
+
 ## Recovery Ladder
 
 Apply the rungs **in order**. Rung 1 is the designed no-SSH path and resolves
@@ -350,6 +381,7 @@ for fleet-wide scope.
 | `/network` dashboard shows a node stalled; `slotStalled: true`, `scpSlotActive: true` after a recent operator edit | A gate-accepted liveness-harming edit (pinned dead peer / cap too low) | **Rung 1** — submit the inverse `operator_submitAction` |
 | Rung-1 apply returns `outcome: "gate_refused"` | The corrective edit would break intersection | Pick a different corrective edit; if the fleet needs it, **Rung 3** |
 | Rung-1 apply returns `verify_refused:invalid_payload` and membership would be `< 4` | Degenerate posture not acknowledged | **Rung 2** — re-sign with `acknowledgeDegenerate: true` |
+| Apply returns `verify_refused:invalid_payload` with `unsafe quorum transition` | The candidate could fork, or lose despite-f intersection, against a fleet still on the installed set | Split the edit into one-member steps and converge between them (see *Rotating Quorum Members Safely*); override with `acknowledgeUnsafeTransition: true` only when the fleet is not mixed |
 | Recovery seems to require membership `= 1` | Solo-quorum hard floor (no override) | **Do not attempt via RPC**; if truly required, **Rung 3** (SSH) |
 | `operator_submitAction` returns `verify_refused:not_configured` | Node has no `action_public_keys` (no write surface) | **Rung 3** — SSH + config + restart |
 | `verify_refused:stale` / `verify_refused:replayed_nonce` | Expired/skewed envelope, or reused nonce | Re-sign with fresh `issuedAt`/`expiresAt`/`nonce`; check NTP |
