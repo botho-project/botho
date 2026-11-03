@@ -215,7 +215,9 @@ fn compute_ring_centroid(
         .map(|(cluster_id, mass)| {
             // weight = mass / total_value (already normalized by TAG_WEIGHT_SCALE from
             // original weights)
-            let weight = (mass / (total_value as u128)) as u32;
+            // Clamp rather than wrap (#1858): only ring members carrying
+            // malformed (over-100%) ledger tags can exceed u32::MAX here.
+            let weight = (mass / (total_value as u128)).min(u32::MAX as u128) as u32;
             (ClusterId(cluster_id), weight)
         })
         .collect();
@@ -705,6 +707,36 @@ impl Mempool {
         // Validate transaction structure
         tx.is_valid_structure()
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
+
+        // #1858: every output's cluster tags must be well-formed
+        // (`ClusterTagVector::is_valid`: at most 16 entries, unique clusters,
+        // sorted, total weight <= 100%). RELAY POLICY ONLY, not a consensus
+        // rule: block validation does not check this (that is #1857), so a
+        // block carrying such an output is still accepted on every node and a
+        // mixed-version fleet cannot fork on it. Kept here in `add_tx` rather
+        // than in `Transaction::is_valid_structure` so that no block-path
+        // caller of that shared validator silently turns it into consensus.
+        //
+        // Checked before any signature or ledger work, so a malformed spend
+        // costs O(outputs * 16) (`is_valid` rejects an over-long vector on
+        // its length alone) and never reaches `merge_weighted` below.
+        for (i, out) in tx.outputs.iter().enumerate() {
+            if !out.cluster_tags.is_valid() {
+                return Err(MempoolError::InvalidTransaction(format!(
+                    "output {} has malformed cluster tags ({} entries, total weight {}); \
+                     relay policy requires at most {} unique, sorted entries totalling \
+                     at most {} (#1858)",
+                    i,
+                    out.cluster_tags.len(),
+                    out.cluster_tags
+                        .entries
+                        .iter()
+                        .fold(0u64, |acc, e| acc.saturating_add(e.weight as u64)),
+                    bth_transaction_types::MAX_CLUSTER_TAGS,
+                    bth_transaction_types::TAG_WEIGHT_SCALE,
+                )));
+            }
+        }
 
         // #831: demurrage-settlement structural validity (mirrors the consensus
         // C8 check `Ledger::verify_settlement` so relay rejects a malformed
@@ -1605,6 +1637,84 @@ mod tests {
             })
             .collect();
         Transaction::new_clsag(vec![test_clsag_input(3)], outputs, MIN_TX_FEE, 0)
+    }
+
+    /// #1858: an output whose cluster tags fail `is_valid()` is rejected at
+    /// admission with `InvalidTransaction`, BEFORE any signature work. The
+    /// fixture's ring signature is fake, so if the gate ran after
+    /// `validate_clsag_inputs` the error would be `InvalidSignature`; the
+    /// control case (same tx, valid tags) shows that it is.
+    #[test]
+    fn add_tx_rejects_invalid_output_tags_before_signature_check() {
+        use bth_transaction_types::{ClusterId, ClusterTagEntry};
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let repeated = |count: usize, weight: u32| ClusterTagVector {
+            entries: vec![
+                ClusterTagEntry {
+                    cluster_id: ClusterId(0xDEAD),
+                    weight,
+                };
+                count
+            ],
+            decay_state: None,
+        };
+        let with_tags = |tags: ClusterTagVector| {
+            let mut tx = tx_with_n_outputs(1);
+            tx.outputs[0].cluster_tags = tags;
+            tx
+        };
+
+        // Control: a valid tag vector reaches the (fake) signature check.
+        let mut mempool = Mempool::new();
+        let err = mempool
+            .add_tx(with_tags(ClusterTagVector::single(ClusterId(7))), &ledger)
+            .expect_err("fake signature");
+        assert!(
+            matches!(err, MempoolError::InvalidSignature),
+            "valid tags must pass the gate and fail on the signature: {err:?}"
+        );
+
+        let over_cap = (0..17).map(|i| (ClusterId(i), 10_000)).collect::<Vec<_>>();
+        let over_cap = ClusterTagVector {
+            entries: over_cap
+                .into_iter()
+                .map(|(cluster_id, weight)| ClusterTagEntry { cluster_id, weight })
+                .collect(),
+            decay_state: None,
+        };
+        let over_weight = ClusterTagVector {
+            entries: vec![
+                ClusterTagEntry {
+                    cluster_id: ClusterId(1),
+                    weight: 600_000,
+                },
+                ClusterTagEntry {
+                    cluster_id: ClusterId(2),
+                    weight: 600_000,
+                },
+            ],
+            decay_state: None,
+        };
+        for (name, tags) in [
+            ("17 entries", over_cap),
+            ("total 120%", over_weight),
+            ("duplicate", repeated(2, 1_000)),
+            ("4,294 x u32::MAX", repeated(4_294, u32::MAX)),
+            ("4,295 x u32::MAX", repeated(4_295, u32::MAX)),
+        ] {
+            assert!(!tags.is_valid(), "{name}");
+            let mut mempool = Mempool::new();
+            match mempool.add_tx(with_tags(tags), &ledger) {
+                Err(MempoolError::InvalidTransaction(msg)) => assert!(
+                    msg.starts_with("output 0 has malformed cluster tags"),
+                    "{name}: {msg}"
+                ),
+                other => panic!("{name}: expected InvalidTransaction, got {other:?}"),
+            }
+            assert_eq!(mempool.len(), 0);
+        }
     }
 
     /// #1772 Part A: a 17-output transaction is rejected at mempool admission
