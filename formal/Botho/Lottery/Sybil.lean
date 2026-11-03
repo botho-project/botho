@@ -7,8 +7,9 @@ The design claim. `sybil_reward_cap`'s doc comment
 creating `k` of the `ρ` eligible outputs wins expected `k/ρ · R = k ·
 base_fee`, "exactly the `k · base_fee` it pays in base fees", so splitting is
 net-zero. Two facts about the code break the conclusion, although the per-draw
-inequality `E[win] ≤ k · base_fee` itself is true (#1708 part C2, #1851,
-proves it):
+inequality `E[win] ≤ k · base_fee` holds for ideal rolls (#1708 part C2,
+#1851). The real modulo-hash bridge needs an IID-u128 premise and carries
+a multiplicative slack; it does not give that exact inequality:
 
 - no consensus rule charges `LOTTERY_BASE_FEE_PICO`; it appears only in the
   cap (the fee floor is #1684, and is not modelled here);
@@ -24,8 +25,8 @@ This module proves, about the model of #1707 (`drawing`, `rewardCap`,
    every hash function `P` and every height in the 9,281-block eligibility
    window, the uniform draw pays every row, and the owner receives
    `3 · LOTTERY_BASE_FEE_PICO` = 7.5e11 pico in that one draw. With any
-   per-ticket cost `c < LOTTERY_BASE_FEE_PICO` (every measured value is at
-   most 6.25e6 pico, research §9.1.1), the owner is ahead after a single
+   per-ticket cost `c < LOTTERY_BASE_FEE_PICO` (the 16-output relay-fee
+   reference is 6.25e6 pico per ticket, research §9.1.1), the owner is ahead after a single
    draw. The per-draw equality `k · base_fee` holds in the instance; the
    net-zero conclusion does not.
 2. **The cap is inert** (`rewardCap_inert`, `lotteryCandidates_length`,
@@ -47,9 +48,10 @@ Status: proven (model). The model is tested against the Rust code by the
 `lottery_candidates`); no new definition here mirrors Rust code, so no new
 leg is needed. Every hash is the `Prims` parameter, so no axiom is used.
 
-Out of scope (sims, #1683 and #1761): variance, timing, profitability above
-10,000 eligible outputs (window inclusion by offset and key gaps), the
-ideal-roll expectation and modulo bias (#1708 part C2, #1851).
+Out of scope (sims, #1683 and #1761): variance, timing, and profitability
+above 10,000 eligible outputs (window inclusion by offset and key gaps).
+Ideal-roll expectation and modulo bias are treated separately in
+`SybilExpectation.lean` (#1708 part C2, #1851).
 -/
 import Botho.Lottery.Drawing
 
@@ -648,7 +650,7 @@ in. Suppose:
   of the payout, `win / D ≤ held · payout / n`. This is the uniform-draw
   expectation, which #1708 part C2 proves for the model's draw when
   `n ≤ MAX_LOTTERY_CANDIDATES` (so the window is the whole eligible set);
-  until then it is an assumption here;
+  C2 now derives it for ideal rolls; this general C1 theorem keeps it as a premise;
 - `hprice` (R3 condition ii): each draw pays `payout · L ≤ n · p`, with `n`
   the untruncated eligible count;
 - `hfee` (R3 condition i): the holder paid at least `p` per ticket,

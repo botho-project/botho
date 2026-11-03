@@ -5,7 +5,9 @@ guarantees and what it does not. The model is `Botho/Lottery/` (#1707). Its
 definitions are **tested** against the Rust code by the DRT legs in
 `formal-drt/`. The theorems are **proven (model)**: they hold for the Lean
 model, for every hash function (`Prims` is a parameter, and no axiom is
-used), and say something about the Rust code only through that DRT. See
+used), and say something about the Rust code only through that DRT. Probabilistic
+claims additionally distinguish ideal rolls from the explicitly trusted
+IID-u128 premise for SHA-256; no hash randomness is proved here. See
 `README.md` for the labels.
 
 #1708 is split into four parts:
@@ -15,7 +17,7 @@ used), and say something about the Rust code only through that DRT. See
 | A | Pool and fee conservation, and Rust widths | **proven (model), `Botho/Lottery/Conservation.lean`** |
 | B | Seed independence and canonical-order determinism | #1850 |
 | C1 | Sybil split without probability: the counterexample, the inert cap, profit as a function of split count, the R3 premise | **this file, `Botho/Lottery/Sybil.lean`** |
-| C2 | Sybil split with ideal-roll expectation: expected winnings of `k` tickets = `k · payout / ρ`, the modulo-bias bridge, the production-shaped counterexample | #1851 |
+| C2 | Exact ideal-roll expectation, modulo-bias bridge, production-shaped counterexample, and R3/economy linkage | **this file, `Botho/Lottery/SybilExpectation.lean` (#1851)** |
 
 ## Conservation (part A)
 
@@ -164,7 +166,7 @@ fixed `Prims`. They establish neither hash unpredictability nor a theorem
 about LMDB, Rust, corruption handling or the timing issue in #1689. The
 executable drawing and DRT dispatch are unchanged by these proofs.
 
-## The Sybil split (part C1)
+## The Sybil split (parts C1 and C2)
 
 ### What the design claimed, and what is false
 
@@ -175,9 +177,13 @@ base_fee`, "exactly the `k · base_fee` it pays", so splitting is net-zero.
 
 Two separate claims are in that sentence:
 
-- **"Winnings per draw rise by at most `k · base_fee`."** This holds, apart
-  from a negligible modulo bias, because `payout ≤ ρ · base_fee`. Part C2
-  (#1851) proves it for the model's draw.
+- **"Winnings per draw rise by at most `k · base_fee`."** For ideal rolls,
+  the payout cap bounds the expected winnings of `k` tickets by this amount.
+  A *marginal* comparison from one ticket to `k+1` also needs a common
+  available payout budget before the cap; separate cap inequalities alone
+  do not suffice. C2 proves both the qualified bound and a counterexample
+  to the unqualified marginal claim. Real modulo-hash draws carry the
+  explicit bias slack described below.
 - **"So splitting is net-zero."** This is false. No consensus rule charges
   `LOTTERY_BASE_FEE_PICO`; it appears only in the cap. A ticket is paid for
   once, through the ordinary fee floor (870 to 117,032 pico, or 6.25e6 pico
@@ -252,8 +258,10 @@ fees that returns to the pool.
 - At the reference point with the `MIN_TX_FEE` cost (6.25e6 pico per ticket)
   and k = 1,584, the split pays.
 
-The bridge from this model to the node is "expected share = ticket share"
-for the uniform draw, which is part C2.
+`Ideal.splitUnprofitable_model_iff` ties this inequality to the ideal
+uniform draw's expected profit. Its explicit economy premise is
+`1000·payout = 1000·R0 + pm·k·c`; it does not assert that consensus always
+realizes the stationary fee-recycling formula or remove integer rounding.
 
 **The R3 premise (#1837 option 1).** `r3_no_split_profit`.
 
@@ -267,8 +275,11 @@ Suppose:
   of the payout (`hshare`).
 
 Then its expected winnings over its tickets' lives are at most its outlay,
-whatever the split. Part C2 discharges `hshare` for the model's draw when
-`N ≤ MAX_LOTTERY_CANDIDATES`; until then it is an explicit hypothesis. R3
+whatever the split. C2's `Ideal.r3_from_model` discharges `hshare` for ideal
+model draws when the **global** eligible count `N ≤ MAX_LOTTERY_CANDIDATES`.
+It converts each draw's finite path mass to a common positive denominator
+`D = mass(N,t)·scale`, and defines its winnings as `winningsMass·scale`.
+The real modulo-hash bridge has slack and does not discharge exact R3. R3
 requires (i) for **every** eligible output, free ones included. Otherwise
 the holder of free tickets (the coinbase and payout outputs, #1690) does not
 meet `hfee`.
@@ -284,6 +295,86 @@ meet `hfee`.
   every `p ≤ LOTTERY_BASE_FEE_PICO`. R3 pricing would need `p` ≥ 2.32 BTH
   per ticket. The cap has no division by the ticket life, and ρ is the
   truncated count.
+
+### Exact ideal-roll expectation and hash boundary (part C2)
+
+`pickWinners_eq_pickWinnersF` and `drawEligible_eq_drawEligibleF` prove the
+parameterized roll versions equal the existing functions when supplied
+`verifiableRandomU128 P seed i % remaining`. No Rust or existing draw
+definition changes. `drawEligibleF_uniform` specializes that same draw to
+weight-one slots.
+
+`Ideal.paths n t` enumerates in-range roll paths of length `t`, with
+successive ranges `n, n−1, …, n−t+1`. `paths_length` proves their count is
+`mass(n,t)`, the product of those ranges. The selection-index and path-loop
+bridges prove these paths execute the existing cumulative walk and winner
+loop. `Ideal.exact_share` then states:
+
+```
+winningsMass(owns, pool, t, candidates) · n
+  = held · pool · mass(n,t)
+```
+
+Here `winningsMass` sums **executed draw payouts**, including `addToLast`,
+over the finite paths. `held` counts owned ticket occurrences; it is not
+an unstated distinct-ID set cardinality. The theorem needs `0 < t ≤ n`;
+canonical draws use `t = min(4,n)`. It permits zero pools, payouts smaller
+than the winner count, and underfilled draws. A generic zero-winner
+configuration is excluded because it cannot pay a nonzero pool.
+
+`Ideal.base_fee_bound` derives `E[win] ≤ held·LOTTERY_BASE_FEE_PICO` when the
+pool is at most the Sybil cap. `lotteryCandidates_complete` proves the
+selected window contains every eligible row up to rotation when the
+**pre-read global eligible count** is at most 10,000. A bound on the
+already truncated return length would not establish this.
+
+**Modulo bias.** `Modulo.residue_count` counts the words `r < U` satisfying
+`r % m = j`: exactly `U/m + [j < U%m]` for `j < m`. The path multiplicities
+multiply under independent uniform words, and `pathWeight_total` proves
+their sum is `U^t`. `Modulo.u128_iid_bridge` takes that joint path-count
+hypothesis explicitly for `U = 2^128`. For `t ≤ 4`, it gives:
+
+```
+observedWinningsMass · n · U^(4−t) ≤ held · pool · (U+n)^4
+```
+
+Dividing by the raw mass `U^t` gives a relative slack of at most
+`(1+n/U)^4`. The counting and inequality are **proven (model)**; applying
+them to SHA-256 is **trusted (uniform independent first 16 bytes)**. No
+nonstandard axiom is introduced. Exact equality for the real modulo draw
+is false: the kernel-checked toy domain `U=8`, `n=t=3`, `pool=1` pays the
+last ticket `192/512 = 3/8` in expectation, against ideal `2/6 = 1/3`.
+The exact R3 theorem applies to ideal rolls only.
+
+**Marginal comparison.** `Ideal.marginal_common_budget` compares one owned
+ticket before a split with `k+1` after, with both global counts within the
+cap and a shared available budget `B`. Payouts are `min(B, sybilRewardCap n)`
+and `min(B, sybilRewardCap(n+k))`; their two path denominators remain
+separate. The expected gain is at most `k·base_fee`.
+`Ideal.marginal_cap_only_refuted` shows why the shared-budget premise is
+necessary: at `n=2`, `k=1`, before-payout 1 pico and after-payout `3·base`,
+both cap inequalities hold, but the expected gain is `2·base − 1/2`, above
+`base`. This arithmetic example is not a claim of a reachable consensus
+transition. Fee-dependent budgets belong to the separate C1 economy
+premise above.
+
+**CE-2.** `Ideal.ce2_expected_profit` uses the actual candidate read,
+`rewardCap`, and `computePoolAccounting`, with exactly 10,000 globally
+eligible tickets, epoch-1 reward 25 BTH, zero stored pool/fees, and lottery
+emission 2.5 BTH. The cap is the reward and the payout is 2.5 BTH, so the
+ideal expected payout per ticket is **250,000,000 pico**. For a positive
+owned ticket count and one-time cost `c ≤ 6,250,000` pico, one draw's
+expected payout exceeds the cost. This is an expectation, not a guaranteed
+individual win. The 6,250,000 figure is the current `MIN_TX_FEE = 100,000,000`
+pico per transaction divided across 16 outputs: the payout is 40 times
+that assumed per-ticket cost. The separate 870-pico floor-only reference
+is about 287,356 times smaller than the expected payout. Neither cost is
+proved to be a universal consensus charge.
+
+Kernel-evaluated regression theorems cover zero pool, zero winners, a
+single ticket, the zero-quotient underfilled case, a four-of-five draw with
+remainder, and the strictly biased toy modulo domain. The full proofs use
+core Lean only; they add no Mathlib, nonstandard axiom, or native evaluation.
 
 ### Not covered (simulation questions)
 
