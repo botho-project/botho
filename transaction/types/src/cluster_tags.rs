@@ -352,8 +352,19 @@ impl ClusterTagVector {
     /// # Returns
     /// A new ClusterTagVector representing the weighted merge with decay
     /// applied.
+    ///
+    /// # Overflow behaviour (#1858)
+    ///
+    /// This function never panics. The value sum is taken in `u128` and the
+    /// decay multiply is done in `u128` and clamped to `u32::MAX`. For any
+    /// inputs whose tags pass [`ClusterTagVector::is_valid`] and whose values
+    /// sum to at most `u64::MAX`, every accumulated weight is at most
+    /// `TAG_WEIGHT_SCALE`, so neither the widening nor the clamp is ever
+    /// reached and the output is bit-identical to the pre-#1858 `u64`
+    /// arithmetic. Only malformed (over-100%) tags, which `is_valid` rejects,
+    /// can reach the clamp; before #1858 those panicked or wrapped.
     pub fn merge_weighted(inputs: &[(ClusterTagVector, u64)], decay_rate: u32) -> Self {
-        let total_value: u64 = inputs.iter().map(|(_, v)| *v).sum();
+        let total_value: u128 = inputs.iter().map(|(_, v)| *v as u128).sum();
         if total_value == 0 {
             return Self::empty();
         }
@@ -365,8 +376,7 @@ impl ClusterTagVector {
             for entry in &tags.entries {
                 // Contribution = (input_value / total_value) * entry_weight
                 // Use u128 to avoid overflow
-                let contribution =
-                    ((*value as u128) * (entry.weight as u128)) / (total_value as u128);
+                let contribution = ((*value as u128) * (entry.weight as u128)) / total_value;
 
                 // Find or insert this cluster
                 if let Some(existing) = cluster_weights
@@ -385,13 +395,20 @@ impl ClusterTagVector {
         let retention = TAG_WEIGHT_SCALE.saturating_sub(decay_rate);
         let pairs: Vec<(ClusterId, u32)> = cluster_weights
             .into_iter()
-            .map(|(id, w)| {
-                let decayed = (w * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
-                (id, decayed as u32)
-            })
+            .map(|(id, w)| (id, Self::decay_weight(w, retention)))
             .collect();
 
         Self::from_pairs(&pairs)
+    }
+
+    /// Apply `retention` (parts per `TAG_WEIGHT_SCALE`) to an accumulated
+    /// weight without overflow: the multiply is done in `u128` and the
+    /// result is clamped to `u32::MAX` rather than truncated by `as u32`
+    /// (#1858). Monotone non-decreasing in `w`.
+    #[inline]
+    fn decay_weight(w: u64, retention: u32) -> u32 {
+        let decayed = (w as u128) * (retention as u128) / (TAG_WEIGHT_SCALE as u128);
+        decayed.min(u32::MAX as u128) as u32
     }
 
     /// Compute inherited tags with AND-based decay (rate-limited and
@@ -424,7 +441,8 @@ impl ClusterTagVector {
         max_decays_per_epoch: u32,
         epoch_blocks: u64,
     ) -> (Self, bool) {
-        let total_value: u64 = inputs.iter().map(|(_, v, _)| *v).sum();
+        // u128 so the sum cannot overflow (#1858); see `merge_weighted`.
+        let total_value: u128 = inputs.iter().map(|(_, v, _)| *v as u128).sum();
         if total_value == 0 {
             return (Self::empty_at_block(current_block), false);
         }
@@ -444,14 +462,14 @@ impl ClusterTagVector {
             // Weight-average the decay state from inputs
             combined_last_decay_block = combined_last_decay_block.max(decay_state.last_decay_block);
             combined_decays_this_epoch = combined_decays_this_epoch.saturating_add(
-                (decay_state.decays_this_epoch as u64 * *value / total_value.max(1)) as u32,
+                ((decay_state.decays_this_epoch as u128) * (*value as u128) / total_value.max(1))
+                    as u32,
             );
             combined_epoch_start_block =
                 combined_epoch_start_block.min(decay_state.epoch_start_block);
 
             for entry in &tags.entries {
-                let contribution =
-                    ((*value as u128) * (entry.weight as u128)) / (total_value as u128);
+                let contribution = ((*value as u128) * (entry.weight as u128)) / total_value;
 
                 if let Some(existing) = cluster_weights
                     .iter_mut()
@@ -491,15 +509,12 @@ impl ClusterTagVector {
             let retention = TAG_WEIGHT_SCALE.saturating_sub(decay_rate_per_hop);
             cluster_weights
                 .into_iter()
-                .map(|(id, w)| {
-                    let decayed = (w * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
-                    (id, decayed as u32)
-                })
+                .map(|(id, w)| (id, Self::decay_weight(w, retention)))
                 .collect()
         } else {
             cluster_weights
                 .into_iter()
-                .map(|(id, w)| (id, w as u32))
+                .map(|(id, w)| (id, w.min(u32::MAX as u64) as u32))
                 .collect()
         };
 
@@ -512,7 +527,9 @@ impl ClusterTagVector {
                 combined_last_decay_block
             },
             decays_this_epoch: if decay_applies {
-                decays_this_epoch + 1
+                // saturating (#1858): an input decay state carrying
+                // u32::MAX decays with an uncapped epoch must not panic.
+                decays_this_epoch.saturating_add(1)
             } else {
                 decays_this_epoch
             },
@@ -1040,5 +1057,517 @@ mod tests {
             950_000,
             "Should be 95% (one 5% decay)"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // #1858: overflow-safe `merge_weighted` / `merge_weighted_with_and_decay`
+    // ------------------------------------------------------------------
+
+    /// The pre-#1858 `merge_weighted`, verbatim (u64 value sum, u64 decay
+    /// multiply, `as u32` truncation). Kept as a test-only reference so the
+    /// bit-identical claim for `is_valid()` inputs is checked, not assumed.
+    fn legacy_merge_weighted(
+        inputs: &[(ClusterTagVector, u64)],
+        decay_rate: u32,
+    ) -> ClusterTagVector {
+        let total_value: u64 = inputs.iter().map(|(_, v)| *v).sum();
+        if total_value == 0 {
+            return ClusterTagVector::empty();
+        }
+        let mut cluster_weights: Vec<(ClusterId, u64)> = Vec::new();
+        for (tags, value) in inputs {
+            for entry in &tags.entries {
+                let contribution =
+                    ((*value as u128) * (entry.weight as u128)) / (total_value as u128);
+                if let Some(existing) = cluster_weights
+                    .iter_mut()
+                    .find(|(id, _)| *id == entry.cluster_id)
+                {
+                    existing.1 = existing.1.saturating_add(contribution as u64);
+                } else {
+                    cluster_weights.push((entry.cluster_id, contribution as u64));
+                }
+            }
+        }
+        let retention = TAG_WEIGHT_SCALE.saturating_sub(decay_rate);
+        let pairs: Vec<(ClusterId, u32)> = cluster_weights
+            .into_iter()
+            .map(|(id, w)| {
+                let decayed = (w * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
+                (id, decayed as u32)
+            })
+            .collect();
+        ClusterTagVector::from_pairs(&pairs)
+    }
+
+    /// The pre-#1858 `merge_weighted_with_and_decay`, verbatim.
+    fn legacy_merge_weighted_with_and_decay(
+        inputs: &[(ClusterTagVector, u64, u64)],
+        current_block: u64,
+        decay_rate_per_hop: u32,
+        min_blocks_between_decays: u64,
+        max_decays_per_epoch: u32,
+        epoch_blocks: u64,
+    ) -> (ClusterTagVector, bool) {
+        let total_value: u64 = inputs.iter().map(|(_, v, _)| *v).sum();
+        if total_value == 0 {
+            return (ClusterTagVector::empty_at_block(current_block), false);
+        }
+        let mut cluster_weights: Vec<(ClusterId, u64)> = Vec::new();
+        let mut combined_last_decay_block: u64 = 0;
+        let mut combined_decays_this_epoch: u32 = 0;
+        let mut combined_epoch_start_block: u64 = u64::MAX;
+        for (tags, value, creation_block) in inputs {
+            let decay_state = tags.decay_state_or_default(*creation_block);
+            combined_last_decay_block = combined_last_decay_block.max(decay_state.last_decay_block);
+            combined_decays_this_epoch = combined_decays_this_epoch.saturating_add(
+                (decay_state.decays_this_epoch as u64 * *value / total_value.max(1)) as u32,
+            );
+            combined_epoch_start_block =
+                combined_epoch_start_block.min(decay_state.epoch_start_block);
+            for entry in &tags.entries {
+                let contribution =
+                    ((*value as u128) * (entry.weight as u128)) / (total_value as u128);
+                if let Some(existing) = cluster_weights
+                    .iter_mut()
+                    .find(|(id, _)| *id == entry.cluster_id)
+                {
+                    existing.1 = existing.1.saturating_add(contribution as u64);
+                } else {
+                    cluster_weights.push((entry.cluster_id, contribution as u64));
+                }
+            }
+        }
+        if combined_epoch_start_block == u64::MAX {
+            combined_epoch_start_block = current_block;
+        }
+        let mut epoch_start = combined_epoch_start_block;
+        let mut decays_this_epoch = combined_decays_this_epoch;
+        if current_block.saturating_sub(epoch_start) >= epoch_blocks {
+            epoch_start = current_block;
+            decays_this_epoch = 0;
+        }
+        let never_decayed = combined_last_decay_block == 0 && decays_this_epoch == 0;
+        let time_eligible = never_decayed
+            || current_block.saturating_sub(combined_last_decay_block) >= min_blocks_between_decays;
+        let epoch_cap_ok = max_decays_per_epoch == 0 || decays_this_epoch < max_decays_per_epoch;
+        let decay_applies = time_eligible && epoch_cap_ok;
+        let pairs: Vec<(ClusterId, u32)> = if decay_applies {
+            let retention = TAG_WEIGHT_SCALE.saturating_sub(decay_rate_per_hop);
+            cluster_weights
+                .into_iter()
+                .map(|(id, w)| {
+                    let decayed = (w * (retention as u64)) / (TAG_WEIGHT_SCALE as u64);
+                    (id, decayed as u32)
+                })
+                .collect()
+        } else {
+            cluster_weights
+                .into_iter()
+                .map(|(id, w)| (id, w as u32))
+                .collect()
+        };
+        let mut result = ClusterTagVector::from_pairs(&pairs);
+        result.decay_state = Some(DecayState {
+            last_decay_block: if decay_applies {
+                current_block
+            } else {
+                combined_last_decay_block
+            },
+            decays_this_epoch: if decay_applies {
+                decays_this_epoch + 1
+            } else {
+                decays_this_epoch
+            },
+            epoch_start_block: epoch_start,
+        });
+        (result, decay_applies)
+    }
+
+    /// `count` copies of `(cluster, weight)`: the #1840/#1858 malformed
+    /// vector (no dedup, no 16-entry cap, total far above 100%).
+    fn repeated(cluster: u64, weight: u32, count: usize) -> ClusterTagVector {
+        ClusterTagVector {
+            entries: vec![
+                ClusterTagEntry {
+                    cluster_id: ClusterId(cluster),
+                    weight,
+                };
+                count
+            ],
+            decay_state: None,
+        }
+    }
+
+    fn pairs_of(tags: &ClusterTagVector) -> Vec<(u64, u32)> {
+        tags.entries
+            .iter()
+            .map(|e| (e.cluster_id.0, e.weight))
+            .collect()
+    }
+
+    /// #1858 (Lean `mergeWeighted_overflow_panics`): 4,295 entries of
+    /// `u32::MAX` at rate 0, and 4,522 at the wallet rate 50,000, used to
+    /// overflow the u64 decay multiply. They now saturate to `u32::MAX`.
+    #[test]
+    fn merge_weighted_saturates_instead_of_panicking() {
+        for (count, rate) in [(4_295usize, 0u32), (4_522, 50_000), (100_000, 0)] {
+            let out = ClusterTagVector::merge_weighted(&[(repeated(7, u32::MAX, count), 1)], rate);
+            assert_eq!(
+                pairs_of(&out),
+                vec![(7, u32::MAX)],
+                "count {count} rate {rate}"
+            );
+            let (out, applied) = ClusterTagVector::merge_weighted_with_and_decay(
+                &[(repeated(7, u32::MAX, count), 1, 0)],
+                10,
+                rate,
+                360,
+                12,
+                8_640,
+            );
+            assert!(applied);
+            assert_eq!(pairs_of(&out), vec![(7, u32::MAX)]);
+        }
+    }
+
+    /// The exact overflow boundary, pinned against the pre-fix reference:
+    /// 4,294 entries did not overflow the multiply, 4,295 did.
+    #[test]
+    fn merge_weighted_overflow_boundary_4294_vs_4295() {
+        let below = repeated(7, u32::MAX, 4_294);
+        let at = repeated(7, u32::MAX, 4_295);
+        // w * 10^6 fits u64 at 4,294 and not at 4,295.
+        let w = |n: u64| n * u32::MAX as u64;
+        assert!(w(4_294).checked_mul(TAG_WEIGHT_SCALE as u64).is_some());
+        assert!(w(4_295).checked_mul(TAG_WEIGHT_SCALE as u64).is_none());
+        // Old code did not panic at 4,294 (it wrapped through `as u32`).
+        let _ = legacy_merge_weighted(&[(below.clone(), 1)], 0);
+        // New code: both sides saturate identically.
+        for v in [below, at] {
+            let out = ClusterTagVector::merge_weighted(&[(v, 1)], 0);
+            assert_eq!(pairs_of(&out), vec![(7, u32::MAX)]);
+        }
+    }
+
+    /// The pre-fix reference really did panic at 4,295 (this is what the
+    /// node hit, #1858); keeps the boundary test honest.
+    #[test]
+    #[should_panic(expected = "overflow")]
+    fn legacy_merge_weighted_panics_at_4295() {
+        let _ = legacy_merge_weighted(&[(repeated(7, u32::MAX, 4_295), 1)], 0);
+    }
+
+    /// Lean `mergeWeighted_decay_not_antitone`: the old `as u32` wrapped, so
+    /// more input weight could yield LESS output weight. With the clamp the
+    /// output is monotone non-decreasing in the input weight.
+    #[test]
+    fn merge_weighted_decay_is_monotone_past_u32() {
+        // Old code: 2 entries of u32::MAX wrap to u32::MAX - 1 < u32::MAX.
+        let one = legacy_merge_weighted(&[(repeated(7, u32::MAX, 1), 1)], 0);
+        let two = legacy_merge_weighted(&[(repeated(7, u32::MAX, 2), 1)], 0);
+        assert!(two.get_weight(ClusterId(7)) < one.get_weight(ClusterId(7)));
+
+        for rate in [0u32, 50_000, 500_000] {
+            let mut prev = 0u32;
+            for count in [1usize, 2, 3, 17, 1_000, 4_294, 4_295, 4_522, 10_000] {
+                let out =
+                    ClusterTagVector::merge_weighted(&[(repeated(7, u32::MAX, count), 1)], rate);
+                let w = out.get_weight(ClusterId(7));
+                assert!(w >= prev, "rate {rate}: count {count} gave {w} < {prev}");
+                prev = w;
+            }
+        }
+        // And for weights that cross u32::MAX only after accumulation.
+        let mut prev = 0u32;
+        for count in 1..=40usize {
+            let out = ClusterTagVector::merge_weighted(&[(repeated(7, 200_000_000, count), 1)], 0);
+            let w = out.get_weight(ClusterId(7));
+            assert!(w >= prev, "count {count} gave {w} < {prev}");
+            prev = w;
+        }
+        assert_eq!(prev, u32::MAX);
+    }
+
+    /// The non-decay branch of `merge_weighted_with_and_decay` clamps too
+    /// (old: `w as u32`).
+    #[test]
+    fn merge_weighted_with_and_decay_no_decay_branch_clamps() {
+        let mut tags = repeated(7, u32::MAX, 2);
+        // Decayed at block 100: not time-eligible at block 101.
+        tags.decay_state = Some(DecayState {
+            last_decay_block: 100,
+            decays_this_epoch: 1,
+            epoch_start_block: 100,
+        });
+        let (out, applied) = ClusterTagVector::merge_weighted_with_and_decay(
+            &[(tags.clone(), 1, 0)],
+            101,
+            50_000,
+            360,
+            12,
+            8_640,
+        );
+        assert!(!applied);
+        assert_eq!(pairs_of(&out), vec![(7, u32::MAX)]);
+        // The old code wrapped to u32::MAX - 1.
+        let (old, _) =
+            legacy_merge_weighted_with_and_decay(&[(tags, 1, 0)], 101, 50_000, 360, 12, 8_640);
+        assert_eq!(pairs_of(&old), vec![(7, u32::MAX - 1)]);
+    }
+
+    /// The value sum is taken in u128: two inputs of `u64::MAX` used to
+    /// panic on the `u64` sum.
+    #[test]
+    fn merge_weighted_total_value_overflow_does_not_panic() {
+        let inputs = [
+            (ClusterTagVector::single(ClusterId(1)), u64::MAX),
+            (ClusterTagVector::single(ClusterId(2)), u64::MAX),
+        ];
+        let out = ClusterTagVector::merge_weighted(&inputs, 0);
+        assert_eq!(pairs_of(&out), vec![(1, 500_000), (2, 500_000)]);
+        assert!(out.is_valid());
+
+        let inputs3 = [
+            (ClusterTagVector::single(ClusterId(1)), u64::MAX, 0),
+            (ClusterTagVector::single(ClusterId(2)), u64::MAX, 0),
+        ];
+        let (out, _) =
+            ClusterTagVector::merge_weighted_with_and_decay(&inputs3, 10, 0, 360, 12, 8_640);
+        assert_eq!(pairs_of(&out), vec![(1, 500_000), (2, 500_000)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflow")]
+    fn legacy_merge_weighted_panics_on_value_sum_overflow() {
+        let inputs = [
+            (ClusterTagVector::single(ClusterId(1)), u64::MAX),
+            (ClusterTagVector::single(ClusterId(2)), u64::MAX),
+        ];
+        let _ = legacy_merge_weighted(&inputs, 0);
+    }
+
+    /// Honest-wallet outputs are pinned: a table of valid inputs with their
+    /// exact expected merged vectors, identical to the pre-fix reference and
+    /// themselves `is_valid()`.
+    #[test]
+    fn merge_weighted_valid_inputs_unchanged() {
+        let s = ClusterTagVector::single;
+        let fp = |p: &[(u64, u32)]| {
+            ClusterTagVector::from_pairs(
+                &p.iter()
+                    .map(|(c, w)| (ClusterId(*c), *w))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        #[allow(clippy::type_complexity)]
+        let table: Vec<(Vec<(ClusterTagVector, u64)>, u32, Vec<(u64, u32)>)> = vec![
+            // single input
+            (vec![(s(ClusterId(1)), 1000)], 0, vec![(1, 1_000_000)]),
+            // equal
+            (
+                vec![(s(ClusterId(1)), 100), (s(ClusterId(2)), 100)],
+                0,
+                vec![(1, 500_000), (2, 500_000)],
+            ),
+            // unequal
+            (
+                vec![(s(ClusterId(1)), 300), (s(ClusterId(2)), 100)],
+                0,
+                vec![(1, 750_000), (2, 250_000)],
+            ),
+            // shared cluster (stable tie order: 1 before 3)
+            (
+                vec![
+                    (fp(&[(1, 600_000), (2, 400_000)]), 100),
+                    (fp(&[(1, 200_000), (3, 800_000)]), 100),
+                ],
+                0,
+                vec![(1, 400_000), (3, 400_000), (2, 200_000)],
+            ),
+            // rounding
+            (
+                vec![(s(ClusterId(1)), 1), (s(ClusterId(2)), 2)],
+                0,
+                vec![(2, 666_666), (1, 333_333)],
+            ),
+            // wallet decay 5%
+            (vec![(s(ClusterId(1)), 1000)], 50_000, vec![(1, 950_000)]),
+            (
+                vec![(s(ClusterId(1)), 300), (s(ClusterId(2)), 100)],
+                50_000,
+                vec![(1, 712_500), (2, 237_500)],
+            ),
+            // empty / zero value
+            (vec![(ClusterTagVector::empty(), 5)], 0, vec![]),
+            (vec![(s(ClusterId(1)), 0)], 0, vec![]),
+        ];
+        for (inputs, rate, expected) in table {
+            let new = ClusterTagVector::merge_weighted(&inputs, rate);
+            let old = legacy_merge_weighted(&inputs, rate);
+            assert_eq!(
+                pairs_of(&new),
+                expected,
+                "inputs {:?}",
+                pairs_of(&inputs[0].0)
+            );
+            assert_eq!(new, old);
+            assert!(new.is_valid());
+        }
+    }
+
+    mod merge_weighted_reference_equivalence {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// A random `is_valid()` tag vector: up to 16 distinct clusters drawn
+        /// from a small id space (so inputs share clusters), each weight in
+        /// [MIN_STORED_WEIGHT, 62_500] so the total is at most 100%.
+        fn valid_tags() -> impl Strategy<Value = ClusterTagVector> {
+            proptest::collection::btree_map(0u64..24, MIN_STORED_WEIGHT..=62_500u32, 0..=16)
+                .prop_map(|m| {
+                    let pairs: Vec<(ClusterId, u32)> =
+                        m.into_iter().map(|(c, w)| (ClusterId(c), w)).collect();
+                    ClusterTagVector::from_pairs(&pairs)
+                })
+        }
+
+        /// A valid vector with arbitrary (not just small) weights summing to
+        /// at most 100%, e.g. one dominant cluster.
+        fn valid_tags_wide() -> impl Strategy<Value = ClusterTagVector> {
+            proptest::collection::btree_map(0u64..24, MIN_STORED_WEIGHT..=TAG_WEIGHT_SCALE, 0..=4)
+                .prop_map(|m| {
+                    let mut left = TAG_WEIGHT_SCALE;
+                    let mut pairs = Vec::new();
+                    for (c, w) in m {
+                        let w = w.min(left);
+                        left -= w;
+                        pairs.push((ClusterId(c), w));
+                    }
+                    ClusterTagVector::from_pairs(&pairs)
+                })
+        }
+
+        fn any_valid() -> impl Strategy<Value = ClusterTagVector> {
+            prop_oneof![valid_tags(), valid_tags_wide()]
+        }
+
+        /// Values whose sum over at most 8 inputs fits u64 (the honest case).
+        fn value() -> impl Strategy<Value = u64> {
+            prop_oneof![0u64..=1_000_000, 0u64..=(u64::MAX / 8)]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(2_000))]
+
+            /// For every `is_valid()` input whose value sum fits u64, the
+            /// overflow-safe `merge_weighted` is bit-identical to the pre-fix
+            /// reference, and its output is itself `is_valid()`.
+            #[test]
+            fn merge_weighted_matches_legacy_on_valid_inputs(
+                inputs in proptest::collection::vec((any_valid(), value()), 0..=8),
+                rate in prop_oneof![Just(0u32), Just(50_000u32), 0u32..=TAG_WEIGHT_SCALE, any::<u32>()],
+            ) {
+                prop_assert!(inputs.iter().all(|(t, _)| t.is_valid()));
+                let new = ClusterTagVector::merge_weighted(&inputs, rate);
+                let old = legacy_merge_weighted(&inputs, rate);
+                prop_assert_eq!(&new, &old);
+                prop_assert!(new.is_valid());
+            }
+
+            /// Same for `merge_weighted_with_and_decay`, over random decay
+            /// states. Values are capped at 2^59 so the pre-fix
+            /// `decays_this_epoch as u64 * value` (<= 12 * 2^59) cannot
+            /// overflow in the reference either.
+            #[test]
+            fn merge_weighted_with_and_decay_matches_legacy_on_valid_inputs(
+                inputs in proptest::collection::vec(
+                    (
+                        any_valid(),
+                        0u64..=(1u64 << 59),
+                        0u64..20_000,
+                        proptest::option::of((0u64..20_000, 0u32..=12, 0u64..20_000)),
+                    ),
+                    0..=8,
+                ),
+                current_block in 0u64..40_000,
+                rate in prop_oneof![Just(50_000u32), 0u32..=TAG_WEIGHT_SCALE],
+                min_between in 0u64..1_000,
+                max_per_epoch in 0u32..=12,
+                epoch_blocks in 1u64..20_000,
+            ) {
+                let inputs: Vec<(ClusterTagVector, u64, u64)> = inputs
+                    .into_iter()
+                    .map(|(mut t, v, created, ds)| {
+                        t.decay_state = ds.map(|(l, d, e)| DecayState {
+                            last_decay_block: l,
+                            decays_this_epoch: d,
+                            epoch_start_block: e,
+                        });
+                        (t, v, created)
+                    })
+                    .collect();
+                let new = ClusterTagVector::merge_weighted_with_and_decay(
+                    &inputs, current_block, rate, min_between, max_per_epoch, epoch_blocks,
+                );
+                let old = legacy_merge_weighted_with_and_decay(
+                    &inputs, current_block, rate, min_between, max_per_epoch, epoch_blocks,
+                );
+                prop_assert_eq!(&new, &old);
+                prop_assert!(new.0.is_valid());
+            }
+
+            /// No input, valid or not, makes the new code panic.
+            #[test]
+            fn merge_weighted_never_panics(
+                entries in proptest::collection::vec(
+                    proptest::collection::vec((0u64..4, any::<u32>()), 0..64),
+                    0..4,
+                ),
+                values in proptest::collection::vec(any::<u64>(), 4),
+                states in proptest::collection::vec(
+                    proptest::option::of((any::<u64>(), any::<u32>(), any::<u64>())),
+                    4,
+                ),
+                rate in any::<u32>(),
+                current_block in any::<u64>(),
+                min_between in any::<u64>(),
+                max_per_epoch in prop_oneof![Just(0u32), any::<u32>()],
+                epoch_blocks in any::<u64>(),
+            ) {
+                let inputs: Vec<(ClusterTagVector, u64)> = entries
+                    .into_iter()
+                    .zip(values)
+                    .map(|(es, v)| {
+                        (
+                            ClusterTagVector {
+                                entries: es
+                                    .into_iter()
+                                    .map(|(c, w)| ClusterTagEntry { cluster_id: ClusterId(c), weight: w })
+                                    .collect(),
+                                decay_state: None,
+                            },
+                            v,
+                        )
+                    })
+                    .collect();
+                let _ = ClusterTagVector::merge_weighted(&inputs, rate);
+                let with_blocks: Vec<_> = inputs
+                    .into_iter()
+                    .zip(states)
+                    .map(|((mut t, v), ds)| {
+                        t.decay_state = ds.map(|(l, d, e)| DecayState {
+                            last_decay_block: l,
+                            decays_this_epoch: d,
+                            epoch_start_block: e,
+                        });
+                        (t, v, 0u64)
+                    })
+                    .collect();
+                let _ = ClusterTagVector::merge_weighted_with_and_decay(
+                    &with_blocks, current_block, rate, min_between, max_per_epoch, epoch_blocks,
+                );
+            }
+        }
     }
 }
