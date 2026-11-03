@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     mempool::MempoolError,
-    transaction::{Transaction, TxOutput, Utxo, UtxoId, PICOCREDITS_PER_CREDIT},
+    transaction::{Transaction, TxOutput, UtxoId, PICOCREDITS_PER_CREDIT},
     wallet::Wallet,
 };
 use bth_cluster_tax::{
@@ -429,20 +429,6 @@ fn victim(ledger: &Ledger, blocks: &[crate::block::Block], tx: &Transaction) -> 
         .expect("some coinbase cluster is off the ring")
 }
 
-fn setup() -> (
-    tempfile::TempDir,
-    Ledger,
-    Wallet,
-    Vec<crate::block::Block>,
-    Utxo,
-    Transaction,
-) {
-    let (dir, ledger, wallet, blocks) = chain(30);
-    let input = coinbase(&ledger, &blocks[2]);
-    let stock = stock_spend(&ledger, &wallet, &input, 10 * PICOCREDITS_PER_CREDIT);
-    (dir, ledger, wallet, blocks, input, stock)
-}
-
 fn expect_rejected(ledger: &Ledger, wallet: &Wallet, tx: Transaction, needle: &str) {
     let tip = ledger.get_chain_state().unwrap().height;
     let hash = tx.hash();
@@ -454,15 +440,41 @@ fn expect_rejected(ledger: &Ledger, wallet: &Wallet, tx: Transaction, needle: &s
     assert!(ledger.get_utxo(&UtxoId::new(hash, 0)).unwrap().is_none());
 }
 
-/// Repro (a), the #1840/#1857 counterexample: 20 entries of weight
-/// `u32::MAX` for a victim cluster off the ring. Before 8.0.0 `add_block`
-/// accepted it and credited the victim ~85,899x the output value. Now Rule 1
-/// rejects the block and the victim's wealth is unchanged.
+fn expect_relay_rejected(ledger: &Ledger, tx: Transaction, needle: &str) {
+    match add_tx_no_panic(ledger, tx) {
+        Err(MempoolError::InvalidTransaction(msg)) => assert!(msg.contains(needle), "{msg}"),
+        other => panic!("expected InvalidTransaction containing {needle:?}, got {other:?}"),
+    }
+}
+
+/// End to end through `add_block` on one real chain (one fixture, so the
+/// ledger CI step's time budget is not spent re-mining it per case). The
+/// rejected blocks write nothing, so the cases share the chain.
+///
+/// 1. Repro (a), the #1840/#1857 counterexample: a stock-wallet ring re-signed
+///    over 20 entries of weight `u32::MAX` for a victim cluster off the ring.
+///    Before 8.0.0 `add_block` accepted it and credited the victim ~85,899x the
+///    output value. Now Rule 1 rejects the block.
+/// 2. Repro (b), the attack within `is_valid`: one entry of weight
+///    `TAG_WEIGHT_SCALE` naming the victim. Rule 2 rejects it at relay and in a
+///    block. The victim's wealth is unchanged by either.
+/// 3. An output tagged to a different epoch's import cluster (a release
+///    included outside the epoch its tag names) is rejected by both.
+/// 4. The honest stock-wallet spend (inherited tags, `merge_weighted`) is
+///    admitted and accepted.
+/// 5. An output tagged to the including block's import cluster (the bridge
+///    release shape, ADR 0007) is admitted and accepted, and the ledger records
+///    the import cluster.
 #[test]
-fn fresh_cluster_tags_above_unit_mass_are_rejected() {
-    let (_dir, ledger, wallet, blocks, input, stock) = setup();
+fn output_tag_rules_end_to_end() {
+    let (_dir, ledger, wallet, blocks) = chain(30);
+    let fee = 10 * PICOCREDITS_PER_CREDIT;
+    let input = coinbase(&ledger, &blocks[2]);
+    let stock = stock_spend(&ledger, &wallet, &input, fee);
     let victim = victim(&ledger, &blocks, &stock);
     let before = ledger.get_cluster_wealth(victim).unwrap();
+
+    // 1. Rule 1.
     let tx = with_tags(
         &ledger,
         &wallet,
@@ -472,71 +484,42 @@ fn fresh_cluster_tags_above_unit_mass_are_rejected() {
     );
     expect_rejected(&ledger, &wallet, tx, "malformed cluster tags");
     assert_eq!(ledger.get_cluster_wealth(victim).unwrap(), before);
-}
 
-/// Repro (b), the attack within `is_valid`: one entry of weight
-/// `TAG_WEIGHT_SCALE` naming the victim cluster off the ring. Rule 2 rejects
-/// the block and the victim's wealth is unchanged.
-#[test]
-fn valid_vector_naming_a_cluster_off_the_ring_is_rejected() {
-    let (_dir, ledger, wallet, blocks, input, stock) = setup();
-    let victim = victim(&ledger, &blocks, &stock);
-    let before = ledger.get_cluster_wealth(victim).unwrap();
+    // 2. Rule 2.
     let tags = ClusterTagVector::single(ClusterId(victim));
     assert!(tags.is_valid());
-    let tx = with_tags(&ledger, &wallet, &input, &stock, tags.clone());
-
-    // Relay refuses it too (Rule 2 at `tip + 1`).
-    match add_tx_no_panic(&ledger, tx.clone()) {
-        Err(MempoolError::InvalidTransaction(msg)) => {
-            assert!(msg.contains("absent from every ring"), "{msg}")
-        }
-        other => panic!("expected InvalidTransaction, got {other:?}"),
-    }
+    let tx = with_tags(&ledger, &wallet, &input, &stock, tags);
+    expect_relay_rejected(&ledger, tx.clone(), "absent from every ring");
     expect_rejected(&ledger, &wallet, tx, "absent from every ring");
     assert_eq!(ledger.get_cluster_wealth(victim).unwrap(), before);
-}
 
-/// The honest stock-wallet spend (inherited tags, `merge_weighted`) is
-/// admitted by relay and accepted by `add_block`.
-#[test]
-fn honest_inherited_spend_is_accepted() {
-    let (_dir, ledger, wallet, _blocks, input, stock) = setup();
-    let inherited = Wallet::compute_inherited_tags(std::slice::from_ref(&input), 50_000);
-    assert!(!inherited.is_empty());
-    let honest = with_tags(&ledger, &wallet, &input, &stock, inherited);
-    add_tx_no_panic(&ledger, honest.clone()).expect("relay admits the honest spend");
-    mine_with(&ledger, &wallet, vec![honest]).expect("honest spend is a valid block");
-}
-
-/// An output tagged to the including block's import cluster (the bridge
-/// release shape, ADR 0007) is admitted by relay and accepted by `add_block`,
-/// and the ledger records the import cluster. An output tagged to a different
-/// epoch's import cluster (a release included outside the epoch its tag
-/// names) is rejected by both.
-#[test]
-fn import_tagged_spend_is_accepted_only_in_its_epoch() {
-    let (_dir, ledger, wallet, _blocks, input, stock) = setup();
+    // 3. Another epoch's import cluster.
     let next = ledger.get_chain_state().unwrap().height + 1;
     let import = import_cluster_id_for_height(next).0;
     assert_eq!(import, import_cluster_id(0).0);
-    assert!(!ring_clusters(&ledger, &stock).contains(&import));
-
-    let wrong_epoch = with_tags(
+    let tx = with_tags(
         &ledger,
         &wallet,
         &input,
         &stock,
         ClusterTagVector::single(ClusterId(import_cluster_id(1).0)),
     );
-    match add_tx_no_panic(&ledger, wrong_epoch.clone()) {
-        Err(MempoolError::InvalidTransaction(msg)) => {
-            assert!(msg.contains("absent from every ring"), "{msg}")
-        }
-        other => panic!("expected InvalidTransaction, got {other:?}"),
-    }
-    expect_rejected(&ledger, &wallet, wrong_epoch, "absent from every ring");
+    expect_relay_rejected(&ledger, tx.clone(), "absent from every ring");
+    expect_rejected(&ledger, &wallet, tx, "absent from every ring");
 
+    // 4. Honest inherited tags.
+    let inherited = Wallet::compute_inherited_tags(std::slice::from_ref(&input), 50_000);
+    assert!(!inherited.is_empty());
+    let honest = with_tags(&ledger, &wallet, &input, &stock, inherited);
+    add_tx_no_panic(&ledger, honest.clone()).expect("relay admits the honest spend");
+    mine_with(&ledger, &wallet, vec![honest]).expect("honest spend is a valid block");
+
+    // 5. The including epoch's import cluster, on a fresh input.
+    let input = coinbase(&ledger, &blocks[3]);
+    let stock = stock_spend(&ledger, &wallet, &input, fee);
+    let next = ledger.get_chain_state().unwrap().height + 1;
+    assert_eq!(import_cluster_id_for_height(next).0, import);
+    assert!(!ring_clusters(&ledger, &stock).contains(&import));
     let tagged = with_tags(
         &ledger,
         &wallet,
