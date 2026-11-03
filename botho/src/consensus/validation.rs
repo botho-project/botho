@@ -105,7 +105,9 @@ pub enum ValidationError {
         got: u64,
     },
     TimestampTooFarInFuture,
-    TimestampBeforeParent,
+    /// The timestamp is not strictly after the chain's median time past
+    /// (protocol 8.0.0, #1848; replaced the 7.x `TimestampBeforeParent`).
+    TimestampNotAfterMedian,
 
     // Transfer transaction errors
     NoInputs,
@@ -156,7 +158,7 @@ impl std::fmt::Display for ValidationError {
                 write!(f, "Wrong reward: expected {}, got {}", expected, got)
             }
             Self::TimestampTooFarInFuture => write!(f, "Timestamp too far in future"),
-            Self::TimestampBeforeParent => write!(f, "Timestamp before parent block"),
+            Self::TimestampNotAfterMedian => write!(f, "Timestamp not after median time past"),
             Self::NoInputs => write!(f, "Transaction has no inputs"),
             Self::NoOutputs => write!(f, "Transaction has no outputs"),
             Self::ZeroAmountOutput => write!(f, "Transaction has zero-amount output"),
@@ -193,8 +195,11 @@ impl std::fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Maximum allowed timestamp drift from current time (2 hours)
-const MAX_FUTURE_TIMESTAMP_SECS: u64 = 2 * 60 * 60;
+/// Maximum allowed timestamp drift from current time.
+///
+/// Protocol 8.0.0 (#1848, operator ruling B): 60 s, down from 2 h. Mirrored
+/// (and asserted equal) by the block-apply bound in `ledger::store`.
+pub(crate) const MAX_FUTURE_TIMESTAMP_SECS: u64 = 60;
 
 /// Transaction validator with access to chain state
 pub struct TransactionValidator {
@@ -237,7 +242,8 @@ impl TransactionValidator {
     ///
     /// The tip-relative checks (`prev_block_hash == tip`, `height == tip + 1`,
     /// `difficulty == chain difficulty`, `reward == emission(height,
-    /// total_mined)`, `timestamp >= parent timestamp`) are NOT performed here.
+    /// total_mined)`, `timestamp > median time past` (protocol 8.0.0, #1848))
+    /// are NOT performed here.
     /// They are enforced unconditionally at block-apply time in
     /// `LedgerStore::add_block`, so a genuinely stale or fraudulent block can
     /// never be appended to the ledger even though its minting tx is a valid
@@ -257,8 +263,8 @@ impl TransactionValidator {
         // Timestamp must not be absurdly far in the future. This is a bound on
         // a property of the value relative to wall-clock time, NOT relative to
         // the local chain tip, so all honest nodes agree on it (within clock
-        // skew). The tip-relative monotonicity check (timestamp >= parent) is
-        // deferred to block-apply.
+        // skew). The tip-relative lower bound (timestamp > median time past,
+        // protocol 8.0.0, #1848) is deferred to block-apply.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -384,14 +390,18 @@ impl TransactionValidator {
             return Err(ValidationError::TimestampTooFarInFuture);
         }
 
-        // Check timestamp is not before parent block (monotonicity)
-        if tx.timestamp < state.tip_timestamp {
+        // Lower bound: strictly after the median time past of the last 11
+        // blocks (protocol 8.0.0, #1848). This REPLACES the 7.x parent rule
+        // (`timestamp >= tip_timestamp`), under which one forward-dated tip
+        // locked out every honest minter. Tip-relative, so it stays out of
+        // `validate_minting_tx_intrinsic` (#419).
+        let median_time_past = state.median_time_past();
+        if tx.timestamp <= median_time_past {
             warn!(
                 timestamp = tx.timestamp,
-                parent_timestamp = state.tip_timestamp,
-                "Minting tx timestamp before parent block"
+                median_time_past, "Minting tx timestamp not after median time past"
             );
-            return Err(ValidationError::TimestampBeforeParent);
+            return Err(ValidationError::TimestampNotAfterMedian);
         }
 
         // 6. Verify PoW (hash < difficulty) - expensive, so do last
@@ -595,6 +605,7 @@ mod tests {
             epoch_emission: 0,
             epoch_burns: 0,
             current_reward: crate::block::difficulty::INITIAL_REWARD,
+            recent_timestamps: vec![1000000],
         }))
     }
 
@@ -843,6 +854,173 @@ mod tests {
             Err(ValidationError::WrongBlockHeight) => panic!("Should not fail on height"),
             _ => {} // Ok or other error is fine
         }
+    }
+
+    // ---- Protocol 8.0.0 timestamp rules (#1848) ----
+
+    /// Chain state at height 10 whose MTP window is `window` (oldest first,
+    /// tip last).
+    fn chain_state_with_window(window: Vec<u64>) -> Arc<RwLock<ChainState>> {
+        let state = mock_chain_state_at(10);
+        {
+            let mut s = state.write().unwrap();
+            s.tip_timestamp = *window.last().unwrap();
+            s.recent_timestamps = window;
+        }
+        state
+    }
+
+    /// A minting tx for height 11 that passes every check BEFORE the
+    /// timestamp checks (height, parent, difficulty, reward) against
+    /// `chain_state_with_window`. Its PoW is unsolved, so a tx that also
+    /// passes both timestamp checks fails with exactly `InvalidPoW`.
+    fn minting_tx_at(state: &Arc<RwLock<ChainState>>, timestamp: u64) -> MintingTx {
+        let s = state.read().unwrap();
+        MintingTx {
+            block_height: s.height + 1,
+            reward: calculate_block_reward(s.height + 1, s.total_mined),
+            minter_view_key: [0u8; 32],
+            minter_spend_key: [0u8; 32],
+            target_key: [0u8; 32],
+            public_key: [0u8; 32],
+            kem_ciphertext: Some(vec![0u8; ML_KEM_768_CIPHERTEXT_BYTES]),
+            prev_block_hash: s.tip_hash,
+            difficulty: s.difficulty,
+            nonce: 0,
+            timestamp,
+        }
+    }
+
+    /// `true` iff `tx` cleared both timestamp checks (it then fails only on
+    /// its unsolved PoW, or a vanishingly unlikely accidental solve).
+    fn passes_timestamp_checks(validator: &TransactionValidator, tx: &MintingTx) -> bool {
+        match validator.validate_minting_tx(tx) {
+            Ok(()) | Err(ValidationError::InvalidPoW) => true,
+            Err(ValidationError::TimestampNotAfterMedian)
+            | Err(ValidationError::TimestampTooFarInFuture) => false,
+            other => panic!("unexpected non-timestamp verdict: {other:?}"),
+        }
+    }
+
+    /// #1848 regression (the positive mirror of #1856's
+    /// `forward_dated_tip_rejects_honest_minting_tx`): ten honest stamps plus
+    /// one tip forward-dated by ~2 h (the 7.x future bound). Under the 7.x
+    /// parent rule an honest minting tx stamped `now` was rejected
+    /// (`now < tip_timestamp`), making the forward-dater the only valid
+    /// minter. Under the 8.0.0 median rule the outlier cannot move the
+    /// median, so the honest stamp is valid.
+    #[test]
+    fn single_forward_dated_tip_does_not_lock_out_honest_minting_tx() {
+        let now = current_timestamp();
+        let mut window: Vec<u64> = (0..10).map(|i| now - 55 + 5 * i).collect();
+        window.push(now + 7000);
+        let state = chain_state_with_window(window);
+        let validator = TransactionValidator::new(state.clone());
+
+        let honest = minting_tx_at(&state, now);
+        assert!(
+            honest.timestamp < state.read().unwrap().tip_timestamp,
+            "precondition: the honest stamp is before the forward-dated tip \
+             (the 7.x parent rule would reject it)"
+        );
+        assert!(
+            passes_timestamp_checks(&validator, &honest),
+            "an honest `now` stamp must not be locked out by one forward-dated tip"
+        );
+    }
+
+    /// The residual the operator's addition A closes: once 6 of the last 11
+    /// stamps are forward-dated, the median itself is ahead of `now`, so a
+    /// `now` stamp is rejected; but the honest minter's stamp
+    /// `max(now, MTP + 1)` is valid (it stays within the 60 s future bound
+    /// because every window entry was itself accepted under that bound).
+    #[test]
+    fn forward_dated_window_majority_needs_min_stamp() {
+        let now = current_timestamp();
+        let mut window: Vec<u64> = (0..5).map(|i| now - 25 + 5 * i).collect();
+        window.extend(std::iter::repeat_n(now + 50, 6));
+        let state = chain_state_with_window(window);
+        let validator = TransactionValidator::new(state.clone());
+        let mtp = state.read().unwrap().median_time_past();
+        assert_eq!(mtp, now + 50, "a 6-of-11 majority pins the median");
+
+        let naive = minting_tx_at(&state, now);
+        assert_eq!(
+            validator.validate_minting_tx(&naive),
+            Err(ValidationError::TimestampNotAfterMedian),
+            "a bare `now` stamp is rejected once the median is ahead"
+        );
+
+        let min_stamp = now.max(state.read().unwrap().next_min_timestamp());
+        assert_eq!(min_stamp, mtp + 1);
+        let honest = minting_tx_at(&state, min_stamp);
+        assert!(
+            passes_timestamp_checks(&validator, &honest),
+            "the honest `max(now, MTP + 1)` stamp must be valid"
+        );
+    }
+
+    /// Strictness: a stamp EQUAL to the median is rejected (Bitcoin's `>`).
+    #[test]
+    fn minting_tx_at_median_is_rejected() {
+        let now = current_timestamp();
+        let window: Vec<u64> = (0..11).map(|i| now - 50 + 5 * i).collect();
+        let state = chain_state_with_window(window);
+        let validator = TransactionValidator::new(state.clone());
+        let mtp = state.read().unwrap().median_time_past();
+        assert_eq!(
+            validator.validate_minting_tx(&minting_tx_at(&state, mtp)),
+            Err(ValidationError::TimestampNotAfterMedian)
+        );
+        assert!(passes_timestamp_checks(
+            &validator,
+            &minting_tx_at(&state, mtp + 1)
+        ));
+    }
+
+    /// A stamp before the parent but after the median is VALID: the 7.x
+    /// parent rule is gone, not kept alongside the median rule.
+    #[test]
+    fn minting_tx_before_parent_after_median_is_accepted() {
+        let now = current_timestamp();
+        let window: Vec<u64> = (0..11).map(|i| now - 50 + 5 * i).collect();
+        let state = chain_state_with_window(window);
+        let validator = TransactionValidator::new(state.clone());
+        let (mtp, parent) = {
+            let s = state.read().unwrap();
+            (s.median_time_past(), s.tip_timestamp)
+        };
+        let ts = mtp + 1;
+        assert!(ts < parent);
+        assert!(passes_timestamp_checks(
+            &validator,
+            &minting_tx_at(&state, ts)
+        ));
+    }
+
+    /// Operator ruling B: the future bound is 60 s in both the gossip/apply
+    /// path and the intrinsic SCP path.
+    #[test]
+    fn future_bound_is_sixty_seconds() {
+        assert_eq!(MAX_FUTURE_TIMESTAMP_SECS, 60);
+        let now = current_timestamp();
+        let window: Vec<u64> = (0..11).map(|i| now - 50 + 5 * i).collect();
+        let state = chain_state_with_window(window);
+        let validator = TransactionValidator::new(state.clone());
+        // 61 s ahead plus margin for the clock ticking during the test.
+        let too_far = minting_tx_at(&state, now + 65);
+        assert_eq!(
+            validator.validate_minting_tx(&too_far),
+            Err(ValidationError::TimestampTooFarInFuture)
+        );
+        assert_eq!(
+            TransactionValidator::validate_minting_tx_intrinsic(&too_far),
+            Err(ValidationError::TimestampTooFarInFuture)
+        );
+        assert!(passes_timestamp_checks(
+            &validator,
+            &minting_tx_at(&state, now + 30)
+        ));
     }
 
     #[test]

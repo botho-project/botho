@@ -255,6 +255,15 @@ impl Ledger {
             .map_err(|e| LedgerError::Database(format!("Failed to open file: {}", e)))?;
         UtxoSnapshotV2::read_from(std::io::BufReader::new(file)).map_err(|e| match e {
             e @ SnapshotError::VersionMismatch { .. } => verification_error(e),
+            // Protocol 8.0.0 (#1848) added the timestamp window to the
+            // committed `ChainState`, so a pre-8.0.0 V2 file no longer
+            // decodes. Report that as a schema refusal with the likely cause
+            // rather than a bare decode error (a corrupt file lands here too).
+            SnapshotError::Serialization(detail) => LedgerError::UnsupportedSchema(format!(
+                "V2 snapshot body does not decode with this binary ({detail}). Snapshots \
+                 written before protocol 8.0.0 carry no median-time-past window and are \
+                 refused; create a new snapshot with this binary or sync from genesis"
+            )),
             other => LedgerError::Serialization(other.to_string()),
         })
     }
@@ -293,6 +302,19 @@ impl Ledger {
         if snapshot.chain_state.tip_timestamp != tip_timestamp {
             return Err(rejected(
                 "chain state tip timestamp disagrees with the tip block",
+            ));
+        }
+        // Protocol 8.0.0 (#1848): the median-time-past window. A restored
+        // ledger holds only genesis and the tip, so it cannot rebuild the
+        // window from blocks; it takes the committed one, which must have
+        // exactly `min(MTP_WINDOW, height)` entries ending with the tip's
+        // timestamp. Otherwise the restored node would compute a different
+        // median than a genesis-synced node and fork on the next block.
+        let window = &snapshot.chain_state.recent_timestamps;
+        let expected_len = (height as usize).min(crate::ledger::MTP_WINDOW);
+        if window.len() != expected_len || (height > 0 && window.last() != Some(&tip_timestamp)) {
+            return Err(rejected(
+                "chain state timestamp window disagrees with the snapshot height or tip block",
             ));
         }
         if contents.key_images.iter().any(|(_, spent)| *spent > height) {
@@ -419,6 +441,10 @@ impl Ledger {
             (
                 META_CURRENT_REWARD,
                 cs.current_reward.to_le_bytes().to_vec(),
+            ),
+            (
+                META_RECENT_TIMESTAMPS,
+                encode_recent_timestamps(&cs.recent_timestamps),
             ),
         ];
         if height > 0 {

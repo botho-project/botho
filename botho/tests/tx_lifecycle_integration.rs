@@ -145,7 +145,11 @@ fn mine_block(
     let prev_hash = prev_block.hash();
     let height = state.height + 1;
 
-    let minting_tx = create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+    let mut minting_tx =
+        create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+    // Protocol 8.0.0 (#1848): strictly after the median time past, like the
+    // minter (`max(now, MTP + 1)`). The timestamp is not in the PoW preimage.
+    minting_tx.timestamp = minting_tx.timestamp.max(state.next_min_timestamp());
 
     // Compute transaction root
     let tx_root = {

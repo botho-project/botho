@@ -510,21 +510,28 @@ pub(in crate::ledger) trait ValidationReads {
 
         // C2b: Timestamp sanity.
         //
-        // Monotonicity vs parent prevents difficulty/emission games via
-        // backdating; the future bound prevents a producer from biasing
-        // timestamp-derived state forward. The header timestamp and the
-        // minting-tx timestamp must agree (the SCP proposer path validates
-        // the minting tx's timestamp; we hold the gossip path to the same
-        // rule).
+        // Protocol 8.0.0 (#1848): the lower bound is median time past —
+        // `timestamp > MTP(last 11 blocks)` — and it REPLACES the 7.x parent
+        // monotonicity rule (`timestamp >= tip_timestamp`). Under the parent
+        // rule one forward-dated tip (up to the future bound ahead) made every
+        // honest `now` stamp invalid, so its producer became the only valid
+        // minter. A single outlier cannot move an 11-block median. Backward
+        // stamps relative to the parent are now legal; the difficulty
+        // controller floors the observed gap (`observed_block_time`). The
+        // future bound prevents a producer from biasing timestamp-derived
+        // state forward. The header timestamp and the minting-tx timestamp
+        // must agree (the SCP proposer path validates the minting tx's
+        // timestamp; we hold the gossip path to the same rule).
         if block.minting_tx.timestamp != block.header.timestamp {
             return Err(LedgerError::InvalidBlock(
                 "Minting tx timestamp does not match header".to_string(),
             ));
         }
-        if block.header.timestamp < state.tip_timestamp {
+        let median_time_past = state.median_time_past();
+        if block.header.timestamp <= median_time_past {
             return Err(LedgerError::InvalidBlock(format!(
-                "Block timestamp {} is before parent {}",
-                block.header.timestamp, state.tip_timestamp
+                "Block timestamp {} is not after median time past {}",
+                block.header.timestamp, median_time_past
             )));
         }
         let now = std::time::SystemTime::now()

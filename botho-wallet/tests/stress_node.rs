@@ -677,7 +677,17 @@ fn mine_block(
     let prev_hash = prev_block.hash();
     let height = state.height + 1;
 
-    let minting_tx = create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+    let mut minting_tx =
+        create_mock_minting_tx(height, TEST_BLOCK_REWARD, minter_address, prev_hash);
+    // Protocol 8.0.0 (#1848): strictly after the median time past. The
+    // fixture chain mines ~750 blocks as fast as it can, so stamp an hour in
+    // the past (at least MTP + 1) rather than `max(now, MTP + 1)`, which would
+    // run ahead of the 60 s future bound. The timestamp is not in the PoW
+    // preimage.
+    minting_tx.timestamp = minting_tx
+        .timestamp
+        .saturating_sub(3_600)
+        .max(state.next_min_timestamp());
 
     let block = Block {
         header: BlockHeader {

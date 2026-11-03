@@ -887,7 +887,7 @@ fn sealed_v2_payout_is_spendable_after_snapshot_restore() {
         );
         block.header.height = state.height + 1;
         block.header.prev_block_hash = state.tip_hash;
-        block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
+        block.header.timestamp = state.fast_chain_timestamp();
         block.minting_tx.block_height = block.header.height;
         block.minting_tx.prev_block_hash = state.tip_hash;
         block.minting_tx.timestamp = block.header.timestamp;
