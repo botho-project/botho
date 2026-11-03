@@ -577,7 +577,10 @@ simproc botho_tidy (Nat.succ _) := fun _ => do
 
 example : Nat.succ 1 = 2 := by simp only [botho_tidy]
 EOF
-  printf 'import Botho.Basic\nimport Botho.Cheat\nimport Botho.Evil\n' >"$1/Botho.lean"
+  # Keep every real model import: Theorems.lean still names those theorems.
+  # Replacing the root with Basic alone makes this positive control fail
+  # on missing constants once the library exports a second module's proofs.
+  printf '\nimport Botho.Cheat\nimport Botho.Evil\n' >>"$1/Botho.lean"
   printf '#print axioms Botho.one_eq_two\n' >>"$1/Theorems.lean"
 }
 d="$(fresh_copy)"
@@ -709,9 +712,9 @@ expect fail "  (and nothing was built)" test -e "$d/.lake"
 # Both full gates pass.
 d="$(fresh_copy)"
 mkdir -p "$d/Botho/Extra"
-cat >"$d/Botho.lean" <<'EOF'
+cat >>"$d/Botho.lean" <<'EOF'
+
 /- Root import (self-test control). import Lean in a comment. -/
-import Botho.Basic -- the toy model
 /- a comment between imports: import Lean -/
 import
   «Botho».Extra.«Deep»
