@@ -2688,6 +2688,391 @@ theorem Botho.Demurrage.saturation_lowers_charge sha256:5725f7bb5f922a9425e3135d
   def Botho.Lottery.satMul : Nat → Nat → Nat → Nat
     := fun (max a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) a b) max) (Nat.decLe (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) a b) max) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) a b) max
 
+# Botho.Supply (#1839): statement records before proofs.
+
+theorem Botho.Supply.fee_quotient_le sha256:8d1e394a9edf054d17bc3a2ca2cf37fb0527ca0326b949220b883d3e38e96854
+  : ∀ (fees permille : Nat), @LE.le.{0} Nat instLENat permille (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) → @LE.le.{0} Nat instLENat (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) fees permille) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000)))) fees
+
+theorem Botho.Supply.splitFees_exact sha256:cff80ac9083045a4cab19a72336ebf78efb690938450948f244f6a4601745e49
+  : ∀ (cfg : Botho.Lottery.FeeConfig) (fees : Nat), @LE.le.{0} Nat instLENat fees Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat (Botho.Lottery.FeeConfig.poolFractionPermille cfg) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) → @Eq.{1} (Prod.{0, 0} Nat Nat) (Botho.Lottery.splitFees cfg fees) (@Prod.mk.{0, 0} Nat Nat (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) fees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000)))) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) fees (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) fees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))))))
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+
+theorem Botho.Supply.splitFees_total sha256:c66a8f346265bd6edda5613e821391cc47de1511c0f499f9f52e8de333203960
+  : ∀ (cfg : Botho.Lottery.FeeConfig) (fees : Nat), @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@Prod.fst.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg fees)) (@Prod.snd.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg fees))) (@Max.max.{0} Nat Nat.instMax fees (@Prod.fst.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg fees)))
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+
+theorem Botho.Supply.splitFees_conserves sha256:024c4aff338ad022707f77286dc143f040b53f81a69b6bee464f54b8ce7bb755
+  : ∀ (cfg : Botho.Lottery.FeeConfig) (fees : Nat), @LE.le.{0} Nat instLENat fees Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat (Botho.Lottery.FeeConfig.poolFractionPermille cfg) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) → @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@Prod.fst.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg fees)) (@Prod.snd.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg fees))) fees
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+
+theorem Botho.Supply.splitFees_rounding sha256:fdeb3fee6d8a58c085df94a1571e637a028a934758db543f7b86b3bc8cceecfa
+  : ∀ (cfg : Botho.Lottery.FeeConfig) (fees : Nat),
+        @LE.le.{0} Nat instLENat fees Botho.Lottery.U64_MAX →
+          @LE.le.{0} Nat instLENat (Botho.Lottery.FeeConfig.poolFractionPermille cfg) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) →
+            have pool : Nat := @Prod.fst.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg fees);
+            And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) pool) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) fees (Botho.Lottery.FeeConfig.poolFractionPermille cfg))) (@LT.lt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) fees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) pool (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))))
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+
+theorem Botho.Supply.oversized_fraction_creates_value sha256:b0790ece89a9f02ec3b01c886d4eb37affd071dfbbb36aa9ebcd5f9cbd148b57
+  : have cfg : Botho.Lottery.FeeConfig := { poolFractionPermille := @OfNat.ofNat.{0} Nat (nat_lit 2000) (instOfNatNat (nat_lit 2000)), draw := Botho.Lottery.DrawConfig.default };
+      @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@Prod.fst.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (@Prod.snd.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))))) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2)))
+  def Botho.Lottery.CIRCULATION_WINDOW_BLOCKS : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000))
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  def Botho.Lottery.DrawConfig.default : Botho.Lottery.DrawConfig
+    := { winnersPerDraw := @OfNat.ofNat.{0} Nat (nat_lit 4) (instOfNatNat (nat_lit 4)), minUtxoAge := @OfNat.ofNat.{0} Nat (nat_lit 720) (instOfNatNat (nat_lit 720)), minUtxoValue := @OfNat.ofNat.{0} Nat (nat_lit 1000000) (instOfNatNat (nat_lit 1000000)), circulationWindow := Botho.Lottery.CIRCULATION_WINDOW_BLOCKS, mode := Botho.Lottery.SelectionMode.uniform }
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+
+theorem Botho.Supply.pool_inflow_fits sha256:8e96b082363b1debdc72d5a3c1aa78ccf0c8f7c6e44fe2bed22f69254e5612c1
+  : ∀ (s : Botho.Supply.State) (f : Botho.Supply.Flow) (cfg : Botho.Lottery.FeeConfig), Botho.Supply.Conserved s → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.spent f) (Botho.Supply.State.unspent s) → @Eq.{1} Nat (Botho.Supply.Flow.spent f) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.Flow.outputs f) (Botho.Supply.Flow.fees f)) → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.emission f) (Botho.Supply.Flow.reward f) → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.fees f) Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat (Botho.Lottery.FeeConfig.poolFractionPermille cfg) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) → @LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.mined s) (Botho.Supply.Flow.reward f)) Botho.Lottery.U128_MAX → @LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.pool s) (Botho.Supply.Flow.emission f)) (@Prod.fst.{0, 0} Nat Nat (Botho.Lottery.splitFees cfg (Botho.Supply.Flow.fees f)))) Botho.Lottery.U128_MAX
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  def Botho.Supply.Conserved : Botho.Supply.State → Prop
+    := fun (s : Botho.Supply.State) => @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.unspent s) (Botho.Supply.State.pool s)) (Botho.Supply.State.burned s)) (Botho.Supply.State.mined s)
+  inductive Botho.Supply.Flow : Type
+  inductive Botho.Supply.State : Type
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+  def Botho.Supply.Flow.emission : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.5
+  def Botho.Supply.Flow.fees : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.3
+  constructor Botho.Supply.Flow.mk : Nat → Nat → Nat → Nat → Nat → Nat → Nat → Botho.Supply.Flow
+  def Botho.Supply.Flow.outputs : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.2
+  def Botho.Supply.Flow.reward : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.4
+  def Botho.Supply.Flow.spent : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.1
+  def Botho.Supply.State.burned : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.4
+  def Botho.Supply.State.mined : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.3
+  constructor Botho.Supply.State.mk : Nat → Nat → Nat → Nat → Botho.Supply.State
+  def Botho.Supply.State.pool : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.2
+  def Botho.Supply.State.unspent : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.1
+
+theorem Botho.Supply.apply_conserves sha256:a8faa9b0f59e2b7cad02490f37d91f8efd1529a52743c28c605ada77aee2e39c
+  : ∀ (s : Botho.Supply.State) (f : Botho.Supply.Flow) (cfg : Botho.Lottery.FeeConfig), Botho.Supply.Conserved s → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.spent f) (Botho.Supply.State.unspent s) → @Eq.{1} Nat (Botho.Supply.Flow.spent f) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.Flow.outputs f) (Botho.Supply.Flow.fees f)) → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.emission f) (Botho.Supply.Flow.reward f) → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.fees f) Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat (Botho.Lottery.FeeConfig.poolFractionPermille cfg) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) → @LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.mined s) (Botho.Supply.Flow.reward f)) Botho.Lottery.U128_MAX → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.distributed f) (Botho.Lottery.Accounting.available (Botho.Lottery.computePoolAccounting (Botho.Supply.Flow.fees f) (Botho.Supply.Flow.emission f) (Botho.Supply.State.pool s) (Botho.Supply.Flow.cap f) cfg)) → Botho.Supply.Conserved (Botho.Supply.apply s f cfg)
+  inductive Botho.Lottery.Accounting : Type
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.computePoolAccounting : Nat → Nat → Nat → Nat → Botho.Lottery.FeeConfig → Botho.Lottery.Accounting
+    := fun (totalFees emissionShare storedPool payoutCap : Nat) (cfg : Botho.Lottery.FeeConfig) =>
+        Botho.Lottery.computePoolAccounting.match_1.{1} (fun (x : Prod.{0, 0} Nat Nat) => Botho.Lottery.Accounting) (Botho.Lottery.splitFees cfg totalFees) fun (feePool feeBurn : Nat) =>
+          have available : Nat := Botho.Lottery.satAdd Botho.Lottery.U128_MAX (Botho.Lottery.satAdd Botho.Lottery.U128_MAX storedPool emissionShare) feePool;
+          { feePool := feePool, feeBurn := feeBurn, emissionShare := emissionShare, available := available, payout := Botho.Lottery.minN available payoutCap }
+  def Botho.Lottery.minN : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
+  def Botho.Lottery.satAdd : Nat → Nat → Nat → Nat
+    := fun (max a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (Nat.decLe (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  def Botho.Supply.Conserved : Botho.Supply.State → Prop
+    := fun (s : Botho.Supply.State) => @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.unspent s) (Botho.Supply.State.pool s)) (Botho.Supply.State.burned s)) (Botho.Supply.State.mined s)
+  inductive Botho.Supply.Flow : Type
+  inductive Botho.Supply.State : Type
+  def Botho.Supply.apply : Botho.Supply.State → Botho.Supply.Flow → Botho.Lottery.FeeConfig → Botho.Supply.State
+    := fun (s : Botho.Supply.State) (f : Botho.Supply.Flow) (cfg : Botho.Lottery.FeeConfig) =>
+        have a : Botho.Lottery.Accounting := Botho.Lottery.computePoolAccounting (Botho.Supply.Flow.fees f) (Botho.Supply.Flow.emission f) (Botho.Supply.State.pool s) (Botho.Supply.Flow.cap f) cfg;
+        { unspent := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (Botho.Supply.State.unspent s) (Botho.Supply.Flow.spent f)) (Botho.Supply.Flow.outputs f)) (Botho.Lottery.satSub (Botho.Supply.Flow.reward f) (Botho.Supply.Flow.emission f))) (Botho.Supply.Flow.distributed f), pool := Botho.Lottery.Accounting.carryoverAfter a (Botho.Supply.Flow.distributed f), mined := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.mined s) (Botho.Supply.Flow.reward f), burned := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.burned s) (Botho.Lottery.Accounting.feeBurn a) }
+  def Botho.Lottery.Accounting.available : Botho.Lottery.Accounting → Nat
+    := fun (self : Botho.Lottery.Accounting) => self.4
+  def Botho.Lottery.Accounting.carryoverAfter : Botho.Lottery.Accounting → Nat → Nat
+    := fun (a : Botho.Lottery.Accounting) (distributed : Nat) => Botho.Lottery.satSub (Botho.Lottery.Accounting.available a) distributed
+  def Botho.Lottery.Accounting.feeBurn : Botho.Lottery.Accounting → Nat
+    := fun (self : Botho.Lottery.Accounting) => self.2
+  constructor Botho.Lottery.Accounting.mk : Nat → Nat → Nat → Nat → Nat → Botho.Lottery.Accounting
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+  def Botho.Lottery.computePoolAccounting.match_1 : (motive : Prod.{0, 0} Nat Nat → Sort u_1) → (x : Prod.{0, 0} Nat Nat) → ((feePool feeBurn : Nat) → motive (@Prod.mk.{0, 0} Nat Nat feePool feeBurn)) → motive x
+    := fun (motive : Prod.{0, 0} Nat Nat → Sort u_1) (x : Prod.{0, 0} Nat Nat) (h_1 : (feePool feeBurn : Nat) → motive (@Prod.mk.{0, 0} Nat Nat feePool feeBurn)) => @Prod.casesOn.{u_1, 0, 0} Nat Nat (fun (x : Prod.{0, 0} Nat Nat) => motive x) x fun (fst snd : Nat) => h_1 fst snd
+  def Botho.Supply.Flow.cap : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.7
+  def Botho.Supply.Flow.distributed : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.6
+  def Botho.Supply.Flow.emission : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.5
+  def Botho.Supply.Flow.fees : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.3
+  constructor Botho.Supply.Flow.mk : Nat → Nat → Nat → Nat → Nat → Nat → Nat → Botho.Supply.Flow
+  def Botho.Supply.Flow.outputs : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.2
+  def Botho.Supply.Flow.reward : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.4
+  def Botho.Supply.Flow.spent : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.1
+  def Botho.Supply.State.burned : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.4
+  def Botho.Supply.State.mined : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.3
+  constructor Botho.Supply.State.mk : Nat → Nat → Nat → Nat → Botho.Supply.State
+  def Botho.Supply.State.pool : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.2
+  def Botho.Supply.State.unspent : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.1
+
+theorem Botho.Supply.counters_fit sha256:47b1d7ce0c121340c2525743b8dd785545e45ed6468db4ea8e63d9d2bed2d1bf
+  : ∀ (s : Botho.Supply.State) (f : Botho.Supply.Flow) (cfg : Botho.Lottery.FeeConfig), Botho.Supply.Conserved s → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.spent f) (Botho.Supply.State.unspent s) → @Eq.{1} Nat (Botho.Supply.Flow.spent f) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.Flow.outputs f) (Botho.Supply.Flow.fees f)) → @LE.le.{0} Nat instLENat (Botho.Supply.Flow.fees f) Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat (Botho.Lottery.FeeConfig.poolFractionPermille cfg) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) → @LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.mined s) (Botho.Supply.Flow.reward f)) Botho.Lottery.U128_MAX → And (@LE.le.{0} Nat instLENat (Botho.Supply.State.mined (Botho.Supply.apply s f cfg)) Botho.Lottery.U128_MAX) (@LE.le.{0} Nat instLENat (Botho.Supply.State.burned (Botho.Supply.apply s f cfg)) Botho.Lottery.U128_MAX)
+  inductive Botho.Lottery.Accounting : Type
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.computePoolAccounting : Nat → Nat → Nat → Nat → Botho.Lottery.FeeConfig → Botho.Lottery.Accounting
+    := fun (totalFees emissionShare storedPool payoutCap : Nat) (cfg : Botho.Lottery.FeeConfig) =>
+        Botho.Lottery.computePoolAccounting.match_1.{1} (fun (x : Prod.{0, 0} Nat Nat) => Botho.Lottery.Accounting) (Botho.Lottery.splitFees cfg totalFees) fun (feePool feeBurn : Nat) =>
+          have available : Nat := Botho.Lottery.satAdd Botho.Lottery.U128_MAX (Botho.Lottery.satAdd Botho.Lottery.U128_MAX storedPool emissionShare) feePool;
+          { feePool := feePool, feeBurn := feeBurn, emissionShare := emissionShare, available := available, payout := Botho.Lottery.minN available payoutCap }
+  def Botho.Lottery.minN : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
+  def Botho.Lottery.satAdd : Nat → Nat → Nat → Nat
+    := fun (max a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (Nat.decLe (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  def Botho.Supply.Conserved : Botho.Supply.State → Prop
+    := fun (s : Botho.Supply.State) => @Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.unspent s) (Botho.Supply.State.pool s)) (Botho.Supply.State.burned s)) (Botho.Supply.State.mined s)
+  inductive Botho.Supply.Flow : Type
+  inductive Botho.Supply.State : Type
+  def Botho.Supply.apply : Botho.Supply.State → Botho.Supply.Flow → Botho.Lottery.FeeConfig → Botho.Supply.State
+    := fun (s : Botho.Supply.State) (f : Botho.Supply.Flow) (cfg : Botho.Lottery.FeeConfig) =>
+        have a : Botho.Lottery.Accounting := Botho.Lottery.computePoolAccounting (Botho.Supply.Flow.fees f) (Botho.Supply.Flow.emission f) (Botho.Supply.State.pool s) (Botho.Supply.Flow.cap f) cfg;
+        { unspent := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (Botho.Supply.State.unspent s) (Botho.Supply.Flow.spent f)) (Botho.Supply.Flow.outputs f)) (Botho.Lottery.satSub (Botho.Supply.Flow.reward f) (Botho.Supply.Flow.emission f))) (Botho.Supply.Flow.distributed f), pool := Botho.Lottery.Accounting.carryoverAfter a (Botho.Supply.Flow.distributed f), mined := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.mined s) (Botho.Supply.Flow.reward f), burned := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.State.burned s) (Botho.Lottery.Accounting.feeBurn a) }
+  def Botho.Lottery.Accounting.available : Botho.Lottery.Accounting → Nat
+    := fun (self : Botho.Lottery.Accounting) => self.4
+  def Botho.Lottery.Accounting.carryoverAfter : Botho.Lottery.Accounting → Nat → Nat
+    := fun (a : Botho.Lottery.Accounting) (distributed : Nat) => Botho.Lottery.satSub (Botho.Lottery.Accounting.available a) distributed
+  def Botho.Lottery.Accounting.feeBurn : Botho.Lottery.Accounting → Nat
+    := fun (self : Botho.Lottery.Accounting) => self.2
+  constructor Botho.Lottery.Accounting.mk : Nat → Nat → Nat → Nat → Nat → Botho.Lottery.Accounting
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+  def Botho.Lottery.computePoolAccounting.match_1 : (motive : Prod.{0, 0} Nat Nat → Sort u_1) → (x : Prod.{0, 0} Nat Nat) → ((feePool feeBurn : Nat) → motive (@Prod.mk.{0, 0} Nat Nat feePool feeBurn)) → motive x
+    := fun (motive : Prod.{0, 0} Nat Nat → Sort u_1) (x : Prod.{0, 0} Nat Nat) (h_1 : (feePool feeBurn : Nat) → motive (@Prod.mk.{0, 0} Nat Nat feePool feeBurn)) => @Prod.casesOn.{u_1, 0, 0} Nat Nat (fun (x : Prod.{0, 0} Nat Nat) => motive x) x fun (fst snd : Nat) => h_1 fst snd
+  def Botho.Supply.Flow.cap : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.7
+  def Botho.Supply.Flow.distributed : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.6
+  def Botho.Supply.Flow.emission : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.5
+  def Botho.Supply.Flow.fees : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.3
+  constructor Botho.Supply.Flow.mk : Nat → Nat → Nat → Nat → Nat → Nat → Nat → Botho.Supply.Flow
+  def Botho.Supply.Flow.outputs : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.2
+  def Botho.Supply.Flow.reward : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.4
+  def Botho.Supply.Flow.spent : Botho.Supply.Flow → Nat
+    := fun (self : Botho.Supply.Flow) => self.1
+  def Botho.Supply.State.burned : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.4
+  def Botho.Supply.State.mined : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.3
+  constructor Botho.Supply.State.mk : Nat → Nat → Nat → Nat → Botho.Supply.State
+  def Botho.Supply.State.pool : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.2
+  def Botho.Supply.State.unspent : Botho.Supply.State → Nat
+    := fun (self : Botho.Supply.State) => self.1
+
+theorem Botho.Supply.issuance_step_fits sha256:b5a428d69c948b3efe6ba9079621654d7bca79d961faf93ed7aeb04c89c69e0e
+  : ∀ (height mined reward : Nat), @LT.lt.{0} Nat instLTNat height Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat mined (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) height Botho.Lottery.U64_MAX) → @LE.le.{0} Nat instLENat reward Botho.Lottery.U64_MAX → And (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) mined reward) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) height (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Lottery.U64_MAX)) (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) mined reward) Botho.Lottery.U128_MAX)
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+
+theorem Botho.Supply.arbitrary_pool_saturates sha256:0f4819f026c07702ca349aa5f3193d2bbbf2b4b4aa4e98daf3227a9724aa87e7
+  : have cfg : Botho.Lottery.FeeConfig := { poolFractionPermille := @OfNat.ofNat.{0} Nat (nat_lit 800) (instOfNatNat (nat_lit 800)), draw := Botho.Lottery.DrawConfig.default };
+      And (@Eq.{1} Nat (Botho.Lottery.Accounting.available (Botho.Lottery.computePoolAccounting (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) Botho.Lottery.U128_MAX (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) cfg)) Botho.Lottery.U128_MAX) (@LT.lt.{0} Nat instLTNat (Botho.Lottery.Accounting.available (Botho.Lottery.computePoolAccounting (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) Botho.Lottery.U128_MAX (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) cfg)) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Lottery.U128_MAX (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))))
+  inductive Botho.Lottery.Accounting : Type
+  def Botho.Lottery.CIRCULATION_WINDOW_BLOCKS : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000))
+  inductive Botho.Lottery.DrawConfig : Type
+  inductive Botho.Lottery.FeeConfig : Type
+  inductive Botho.Lottery.SelectionMode : Type
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.computePoolAccounting : Nat → Nat → Nat → Nat → Botho.Lottery.FeeConfig → Botho.Lottery.Accounting
+    := fun (totalFees emissionShare storedPool payoutCap : Nat) (cfg : Botho.Lottery.FeeConfig) =>
+        Botho.Lottery.computePoolAccounting.match_1.{1} (fun (x : Prod.{0, 0} Nat Nat) => Botho.Lottery.Accounting) (Botho.Lottery.splitFees cfg totalFees) fun (feePool feeBurn : Nat) =>
+          have available : Nat := Botho.Lottery.satAdd Botho.Lottery.U128_MAX (Botho.Lottery.satAdd Botho.Lottery.U128_MAX storedPool emissionShare) feePool;
+          { feePool := feePool, feeBurn := feeBurn, emissionShare := emissionShare, available := available, payout := Botho.Lottery.minN available payoutCap }
+  def Botho.Lottery.minN : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
+  def Botho.Lottery.satAdd : Nat → Nat → Nat → Nat
+    := fun (max a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (Nat.decLe (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.splitFees : Botho.Lottery.FeeConfig → Nat → Prod.{0, 0} Nat Nat
+    := fun (cfg : Botho.Lottery.FeeConfig) (totalFees : Nat) =>
+        have pool : Nat := Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) totalFees (Botho.Lottery.FeeConfig.poolFractionPermille cfg)) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))));
+        @Prod.mk.{0, 0} Nat Nat pool (Botho.Lottery.satSub totalFees pool)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  def Botho.Lottery.Accounting.available : Botho.Lottery.Accounting → Nat
+    := fun (self : Botho.Lottery.Accounting) => self.4
+  constructor Botho.Lottery.Accounting.mk : Nat → Nat → Nat → Nat → Nat → Botho.Lottery.Accounting
+  def Botho.Lottery.DrawConfig.default : Botho.Lottery.DrawConfig
+    := { winnersPerDraw := @OfNat.ofNat.{0} Nat (nat_lit 4) (instOfNatNat (nat_lit 4)), minUtxoAge := @OfNat.ofNat.{0} Nat (nat_lit 720) (instOfNatNat (nat_lit 720)), minUtxoValue := @OfNat.ofNat.{0} Nat (nat_lit 1000000) (instOfNatNat (nat_lit 1000000)), circulationWindow := Botho.Lottery.CIRCULATION_WINDOW_BLOCKS, mode := Botho.Lottery.SelectionMode.uniform }
+  constructor Botho.Lottery.DrawConfig.mk : Nat → Nat → Nat → Nat → Botho.Lottery.SelectionMode → Botho.Lottery.DrawConfig
+  constructor Botho.Lottery.FeeConfig.mk : Nat → Botho.Lottery.DrawConfig → Botho.Lottery.FeeConfig
+  def Botho.Lottery.FeeConfig.poolFractionPermille : Botho.Lottery.FeeConfig → Nat
+    := fun (self : Botho.Lottery.FeeConfig) => self.1
+  constructor Botho.Lottery.SelectionMode.clusterWeighted : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.hybrid : Nat → Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.uniform : Botho.Lottery.SelectionMode
+  constructor Botho.Lottery.SelectionMode.valueWeighted : Botho.Lottery.SelectionMode
+  def Botho.Lottery.computePoolAccounting.match_1 : (motive : Prod.{0, 0} Nat Nat → Sort u_1) → (x : Prod.{0, 0} Nat Nat) → ((feePool feeBurn : Nat) → motive (@Prod.mk.{0, 0} Nat Nat feePool feeBurn)) → motive x
+    := fun (motive : Prod.{0, 0} Nat Nat → Sort u_1) (x : Prod.{0, 0} Nat Nat) (h_1 : (feePool feeBurn : Nat) → motive (@Prod.mk.{0, 0} Nat Nat feePool feeBurn)) => @Prod.casesOn.{u_1, 0, 0} Nat Nat (fun (x : Prod.{0, 0} Nat Nat) => motive x) x fun (fst snd : Nat) => h_1 fst snd
+
 theorem Botho.Lottery.seed_body_independent sha256:a07917ec9d5bb1a43a217ad71038e6f9603ba6ee9bd13b426963d378008e7367
   : ∀ (P : Botho.Lottery.Prims) (r : Botho.Lottery.Reads) (b₁ b₂ : Botho.Lottery.DrawBlock), @Eq.{1} Nat (Botho.Lottery.DrawBlock.height b₁) (Botho.Lottery.DrawBlock.height b₂) → @Eq.{1} Botho.Lottery.Bytes (Botho.Lottery.DrawBlock.prevBlockHash b₁) (Botho.Lottery.DrawBlock.prevBlockHash b₂) → @Eq.{1} (Except.{0, 0} Botho.Lottery.DrawingError Botho.Lottery.Bytes) (Botho.Lottery.seed P r b₁) (Botho.Lottery.seed P r b₂)
   def Botho.Lottery.Bytes : Type

@@ -53,7 +53,8 @@
 //! Honest over-charge under `quantile@max` against the honest decoy
 //! age-spread (`--honest-jitter-bps`), the table that set the wallet's
 //! `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) band against the #314 ≤15%
-//! tolerance:
+//! tolerance (centred placement; see the random-offset section below for the
+//! ±5% band that replaced it):
 //!
 //! | honest decoy age-spread | ring 11 | ring 20 | within #314 tolerance |
 //! |-------------------------|--------:|--------:|:---------------------:|
@@ -74,6 +75,26 @@
 //! construction. (The ring-11 column differs from PR #595's figures in the
 //! third or fourth decimal, e.g. 1.0386 then vs 1.0390 now, from changes to the
 //! simulation since then; the verdicts are the same.)
+//!
+//! # Random-offset placement (#1692, operator ruling 2026-11-02)
+//!
+//! Since #1692 every production picker draws the band at a random offset so
+//! the real age is uniform inside it (`--honest-band-offset`). The real input
+//! can then sit at the band's young edge, so a single spend's `@max`
+//! over-charge is bounded by `1 + 2 × jitter` rather than `1 + jitter`. At
+//! ±10% that bound is 1.20 and the per-spend #314 bound fails, so the band was
+//! narrowed to ±5% (`AGE_SIMILARITY_SPREAD_BPS = 500`). Default population,
+//! ring 20, `quantile@max`:
+//!
+//! | band, placement     | aggregate | worst single spend | spends > 1.15 |
+//! |---------------------|----------:|-------------------:|--------------:|
+//! | ±5%, centred        | 1.0427    | 1.0499             | 0%            |
+//! | ±5%, random offset  | 1.0413    | 1.0992             | 0%            |
+//! | ±10%, centred       | 1.0855    | 1.1000             | 0%            |
+//! | ±10%, random offset | 1.0825    | 1.1985             | 19.2%         |
+//!
+//! The production row is ±5% random offset: every honest spend stays within
+//! 1.10, inside the #314 bound of 1.15.
 //!
 //! # Why a focused Monte-Carlo (not the agent framework)
 //!
@@ -192,6 +213,15 @@ pub struct DecoySweepParams {
     /// Half-width of honest decoy age jitter, in basis points of the real age
     /// (500 = ±5%). Adversary decoys ignore this (always fresh).
     pub honest_jitter_bps: u32,
+    /// Honest decoy PLACEMENT (#1692 / #1755). `false` (the historical #577
+    /// model): every decoy is drawn from a band of half-width
+    /// `honest_jitter_bps` CENTRED on the real age. `true`: the production
+    /// random-offset placement. The band keeps its total width
+    /// (`2 × honest_jitter_bps`) but its position is drawn once per ring so the
+    /// real age sits uniformly inside it, and decoys are drawn uniformly within
+    /// it. The real input can then sit at the band's young edge, so a single
+    /// ring can be over-charged by up to `1 + 2 × jitter`.
+    pub honest_band_offset: bool,
     /// Base RNG seed (combined with agent index and round).
     pub seed: u64,
 }
@@ -219,6 +249,7 @@ impl Default for DecoySweepParams {
             rate_bps: 200,
             blocks_per_year,
             honest_jitter_bps: 500,
+            honest_band_offset: false,
             seed: 0xB07A_2025,
         }
     }
@@ -273,10 +304,21 @@ fn build_ring(
     current_height: u64,
     ring_size: usize,
     honest_jitter_bps: u32,
+    honest_band_offset: bool,
 ) -> Vec<(u64, u64)> {
     let mut members = Vec::with_capacity(ring_size);
     let real_creation = current_height.saturating_sub(real_age);
     members.push((real_value, real_creation));
+
+    let span = (real_age.saturating_mul(honest_jitter_bps as u64)) / BPS;
+    // Random-offset placement (#1692): the band `[real − o, real − o + 2·span]`
+    // with `o` uniform in `0..=2·span`, drawn once per ring. Centred placement
+    // is the special case `o = span`.
+    let offset = if honest_band_offset && kind != Kind::AdversaryWhale && span > 0 {
+        rng.random_range(0..=2 * span)
+    } else {
+        span
+    };
 
     for _ in 1..ring_size {
         match kind {
@@ -286,13 +328,13 @@ fn build_ring(
                 members.push((real_value, current_height));
             }
             Kind::HonestWhale | Kind::Poor => {
-                // Age-similar decoy: age within ±jitter of the real age, value
-                // comparable to the real input (so the mean is well-behaved).
-                let span = (real_age.saturating_mul(honest_jitter_bps as u64)) / BPS;
+                // Age-similar decoy: age within the band around the real age,
+                // value comparable to the real input (so the mean is
+                // well-behaved).
                 let age = if span == 0 {
                     real_age
                 } else {
-                    let delta = rng.random_range(0..=2 * span) as i64 - span as i64;
+                    let delta = rng.random_range(0..=2 * span) as i64 - offset as i64;
                     (real_age as i64 + delta).max(0) as u64
                 };
                 let creation = current_height.saturating_sub(age);
@@ -323,6 +365,12 @@ struct RunOutcome {
     honest_realized: u128,
     /// Σ demurrage honest whales would owe on their TRUE holding age.
     honest_true: u128,
+    /// Largest single-spend honest realized / true ratio.
+    honest_worst: f64,
+    /// Honest spends with a non-zero true charge, and how many of them were
+    /// over-charged by more than the #314 tolerance (ratio > 1.15).
+    honest_spends: u64,
+    honest_over_tolerance: u64,
 }
 
 /// Run one Monte-Carlo pass. `kernel == None` is the no-demurrage baseline
@@ -335,6 +383,9 @@ fn run_one(params: &DecoySweepParams, kernel: Option<Kernel>) -> RunOutcome {
     let mut adv_true: u128 = 0;
     let mut honest_realized: u128 = 0;
     let mut honest_true: u128 = 0;
+    let mut honest_worst: f64 = 1.0;
+    let mut honest_spends: u64 = 0;
+    let mut honest_over_tolerance: u64 = 0;
 
     // Integer redistribution carry so per-capita division loses nothing.
     let mut pool_carry: u64 = 0;
@@ -366,6 +417,7 @@ fn run_one(params: &DecoySweepParams, kernel: Option<Kernel>) -> RunOutcome {
                     current_height,
                     params.ring_size,
                     params.honest_jitter_bps,
+                    params.honest_band_offset,
                 );
                 let est_age = kernel.estimate(&ring, current_height);
 
@@ -393,6 +445,14 @@ fn run_one(params: &DecoySweepParams, kernel: Option<Kernel>) -> RunOutcome {
                     Kind::HonestWhale => {
                         honest_realized += realized as u128;
                         honest_true += truth as u128;
+                        if truth > 0 {
+                            let ratio = realized as f64 / truth as f64;
+                            honest_worst = honest_worst.max(ratio);
+                            honest_spends += 1;
+                            if ratio > 1.15 {
+                                honest_over_tolerance += 1;
+                            }
+                        }
                     }
                     Kind::Poor => {}
                 }
@@ -428,6 +488,9 @@ fn run_one(params: &DecoySweepParams, kernel: Option<Kernel>) -> RunOutcome {
         adv_true,
         honest_realized,
         honest_true,
+        honest_worst,
+        honest_spends,
+        honest_over_tolerance,
     }
 }
 
@@ -444,6 +507,10 @@ pub struct KernelResult {
     pub adversary_dilution_ratio: f64,
     /// Honest realized charge / true accrual. Must stay ≈1.0.
     pub honest_overcharge_ratio: f64,
+    /// Largest single-spend honest over-charge (realized / true) seen.
+    pub honest_worst_overcharge: f64,
+    /// Fraction of honest spends over-charged by more than 15% (ratio > 1.15).
+    pub honest_share_over_tolerance: f64,
 }
 
 impl KernelResult {
@@ -506,6 +573,12 @@ pub fn run_decoy_sweep(params: &DecoySweepParams) -> DecoySweepReport {
                 delta_gini: baseline_gini - out.final_gini,
                 adversary_dilution_ratio,
                 honest_overcharge_ratio,
+                honest_worst_overcharge: out.honest_worst,
+                honest_share_over_tolerance: if out.honest_spends > 0 {
+                    out.honest_over_tolerance as f64 / out.honest_spends as f64
+                } else {
+                    0.0
+                },
             }
         })
         .collect();
@@ -539,6 +612,14 @@ pub fn to_table(report: &DecoySweepReport) -> String {
         p.honest_jitter_bps / 100,
     ));
     s.push_str(&format!(
+        "Honest band placement: {}\n",
+        if p.honest_band_offset {
+            "random offset (real age uniform inside the band, #1692)"
+        } else {
+            "centred on the real age"
+        },
+    ));
+    s.push_str(&format!(
         "Initial Gini {:.4} | no-demurrage baseline Gini {:.4} (Δgini anchor)\n\n",
         report.initial_gini, report.baseline_gini,
     ));
@@ -558,6 +639,15 @@ pub fn to_table(report: &DecoySweepReport) -> String {
             r.adversary_dilution_ratio,
             r.honest_overcharge_ratio,
             if r.passes() { "YES" } else { "no" },
+        ));
+    }
+    s.push('\n');
+    for r in &report.results {
+        s.push_str(&format!(
+            "Worst single-spend honest over-charge, {}: {:.4} ({:.1}% of honest spends > 1.15)\n",
+            r.kernel.label(),
+            r.honest_worst_overcharge,
+            r.honest_share_over_tolerance * 100.0,
         ));
     }
     s.push('\n');
@@ -653,6 +743,47 @@ mod tests {
                 r.honest_overcharge_ratio
             );
         }
+    }
+
+    /// #1692 / operator ruling 2026-11-02: the production ±5% random-offset
+    /// band keeps EVERY honest spend's `@max` over-charge within
+    /// `1 + 2 × jitter` = 1.10, inside the #314 bound of 1.15. The old ±10%
+    /// width breaks the per-spend bound under random-offset placement.
+    #[test]
+    fn random_offset_band_keeps_every_honest_spend_within_314_bound() {
+        let production = run_decoy_sweep(&DecoySweepParams {
+            honest_jitter_bps: 500,
+            honest_band_offset: true,
+            ..Default::default()
+        });
+        let qmax = production
+            .results
+            .iter()
+            .find(|r| r.kernel == Kernel::Quantile(10_000))
+            .unwrap();
+        assert!(qmax.honest_overcharge_ratio <= 1.15);
+        assert!(
+            qmax.honest_worst_overcharge <= 1.10 + 1e-3,
+            "worst single spend {} above the ±5% window ceiling",
+            qmax.honest_worst_overcharge
+        );
+        assert_eq!(qmax.honest_share_over_tolerance, 0.0);
+
+        let wide = run_decoy_sweep(&DecoySweepParams {
+            honest_jitter_bps: 1_000,
+            honest_band_offset: true,
+            ..Default::default()
+        });
+        let wide_max = wide
+            .results
+            .iter()
+            .find(|r| r.kernel == Kernel::Quantile(10_000))
+            .unwrap();
+        assert!(
+            wide_max.honest_worst_overcharge > 1.15,
+            "±10% random offset should breach the per-spend bound: {}",
+            wide_max.honest_worst_overcharge
+        );
     }
 
     #[test]
