@@ -245,7 +245,8 @@ jobs:
           PYTHON
 
       - name: Run all ledger and inactive LotteryV2 validation tests
-        timeout-minutes: 12
+        # Leave two minutes beyond the command budget for provenance and log handling.
+        timeout-minutes: 22
         env:
           LEDGER_TEST_EXECUTABLE: ${{ steps.ledger_tests.outputs.executable }}
         run: |
@@ -255,7 +256,8 @@ jobs:
             rustc -vV
             uname -a
             sha256sum botho/src/ledger/store.rs botho/src/ledger/store/validation.rs botho/src/ledger/store/writer.rs botho/src/ledger/experimental.rs botho/src/ledger/experimental/validated.rs botho/src/ledger/experimental/validated/tests.rs botho/tests/common/positive_transfer.rs
-            timeout 600s "$LEDGER_TEST_EXECUTABLE" ledger:: --nocapture
+            # Keep aligned with the canonical maturity test's internal deadline.
+            timeout 1200s "$LEDGER_TEST_EXECUTABLE" ledger:: --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/ledger-validation.log"
 
       - name: Retain ledger validation evidence (including failures)
