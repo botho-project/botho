@@ -34,7 +34,7 @@ fn next_block(ledger: &SharedLedger, minter: &bth_account_keys::PublicAddress) -
     );
     block.header.height = state.height + 1;
     block.header.prev_block_hash = state.tip_hash;
-    block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
+    block.header.timestamp = block.header.timestamp.max(state.next_min_timestamp());
     block.minting_tx.block_height = block.header.height;
     block.minting_tx.prev_block_hash = state.tip_hash;
     block.minting_tx.timestamp = block.header.timestamp;

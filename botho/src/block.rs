@@ -1035,6 +1035,43 @@ pub mod difficulty {
     /// [`crate::node::minter::INITIAL_DIFFICULTY`].
     pub const TARGET_BLOCK_TIME_SECS: u64 = 5;
 
+    /// Lower bound on the observed inter-block time (seconds) the controller
+    /// acts on (protocol 8.0.0, #1848). Equal to the consensus slot floor
+    /// `ConsensusConfig::MIN_BLOCK_TIME_SECS` (asserted below).
+    ///
+    /// Since 8.0.0 a block only has to be after the median time past, not
+    /// after its parent, so its gap to the parent can be zero or negative.
+    /// [`observed_block_time`] floors such gaps here: a backward stamp then
+    /// costs one bounded hardening step (5 s target / 3 s floor = 0.6x)
+    /// instead of either a free pass or the full 0.5x clamp.
+    pub const MIN_OBSERVED_BLOCK_TIME_SECS: u64 = 3;
+
+    const _: () = assert!(
+        MIN_OBSERVED_BLOCK_TIME_SECS == crate::consensus::ConsensusConfig::MIN_BLOCK_TIME_SECS,
+        "MIN_OBSERVED_BLOCK_TIME_SECS must equal ConsensusConfig::MIN_BLOCK_TIME_SECS"
+    );
+
+    /// The observed inter-block time the difficulty controller is fed for a
+    /// block stamped `timestamp` on a parent stamped `parent` (protocol
+    /// 8.0.0, #1848).
+    ///
+    /// `None` when there is no usable parent (`parent == 0`: genesis, so the
+    /// first block leaves difficulty unchanged, as before). Otherwise the gap
+    /// floored at [`MIN_OBSERVED_BLOCK_TIME_SECS`]: zero and backward gaps,
+    /// which the median-time-past rule now admits, become the floor. The
+    /// upper cap stays inside [`compute_time_adjusted_difficulty`], which is
+    /// unchanged.
+    pub fn observed_block_time(parent: u64, timestamp: u64) -> Option<u64> {
+        if parent == 0 {
+            return None;
+        }
+        Some(
+            timestamp
+                .saturating_sub(parent)
+                .max(MIN_OBSERVED_BLOCK_TIME_SECS),
+        )
+    }
+
     /// Upper bound on the observed inter-block time (seconds) the controller
     /// will act on, as a multiple of [`TARGET_BLOCK_TIME_SECS`]. Caps how
     /// far a single (consensus-bounded but still loose) timestamp gap can
@@ -1685,6 +1722,65 @@ pub mod difficulty {
                 TARGET_BLOCK_TIME_SECS,
             );
             assert_eq!(ctrl2.difficulty, expected);
+        }
+
+        /// #1848: the minimum-observed-gap helper. No parent → no signal;
+        /// zero and backward gaps (legal under the median-time-past rule)
+        /// floor at `MIN_OBSERVED_BLOCK_TIME_SECS`; normal gaps pass through
+        /// (the upper cap stays in the kernel).
+        #[test]
+        fn observed_block_time_floors_zero_and_backward_gaps() {
+            assert_eq!(MIN_OBSERVED_BLOCK_TIME_SECS, 3);
+            assert_eq!(observed_block_time(0, 1_000), None);
+            assert_eq!(observed_block_time(1_000, 1_000), Some(3));
+            assert_eq!(observed_block_time(1_000, 900), Some(3));
+            assert_eq!(observed_block_time(1_000, 1_002), Some(3));
+            assert_eq!(observed_block_time(1_000, 1_003), Some(3));
+            assert_eq!(observed_block_time(1_000, 1_005), Some(5));
+            assert_eq!(observed_block_time(1_000, 1_500), Some(500));
+            assert_eq!(observed_block_time(u64::MAX, 0), Some(3));
+        }
+
+        /// #1848: a backward stamp followed by a normal one costs exactly one
+        /// floored (0.6x) hardening step, then the controller is neutral at
+        /// target. The kernel itself is unchanged (it still maps a raw 0 s gap
+        /// to the 0.5x clamp; the floor lives in the helper).
+        #[test]
+        fn backward_then_normal_gap_is_one_floored_step() {
+            let start = INITIAL_DIFFICULTY / 2;
+            let mut ctrl = EmissionController::new(start);
+            let parent = 10_000;
+            let backward = parent - 40;
+            ctrl.record_block(0, INITIAL_REWARD, 0, observed_block_time(parent, backward));
+            let after_backward = ctrl.difficulty;
+            assert_eq!(
+                after_backward,
+                EmissionController::compute_time_adjusted_difficulty(
+                    start,
+                    MIN_OBSERVED_BLOCK_TIME_SECS,
+                    TARGET_BLOCK_TIME_SECS
+                )
+            );
+            assert_eq!(after_backward, (start as u128 * 6_000 / 10_000) as u64);
+            assert!(
+                after_backward
+                    > EmissionController::compute_time_adjusted_difficulty(
+                        start,
+                        0,
+                        TARGET_BLOCK_TIME_SECS
+                    ),
+                "floored step is gentler than the raw 0 s (0.5x) step"
+            );
+            ctrl.record_block(
+                0,
+                INITIAL_REWARD,
+                0,
+                observed_block_time(backward, backward + TARGET_BLOCK_TIME_SECS),
+            );
+            assert_eq!(
+                ctrl.difficulty, after_backward,
+                "an on-target gap leaves difficulty unchanged"
+            );
         }
 
         #[test]

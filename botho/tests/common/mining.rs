@@ -63,8 +63,11 @@ pub fn mine_block(network: &TestNetwork, miner_idx: usize) {
     // Clear any previous pending minting txs to avoid conflicts
     network.pending_minting_txs.lock().unwrap().clear();
 
-    let minting_tx =
+    let mut minting_tx =
         create_mock_minting_tx(height, INITIAL_BLOCK_REWARD, &miner_address, prev_hash);
+    // Protocol 8.0.0 (#1848): strictly after the median time past, like the
+    // minter (`max(now, MTP + 1)`). The timestamp is not in the PoW preimage.
+    minting_tx.timestamp = minting_tx.timestamp.max(state.next_min_timestamp());
     network.broadcast_minting_tx(minting_tx);
 
     if !network.wait_for_height(height, Duration::from_secs(30)) {
@@ -89,7 +92,10 @@ pub fn mine_block_with_reward(network: &TestNetwork, miner_idx: usize, reward: u
 
     network.pending_minting_txs.lock().unwrap().clear();
 
-    let minting_tx = create_mock_minting_tx(height, reward, &miner_address, prev_hash);
+    let mut minting_tx = create_mock_minting_tx(height, reward, &miner_address, prev_hash);
+    // Protocol 8.0.0 (#1848): strictly after the median time past, like the
+    // minter (`max(now, MTP + 1)`). The timestamp is not in the PoW preimage.
+    minting_tx.timestamp = minting_tx.timestamp.max(state.next_min_timestamp());
     network.broadcast_minting_tx(minting_tx);
 
     if !network.wait_for_height(height, Duration::from_secs(30)) {
@@ -124,8 +130,10 @@ pub fn mine_block_all_minters(network: &TestNetwork, timeout: Duration) -> bool 
     // Every node mints and broadcasts a competing coinbase for the same height.
     for miner_idx in 0..network.config.num_nodes {
         let miner_address = network.wallets[miner_idx].default_address();
-        let minting_tx =
+        let mut minting_tx =
             create_mock_minting_tx(height, INITIAL_BLOCK_REWARD, &miner_address, prev_hash);
+        // Protocol 8.0.0 (#1848): strictly after the median time past.
+        minting_tx.timestamp = minting_tx.timestamp.max(state.next_min_timestamp());
         network.broadcast_minting_tx(minting_tx);
     }
 

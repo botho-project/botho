@@ -238,6 +238,7 @@ impl Node {
             height: state.height + 1,
             difficulty: state.difficulty,
             total_minted: state.total_mined,
+            min_timestamp: state.next_min_timestamp(),
         };
         minter.update_work(work);
 
@@ -344,6 +345,7 @@ impl Node {
                         height: state.height + 1,
                         difficulty: new_difficulty,
                         total_minted: state.total_mined,
+                        min_timestamp: state.next_min_timestamp(),
                     };
                     info!(
                         height = work.height,
@@ -592,16 +594,15 @@ pub fn commit_block_locked(
 
     // M5 (#554): difficulty is driven by observed block TIME, not tx count.
     // Derive the inter-block time from the parent's timestamp captured above.
-    // Monotonicity is already enforced at acceptance (`store::add_block`), so
-    // the delta is non-negative; the `>=` guard is defensive. `None` when
-    // there is no usable parent (genesis / first block, where tip_timestamp
-    // is 0) leaves difficulty unchanged for that block.
-    let observed_secs: Option<u64> = match parent_timestamp {
-        Some(parent) if parent > 0 && block.header.timestamp >= parent => {
-            Some(block.header.timestamp - parent)
-        }
-        _ => None,
-    };
+    // Protocol 8.0.0 (#1848): acceptance now only requires `ts > MTP`, so the
+    // gap to the parent may be zero or negative; `observed_block_time` floors
+    // it at MIN_OBSERVED_BLOCK_TIME_SECS (a backward stamp is one bounded
+    // hardening step, not a free pass). `None` when there is no usable parent
+    // (genesis / first block, where tip_timestamp is 0) leaves difficulty
+    // unchanged for that block.
+    let observed_secs: Option<u64> = parent_timestamp.and_then(|parent| {
+        crate::block::difficulty::observed_block_time(parent, block.header.timestamp)
+    });
 
     // H3 (#558): compute the prospective emission state on a CLONE so the
     // in-memory controller is not mutated until the atomic DB write below

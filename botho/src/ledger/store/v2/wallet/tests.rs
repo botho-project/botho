@@ -547,13 +547,16 @@ fn node_wallet_v2_payout_at_real_720_block_maturity() {
             _ => {}
         }
         let tip = ledger.get_block(height).unwrap();
-        let template = Block::new_template_with_txs(
+        let mut template = Block::new_template_with_txs(
             &tip,
             &owner.default_address(),
             state.difficulty,
             calculate_block_reward(height + 1, state.total_mined),
             transactions,
         );
+        // Protocol 8.0.0 (#1848): above the median, behind the future bound.
+        template.header.timestamp = state.fast_chain_timestamp();
+        template.minting_tx.timestamp = template.header.timestamp;
         let mut block = ledger.seal_block(template).unwrap();
         while !block.header.is_valid_pow() {
             block.header.nonce += 1;

@@ -500,7 +500,7 @@ async fn real_sealed_v2_payout_rows_match_the_ledger() {
             calculate_block_reward(state.height + 1, state.total_mined),
             txs,
         );
-        block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
+        block.header.timestamp = state.fast_chain_timestamp();
         block.minting_tx.timestamp = block.header.timestamp;
         while !block.header.is_valid_pow() {
             block.header.nonce += 1;

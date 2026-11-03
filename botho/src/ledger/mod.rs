@@ -215,6 +215,81 @@ pub struct ChainState {
 
     /// Current block reward
     pub current_reward: u64,
+
+    /// Header timestamps of the last (at most [`MTP_WINDOW`]) non-genesis
+    /// blocks, oldest first, ending with the tip's (protocol 8.0.0, #1848).
+    ///
+    /// The lower timestamp bound for the next block is
+    /// [`ChainState::median_time_past`] over this window. It is persisted in
+    /// the block write transaction and carried by V2 snapshots, because a
+    /// restored ledger holds only genesis and the snapshot tip and could not
+    /// rebuild it from blocks.
+    pub recent_timestamps: Vec<u64>,
+}
+
+/// Number of recent block timestamps the median-time-past rule covers
+/// (protocol 8.0.0, #1848). Bitcoin's value.
+pub const MTP_WINDOW: usize = 11;
+
+/// Median time past over `window` (oldest first; only the last
+/// [`MTP_WINDOW`] entries count).
+///
+/// The window is padded at the front with zeros to [`MTP_WINDOW`] slots, and
+/// the result is element `MTP_WINDOW / 2` (the 6th smallest) of the sorted
+/// slots. So on a short chain (fewer than 6 non-genesis blocks) the median is
+/// 0 and only the future bound applies: a forward-dated block 1 can never be
+/// the median that locks out block 2. Genesis is excluded (its timestamp is
+/// 0 anyway).
+pub fn median_time_past_of(window: &[u64]) -> u64 {
+    let mut slots = [0u64; MTP_WINDOW];
+    let take = window.len().min(MTP_WINDOW);
+    slots[MTP_WINDOW - take..].copy_from_slice(&window[window.len() - take..]);
+    slots.sort_unstable();
+    slots[MTP_WINDOW / 2]
+}
+
+impl ChainState {
+    /// Median time past of the chain at this tip (protocol 8.0.0, #1848).
+    ///
+    /// A block (and its minting tx) extending this tip is valid only if its
+    /// timestamp is STRICTLY greater than this value (and within the future
+    /// bound). This replaces the 7.x `timestamp >= tip_timestamp` rule, which
+    /// let one forward-dated tip lock every honest minter out.
+    pub fn median_time_past(&self) -> u64 {
+        median_time_past_of(&self.recent_timestamps)
+    }
+
+    /// The smallest timestamp a block extending this tip may carry:
+    /// `median_time_past() + 1`. Honest minters stamp `max(now, this)`.
+    pub fn next_min_timestamp(&self) -> u64 {
+        self.median_time_past().saturating_add(1)
+    }
+
+    /// TEST/FIXTURE ONLY: a valid timestamp for a fixture block extending this
+    /// tip on a fast chain (#1848): one hour behind the wall clock, but at
+    /// least `next_min_timestamp()`.
+    ///
+    /// Stamping `max(now, MTP + 1)` (the minter's rule) on a chain built
+    /// faster than ~6 blocks per second pushes the median ahead of the clock
+    /// by about one second per 6 blocks, so a few hundred instant blocks
+    /// would outrun the 60 s future bound. Starting an hour back leaves room
+    /// for ~20,000 instant blocks.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn fast_chain_timestamp(&self) -> u64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(3_600).max(self.next_min_timestamp())
+    }
+
+    /// The timestamp window after appending a block stamped `timestamp`.
+    pub fn rolled_timestamps(&self, timestamp: u64) -> Vec<u64> {
+        let keep = self.recent_timestamps.len().min(MTP_WINDOW - 1);
+        let mut window = self.recent_timestamps[self.recent_timestamps.len() - keep..].to_vec();
+        window.push(timestamp);
+        window
+    }
 }
 
 impl Default for ChainState {
@@ -232,6 +307,7 @@ impl Default for ChainState {
             epoch_emission: 0,
             epoch_burns: 0,
             current_reward: INITIAL_REWARD,
+            recent_timestamps: Vec::new(),
         }
     }
 }

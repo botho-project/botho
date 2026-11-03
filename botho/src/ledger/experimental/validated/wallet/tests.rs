@@ -32,13 +32,16 @@ fn accepted(store: &ValidatedStore, miner: &Wallet, transactions: Vec<Transactio
                 <= tx.fee
         );
     }
-    let block = Block::new_template_with_txs(
+    let mut block = Block::new_template_with_txs(
         &store.store.envelope(&r, state.height).unwrap().block,
         &miner.default_address(),
         state.difficulty,
         calculate_block_reward(state.height + 1, state.total_mined),
         transactions,
     );
+    // Protocol 8.0.0 (#1848): above the median, behind the future bound.
+    block.header.timestamp = state.fast_chain_timestamp();
+    block.minting_tx.timestamp = block.header.timestamp;
     drop(r);
     let produced = store.produce(block).unwrap();
     store.apply(&produced, None, || Ok(())).unwrap();
