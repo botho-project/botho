@@ -5,7 +5,7 @@ What this module mirrors, and what it does not:
 
 | Lean (`Botho.Tags.*`) | Rust | Role | Status |
 |---|---|---|---|
-| `Entry`, `TagVec` | `ClusterTagEntry`, `ClusterTagVector::entries`, `transaction/types/src/cluster_tags.rs:51,113` | data | - |
+| `Entry`, `TagVec` | `ClusterTagEntry`, `ClusterTagVector::entries`, `transaction/types/src/cluster_tags.rs:51,124` | data | - |
 | `fromPairs` | `ClusterTagVector::from_pairs`, `cluster_tags.rs:306` | wallet | tested (through `mergeWeighted`) |
 | `mergeWeighted` | `ClusterTagVector::merge_weighted` **before #1863** (`cluster_tags.rs:355` at the #1840 base) | wallet, and the node's mempool | historical model (the record of #1858) |
 | `mergeWeightedSafe` | `ClusterTagVector::merge_weighted` since #1863 (`cluster_tags.rs:366`, `decay_weight` `:409`) | wallet, and the node's mempool (behind its `is_valid` gate) | tested (DRT leg `merge_weighted`) |
@@ -33,7 +33,7 @@ Not mirrored (sim or research only; `git grep` finds no caller under
 `BlockAwareTagVector::mix`), `age_decay.rs`, `entropy_decay.rs`, and the
 floating-point `TagVector::mix` / `apply_decay` (`cluster-tax/src/tag.rs`),
 which only the wallet's fee estimate uses. `merge_weighted_with_and_decay`
-(`cluster_tags.rs:427`) has no production caller either. `decay_state` is not
+(`cluster_tags.rs:436`) has no production caller either. `decay_state` is not
 modelled: `merge_weighted` returns `None` for it and no check reads it.
 
 Integers. Weights are `u32` and values `u64` in Rust; the model computes on
@@ -219,7 +219,8 @@ def weightedP (p : Nat → Bool) : List (TagVec × Nat) → Nat
   | [] => 0
   | (tags, v) :: rest => v * massP p tags + weightedP p rest
 
-/-- Mirrors `ClusterTagVector::merge_weighted` (`cluster_tags.rs:355`).
+/-- Mirrors `ClusterTagVector::merge_weighted` before #1863 (`cluster_tags.rs:355`
+at the #1840 base).
 `none` is a Rust panic (overflow of the `u64` value sum, or of
 `w * retention`). Weights must be below `2^32` and values below `2^64`, as
 the Rust types force. -/

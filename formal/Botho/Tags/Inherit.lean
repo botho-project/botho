@@ -21,12 +21,12 @@ wallet need not run.
 
 | Lean (`Botho.Tags.*`) | Rust | Status |
 |---|---|---|
-| `inheritOk`, `inputMass`, `outputMass`, `inputClusters` | the C6 mass check of `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:242`); in 7.x the whole tag rule | tested, as the last step of `inheritOk₈` |
-| `inheritOk₈`, `tagsValid`, `ruleTwoOk` | 8.0.0: `first_malformed_output_tags` (Rule 1, `store.rs:332`) then `check_cluster_tag_inheritance` (Rule 2 via `check_output_clusters_on_ring`, `store.rs:353`, then C6), reached through `validate_ordinary_body` and `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (`store/validation.rs:103`) | tested (DRT leg `cluster_tag_inheritance`); no recorded theorems yet |
-| `wealthCredit` | `update_cluster_wealth_for_output`, `botho/src/ledger/store/writer.rs:469` | tested (end to end, `cluster_tag_invariant_tests.rs`) |
-| `effectiveWealth` | `ValidationReads::effective_cluster_wealth_from_outputs`, `store/validation.rs:272` | tested (DRT leg `effective_cluster_wealth`) |
-| `importFloor` | `ValidationReads::import_floor_factor_from_outputs`, `store/validation.rs:305` | tested (DRT leg `import_floor_factor`) |
-| `demurrageFactor` | the factor composition in `ValidationReads::consensus_fee_floor`, `store/validation.rs:161` (`claimed.max(implied)` in `ring_centroid_floored_factor`, then `.max(import_floor)`) | model; the curve and the ring-centroid factor are parameters |
+| `inheritOk`, `inputMass`, `outputMass`, `inputClusters` | the C6 mass check of `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:256`); in 7.x the whole tag rule | tested, as the last step of `inheritOk₈` |
+| `inheritOk₈`, `tagsValid`, `ruleTwoOk` | 8.0.0: `first_malformed_output_tags` (Rule 1, `store.rs:346`) then `check_cluster_tag_inheritance` (Rule 2 via `check_output_clusters_on_ring`, `store.rs:367`, then C6), reached through `validate_ordinary_body` and `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (`store/validation.rs:103`) | tested (DRT leg `cluster_tag_inheritance`); no recorded theorems yet |
+| `wealthCredit` | `update_cluster_wealth_for_output`, `botho/src/ledger/store/writer.rs:482` | tested (end to end, `cluster_tag_invariant_tests.rs`) |
+| `effectiveWealth` | `ValidationReads::effective_cluster_wealth_from_outputs`, `store/validation.rs:280` | tested (DRT leg `effective_cluster_wealth`) |
+| `importFloor` | `ValidationReads::import_floor_factor_from_outputs`, `store/validation.rs:313` | tested (DRT leg `import_floor_factor`) |
+| `demurrageFactor` | the factor composition in `ValidationReads::consensus_fee_floor`, `store/validation.rs:169` (`claimed.max(implied)` in `ring_centroid_floored_factor`, then `.max(import_floor)`) | model; the curve and the ring-centroid factor are parameters |
 
 The fee curve (`ClusterFactorCurve::factor`) and the ring-centroid implied
 factor (`ring_centroid_implied_factor`) are not modelled here (#1711 models
@@ -99,7 +99,7 @@ multiplicity). -/
 def inputClusters (rings : List (List Coin)) : List Nat :=
   rings.flatMap fun ring => ring.flatMap fun x => x.tags.map Entry.cluster
 
-/-- `CONSENSUS_TAG_DECAY_RATE` (`store.rs:178`). -/
+/-- `CONSENSUS_TAG_DECAY_RATE` (`store.rs:192`). -/
 def CONSENSUS_TAG_DECAY_RATE : Nat := 0
 
 /-- `expected = input_mass * (SCALE - CONSENSUS_TAG_DECAY_RATE) / SCALE`. -/
@@ -118,7 +118,7 @@ def clusterOk (rings : List (List Coin)) (outs : List Coin) (c : Nat) : Bool :=
 def inheritOk (rings : List (List Coin)) (outs : List Coin) : Bool :=
   (inputClusters rings).all (clusterOk rings outs)
 
-/-- Mirrors `update_cluster_wealth_for_output` (`writer.rs:469`) over a
+/-- Mirrors `update_cluster_wealth_for_output` (`writer.rs:482`) over a
 transaction's outputs: the increment of cluster `c`'s recorded wealth
 (`Σ amount * weight / SCALE` over its entries; the `u128` accumulator
 saturates only at `2^128`). Every named cluster is credited, whether or not
@@ -162,7 +162,7 @@ def effectiveAcc (env : FeeEnv) : Nat × Nat → List Coin → Nat × Nat
   | acc, [] => acc
   | (w, t), o :: os => effectiveAcc env (weightedWealth env o.value w o.tags, satAdd U128_MAX t o.value) os
 
-/-- Mirrors `effective_cluster_wealth_from_outputs` (`validation.rs:272`). -/
+/-- Mirrors `effective_cluster_wealth_from_outputs` (`validation.rs:280`). -/
 def effectiveWealth (env : FeeEnv) (outs : List Coin) : Nat :=
   let (w, t) := effectiveAcc env (0, 0) outs
   if t = 0 then 0 else w / t
@@ -184,7 +184,7 @@ def importAcc (env : FeeEnv) : Nat × Nat → List Coin → Nat × Nat
   | acc, [] => acc
   | (i, t), o :: os => importAcc env (importTagged env o.value i o.tags, satAdd U128_MAX t o.value) os
 
-/-- Mirrors `import_floor_factor_from_outputs` (`validation.rs:305`): the
+/-- Mirrors `import_floor_factor_from_outputs` (`validation.rs:313`): the
 value-weighted blend of `F` on the import-tagged value (clamped to the
 total) and 1x on the rest, `as u64`. -/
 def importFloor (env : FeeEnv) (outs : List Coin) : Nat :=
@@ -197,7 +197,7 @@ def importFloor (env : FeeEnv) (outs : List Coin) : Nat :=
 
 /-- The factor the consensus fee floor charges demurrage at:
 `max(max(claimed, implied), import_floor)` (`consensus_fee_floor`,
-`validation.rs:161`). -/
+`validation.rs:169`). -/
 def demurrageFactor (env : FeeEnv) (rings : List (List Coin)) (outs : List Coin) : Nat :=
   max (max (claimedFactor env outs) (env.implied rings)) (importFloor env outs)
 

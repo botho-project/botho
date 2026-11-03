@@ -267,12 +267,12 @@ them apart, because a modified wallet need not run the wallet's:
 
 - **Consensus** (`Botho/Tags/Inherit.lean`). Block acceptance applies no
   tag mixing and no decay. In 7.x its only tag rule was C6,
-  `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:242`,
+  `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:256`,
   `CONSENSUS_TAG_DECAY_RATE = 0`). The ledger also reads output tags for the
   fee floor (`effective_cluster_wealth_from_outputs`,
-  `import_floor_factor_from_outputs`, `store/validation.rs:272,305`) and
+  `import_floor_factor_from_outputs`, `store/validation.rs:280,313`) and
   credits them to the per-cluster wealth index
-  (`update_cluster_wealth_for_output`, `store/writer.rs:469`). The fee curve
+  (`update_cluster_wealth_for_output`, `store/writer.rs:482`). The fee curve
   and the ring-centroid factor are parameters (`FeeEnv`), not models (#1711).
 - **Wallet** (`Botho/Tags/Vector.lean`).
   `ClusterTagVector::merge_weighted` (`transaction/types/src/cluster_tags.rs:366`)
