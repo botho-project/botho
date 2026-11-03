@@ -222,16 +222,22 @@ if ! json="$(cd "$root" && "$lake" env lean --json --stdin <<<"$manifest_src" 2>
   exit 1
 fi
 
-GATE_COMMANDS="$commands" GATE_JSON="$json" GATE_REPORT="$report" \
-  GATE_ALLOWLIST="$allowlist_src" python3 - <<'PY'
+# Keep the snapshots in shell memory until all Lean processes have exited.
+# Pass them through stdin: a statement-closure report can exceed Linux's
+# per-environment-string exec limit. Re-reading the report/allow-list files
+# here would instead let an imported initializer rewrite the earlier snapshot.
+# Shell strings cannot contain NUL, so it is an unambiguous field separator.
+printf '%s\0' "$commands" "$json" "$report" "$allowlist_src" | python3 -c "$(cat <<'PY'
 import json
-import os
 import re
 import sys
 
+commands_src, json_src, report_src, allowlist_src, end = sys.stdin.read().split("\0")
+assert end == ""
+
 commands = {}  # (line, col) -> name
 order = []
-for row in os.environ["GATE_COMMANDS"].splitlines():
+for row in commands_src.splitlines():
     line, col, name = row.split("\t")
     commands[(int(line), int(col))] = name
     order.append(name)
@@ -239,7 +245,7 @@ for row in os.environ["GATE_COMMANDS"].splitlines():
 # The allow-list as read before `lake build` (not the file, which model code
 # could have rewritten during the build).
 allowed = set()
-for row in os.environ["GATE_ALLOWLIST"].splitlines():
+for row in allowlist_src.splitlines():
     name = row.split("#", 1)[0].strip()
     if name:
         allowed.add(name)
@@ -252,7 +258,7 @@ RESULT = re.compile(
     re.S,
 )
 printed = {}  # name -> sorted axiom list
-for raw in os.environ["GATE_JSON"].splitlines():
+for raw in json_src.splitlines():
     if not raw.strip():
         continue
     try:
@@ -292,7 +298,7 @@ for name in order:
 
 # Layer 4: the independent walk.
 walked, swept = {}, None
-for row in os.environ["GATE_REPORT"].splitlines():
+for row in report_src.splitlines():
     parts = row.split("\t")
     if parts[0] == "AXIOMS":
         walked[parts[1]] = sorted(a for a in parts[2].split(",") if a)
@@ -328,6 +334,7 @@ print(
     f"swept; allow-list: {', '.join(sorted(allowed))})"
 )
 PY
+)"
 }
 
 main "$@"
