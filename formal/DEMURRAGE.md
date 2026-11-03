@@ -6,6 +6,11 @@ The six theorems are **proven (model)**; the three DRT legs call the actual
 Rust functions to test correspondence. DRT is evidence, not a proof of
 Rust-to-Lean equivalence.
 
+Tracked findings: [#1875](https://github.com/botho-project/botho/issues/1875)
+(time quantization) and [#1876](https://github.com/botho-project/botho/issues/1876)
+(ring saturation). Statement-record review precedes proofs in
+[#1877](https://github.com/botho-project/botho/pull/1877).
+
 ## Time quantization defeats a positive-value threshold
 
 `cluster-tax/src/demurrage.rs::demurrage_charge` computes
@@ -79,6 +84,8 @@ Pinned DRT fixtures include both rings, the six/twelve-block calls, the
 51-year call and curve boundaries. Generated cases cover the Rust integer
 widths, near-zero elapsed times, saturation and homogeneous rings.
 See `formal-drt/results/demurrage-1711.json` for the run receipt.
+The seed-1711 run compared 100,000 generated cases per leg and all 11 pinned
+fixtures, with zero mismatches (300,011 comparisons).
 
 Reproduce after building `formal-drt/lean` and `formal-drt`:
 
