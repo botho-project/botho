@@ -282,7 +282,10 @@ theorem step_slow {c o : Nat} (h : 10 ≤ o) (h1 : 1 ≤ c) :
 
 /-- A block claiming a gap of at most 2 s, including a timestamp EQUAL to its
 parent's (which header validation admits), halves the number (hardens PoW 2x),
-down to `MIN_DIFFICULTY`. Proven (model). -/
+down to `MIN_DIFFICULTY`. Proven (model). This is the kernel, unchanged in
+protocol 8.0.0; under protocol ≤ 7.x the node fed it the raw gap (finding
+#1848), and since 8.0.0 (#1869) `observed_block_time` floors the gap at 3 s
+before it reaches the kernel. -/
 theorem step_fast {c o : Nat} (h : o ≤ 2) (hc : c ≤ U64_MAX) :
     step c o TARGET_BLOCK_TIME_SECS = max MIN_DIFFICULTY (c / 2) := by
   unfold TARGET_BLOCK_TIME_SECS MIN_DIFFICULTY

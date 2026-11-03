@@ -31,9 +31,17 @@
 //! feature. The module is compiled only for tests and with that feature, so
 //! no node build contains it, and it changes no consensus code: each wrapper
 //! calls the production function unchanged.
+//!
+//! The wrappers target the protocol 8.0.0 code (#1869): the difficulty kernel
+//! and the slot-duration code are unchanged by that release, and the one new
+//! piece on the difficulty path, the 3 s gap floor `observed_block_time`, is
+//! exercised by [`chain_rust`]. The Lean model's timestamp-validity layer
+//! (`tsValid`, `observedSecs`, `applyChain` in `Warp.lean`) is the protocol
+//! <= 7.x rule set and is kept as the record of finding #1848; it is not a
+//! DRT leg.
 
 use crate::{
-    block::difficulty::EmissionController,
+    block::difficulty::{observed_block_time, EmissionController},
     consensus::{ConsensusConfig, ConsensusService},
     ledger::ChainState,
 };
@@ -48,10 +56,30 @@ pub fn step_rust(c: u64, o: u64, t: u64) -> u64 {
 
 /// Difficulty after `EmissionController::record_block(.., Some(g))` for each
 /// gap `g`, starting from `d0`.
+///
+/// This is the controller kernel the Lean `run` models: it takes the observed
+/// gap as given. Since protocol 8.0.0 (#1869, finding #1848) the node derives
+/// that gap with [`observed_block_time`], which floors it at
+/// `MIN_OBSERVED_BLOCK_TIME_SECS` (3 s); [`chain_rust`] is that production
+/// feed, and the tests pin `chain_rust` to `run_rust` over the floored gaps.
 pub fn run_rust(d0: u64, gaps: &[u64]) -> u64 {
     let mut ctl = EmissionController::new(d0);
     for &g in gaps {
         ctl.record_block(0, 0, 0, Some(g));
+    }
+    ctl.difficulty
+}
+
+/// Difficulty after the protocol 8.0.0 production feed (#1869): each block
+/// stamped `ts` on a parent stamped `parent` is recorded with
+/// `observed_block_time(parent, ts)` (as `node::commit_block_locked` does),
+/// starting from `d0` on a tip stamped `parent0`.
+pub fn chain_rust(d0: u64, parent0: u64, stamps: &[u64]) -> u64 {
+    let mut ctl = EmissionController::new(d0);
+    let mut parent = parent0;
+    for &ts in stamps {
+        ctl.record_block(0, 0, 0, observed_block_time(parent, ts));
+        parent = ts;
     }
     ctl.difficulty
 }

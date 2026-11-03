@@ -104,11 +104,16 @@ fn slot_vectors_match_rust() {
     }
 }
 
-/// The #1842 numbers, checked on the Rust controller directly: from
+/// The #1842 numbers, checked on the Rust controller kernel directly: from
 /// `INITIAL_DIFFICULTY`, 8 blocks at the 10/20/40 s pacing tiers reach
 /// `MAX_DIFFICULTY` (Lean: `easing_to_max_in_8`, `no_max_in_7`), and 55
-/// equal-timestamp blocks reach the floor (Lean: `time_warp_to_floor_in_55`,
+/// zero gaps reach the floor (Lean: `time_warp_to_floor_in_55`,
 /// `no_floor_in_54`); from `MAX_DIFFICULTY` the floor takes 63.
+///
+/// The zero-gap counts are about the kernel. Under protocol <= 7.x the node
+/// fed it a zero gap for every equal-timestamp block (finding #1848); since
+/// 8.0.0 (#1869) the feed floors gaps at 3 s, see
+/// `production_feed_floors_gaps_post_1848`.
 #[test]
 fn headline_counts_match_lean_theorems() {
     use crate::{block::difficulty::MAX_DIFFICULTY, node::minter::INITIAL_DIFFICULTY};
@@ -132,15 +137,94 @@ fn headline_counts_match_lean_theorems() {
     assert_eq!(step_rust(MAX_DIFFICULTY, 60, 5), MAX_DIFFICULTY);
 }
 
-/// Witness, on the real validator, for the Lean counterexample
-/// `Botho.Difficulty.forward_date_locks_out_honest` (#1841): once the tip
-/// carries a timestamp up to 2 h ahead of the wall clock (which the
-/// future-timestamp rule admits), an honest minting tx stamped with the
-/// honest wall clock (`node/minter.rs`) is rejected as before its parent,
-/// while a tx stamped at or past the tip, still inside the 2 h bound, gets
-/// past both timestamp checks.
+/// The protocol 8.0.0 difficulty feed (#1869): `chain_rust` (stamps through
+/// `observed_block_time`, as the node commits blocks) equals the kernel
+/// trajectory `run_rust` over the gaps floored at 3 s, so the DRT-tested
+/// kernel plus this floor is the production path. Equal and backward stamps
+/// no longer give the 7.x zero-gap halving: 55 equal stamps, which took
+/// `INITIAL_DIFFICULTY` to the floor under 7.x (Lean
+/// `time_warp_to_floor_in_55`), now leave it far above the floor.
 #[test]
-fn forward_dated_tip_rejects_honest_minting_tx() {
+fn production_feed_floors_gaps_post_1848() {
+    use crate::{
+        block::difficulty::{MAX_DIFFICULTY, MIN_OBSERVED_BLOCK_TIME_SECS},
+        node::minter::INITIAL_DIFFICULTY,
+    };
+    assert_eq!(MIN_OBSERVED_BLOCK_TIME_SECS, 3);
+    let p = 1_700_000_000u64;
+    let mut rng = Rng(1848);
+    for _ in 0..500 {
+        let d0 = match rng.below(3) {
+            0 => INITIAL_DIFFICULTY,
+            1 => MAX_DIFFICULTY,
+            _ => 1 + rng.below(MAX_DIFFICULTY),
+        };
+        let mut ts = p;
+        let stamps: Vec<u64> = (0..rng.below(40))
+            .map(|_| {
+                ts = match rng.below(5) {
+                    0 => ts,
+                    1 => ts.saturating_sub(rng.below(50)),
+                    2 => ts + rng.pick(&[3, 5, 10, 20, 40, 60]),
+                    _ => ts + rng.below(100),
+                };
+                ts
+            })
+            .collect();
+        let mut parent = p;
+        let floored: Vec<u64> = stamps
+            .iter()
+            .map(|&t| {
+                let g = t.saturating_sub(parent).max(MIN_OBSERVED_BLOCK_TIME_SECS);
+                parent = t;
+                g
+            })
+            .collect();
+        assert_eq!(
+            chain_rust(d0, p, &stamps),
+            run_rust(d0, &floored),
+            "production feed from {d0} over {stamps:?}"
+        );
+    }
+    // Genesis parent (0): no signal, difficulty unchanged for that block.
+    assert_eq!(chain_rust(INITIAL_DIFFICULTY, 0, &[p]), INITIAL_DIFFICULTY);
+    // The 7.x time warp is gone: 55 equal stamps are 55 floored 3 s gaps.
+    let warped = chain_rust(INITIAL_DIFFICULTY, p, &[p; 55]);
+    assert_eq!(warped, run_rust(INITIAL_DIFFICULTY, &[3; 55]));
+    assert!(
+        warped > 1,
+        "55 equal stamps must not reach the floor post-#1848"
+    );
+    assert_eq!(
+        run_rust(INITIAL_DIFFICULTY, &[0; 55]),
+        1,
+        "kernel unchanged"
+    );
+}
+
+/// Post-fix witness for the Lean counterexample
+/// `Botho.Difficulty.forward_date_locks_out_honest` (#1841, finding #1848).
+///
+/// History: under protocol <= 7.x the validator's lower timestamp bound was
+/// the parent (`timestamp >= tip_timestamp`) and the future bound was 2 h, so
+/// one tip stamped up to 2 h ahead of the wall clock made every honest
+/// `now` stamp invalid (`TimestampBeforeParent`); that is what the Lean
+/// theorem proves about the 7.x rule, and what this test used to witness on
+/// the real validator. Fixed in protocol 8.0.0 (#1869): the lower bound is
+/// `timestamp > MTP(last 11)` and the future bound is 60 s.
+///
+/// This test now pins the post-fix behaviour on the real validator:
+///
+/// - a 7.x-style 2 h forward-dated stamp is rejected outright by the 60 s
+///   future bound;
+/// - a tip forward-dated as far as 8.0.0 allows (`now + 50`) on top of an
+///   honest window does not move the median, so the honest minter's stamp
+///   `max(now, MTP + 1)` (`node/minter.rs`) is ACCEPTED, even though it is
+///   before the parent;
+/// - the forward-dated producer's next stamp still passes too: it gains no
+///   exclusive right to mint.
+#[test]
+fn forward_dated_tip_accepts_honest_minting_tx_post_1848() {
     use crate::{
         block::{calculate_block_reward, MintingTx},
         consensus::{TransactionValidator, ValidationError},
@@ -153,16 +237,30 @@ fn forward_dated_tip_rejects_honest_minting_tx() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after epoch")
         .as_secs();
-    // The parent was stamped 7000 s ahead (< 7200 s: valid when accepted).
+    // Ten honest blocks 5 s apart ending at `now - 5`, then a tip stamped
+    // 50 s ahead (inside the 8.0.0 60 s bound: valid when accepted).
+    let tip_timestamp = now + 50;
+    let mut recent_timestamps: Vec<u64> = (0..10).map(|i| now - 50 + 5 * i).collect();
+    recent_timestamps.push(tip_timestamp);
     let state = ChainState {
         height: 10,
         tip_hash: [7u8; 32],
-        tip_timestamp: now + 7000,
+        tip_timestamp,
         difficulty: u64::MAX,
         total_mined: 1_000_000_000_000,
         current_reward: crate::block::difficulty::INITIAL_REWARD,
+        recent_timestamps,
         ..ChainState::default()
     };
+    let mtp = state.median_time_past();
+    let honest_stamp = now.max(state.next_min_timestamp());
+    assert!(mtp < now, "one forward-dated tip cannot move the median");
+    assert_eq!(honest_stamp, now);
+    assert!(
+        honest_stamp < state.tip_timestamp,
+        "honest stamp is before the parent"
+    );
+
     let reward = calculate_block_reward(11, state.total_mined);
     let validator = TransactionValidator::new(Arc::new(RwLock::new(state)));
     let tx_at = |timestamp: u64| MintingTx {
@@ -179,20 +277,23 @@ fn forward_dated_tip_rejects_honest_minting_tx() {
         timestamp,
     };
 
-    // Honest minter: stamped with its wall clock -> rejected.
+    // Honest minter: stamped `max(now, MTP + 1)` -> accepted (difficulty
+    // u64::MAX makes any PoW hash valid, so every other check passes too).
     assert_eq!(
-        validator.validate_minting_tx(&tx_at(now)),
-        Err(ValidationError::TimestampBeforeParent)
+        validator.validate_minting_tx(&tx_at(honest_stamp)),
+        Ok(()),
+        "post-#1848 the honest minting tx must be accepted on a forward-dated tip"
     );
-    // Attacker: stamped at the tip -> passes the timestamp checks (difficulty
-    // u64::MAX makes any PoW hash valid, so it is accepted outright).
-    let attacker = validator.validate_minting_tx(&tx_at(now + 7100));
-    assert!(
-        !matches!(
-            attacker,
-            Err(ValidationError::TimestampBeforeParent | ValidationError::TimestampTooFarInFuture)
-        ),
-        "forward-dated tx must pass both timestamp rules, got {attacker:?}"
+    // The forward-dated producer stamping at its tip still passes as well.
+    assert_eq!(
+        validator.validate_minting_tx(&tx_at(tip_timestamp + 5)),
+        Ok(())
+    );
+    // The 7.x attack offset (7000 s ahead, inside the old 2 h bound) is now
+    // out of bounds.
+    assert_eq!(
+        validator.validate_minting_tx(&tx_at(now + 7000)),
+        Err(ValidationError::TimestampTooFarInFuture)
     );
 }
 
@@ -340,7 +441,7 @@ fn gen_slot_vectors(rng: &mut Rng) -> Vec<(bool, u64, Vec<(u64, u64)>, u64)> {
             ts = match rng.below(8) {
                 0 => ts,                                 // equal to parent
                 1 => ts.saturating_sub(rng.below(50)),   // out of order
-                2 => ts + 7200,                          // forward-dated
+                2 => ts + 7200,                          // forward-dated (7.x 2 h bound)
                 3 => ts + rng.pick(&[3, 5, 10, 20, 40]), // tier pacing
                 _ => ts + rng.below(60),
             };

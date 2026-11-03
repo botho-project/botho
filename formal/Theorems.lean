@@ -198,7 +198,9 @@ import Botho
 
 -- Botho.Difficulty.Warp (#1841, #1842; status: proven (model); `run` tested
 -- against EmissionController::record_block; header timestamp rules and the
--- validator clock `now` are trusted inputs read from the code)
+-- validator clock `now` are trusted inputs read from the code. The header
+-- rules are protocol <= 7.x: the lockout/time-warp theorems are the record
+-- of finding #1848, fixed in 8.0.0 (#1869))
 #print axioms Botho.Difficulty.run_le_pow
 #print axioms Botho.Difficulty.run_ge_div_pow
 #print axioms Botho.Difficulty.run_slow_exact

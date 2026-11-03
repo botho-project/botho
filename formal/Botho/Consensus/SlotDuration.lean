@@ -19,8 +19,8 @@ rounded and rounding is monotone; `20, 5, 1` are exact doubles; and for
 `0.2` (the double is slightly above `1/5`) an exact quotient below `1/5` is
 at least `1/(5w)` below it, more than the half-ulp that could round it up.
 That argument is **trusted** (not formalised: the model has no floats);
-timestamps are bounded by the 2 h future rule, so real windows are far
-inside it. The vectors in `Botho/Difficulty/Vectors.lean` test the model
+timestamps are bounded by the future rule (2 h under protocol ≤ 7.x, 60 s
+since 8.0.0, #1869), so real windows are far inside it. The vectors in `Botho/Difficulty/Vectors.lean` test the model
 against the Rust method (**tested**). `Duration::as_secs` drops sub-second
 `config.slot_duration` parts in the fallback paths; the model takes the
 configured value in whole seconds.
@@ -121,8 +121,10 @@ theorem recordBlock_firstTs_mem {w : List RecentBlockInfo} (hw : w ≠ []) (b : 
 
 /-- **Counterexample (a producer can force the idle tier).** Let a node's
 window hold at least one block with a timestamp at or before `now`, and let a
-producer add a block stamped `now + 2 h` (valid for that node, see
-`Botho.Difficulty.forward_date_locks_out_honest`). If the resulting window
+producer add a block stamped `now + 2 h` (valid for that node under the
+protocol ≤ 7.x 2 h future bound, see
+`Botho.Difficulty.forward_date_locks_out_honest`; finding #1848, fixed in
+8.0.0 (#1869), whose 60 s bound no longer admits this stamp). If the resulting window
 carries at most 1439 transactions, the node's slot duration becomes the idle
 40 s, whatever the real load. With the default `max_txs_per_slot = 100` a
 window of 10 blocks carries at most 1000, so the hypothesis holds for every

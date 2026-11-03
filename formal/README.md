@@ -311,14 +311,24 @@ the #1857 and #1858 tests there now assert the rejection
 
 `Botho/Difficulty/` and `Botho/Consensus/SlotDuration.lean` (#1841) model the
 node's per-block difficulty controller, the header timestamp rules it is fed
-by, and the node-local dynamic slot duration:
+by, and the node-local dynamic slot duration.
+
+Scope: the header timestamp layer (`tsValid`, `applyChain`, `observedSecs`,
+the 2 h `MAX_FUTURE_TIMESTAMP_SECS`) is the protocol ≤ 7.x rule set, under
+which there was no median-time-past rule. Its counterexamples are finding
+#1848, fixed in protocol 8.0.0 (#1869): `timestamp > MTP(last 11)`, a 60 s
+future bound, a 3 s floor on the observed difficulty gap
+(`observed_block_time`), and minters stamping `max(now, MTP + 1)`. The
+theorems stay as the record of the 7.x bug; the 8.0.0 timestamp rules are
+not modelled yet. The controller kernel and the slot-duration code are
+unchanged in 8.0.0, so their models and DRT legs cover the code on main.
 
 | Lean | Rust | Status |
 |------|------|--------|
 | `Botho.Difficulty.step` | `EmissionController::compute_time_adjusted_difficulty`, `botho/src/block.rs` | proven + tested |
 | `Botho.Difficulty.run`, `recordBlock` | `EmissionController::record_block`, `botho/src/block.rs` | proven + tested |
-| `Botho.Difficulty.observedSecs` | `observed_secs` in `node::commit_block_locked`, `botho/src/node/mod.rs` | proven (model); read from the code |
-| `Botho.Difficulty.tsValid`, `applyChain` | the timestamp checks in `ledger/store/validation.rs` and `consensus/validation.rs` (`ts >= tip`, `ts <= now + 2 h`) | proven (model); the validator clock `now` is a trusted input |
+| `Botho.Difficulty.observedSecs` | `observed_secs` in `node::commit_block_locked`, `botho/src/node/mod.rs`, protocol ≤ 7.x (8.0.0: `observed_block_time`, floored at 3 s, not modelled; tested in Rust by `production_feed_floors_gaps_post_1848`) | proven (model); read from the 7.x code |
+| `Botho.Difficulty.tsValid`, `applyChain` | the protocol ≤ 7.x timestamp checks in `ledger/store/validation.rs` and `consensus/validation.rs` (`ts >= tip`, `ts <= now + 2 h`; 8.0.0 replaced them with `ts > MTP`, `ts <= now + 60 s`) | proven (model) for 7.x; the validator clock `now` is a trusted input |
 | `Botho.Consensus.slotSecs`, `recordBlock` | `ConsensusService::current_slot_duration`, `record_block`, `botho/src/consensus/service.rs` | proven + tested; the f64 rate is modelled exactly (trusted agreement domain in the module docstring) |
 
 Each kernel is tested twice: by the random legs below, and by the fixed
@@ -327,8 +337,10 @@ against the model (`lake build`) and the Rust tests in
 `botho/src/formal_drt_difficulty/tests.rs` check against the code. The
 headline results (convergence to `MAX_DIFFICULTY` in 8 blocks, #1842; the
 floor in 55 equal-timestamp blocks, and why that is not a cheap halt; the
-forward-dating lockout counterexample, #1848) are in the docstrings of
-`Botho/Difficulty/Warp.lean`. `compute_time_adjusted_difficulty` is
+forward-dating lockout counterexample, #1848, protocol ≤ 7.x, fixed in 8.0.0
+by #1869) are in the docstrings of `Botho/Difficulty/Warp.lean`. The Rust
+test `forward_dated_tip_accepts_honest_minting_tx_post_1848` pins the fixed
+validator behaviour. `compute_time_adjusted_difficulty` is
 integer-only and a candidate for the `botho` extraction lane (#1838); this
 model does not depend on it.
 
@@ -391,7 +403,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `effective_cluster_wealth` | `ValidationReads::effective_cluster_wealth_from_outputs` over the same double | `Botho.Tags.effectiveWealth` |
 | `import_floor_factor` | `ValidationReads::import_floor_factor_from_outputs` over the same double | `Botho.Tags.importFloor` |
 | `difficulty_step` | `EmissionController::compute_time_adjusted_difficulty` (through `botho::formal_drt_difficulty`) | `Botho.Difficulty.step` |
-| `difficulty_run` | `EmissionController::record_block`, one `Some(gap)` per block | `Botho.Difficulty.run` |
+| `difficulty_run` | `EmissionController::record_block`, one `Some(gap)` per block (half the runs with gaps floored at 3 s, as `observed_block_time` feeds them since 8.0.0) | `Botho.Difficulty.run` |
 | `slot_duration` | `ConsensusService::record_block` then `current_slot_duration` | `Botho.Consensus.slotSecs` |
 
 The cluster-tag legs (#1840) live in `formal-drt/src/legs_tags.rs` and

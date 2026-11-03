@@ -2,18 +2,33 @@
 Difficulty over many blocks, and what a producer who controls timestamps can
 do to it (#1841, epic #1704; formalises the #1842 finding).
 
+Scope: the header timestamp layer here (`tsValid`, `applyChain`,
+`observedSecs`, `MAX_FUTURE_TIMESTAMP_SECS`, the honest-stamp rule) is the
+protocol ≤ 7.x rule set. Its counterexamples (`time_warp_to_floor_in_55`,
+`forward_date_locks_out_honest`, `forward_dated_chain_valid`) are finding
+#1848, fixed in protocol 8.0.0 (#1869): blocks must be stamped after the
+median time past of the last 11 blocks, the future bound is 60 s, the
+difficulty gap is floored at 3 s (`observed_block_time`), and minters stamp
+`max(now, MTP + 1)`. Those theorems stay as the record of the 7.x bug; the
+8.0.0 rules are not modelled here. The controller part (`run`,
+`recordBlock`, and every theorem about them) is unchanged in 8.0.0.
+
 What is mirrored:
 - `run` / `recordBlock`: the difficulty part of
   `EmissionController::record_block` (`botho/src/block.rs`): one `step` per
   block when `observed_secs` is `Some`, no change when it is `None`.
 - `observedSecs`: how `node::commit_block_locked` (`botho/src/node/mod.rs`)
-  derives `observed_secs` from the parent tip timestamp:
-  `Some(ts - parent)` when `parent > 0 && ts >= parent`, else `None`.
-- `tsValid` / `applyChain`: the two header timestamp rules, and nothing else,
-  because there is nothing else (no median-time-past rule):
+  derived `observed_secs` from the parent tip timestamp under protocol ≤ 7.x:
+  `Some(ts - parent)` when `parent > 0 && ts >= parent`, else `None`. Since
+  8.0.0 (#1869) it is `observed_block_time`: `Some(max(ts - parent, 3))`
+  when `parent > 0` (saturating subtraction), else `None`.
+- `tsValid` / `applyChain`: the two header timestamp rules of protocol
+  ≤ 7.x, and nothing else, because under 7.x there was nothing else (no
+  median-time-past rule; finding #1848, fixed in 8.0.0 (#1869)):
   `ts >= tip_timestamp` (`ledger/store/validation.rs`, and
   `consensus/validation.rs` `validate_minting_tx`) and
-  `ts <= now + MAX_FUTURE_TIMESTAMP_SECS` with a 2 h bound against the
+  `ts <= now + MAX_FUTURE_TIMESTAMP_SECS` with a 2 h bound (60 s since
+  8.0.0) against the
   VALIDATING node's wall clock (`ledger/store/validation.rs`,
   `consensus/validation.rs` `validate_minting_tx_intrinsic`). `now` is an
   input of the model, one per block: **trusted** (the model assumes nothing
@@ -21,7 +36,8 @@ What is mirrored:
 - An honest minter stamps its minting tx, and so its block, with its own
   wall clock at the moment it finds the PoW (`node/minter.rs`, `timestamp =
   SystemTime::now()`; `consensus/block_builder.rs` copies it into the
-  header). It never uses `max(now, parent)`.
+  header). Under protocol ≤ 7.x it never used `max(now, parent)`; since
+  8.0.0 (#1869) it stamps `max(now, MTP + 1)`.
 
 Not mirrored: the SCP choice of which minting tx wins a slot (highest
 `pow_priority`), the PoW search itself, and the network.
@@ -38,10 +54,12 @@ import Botho.Difficulty.Step
 namespace Botho.Difficulty
 
 /-- `MAX_FUTURE_TIMESTAMP_SECS` (2 h), in `consensus/validation.rs` and
-`ledger/store.rs`. -/
+`ledger/store.rs` under protocol ≤ 7.x (finding #1848); 60 s since 8.0.0
+(#1869), which this model does not cover. -/
 def MAX_FUTURE_TIMESTAMP_SECS : Nat := 7200
 
-/-- `observed_secs` in `node::commit_block_locked`. -/
+/-- `observed_secs` in `node::commit_block_locked`, protocol ≤ 7.x (since
+8.0.0, #1869, the node floors the gap at 3 s via `observed_block_time`). -/
 def observedSecs (parent ts : Nat) : Option Nat :=
   if 0 < parent ∧ parent ≤ ts then some (ts - parent) else none
 
@@ -55,8 +73,9 @@ def run (d : Nat) : List Nat → Nat
   | [] => d
   | o :: os => run (step d o TARGET_BLOCK_TIME_SECS) os
 
-/-- The header timestamp rules against tip timestamp `tip`, for a validator
-whose clock reads `now`. -/
+/-- The protocol ≤ 7.x header timestamp rules against tip timestamp `tip`,
+for a validator whose clock reads `now` (finding #1848; replaced in 8.0.0,
+#1869, by `ts > MTP(last 11)` and a 60 s future bound). -/
 def tsValid (tip ts now : Nat) : Bool :=
   decide (tip ≤ ts) && decide (ts ≤ now + MAX_FUTURE_TIMESTAMP_SECS)
 
@@ -288,7 +307,7 @@ admits (`p + 80 ≤ now + 2 h`, true whenever `p ≤ now`), the chain stamped
 `p + 10, p + 20, ..., p + 80` is valid and takes `INITIAL_DIFFICULTY` to
 `MAX_DIFFICULTY`. Forward-dating needs only 80 s of claimed time, far inside
 the 2 h slack, and buys nothing a run of honest 10 s blocks does not.
-Proven (model). -/
+Proven (model), against the protocol ≤ 7.x header rules. -/
 theorem forward_dating_reaches_max_in_8 {p now : Nat} (hp : 0 < p)
     (hf : p + 80 ≤ now + MAX_FUTURE_TIMESTAMP_SECS) :
     (applyChain INITIAL_DIFFICULTY p (gapsChain p now (List.replicate 8 10))).map
@@ -355,7 +374,10 @@ theorem initial_div_pow_54 : INITIAL_DIFFICULTY / 2 ^ 54 = 2 := by
 timestamp rules prevent it").** From any tip `p > 0` the validator's clock
 admits, the chain of 55 blocks all stamped `p` (equal to the parent, which
 `ts >= parent` allows) is valid and takes `INITIAL_DIFFICULTY` to
-`MIN_DIFFICULTY = 1`. Proven (model). -/
+`MIN_DIFFICULTY = 1`. Proven (model). This is the record of the bug under
+the protocol ≤ 7.x rules (#1842, finding #1848); fixed in 8.0.0 (#1869),
+where equal stamps are bounded by the median-time-past rule and each feeds
+the floored 3 s gap, not 0. -/
 theorem time_warp_to_floor_in_55 {p now : Nat} (hp : 0 < p)
     (hf : p ≤ now + MAX_FUTURE_TIMESTAMP_SECS) :
     applyChain INITIAL_DIFFICULTY p (gapsChain p now (List.replicate 55 0)) =
@@ -460,7 +482,10 @@ maximum future offset, `ts = now_a + 2 h`, is valid for a validator whose clock
 reads `now_a`. After it, a block from an honest minter, stamped with the
 honest wall clock `now_h`, is REJECTED for as long as `now_h < now_a + 2 h`:
 honest minting is locked out for up to 2 h by one block. Proven (model);
-the honest-stamp rule is read from `node/minter.rs`. -/
+the honest-stamp rule is read from `node/minter.rs`. This is the record of
+finding #1848 against the protocol ≤ 7.x rules; fixed in 8.0.0 (#1869). The
+Rust test `forward_dated_tip_accepts_honest_minting_tx_post_1848` pins the
+fixed behaviour on the real validator. -/
 theorem forward_date_locks_out_honest {d tip d' tip' now_a now_h : Nat}
     (bs : List (Nat × Nat)) (h : applyChain d tip bs = some (d', tip'))
     (hv : tip' ≤ now_a + MAX_FUTURE_TIMESTAMP_SECS)
@@ -480,7 +505,8 @@ with its validators' clock plus 2 h is valid for any non-decreasing sequence
 of clock readings, so the tip always sits 2 h ahead of the wall clock and no
 honest block (`forward_date_locks_out_honest`) is valid while the attacker
 keeps producing. The attacker's own gaps are then the real gaps, so the
-controller sees nothing unusual. Proven (model). -/
+controller sees nothing unusual. Proven (model), against the protocol ≤ 7.x
+rules (finding #1848; fixed in 8.0.0, #1869). -/
 theorem forward_dated_chain_valid {d tip : Nat} (nows : List Nat) (n0 : Nat)
     (hsorted : ∀ i j, i ≤ j → j < nows.length → nows[i]! ≤ nows[j]!)
     (h0 : tip ≤ n0 + MAX_FUTURE_TIMESTAMP_SECS) (hfirst : ∀ n ∈ nows, n0 ≤ n) :
