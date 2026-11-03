@@ -5,6 +5,7 @@ Every model module under `Botho/` must be imported here so that
 `lake build` type-checks it (and the sorry gate sees it).
 -/
 import Botho.Basic
+import Botho.Supply.Accounting
 import Botho.Lottery.Arith
 import Botho.Lottery.Prims
 import Botho.Lottery.Seed
@@ -14,4 +15,4 @@ import Botho.Lottery.Pool
 import Botho.Lottery.Window
 import Botho.Lottery.Drawing
 import Botho.Quorum.Fbas
-import Botho.Supply.Accounting
+import Botho.Lottery.Sybil

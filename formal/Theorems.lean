@@ -21,6 +21,19 @@ import Botho
 #print axioms Botho.satAdd_le_cap
 #print axioms Botho.satAdd_eq_add
 
+-- Botho.Supply.Accounting (#1839; scalar model, explicit ledger premises)
+#print axioms Botho.Supply.fee_quotient_le
+#print axioms Botho.Supply.splitFees_exact
+#print axioms Botho.Supply.splitFees_total
+#print axioms Botho.Supply.splitFees_conserves
+#print axioms Botho.Supply.splitFees_rounding
+#print axioms Botho.Supply.oversized_fraction_creates_value
+#print axioms Botho.Supply.pool_inflow_fits
+#print axioms Botho.Supply.apply_conserves
+#print axioms Botho.Supply.counters_fit
+#print axioms Botho.Supply.issuance_step_fits
+#print axioms Botho.Supply.arbitrary_pool_saturates
+
 -- Botho.Quorum.Fbas (#1714: flat FBAS quorum intersection, despite-f, curated
 -- rotation; status: proven (model); Rust ties are tested, see the module docstring)
 #print axioms Botho.Quorum.delete_satisfies_iff
@@ -56,16 +69,24 @@ import Botho
 #print axioms Botho.Quorum.prod_4of5_rotate_two_intersects
 #print axioms Botho.Quorum.prod_4of5_rotate_two_not_despite_one
 #print axioms Botho.Quorum.reroster_mixed_fork
-
--- Botho.Supply.Accounting (#1839; scalar model, explicit ledger premises)
-#print axioms Botho.Supply.fee_quotient_le
-#print axioms Botho.Supply.splitFees_exact
-#print axioms Botho.Supply.splitFees_total
-#print axioms Botho.Supply.splitFees_conserves
-#print axioms Botho.Supply.splitFees_rounding
-#print axioms Botho.Supply.oversized_fraction_creates_value
-#print axioms Botho.Supply.pool_inflow_fits
-#print axioms Botho.Supply.apply_conserves
-#print axioms Botho.Supply.counters_fit
-#print axioms Botho.Supply.issuance_step_fits
-#print axioms Botho.Supply.arbitrary_pool_saturates
+-- Botho.Lottery.Sybil (#1708 part C1; status: proven (model), the lottery
+-- model is tested by the #1818 DRT legs; ST-3 is about a stated economy
+-- model, not the node)
+#print axioms Botho.Lottery.TICKET_LIFE_eq
+#print axioms Botho.Lottery.drawEligible_uniform_all_win
+#print axioms Botho.Lottery.rotate_perm
+#print axioms Botho.Lottery.ce_owner_wins_three_base_fees
+#print axioms Botho.Lottery.sybil_net_zero_refuted
+#print axioms Botho.Lottery.rewardCap_inert
+#print axioms Botho.Lottery.lotteryCandidates_length
+#print axioms Botho.Lottery.countEligible_lotteryCandidates
+#print axioms Botho.Lottery.rewardCap_saturated
+#print axioms Botho.Lottery.splitUnprofitable_iff
+#print axioms Botho.Lottery.split_never_pays_iff
+#print axioms Botho.Lottery.split_never_pays_iff_fixed
+#print axioms Botho.Lottery.break_even_reference
+#print axioms Botho.Lottery.break_even_backlog_reference
+#print axioms Botho.Lottery.split_pays_at_reference
+#print axioms Botho.Lottery.r3_no_split_profit
+#print axioms Botho.Lottery.r3_eligibility_unpriced
+#print axioms Botho.Lottery.r3_pricing_violated
