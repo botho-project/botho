@@ -1202,6 +1202,30 @@ fn compute_effective_decay_rate(validation_result: Option<&str>, block_height: u
 // Node and Chain Handlers
 // ============================================================================
 
+/// `(quorumFaultTolerant, quorumDegenerate)` for `node_getStatus` (#1843).
+///
+/// With a gate snapshot present the answer comes from the INSTALLED quorum set
+/// — `byzantine_tolerance(quorum_size, quorum_threshold) >= 1` — exactly the
+/// formula behind `quorumByzantineTolerance`, so the flag and the count can
+/// never disagree (#1605). Without a snapshot (before the first gate
+/// evaluation) it falls back to
+/// [`crate::config::QuorumConfig::is_bft_fault_tolerant`] over `scp_peers + 1`
+/// participating nodes. `degenerate` is always `!fault_tolerant`.
+fn status_fault_flags(
+    snapshot: Option<&QuorumGateSnapshot>,
+    cfg: &crate::config::QuorumConfig,
+    scp_peers: usize,
+    local_peer_id: &str,
+) -> (bool, bool) {
+    let fault_tolerant = match snapshot {
+        Some(g) => {
+            crate::config::byzantine_tolerance(g.quorum_size, g.quorum_threshold as usize) >= 1
+        }
+        None => cfg.is_bft_fault_tolerant(scp_peers + 1, local_peer_id),
+    };
+    (fault_tolerant, !fault_tolerant)
+}
+
 async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let ledger = read_lock!(state.ledger, id.clone());
     let chain_state = ledger.get_chain_state().unwrap_or_default();
@@ -1256,21 +1280,6 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
         }
     };
 
-    // Byzantine-fault-tolerance posture (#509). Participating node count
-    // includes self, so n = scp_peers + 1. In `recommended` mode, n < 4 yields
-    // a degenerate quorum that tolerates ZERO faults; >= 4 is genuinely BFT.
-    // In `explicit` mode `participating_nodes` is ignored: the threshold and the
-    // effective member set (self, duplicates and unparseable IDs dropped, as
-    // the quorum gate does) decide (#1546).
-    let participating_nodes = scp_peers + 1;
-    let local_peer_id = state.identity.peer_id.as_str();
-    let quorum_fault_tolerant = state
-        .quorum
-        .is_bft_fault_tolerant(participating_nodes, local_peer_id);
-    let quorum_degenerate = state
-        .quorum
-        .is_degenerate_quorum(participating_nodes, local_peer_id);
-
     // Stuck-miner health (#538): surface the same verdict as `minting_getStatus`
     // so dashboards/monitoring watching node health catch a wedged miner (active
     // but 0 H/s) immediately instead of after the chain silently halts.
@@ -1317,6 +1326,19 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
         .as_ref()
         .map(|g| crate::config::byzantine_tolerance(g.quorum_size, g.quorum_threshold as usize));
 
+    // Byzantine-fault-tolerance posture (#509, #1843). Once the gate has
+    // installed a quorum set, both flags read that installed `(n, t)` with the
+    // same formula as `quorumByzantineTolerance`, so
+    // `quorumFaultTolerant == (quorumByzantineTolerance >= 1)` by construction
+    // (#1605). Before the first gate evaluation they fall back to the config
+    // over `n = scp_peers + 1` participating nodes.
+    let (quorum_fault_tolerant, quorum_degenerate) = status_fault_flags(
+        quorum_gate.as_ref(),
+        &state.quorum,
+        scp_peers,
+        state.identity.peer_id.as_str(),
+    );
+
     // Operator-action pre-signature rejected-requests counter (#750, §6 review
     // finding 3). Pre-signature failures (not-configured / unknown-signer /
     // bad-signature) are reachable by ANY unauthenticated caller, so they are
@@ -1345,10 +1367,11 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "mintingActive": minting,
             "mintingThreads": if minting { state.minting_threads } else { 0 },
             "totalTransactions": chain_state.total_tx,
-            // BFT posture: `quorumFaultTolerant` is true only with >= 4
-            // participating nodes in recommended mode (3f+1 >= 4 for f=1), or
-            // an explicit threshold that tolerates f >= 1 (#1546);
-            // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
+            // BFT posture (#1843): `quorumFaultTolerant` is true only when the
+            // installed t-of-n quorum tolerates f >= 1 Byzantine fault — the
+            // same formula as `quorumByzantineTolerance`, so the two always
+            // agree once the gate has run (#1605). A Crash-majority 3-of-5 is
+            // NOT fault-tolerant. `quorumDegenerate` is its complement.
             "quorumFaultTolerant": quorum_fault_tolerant,
             "quorumDegenerate": quorum_degenerate,
             // Quorum promotion gate (#651): curated vs auto-promoted quorum
@@ -5107,6 +5130,69 @@ mod tests {
         assert_eq!(result["scpPeerCount"], json!(3));
         assert_eq!(result["quorumDegenerate"], json!(false));
         assert_eq!(result["quorumFaultTolerant"], json!(true));
+
+        // #1843: 4 SCP peers -> n = 5 -> Crash majority 3-of-5, f = 0 -> NOT
+        // fault tolerant, even though n >= 4.
+        *state.scp_peer_count.write().unwrap() = 4;
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["scpPeerCount"], json!(4));
+        assert_eq!(result["quorumDegenerate"], json!(true));
+        assert_eq!(result["quorumFaultTolerant"], json!(false));
+    }
+
+    /// #1843: with a gate snapshot present, `status_fault_flags` reads the
+    /// INSTALLED `(quorum_size, quorum_threshold)`, so the flag equals
+    /// `byzantine_tolerance(n, t) >= 1` (the `quorumByzantineTolerance`
+    /// formula) for every n <= 13 and every threshold — regardless of the
+    /// config mode or the live SCP peer count.
+    #[test]
+    fn status_fault_flags_match_installed_byzantine_tolerance() {
+        use crate::{
+            config::{byzantine_tolerance, FaultModel, QuorumConfig, QuorumMode},
+            consensus::QuorumGateSnapshot,
+        };
+        let configs = [
+            QuorumConfig::default(),
+            QuorumConfig {
+                fault_model: FaultModel::Bft,
+                ..QuorumConfig::default()
+            },
+            QuorumConfig {
+                mode: QuorumMode::Explicit,
+                threshold: 4,
+                ..QuorumConfig::default()
+            },
+        ];
+        for n in 1..=13usize {
+            for t in 1..=n {
+                let snap = QuorumGateSnapshot {
+                    curated_members: 0,
+                    auto_members: n - 1,
+                    suppressed_peers: 0,
+                    max_auto_members: 16,
+                    intersection_refused: false,
+                    quorum_size: n,
+                    quorum_threshold: t as u32,
+                    curated_peer_ids: Vec::new(),
+                    auto_peer_ids: Vec::new(),
+                    suppressed_peer_ids: Vec::new(),
+                };
+                for cfg in &configs {
+                    for scp_peers in [0, n - 1, 20] {
+                        let (ft, degen) = status_fault_flags(Some(&snap), cfg, scp_peers, "");
+                        assert_eq!(ft, byzantine_tolerance(n, t) >= 1, "{t}-of-{n}");
+                        assert_eq!(degen, !ft, "{t}-of-{n}");
+                    }
+                }
+            }
+        }
+
+        // No snapshot: fall back to the config over scp_peers + 1.
+        let crash = QuorumConfig::default();
+        assert_eq!(status_fault_flags(None, &crash, 3, ""), (true, false)); // 3-of-4
+        assert_eq!(status_fault_flags(None, &crash, 4, ""), (false, true)); // 3-of-5
+        assert_eq!(status_fault_flags(None, &crash, 5, ""), (true, false)); // 4-of-6
     }
 
     /// #1535: `node_getStatus` reports the ledger's LMDB map usage, read live
@@ -5635,6 +5721,9 @@ mod tests {
         assert_eq!(quiet["quorumSize"], json!(5));
         assert_eq!(quiet["quorumThreshold"], json!(4));
         assert_eq!(quiet["quorumByzantineTolerance"], json!(1));
+        // #1843: the flag reads the installed 4-of-5 (f = 1).
+        assert_eq!(quiet["quorumFaultTolerant"], json!(true));
+        assert_eq!(quiet["quorumDegenerate"], json!(false));
 
         // (4) Sybil flood: the SAME handle now reports active suppression —
         // every field must move with the snapshot (not-a-constant proof).
@@ -5659,6 +5748,8 @@ mod tests {
         assert_eq!(flooded["quorumSize"], json!(4));
         assert_eq!(flooded["quorumThreshold"], json!(4));
         assert_eq!(flooded["quorumByzantineTolerance"], json!(0));
+        assert_eq!(flooded["quorumFaultTolerant"], json!(false));
+        assert_eq!(flooded["quorumDegenerate"], json!(true));
         assert_ne!(
             quiet["quorumGateSuppressedPeers"], flooded["quorumGateSuppressedPeers"],
             "quorumGateSuppressedPeers must track the live snapshot, not a constant"
@@ -5685,6 +5776,10 @@ mod tests {
         assert_eq!(five_three["quorumSize"], json!(5));
         assert_eq!(five_three["quorumThreshold"], json!(3));
         assert_eq!(five_three["quorumByzantineTolerance"], json!(0));
+        // #1843: installed 3-of-5 tolerates zero faults, so the flag must
+        // agree with `quorumByzantineTolerance` instead of overclaiming.
+        assert_eq!(five_three["quorumFaultTolerant"], json!(false));
+        assert_eq!(five_three["quorumDegenerate"], json!(true));
 
         // (6) `quorumMode` reflects config.
         let mut explicit_state = fresh_state().with_quorum_gate_status(handle.clone());

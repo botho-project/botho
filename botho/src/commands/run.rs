@@ -5735,6 +5735,59 @@ mod tests {
         }
     }
 
+    /// #1843 (ported, inverted, from the #1847 review repro
+    /// `judge_repro_1843_flag_overclaims_via_config`): a Recommended/Crash
+    /// cluster at odd n installs the majority `(n/2+1)`-of-n set, whose
+    /// quorums can share a single member (`2t - n == 1`), so it tolerates zero
+    /// Byzantine faults. Every posture flag — the config flag, the
+    /// operator-action `GateVerdict`, and the installed-set `f` — must say so.
+    #[test]
+    fn recommended_crash_odd_n_flags_not_fault_tolerant() {
+        use crate::{config::byzantine_tolerance, operator_action::GateVerdict};
+
+        let cfg = QuorumConfig::default();
+        assert_eq!(cfg.mode, QuorumMode::Recommended);
+        let local = ed25519_peer_id([0x43; 32]);
+        let local_str = local.to_string();
+        for n in [5usize, 7, 9] {
+            let peers = synthetic_peers(n - 1);
+            let (qs, snap) =
+                gated_scp_quorum_set(&cfg, &local, &peers, Some(&QuorumSet::new(1, vec![])));
+            assert!(!snap.intersection_refused, "n={n}: majority set intersects");
+            assert_eq!(snap.quorum_size, n);
+            assert_eq!(snap.quorum_threshold as usize, n / 2 + 1);
+            assert_eq!(qs.threshold as usize, n / 2 + 1);
+            // Two quorums overlap in exactly one member: one Byzantine member
+            // in that overlap breaks safety.
+            assert_eq!(2 * snap.quorum_threshold as usize - n, 1, "n={n}");
+
+            assert_eq!(
+                byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize),
+                0,
+                "n={n}: installed set has f = 0"
+            );
+            assert!(
+                !cfg.is_bft_fault_tolerant(n, &local_str),
+                "n={n}: config flag must not overclaim"
+            );
+            assert!(cfg.is_degenerate_quorum(n, &local_str));
+            let verdict = GateVerdict::from_snapshot(&snap);
+            assert!(!verdict.fault_tolerant, "n={n}: GateVerdict overclaims");
+            assert!(verdict.degenerate);
+        }
+
+        // Even n stays fault-tolerant (e.g. 3-of-4, 4-of-6: f = 1).
+        for n in [4usize, 6, 8] {
+            let peers = synthetic_peers(n - 1);
+            let (_, snap) =
+                gated_scp_quorum_set(&cfg, &local, &peers, Some(&QuorumSet::new(1, vec![])));
+            assert!(cfg.is_bft_fault_tolerant(n, &local_str), "n={n}");
+            let verdict = GateVerdict::from_snapshot(&snap);
+            assert!(verdict.fault_tolerant, "n={n}");
+            assert!(!verdict.degenerate, "n={n}");
+        }
+    }
+
     #[test]
     fn action_path_dry_run_accepts_without_mutating_config_or_reserving_nonce() {
         // Dry run returns a verdict but produces DryRunAccepted (never Apply), so
