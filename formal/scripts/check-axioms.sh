@@ -45,6 +45,17 @@
 # rewrite of this file during the build has no effect. These are defence in
 # depth, not a sandbox: see "Limits" in formal/README.md.
 #
+# Gate data reaches python3 on stdin, never in the environment or argv
+# (#1714 review). Linux caps one argv or environment string at 128 KiB
+# (MAX_ARG_STRLEN), and the axiom report alone is over 500 KiB for the
+# current model, so an environment variable fails with "Argument list too
+# long" on Linux (macOS has no per-string cap). The values still come from
+# the shell variables, not from files: the final check gets them as one
+# NUL-separated stream (bash variables cannot hold NUL, so the split is
+# exact), and its program is passed with `-c`, so nothing is read from disk
+# after the Theorems.lean compile. selftest-gates.sh checks this with an
+# oversized report under a python3 shim that enforces the Linux limits.
+#
 # Usage: check-axioms.sh [--no-scan] [FORMAL_ROOT]
 #   FORMAL_ROOT defaults to the directory above this script.
 #   --no-scan  skip the source scan in step 0 (the layout check still runs).
@@ -98,14 +109,13 @@ if [[ "$scan" == 1 ]]; then
 fi
 
 echo "== axiom gate: manifest syntax"
-if ! GATE_MANIFEST="$manifest_src" python3 - "$manifest" "$gate_lib" \
-  >"$tmp/commands" <<'PY'
-import os
+IFS= read -r -d '' manifest_prog <<'PY' || true
 import re
 import sys
 
 path, lib = sys.argv[1:]
-src = os.environ["GATE_MANIFEST"]
+# The manifest as read before any `lake` call, on stdin (see the header).
+src = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
 
 
 def blank_comments(s):
@@ -186,6 +196,8 @@ if errors:
     sys.exit(1)
 print("\n".join(commands))
 PY
+if ! printf '%s' "$manifest_src" \
+  | python3 -I -c "$manifest_prog" "$manifest" "$gate_lib" >"$tmp/commands"
 then
   echo "FAIL: Theorems.lean is not a plain manifest" >&2
   exit 1
@@ -222,16 +234,23 @@ if ! json="$(cd "$root" && "$lake" env lean --json --stdin <<<"$manifest_src" 2>
   exit 1
 fi
 
-GATE_COMMANDS="$commands" GATE_JSON="$json" GATE_REPORT="$report" \
-  GATE_ALLOWLIST="$allowlist_src" python3 - <<'PY'
+# The final check reads commands, json, report and the allow-list from one
+# NUL-separated stream on stdin, in that order (see the header).
+IFS= read -r -d '' check_prog <<'PY' || true
 import json
-import os
 import re
 import sys
 
+parts = sys.stdin.buffer.read().split(b"\0")
+if len(parts) != 5 or parts[4]:
+    sys.exit(f"FAIL: gate data stream has {len(parts) - 1} fields, wanted 4")
+gate_commands, gate_json, gate_report, gate_allowlist = (
+    p.decode("utf-8", "surrogateescape") for p in parts[:4]
+)
+
 commands = {}  # (line, col) -> name
 order = []
-for row in os.environ["GATE_COMMANDS"].splitlines():
+for row in gate_commands.splitlines():
     line, col, name = row.split("\t")
     commands[(int(line), int(col))] = name
     order.append(name)
@@ -239,7 +258,7 @@ for row in os.environ["GATE_COMMANDS"].splitlines():
 # The allow-list as read before `lake build` (not the file, which model code
 # could have rewritten during the build).
 allowed = set()
-for row in os.environ["GATE_ALLOWLIST"].splitlines():
+for row in gate_allowlist.splitlines():
     name = row.split("#", 1)[0].strip()
     if name:
         allowed.add(name)
@@ -252,7 +271,7 @@ RESULT = re.compile(
     re.S,
 )
 printed = {}  # name -> sorted axiom list
-for raw in os.environ["GATE_JSON"].splitlines():
+for raw in gate_json.splitlines():
     if not raw.strip():
         continue
     try:
@@ -292,7 +311,7 @@ for name in order:
 
 # Layer 4: the independent walk.
 walked, swept = {}, None
-for row in os.environ["GATE_REPORT"].splitlines():
+for row in gate_report.splitlines():
     parts = row.split("\t")
     if parts[0] == "AXIOMS":
         walked[parts[1]] = sorted(a for a in parts[2].split(",") if a)
@@ -328,6 +347,8 @@ print(
     f"swept; allow-list: {', '.join(sorted(allowed))})"
 )
 PY
+printf '%s\0' "$commands" "$json" "$report" "$allowlist_src" \
+  | python3 -I -c "$check_prog"
 }
 
 main "$@"
