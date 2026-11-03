@@ -252,6 +252,10 @@ Status: every theorem is proven (model). The Rust side is tested by
 
 A random heterogeneous `formal-drt` leg is a follow-up.
 
+The separate [demurrage counterexample model](DEMURRAGE.md) covers the
+charge kernel and default ring factor (#1711), including refutations of
+the positive-charge threshold, churn identity and conservative-overflow claim.
+
 ## Differential random testing (DRT)
 
 `formal-drt/` (#1706, #1707) checks that the Lean model and the Rust code

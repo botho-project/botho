@@ -149,6 +149,15 @@ def shaOnly : Prims := prims []
 
 def dispatch (fn : String) (a : Json) : Dec Json := do
   match fn with
+  | "demurrage_charge" =>
+    pure (encNat (Botho.Demurrage.charge (← nat a "value") (← nat a "factor")
+      (← nat a "elapsed") (← nat a "rate") (← nat a "year")))
+  | "default_cluster_factor" =>
+    pure (encNat (Botho.Demurrage.defaultFactor (← nat a "wealth")))
+  | "ring_centroid_factor" =>
+    let members ← (← arr a "members").mapM fun m => do
+      pure (← nat m "value", ← nat m "wealth")
+    pure (encNat (Botho.Demurrage.ringFactor members))
   | "lottery_seed_v2" =>
     pure (encBytes (lotterySeedV2 shaOnly (← bytes a "pow_hash") (← bytes a "prev_hash")
       (← nat a "height")))

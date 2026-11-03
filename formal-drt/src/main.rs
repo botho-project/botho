@@ -15,6 +15,7 @@
 //! See `formal/README.md` ("Differential random testing") for the tiers and
 //! for adding a leg.
 
+mod demurrage;
 mod fixtures;
 mod gen;
 mod legs;
@@ -31,6 +32,12 @@ type LegFn = fn(&fixtures::Fixtures, &mut model::Model, &Options) -> Report;
 /// Every leg: `(name, runner)`. To add a leg, implement `legs::Leg` and list
 /// it here.
 const LEGS: &[(&str, LegFn)] = &[
+    (demurrage::Charge::NAME, runner::run::<demurrage::Charge>),
+    (demurrage::Factor::NAME, runner::run::<demurrage::Factor>),
+    (
+        demurrage::RingFactor::NAME,
+        runner::run::<demurrage::RingFactor>,
+    ),
     (legs::SeedV2::NAME, runner::run::<legs::SeedV2>),
     (legs::IsEligible::NAME, runner::run::<legs::IsEligible>),
     (
