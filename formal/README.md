@@ -202,7 +202,7 @@ FBAS-level questions the quorum gate depends on, several of which come out
 | `t`-of-`n` intersects iff `2t > n` (both branches of `symmetric_quorum_has_intersection`) | `sym_intersects_iff_pos`, `analytic_rule_eq` | proven |
 | `t`-of-`n` intersects despite `f` faulty iff `2t - n > f` | `sym_despite_iff` | proven |
 | `byzantine_tolerance` is the largest tolerated `f` | `byzTol_iff_dset` (needs two honest nodes; `byzTol_conservative_edge` shows the edge is conservative) | proven |
-| `quorumFaultTolerant` agrees with it (lead A) | `recommended_crash_flag_overclaims` | refuted at odd `n >= 5`, Crash mode: #1843 |
+| `quorumFaultTolerant` agrees with it (lead A) | `recommended_crash_flag_overclaims` | refuted for the pre-#1864 flag at odd `n >= 5`, Crash mode: #1843 (historical; fixed by #1864) |
 | The node-local gate makes the fleet intersect (lead B) | `recommended_crash_bowtie_fork`, `recommended_bft_bowtie_fork` | refuted: #1844 |
 | Pairwise checker sound / complete | `checker_sound`, `checkDespite_sound`, `checker_complete_sym`, `checker_not_complete` | sound; complete for symmetric only |
 | Exact checker (the sim's enumeration) | `bruteIntersects_iff` | proven |
@@ -235,7 +235,10 @@ Status: every theorem is proven (model). The Rust side is tested by
   gate on bowtie views (#1844), and two Explicit configurations during a
   re-roster and a two-member swap (#1845). These tests assert the current
   behaviour, bugs included, and link the issue; fixing a bug means updating
-  its test.
+  its test. #1843 is fixed on main by #1864: the Lean flag model
+  (`recommendedFaultTolerant`) describes the flag as it was before #1864, and
+  the Rust test `crash_odd_n_flag_matches_tolerance_through_gate` now asserts
+  the fixed flag (not tolerant, degenerate) on the same odd-`n` fleets.
 
 A random heterogeneous `formal-drt` leg is a follow-up.
 

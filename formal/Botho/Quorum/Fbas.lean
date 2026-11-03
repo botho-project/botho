@@ -17,7 +17,10 @@ Flat FBAS model and quorum-intersection checker (#1714, epic #1704).
   `min(n - t, 2t - n - 1)`, saturating. Reported as
   `node_getStatus.quorumByzantineTolerance`.
 - `QuorumConfig::is_bft_fault_tolerant`, `botho/src/config.rs`: in Recommended
-  mode `node_count >= 4`, reported as `node_getStatus.quorumFaultTolerant`.
+  mode, before #1864, `node_count >= 4`, reported as
+  `node_getStatus.quorumFaultTolerant`. #1864 fixed it (#1843) to
+  `byzantine_tolerance(n, effective_threshold) >= 1`; the model below keeps
+  the pre-#1864 flag as a historical finding.
 - `QuorumConfig::effective_threshold`, `botho/src/config.rs`: Crash
   `n / 2 + 1`, Bft `n - (n - 1) / 3`.
 - The P4.4 curated path (#709, `evaluate_operator_action` in `run.rs`): one
@@ -564,8 +567,10 @@ def crashThreshold (n : Nat) : Nat := n / 2 + 1
 /-- `effective_threshold` under `FaultModel::Bft`: `n - (n - 1) / 3`. -/
 def bftThreshold (n : Nat) : Nat := n - (n - 1) / 3
 
-/-- `QuorumConfig::is_bft_fault_tolerant` in Recommended mode: `n >= 4`,
-whatever the fault model and threshold. This is `quorumFaultTolerant`. -/
+/-- `QuorumConfig::is_bft_fault_tolerant` in Recommended mode **as it was
+before #1864**: `n >= 4`, whatever the fault model and threshold. This was
+`quorumFaultTolerant`. #1864 fixed the flag (#1843) to follow the installed
+set's tolerance, `1 <= byzTol n t`; this definition models the old flag. -/
 def recommendedFaultTolerant (n : Nat) : Bool := decide (4 ≤ n)
 
 /-- In Recommended mode the gate never refuses: both fault models' thresholds
@@ -583,7 +588,9 @@ theorem recommended_gate_never_refuses (n : Nat) (hn : 1 ≤ n) :
 odd `n >= 5`, `quorumFaultTolerant` is `true` while the installed
 `n / 2 + 1`-of-`n` quorum has `quorumByzantineTolerance = 0` and loses quorum
 intersection once any single node is faulty. The flag overclaims. (At `n = 5`:
-3-of-5, `2t - n = 1`, not `> 1`.) Filed as #1843. -/
+3-of-5, `2t - n = 1`, not `> 1`.) Filed as #1843. This is a historical finding
+about the flag **before #1864**, which fixed it on main; the Rust test
+`crash_odd_n_flag_matches_tolerance_through_gate` now checks the fixed flag. -/
 theorem recommended_crash_flag_overclaims (n : Nat) (h4 : 4 ≤ n) (hodd : n % 2 = 1)
     (B : NodeSet) (hB : cnt B (List.range n) = 1) :
     recommendedFaultTolerant n = true ∧ byzTol n (crashThreshold n) = 0 ∧

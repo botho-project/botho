@@ -5831,7 +5831,8 @@ mod tests {
     // function the node runs, and read the fault-tolerance flag from
     // `QuorumConfig`. Tests marked BUG assert the CURRENT behaviour, bug
     // included, so CI stays green while the fix is consensus-gated. Fixing the
-    // linked issue must flip the marked assertions.
+    // linked issue must flip the marked assertions. #1843 is already fixed
+    // (#1864), so its test asserts the fixed flag.
 
     /// The fleet a set of per-node quorum sets forms, as `(threshold,
     /// members)` over indices into `peers`, members sorted.
@@ -5850,14 +5851,16 @@ mod tests {
             .collect()
     }
 
-    /// BUG #1843 (Lean `recommended_crash_flag_overclaims`): in Recommended
-    /// mode under the default Crash fault model, an odd-`n` fleet of `n >= 5`
-    /// gets a `n/2+1`-of-`n` quorum set from the gate, which tolerates zero
-    /// Byzantine faults, yet `is_bft_fault_tolerant` reports it tolerant (it
-    /// only checks `n >= 4`). Deleting one node leaves no quorum
-    /// intersection. Even `n` is consistent (flag and tolerance agree).
+    /// #1843, fixed by #1864 (Lean `recommended_crash_flag_overclaims`
+    /// models the flag as it was BEFORE #1864, when it only checked
+    /// `n >= 4`): in Recommended mode under the default Crash fault model, an
+    /// odd-`n` fleet of `n >= 5` gets a `n/2+1`-of-`n` quorum set from the
+    /// gate, which tolerates zero Byzantine faults. The fixed flag follows
+    /// the installed set's `f`, so `is_bft_fault_tolerant` now reports it
+    /// not tolerant. Deleting one node leaves no quorum intersection. Even
+    /// `n` is consistent (flag and tolerance agree).
     #[test]
-    fn bug_1843_crash_flag_overclaims_through_gate() {
+    fn crash_odd_n_flag_matches_tolerance_through_gate() {
         use crate::config::{byzantine_tolerance, FaultModel, QuorumConfig, QuorumMode};
         let cfg = QuorumConfig {
             mode: QuorumMode::Recommended,
@@ -5876,14 +5879,15 @@ mod tests {
             );
             let tol = byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize);
             assert_eq!(tol, 0, "{t}-of-{n} tolerates no Byzantine fault");
-            // BUG #1843: the flag says tolerant while the tolerance is 0.
+            // #1843 (fixed by #1864): the flag follows the tolerance, 0.
+            // Before #1864 both assertions below were inverted.
             assert!(
-                cfg.is_bft_fault_tolerant(n, &local),
-                "BUG #1843 flag, n={n}"
+                !cfg.is_bft_fault_tolerant(n, &local),
+                "#1843 flag must not overclaim, n={n}"
             );
             assert!(
-                !cfg.is_degenerate_quorum(n, &local),
-                "BUG #1843 flag, n={n}"
+                cfg.is_degenerate_quorum(n, &local),
+                "#1843 flag must report degenerate, n={n}"
             );
             // Every node builds the same symmetric set, so the fleet is
             // t-of-n; despite one faulty node it has no quorum intersection.
