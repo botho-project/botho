@@ -39,6 +39,12 @@
 //!   `acknowledgeDegenerate` override; `acknowledgeDegenerate: true` is
 //!   REQUIRED (and sufficient) only for edits leaving a <4-but->1-node quorum.
 //!   See [`check_membership_floor`] and the `finding2_*` tests.
+//! - **Transitional safety (#1845).** The optional signed
+//!   `acknowledgeUnsafeTransition: true` overrides the action path's pairwise
+//!   rotation check (`commands::run::transition_safe`), which otherwise refuses
+//!   a candidate quorum set that could fork a fleet still running the installed
+//!   set. Absent means `false`; it is covered by the signature like every other
+//!   field. The verdict is reported as [`GateVerdict::transition_safe`].
 
 use crate::{
     operator_key::fingerprint_hex,
@@ -240,6 +246,11 @@ pub struct ParsedEnvelope {
     pub signer_key_id: String,
     pub target_node: String,
     pub acknowledge_degenerate: bool,
+    /// Signed override for the #1845 transitional-safety check: when `true`,
+    /// a candidate quorum set that fails the pairwise rotation condition
+    /// against the installed set is applied anyway. Optional; absent means
+    /// `false`. Distinct from `acknowledge_degenerate` (different semantics).
+    pub acknowledge_unsafe_transition: bool,
 }
 
 impl SignedEnvelope {
@@ -340,6 +351,7 @@ fn parse_canonical_envelope(bytes: &str) -> Result<ParsedEnvelope, String> {
         "targetNode",
         "v",
         "acknowledgeDegenerate",
+        "acknowledgeUnsafeTransition",
     ];
     for key in obj.keys() {
         if !KNOWN_KEYS.contains(&key.as_str()) {
@@ -376,6 +388,14 @@ fn parse_canonical_envelope(bytes: &str) -> Result<ParsedEnvelope, String> {
             .ok_or_else(|| "`acknowledgeDegenerate` must be a boolean".to_string())?,
     };
 
+    // Optional field (#1845): acknowledgeUnsafeTransition defaults to false.
+    let acknowledge_unsafe_transition = match obj.get("acknowledgeUnsafeTransition") {
+        None => false,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| "`acknowledgeUnsafeTransition` must be a boolean".to_string())?,
+    };
+
     // `params` must be present (the canonical envelope always includes it, even
     // if empty for actions with no params) and an object.
     let params_obj = obj
@@ -397,6 +417,7 @@ fn parse_canonical_envelope(bytes: &str) -> Result<ParsedEnvelope, String> {
         signer_key_id,
         target_node,
         acknowledge_degenerate,
+        acknowledge_unsafe_transition,
     })
 }
 
@@ -882,6 +903,13 @@ pub struct GateVerdict {
     /// Degenerate posture: the installed set tolerates zero Byzantine faults.
     /// The complement of `fault_tolerant`.
     pub degenerate: bool,
+    /// Pairwise transitional safety of the candidate against the installed
+    /// quorum set (#1845): `Some(true)` when the rotation condition holds,
+    /// `Some(false)` when it failed but the signed envelope carried
+    /// `acknowledgeUnsafeTransition: true`, `None` when the check was skipped
+    /// (the installed set had at most one member). Set by the action path, not
+    /// by [`GateVerdict::from_snapshot`].
+    pub transition_safe: Option<bool>,
 }
 
 impl GateVerdict {
@@ -899,6 +927,7 @@ impl GateVerdict {
             max_auto_members: snap.max_auto_members,
             fault_tolerant,
             degenerate: !fault_tolerant,
+            transition_safe: None,
         }
     }
 }
@@ -1615,6 +1644,7 @@ mod tests {
             signer_key_id: "a1b2c3d4e5f60708".to_string(),
             target_node: a_peer_id(200),
             acknowledge_degenerate: false,
+            acknowledge_unsafe_transition: false,
         }
     }
 
@@ -1623,6 +1653,122 @@ mod tests {
             acknowledge_degenerate: true,
             ..dummy_parsed(action)
         }
+    }
+
+    // -- acknowledgeUnsafeTransition (#1845) ----------------------------------
+
+    /// Canonical envelope carrying an optional raw
+    /// `acknowledgeUnsafeTransition` JSON value (keys sorted: it sorts
+    /// before `action`).
+    fn canonical_with_unsafe_ack(sk: &SigningKey, ack_json: Option<&str>) -> String {
+        let lead = match ack_json {
+            Some(v) => format!("\"acknowledgeUnsafeTransition\":{v},"),
+            None => String::new(),
+        };
+        format!(
+            "{{{lead}\"action\":\"quorum.unpin_member\",\"dryRun\":false,\
+             \"expiresAt\":{e},\"issuedAt\":{i},\"nonce\":\"00112233445566778899aabbccddeeff\",\
+             \"params\":{{\"peerId\":\"{p}\"}},\"signerKeyId\":\"{s}\",\
+             \"targetNode\":\"{t}\",\"v\":1}}",
+            e = now() + 100,
+            i = now(),
+            p = a_peer_id(7),
+            s = signer_id(sk),
+            t = a_peer_id(200),
+        )
+    }
+
+    #[test]
+    fn acknowledge_unsafe_transition_accepted_as_boolean() {
+        let sk = test_key(1);
+        let env = sign_str(&sk, &canonical_with_unsafe_ack(&sk, Some("true")));
+        let parsed = parse_ok(&env, &sk);
+        assert!(parsed.acknowledge_unsafe_transition);
+        assert!(
+            !parsed.acknowledge_degenerate,
+            "the two acknowledgements are independent"
+        );
+
+        let env = sign_str(&sk, &canonical_with_unsafe_ack(&sk, Some("false")));
+        assert!(!parse_ok(&env, &sk).acknowledge_unsafe_transition);
+    }
+
+    #[test]
+    fn acknowledge_unsafe_transition_defaults_false_when_absent() {
+        let sk = test_key(1);
+        let env = sign_str(&sk, &canonical_with_unsafe_ack(&sk, None));
+        assert!(!parse_ok(&env, &sk).acknowledge_unsafe_transition);
+    }
+
+    #[test]
+    fn acknowledge_unsafe_transition_non_boolean_rejected() {
+        let sk = test_key(1);
+        for bad in ["1", "\"true\"", "null", "{}"] {
+            let env = sign_str(&sk, &canonical_with_unsafe_ack(&sk, Some(bad)));
+            match env.verify_and_parse(&sk.verifying_key()).unwrap_err() {
+                RejectReason::InvalidPayload(d) => {
+                    assert!(d.contains("acknowledgeUnsafeTransition"), "{bad}: {d}")
+                }
+                other => panic!("{bad}: expected InvalidPayload, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn acknowledge_unsafe_transition_is_covered_by_the_signature() {
+        // Splicing the ack into an envelope signed WITHOUT it must fail the
+        // signature: an unsigned acknowledgement can never override the check.
+        let sk = test_key(1);
+        let mut env = sign_str(&sk, &canonical_with_unsafe_ack(&sk, None));
+        env.envelope = canonical_with_unsafe_ack(&sk, Some("true"));
+        assert_eq!(
+            env.verify_and_parse(&sk.verifying_key()).unwrap_err(),
+            RejectReason::BadSignature
+        );
+        // Flipping a signed false to true likewise breaks the signature.
+        let mut env = sign_str(&sk, &canonical_with_unsafe_ack(&sk, Some("false")));
+        env.envelope = env.envelope.replace(
+            "\"acknowledgeUnsafeTransition\":false",
+            "\"acknowledgeUnsafeTransition\":true",
+        );
+        assert_eq!(
+            env.verify_and_parse(&sk.verifying_key()).unwrap_err(),
+            RejectReason::BadSignature
+        );
+    }
+
+    #[test]
+    fn acknowledge_unsafe_transition_duplicate_key_rejected() {
+        let sk = test_key(1);
+        let canonical = canonical_with_unsafe_ack(&sk, Some("false")).replacen(
+            '{',
+            "{\"acknowledgeUnsafeTransition\":true,",
+            1,
+        );
+        let env = sign_str(&sk, &canonical);
+        assert!(matches!(
+            env.verify_and_parse(&sk.verifying_key()).unwrap_err(),
+            RejectReason::InvalidPayload(_)
+        ));
+    }
+
+    #[test]
+    fn gate_verdict_transition_safe_serializes_null_or_bool() {
+        let mut v = GateVerdict {
+            intersection_refused: false,
+            curated_members: 4,
+            auto_members: 0,
+            suppressed_peers: 0,
+            max_auto_members: 8,
+            fault_tolerant: true,
+            degenerate: false,
+            transition_safe: None,
+        };
+        let json = serde_json::to_value(&v).unwrap();
+        assert!(json.get("transitionSafe").unwrap().is_null());
+        v.transition_safe = Some(false);
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["transitionSafe"], serde_json::json!(false));
     }
 
     // -- Nonce step: dry-run must not reserve; replay rejected ----------------
