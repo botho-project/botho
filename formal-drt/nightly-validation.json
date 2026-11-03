@@ -1,0 +1,372 @@
+{
+  "kind": "scoped local pre-merge evidence; not live publication or full Linux nightly acceptance",
+  "source_sha": "de9b8c33b6c9bc9bb12f1e19b20d39cc89c07c37",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "date_utc": "2026-11-03",
+  "build_commands": [
+    "LAKE=/opt/homebrew/bin/lake; (cd formal-drt/lean && \"$LAKE\" build)",
+    "cp Cargo.lock formal-drt/Cargo.lock",
+    "CARGO_BUILD_JOBS=2 cargo build --release --manifest-path formal-drt/Cargo.toml"
+  ],
+  "cargo_target_directory": "/Volumes/Stripe/cargo-target",
+  "baseline_runner_sha256": "490e5bf0c62f60ad1821ed0deb6b593020804354a8292ea5a4c19795634bf9e7",
+  "mutated_runner_sha256": "e7939c791fe206acd0f99ba2d4288b618e413fa41dba76d0426d7cfe3dea221b",
+  "restored_runner_sha256": "550fde7b65f30cf3086843e102e03e9f69f32a4028047b73fcebc8a5a457a98e",
+  "model_sha256": "89c12833e5b5666a4f1e00d571bcfd2bd644af43e2df9c5f8eb46acf6816fd36",
+  "clean": {
+    "seed": "18446744073709551615",
+    "requested_cases_per_leg": 100,
+    "workers": 4,
+    "exit": 0,
+    "legs": [
+      {
+        "cases": 100,
+        "classes": {
+          "exact": 73,
+          "saturates at 0": 27
+        },
+        "leg": "carryover_after",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "botho::consensus::lottery::LotteryPoolAccounting::carryover_after",
+        "seconds": 0.023652375
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "available exact, payout = available": 12,
+          "available exact, payout = cap": 77,
+          "available saturated, payout = cap": 11
+        },
+        "leg": "compute_pool_accounting",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "botho::consensus::lottery::compute_pool_accounting",
+        "seconds": 0.025696958
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "rho 0 of <9999": 40,
+          "rho 1 of <9999": 11,
+          "rho 13-9998 of <9999": 9,
+          "rho 2-12 of <9999": 40
+        },
+        "leg": "count_eligible",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "bth_cluster_tax::count_eligible",
+        "seconds": 0.051101916
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "interior": 28,
+          "maximum": 67,
+          "minimum": 5
+        },
+        "leg": "default_cluster_factor",
+        "mismatches": [],
+        "replayed": 6,
+        "rust": "bth_cluster_tax::ClusterFactorCurve::default_params().factor",
+        "seconds": 0.178626666
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "clamped to u64 max": 12,
+          "positive": 22,
+          "positive inputs, six-block dead zone": 5,
+          "zero": 61
+        },
+        "leg": "demurrage_charge",
+        "mismatches": [],
+        "replayed": 3,
+        "rust": "bth_cluster_tax::demurrage_charge",
+        "seconds": 0.182561583
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "0 winners": 54,
+          "1 winners": 13,
+          "2 winners": 6,
+          "3 winners": 7,
+          "4 winners": 18,
+          "6 winners": 1,
+          "8 winners": 1
+        },
+        "leg": "draw_lottery_winners_seeded",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "botho::consensus::lottery::draw_lottery_winners_seeded (finish_draw)",
+        "seconds": 0.050345042
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "ClusterWeighted: 1 winners": 1,
+          "ClusterWeighted: 2 winners": 1,
+          "ClusterWeighted: 4 winners": 1,
+          "ClusterWeighted: none": 4,
+          "Hybrid: 1 winners": 1,
+          "Hybrid: 2 winners": 1,
+          "Hybrid: 4 winners": 1,
+          "Hybrid: none": 1,
+          "Uniform: 1 winners": 10,
+          "Uniform: 2 winners": 14,
+          "Uniform: 3 winners": 5,
+          "Uniform: 4 winners": 18,
+          "Uniform: 5 winners": 1,
+          "Uniform: 8 winners": 1,
+          "Uniform: none": 35,
+          "ValueWeighted: 3 winners": 1,
+          "ValueWeighted: 4 winners": 2,
+          "ValueWeighted: none": 2
+        },
+        "leg": "draw_winners_with_seed",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "bth_cluster_tax::draw_winners_with_seed (draw_eligible)",
+        "seconds": 0.05206875
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "error fee_overflow": 3,
+          "error seed_parent": 26,
+          "ok, 0 winners": 33,
+          "ok, 1 winners": 5,
+          "ok, 2 winners": 10,
+          "ok, 3 winners": 1,
+          "ok, 4 winners": 22
+        },
+        "leg": "drawing",
+        "mismatches": [],
+        "replayed": 4,
+        "rust": "botho::ledger::lottery_v2::drawing (via ledger::formal_drt)",
+        "seconds": 2.7338595420000003
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "eligible=false": 73,
+          "eligible=true": 27
+        },
+        "leg": "is_eligible",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "bth_cluster_tax::LotteryCandidate::is_eligible",
+        "seconds": 0.027192125
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "capped at 10000 (ledger 10000 rows)": 1,
+          "empty (ledger 0 rows)": 7,
+          "empty (ledger 1 rows)": 3,
+          "empty (ledger 17 rows)": 6,
+          "empty (ledger 2 rows)": 8,
+          "empty (ledger 3 rows)": 4,
+          "empty (ledger 300 rows)": 1,
+          "empty (ledger 5 rows)": 1,
+          "empty (ledger 8 rows)": 7,
+          "under cap (ledger 1 rows)": 5,
+          "under cap (ledger 17 rows)": 11,
+          "under cap (ledger 2 rows)": 7,
+          "under cap (ledger 3 rows)": 6,
+          "under cap (ledger 300 rows)": 13,
+          "under cap (ledger 5 rows)": 3,
+          "under cap (ledger 64 rows)": 6,
+          "under cap (ledger 8 rows)": 11
+        },
+        "leg": "lottery_candidates",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "botho::ledger::Ledger::get_lottery_validation_candidates (store::validation::lottery_candidates)",
+        "seconds": 0.443198292
+      },
+      {
+        "cases": 100,
+        "classes": {},
+        "leg": "lottery_seed_v2",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "botho::consensus::lottery::lottery_seed_v2",
+        "seconds": 0.183572375
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "cap = block reward": 21,
+          "cap = rho * base fee": 79
+        },
+        "leg": "reward_cap",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "botho::consensus::lottery::reward_cap",
+        "seconds": 0.060709292
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "weighted numerator exact": 25,
+          "weighted numerator saturates": 75
+        },
+        "leg": "ring_centroid_factor",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "bth_cluster_tax::ring_centroid_implied_factor",
+        "seconds": 0.198357417
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "as-u64 truncates": 2,
+          "permille 800": 49,
+          "permille other": 49
+        },
+        "leg": "split_fees",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "botho::consensus::lottery::LotteryFeeConfig::split_fees",
+        "seconds": 0.023551458
+      },
+      {
+        "cases": 100,
+        "classes": {
+          "above u64": 37,
+          "fits u64": 63
+        },
+        "leg": "sybil_reward_cap",
+        "mismatches": [],
+        "replayed": 0,
+        "rust": "bth_cluster_tax::sybil_reward_cap",
+        "seconds": 0.022838208
+      }
+    ]
+  },
+  "mutation": {
+    "patch": "diff --git a/botho/src/consensus/lottery.rs b/botho/src/consensus/lottery.rs\nindex 6c02e20b..c4fe247f 100644\n--- a/botho/src/consensus/lottery.rs\n+++ b/botho/src/consensus/lottery.rs\n@@ -167,7 +167,7 @@ impl LotteryFeeConfig {\n     pub fn split_fees(&self, total_fees: u64) -> (u64, u64) {\n         let pool_amount = (total_fees as u128 * self.pool_fraction_permille as u128 / 1000) as u64;\n         let burn_amount = total_fees.saturating_sub(pool_amount);\n-        (pool_amount, burn_amount)\n+        (pool_amount, burn_amount.wrapping_add(1)) // temporary DRT validation mutation\n     }\n }\n \n",
+    "patch_sha256": "0c085f7afc68544d1a14c8c712bab2c692fd0e703888b2dd3f98e7e8606c155f",
+    "seed": "0",
+    "requested_cases": 100,
+    "exit": 1,
+    "report": {
+      "cases_per_leg": 100,
+      "legs": [
+        {
+          "cases": 100,
+          "classes": {
+            "as-u64 truncates": 8,
+            "permille 800": 43,
+            "permille other": 49
+          },
+          "leg": "split_fees",
+          "mismatches": [
+            {
+              "input": {
+                "pool_fraction_permille": 800,
+                "total_fees": 0
+              },
+              "lean": [
+                "0",
+                "0"
+              ],
+              "rust": [
+                "0",
+                "1"
+              ]
+            }
+          ],
+          "replayed": 0,
+          "rust": "botho::consensus::lottery::LotteryFeeConfig::split_fees",
+          "seconds": 0.474229542
+        }
+      ],
+      "seed": "0"
+    }
+  },
+  "replay": {
+    "exit": 1,
+    "report": {
+      "cases_per_leg": 1,
+      "legs": [
+        {
+          "cases": 1,
+          "classes": {
+            "as-u64 truncates": 1
+          },
+          "leg": "split_fees",
+          "mismatches": [
+            {
+              "input": {
+                "pool_fraction_permille": 800,
+                "total_fees": 0
+              },
+              "lean": [
+                "0",
+                "0"
+              ],
+              "replayed_fixture": "/private/tmp/botho1817-replay/regressions/split_fees.jsonl:1",
+              "rust": [
+                "0",
+                "1"
+              ]
+            }
+          ],
+          "replayed": 1,
+          "rust": "botho::consensus::lottery::LotteryFeeConfig::split_fees",
+          "seconds": 0.028554041
+        }
+      ],
+      "seed": "0"
+    },
+    "appended_bytes": 0
+  },
+  "restored": {
+    "source_matches_git": true,
+    "exit": 0,
+    "report": {
+      "cases_per_leg": 1,
+      "legs": [
+        {
+          "cases": 1,
+          "classes": {
+            "as-u64 truncates": 1
+          },
+          "leg": "split_fees",
+          "mismatches": [],
+          "replayed": 1,
+          "rust": "botho::consensus::lottery::LotteryFeeConfig::split_fees",
+          "seconds": 0.024534375
+        }
+      ],
+      "seed": "0"
+    },
+    "binary": "restored_runner_sha256"
+  },
+  "post_registration_pending": [
+    "Full clean Linux 1000000-per-leg dispatch with timing/artifacts",
+    "First scheduled main run with default budgets",
+    "Live temporary-mutation dispatch, issue publication, replay and repeated-run deduplication; clean up branch/validation issue"
+  ],
+  "runtime_commands": {
+    "clean": [
+      "python3 formal-drt/scripts/nightly.py prepare --out /tmp/botho1817-clean-current --seed 18446744073709551615 --cases 100 --sha de9b8c33b6c9bc9bb12f1e19b20d39cc89c07c37 --repository botho-project/botho",
+      "python3 formal-drt/scripts/nightly.py run --out /tmp/botho1817-clean-current --runner /tmp/botho1817-baseline-runner --model formal-drt/lean/.lake/build/bin/botho-model --regressions formal-drt/regressions --workers 4 --leg-timeout 180 --total-timeout 300"
+    ],
+    "mutation": [
+      "python3 formal-drt/scripts/nightly.py prepare --out /tmp/botho1817-mutation --seed 0 --cases 100 --legs split_fees --sha de9b8c33b6c9bc9bb12f1e19b20d39cc89c07c37 --repository botho-project/botho",
+      "python3 formal-drt/scripts/nightly.py run --out /tmp/botho1817-mutation --runner /tmp/botho1817-mutated-runner --model formal-drt/lean/.lake/build/bin/botho-model --regressions formal-drt/regressions --workers 1 --leg-timeout 120 --total-timeout 120"
+    ],
+    "replay": [
+      "python3 formal-drt/scripts/nightly.py prepare --out /tmp/botho1817-replay --seed 0 --cases 1 --legs split_fees --sha de9b8c33b6c9bc9bb12f1e19b20d39cc89c07c37 --repository botho-project/botho",
+      "python3 formal-drt/scripts/nightly.py run --out /tmp/botho1817-replay --runner /tmp/botho1817-mutated-runner --model formal-drt/lean/.lake/build/bin/botho-model --regressions /tmp/botho1817-mutation/failing --workers 1 --leg-timeout 120 --total-timeout 120"
+    ],
+    "restored": [
+      "python3 formal-drt/scripts/nightly.py prepare --out /tmp/botho1817-restored-current --seed 0 --cases 1 --legs split_fees --sha de9b8c33b6c9bc9bb12f1e19b20d39cc89c07c37 --repository botho-project/botho",
+      "python3 formal-drt/scripts/nightly.py run --out /tmp/botho1817-restored-current --runner /Volumes/Stripe/cargo-target/release/botho-formal-drt --model formal-drt/lean/.lake/build/bin/botho-model --regressions /tmp/botho1817-mutation/failing --workers 1 --leg-timeout 120 --total-timeout 120"
+    ]
+  }
+}

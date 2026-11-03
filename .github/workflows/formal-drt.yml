@@ -13,9 +13,8 @@ name: Formal DRT (Lean model vs Rust)
 # (formal.yml). The model it runs is the gated formal/ package, required by
 # path from formal-drt/lean/.
 #
-# Not yet here (follow-ups of #1706): the nightly random-seed tier (1M cases
-# per leg, opening an issue with the shrunk fixture on failure) and the
-# cluster-tax simulation leg.
+# The nightly tier is in formal-drt-nightly.yml. The cluster-tax simulation
+# leg remains a follow-up of #1706.
 
 on:
   pull_request:
@@ -35,6 +34,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain*'
       - '.github/workflows/formal-drt.yml'
+      - '.github/workflows/formal-drt-nightly.yml'
   push:
     branches: [main]
     paths:
@@ -53,6 +53,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain*'
       - '.github/workflows/formal-drt.yml'
+      - '.github/workflows/formal-drt-nightly.yml'
   workflow_dispatch:
     inputs:
       cases:
@@ -75,6 +76,15 @@ env:
   ELAN_VERSION: v4.2.4
 
 jobs:
+  nightly-helper-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s formal-drt/scripts -p 'test_*.py' -v
+
   drt:
     runs-on: ubuntu-latest
     timeout-minutes: 60
