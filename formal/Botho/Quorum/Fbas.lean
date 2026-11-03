@@ -686,8 +686,8 @@ theorem checker_complete_sym (n t : Nat) (ht : 1 ≤ t) :
     simp only [check, checkDespite, sym, List.all_eq_true, decide_eq_true_eq, e]
     intro _ _ _ _; omega
 
-/-- The despite-`f` checker is also exact on `t`-of-`n` with at least `f + 2`
-nodes: it accepts iff `n + f < 2t`, the `sym_despite_iff` bound. -/
+/-- The despite-`f` checker is also exact on every `t`-of-`n` with `n ≥ 1`
+(any `t` and `f`): it accepts iff `n + f < 2t`, the `sym_despite_iff` bound. -/
 theorem checkDespite_sym_iff (n t f : Nat) (hn : 1 ≤ n) :
     checkDespite (sym n t) f = true ↔ n + f < 2 * t := by
   have e : cnt (fun x => decide (x < n) || decide (x < n)) (List.range n) = n := by
@@ -793,7 +793,18 @@ theorem checker_not_complete :
 /-! ## Item 2: mixed configurations during a curated rotation -/
 
 /-- A fleet over nodes `0..N-1` part-way through a rolling update from quorum
-set `A` to quorum set `B`: nodes with `runsB` already run `B`. -/
+set `A` to quorum set `B`: nodes with `runsB` already run `B`.
+
+**Abstraction.** Every node runs `A` or `B` *verbatim*. The node's Explicit
+gate (`gated_scp_quorum_set`, `botho/src/commands/run.rs`) always adds the
+local node to the configured roster, so a node that is not on roster `S` runs
+`S ∪ {self}`, not `S`. Theorems that quantify over every split therefore range
+over some quorum sets no node would run (a roster that omits the node running
+it) and do not cover the one such a node does run. The counterexamples and
+`rotation_condition_necessary` only use self-listed nodes, so they are
+unaffected. For the production instances (`prod_4of5_rotate_*`) the Rust test
+`lean_rotation_instances_through_real_gate` re-checks every split with the
+quorum sets the real gate builds, and the conclusions hold there too. -/
 def mixed (N : Nat) (A B : QSet) (runsB : NodeSet) : Fbas :=
   ⟨List.range N, fun v => if runsB v = true then B else A⟩
 
@@ -801,7 +812,8 @@ def mixed (N : Nat) (A B : QSet) (runsB : NodeSet) : Fbas :=
 `|S_A| + f < 2 t_A`, `|S_B| + f < 2 t_B` and `|S_A ∪ S_B| + f < t_A + t_B`, then
 *every* mixed fleet (any split of who runs which) has quorum intersection
 despite any `B` with at most `f` members. This is the check a fleet-level gate
-could run against the previous configuration. -/
+could run against the previous configuration. Splits are over the `mixed`
+abstraction (each node runs `A` or `B` verbatim; see `mixed`). -/
 theorem rotation_sound (N f : Nat) (A B : QSet) (runsB Byz : NodeSet)
     (hAA : cnt A.members (List.range N) + f < 2 * A.threshold)
     (hBB : cnt B.members (List.range N) + f < 2 * B.threshold)
@@ -885,7 +897,10 @@ theorem rotation_condition_necessary (N : Nat) (A B : QSet)
 threshold is unchanged and the larger roster passes the despite-`f` bound.
 Both rosters sit inside one roster `L` (the larger endpoint), so the mixed
 fleet's union is `L`. With `f = 0` this is the gate's own check on the larger
-endpoint: if both endpoints pass the gate, every mixed fleet intersects. -/
+endpoint: if both endpoints pass the gate, every mixed fleet intersects.
+"Every mixed fleet" is over the `mixed` abstraction, where each node runs `A`
+or `B` verbatim; the real gate adds the local node to the roster (see
+`mixed`). -/
 theorem nested_rotation_safe (N f t : Nat) (A B : QSet) (L runsB Byz : NodeSet)
     (hA : ∀ x < N, A.members x = true → L x = true)
     (hB : ∀ x < N, B.members x = true → L x = true)
@@ -994,16 +1009,22 @@ def prodSwapOne : QSet := ⟨4, fun x => decide (x < 4) || x == 5⟩
 /-- 4-of-5 with members 3 and 4 swapped for 5 and 6: `{0,1,2,5,6}`. -/
 def prodSwapTwo : QSet := ⟨4, fun x => decide (x < 3) || x == 5 || x == 6⟩
 
-/-- **Item 2 at 4-of-5, one-member swap: safe.** Whoever has switched, the
+/-- **Item 2 at 4-of-5, one-member swap: safe.** For every split in the
+`mixed` abstraction (each node runs `prodA` or `prodSwapOne` verbatim), the
 mixed fleet keeps quorum intersection despite any one faulty node
-(`|∪| = 6`, `4 + 4 - 6 = 2 > 1`). -/
+(`|∪| = 6`, `4 + 4 - 6 = 2 > 1`). The real gate gives an off-roster node the
+roster plus itself instead (see `mixed`); the Rust test
+`lean_rotation_instances_through_real_gate` checks those quorum sets in all
+64 splits. -/
 theorem prod_4of5_rotate_one_despite_one (runsB Byz : NodeSet)
     (hf : cnt Byz (List.range 6) ≤ 1) :
     IntersectsDespite (mixed 6 prodA prodSwapOne runsB) Byz :=
   rotation_sound 6 1 prodA prodSwapOne runsB Byz (by decide) (by decide) (by decide) hf
 
-/-- Item 2 at 4-of-5, two-member swap: the mixed fleet still intersects
-(`|∪| = 7 < 8`) ... -/
+/-- Item 2 at 4-of-5, two-member swap: for every split in the `mixed`
+abstraction the mixed fleet still intersects (`|∪| = 7 < 8`; the real-gate
+quorum sets are checked in all 128 splits by the Rust test
+`lean_rotation_instances_through_real_gate`) ... -/
 theorem prod_4of5_rotate_two_intersects (runsB : NodeSet) :
     Intersects (mixed 7 prodA prodSwapTwo runsB) := by
   rw [← intersectsDespite_empty_iff]

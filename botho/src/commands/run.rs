@@ -5824,6 +5824,280 @@ mod tests {
         assert!(!lean_delete(&fleet, &[0]).has_quorum_intersection());
     }
 
+    // -- The #1714 bugs through the node's own code ---------------------------
+    //
+    // The tests above check the Lean instance arithmetic on hand-built quorum
+    // sets. These build the quorum sets with `gated_scp_quorum_set`, the
+    // function the node runs, and read the fault-tolerance flag from
+    // `QuorumConfig`. Tests marked BUG assert the CURRENT behaviour, bug
+    // included, so CI stays green while the fix is consensus-gated. Fixing the
+    // linked issue must flip the marked assertions.
+
+    /// The fleet a set of per-node quorum sets forms, as `(threshold,
+    /// members)` over indices into `peers`, members sorted.
+    fn gate_fleet(qsets: &[QuorumSet], peers: &[libp2p::PeerId]) -> Vec<(usize, Vec<usize>)> {
+        let ids: Vec<NodeID> = peers.iter().map(peer_id_to_node_id).collect();
+        qsets
+            .iter()
+            .map(|qs| {
+                let mut members: Vec<usize> = member_node_ids(qs)
+                    .iter()
+                    .map(|id| ids.iter().position(|x| x == id).expect("member is a peer"))
+                    .collect();
+                members.sort_unstable();
+                (qs.threshold as usize, members)
+            })
+            .collect()
+    }
+
+    /// BUG #1843 (Lean `recommended_crash_flag_overclaims`): in Recommended
+    /// mode under the default Crash fault model, an odd-`n` fleet of `n >= 5`
+    /// gets a `n/2+1`-of-`n` quorum set from the gate, which tolerates zero
+    /// Byzantine faults, yet `is_bft_fault_tolerant` reports it tolerant (it
+    /// only checks `n >= 4`). Deleting one node leaves no quorum
+    /// intersection. Even `n` is consistent (flag and tolerance agree).
+    #[test]
+    fn bug_1843_crash_flag_overclaims_through_gate() {
+        use crate::config::{byzantine_tolerance, FaultModel, QuorumConfig, QuorumMode};
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Recommended,
+            fault_model: FaultModel::Crash,
+            ..QuorumConfig::default()
+        };
+        for (n, t) in [(5usize, 3u32), (7, 4), (9, 5)] {
+            let peers = synthetic_peers(n);
+            let local = peers[0].to_string();
+            let (qs, snap) = gated_scp_quorum_set(&cfg, &peers[0], &peers[1..], None);
+            assert!(!snap.intersection_refused, "n={n}");
+            assert_eq!(
+                (snap.quorum_size, snap.quorum_threshold),
+                (n, t),
+                "{t}-of-{n}"
+            );
+            let tol = byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize);
+            assert_eq!(tol, 0, "{t}-of-{n} tolerates no Byzantine fault");
+            // BUG #1843: the flag says tolerant while the tolerance is 0.
+            assert!(
+                cfg.is_bft_fault_tolerant(n, &local),
+                "BUG #1843 flag, n={n}"
+            );
+            assert!(
+                !cfg.is_degenerate_quorum(n, &local),
+                "BUG #1843 flag, n={n}"
+            );
+            // Every node builds the same symmetric set, so the fleet is
+            // t-of-n; despite one faulty node it has no quorum intersection.
+            let fleet = gate_fleet(&vec![qs; n], &peers);
+            assert!(lean_fbas(&fleet).has_quorum_intersection(), "n={n}");
+            assert!(
+                !lean_delete(&fleet, &[0]).has_quorum_intersection(),
+                "n={n}"
+            );
+        }
+        // Lean `recommended_crash_flag_even_sound`: even n, flag and
+        // tolerance agree.
+        for n in [4usize, 6, 8] {
+            let peers = synthetic_peers(n);
+            let local = peers[0].to_string();
+            let (_, snap) = gated_scp_quorum_set(&cfg, &peers[0], &peers[1..], None);
+            let tol = byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize);
+            assert!(tol >= 1, "n={n}");
+            assert!(cfg.is_bft_fault_tolerant(n, &local), "n={n}");
+        }
+    }
+
+    /// BUG #1844 (Lean `recommended_crash_bowtie_fork`,
+    /// `recommended_bft_bowtie_fork`): each node's gate checks only its own
+    /// symmetric quorum set, so on a bowtie topology every node passes the
+    /// gate while the fleet has no quorum intersection.
+    #[test]
+    fn bug_1844_bowtie_forks_through_gate() {
+        use crate::config::{FaultModel, QuorumConfig, QuorumMode};
+        let cases: [(FaultModel, usize, Vec<Vec<usize>>, Vec<(usize, Vec<usize>)>); 2] = [
+            // Triangles {0,1,2} and {2,3,4} on hub 2, Crash majority.
+            (
+                FaultModel::Crash,
+                5,
+                vec![
+                    vec![0, 1, 2],
+                    vec![0, 1, 2],
+                    (0..5).collect(),
+                    vec![2, 3, 4],
+                    vec![2, 3, 4],
+                ],
+                vec![
+                    (2, vec![0, 1, 2]),
+                    (2, vec![0, 1, 2]),
+                    (3, vec![0, 1, 2, 3, 4]),
+                    (2, vec![2, 3, 4]),
+                    (2, vec![2, 3, 4]),
+                ],
+            ),
+            // 4-cliques {0,1,2,3} and {3,4,5,6} on hub 3, Bft.
+            (
+                FaultModel::Bft,
+                7,
+                vec![
+                    (0..4).collect(),
+                    (0..4).collect(),
+                    (0..4).collect(),
+                    (0..7).collect(),
+                    (3..7).collect(),
+                    (3..7).collect(),
+                    (3..7).collect(),
+                ],
+                vec![
+                    (3, vec![0, 1, 2, 3]),
+                    (3, vec![0, 1, 2, 3]),
+                    (3, vec![0, 1, 2, 3]),
+                    (5, (0..7).collect()),
+                    (3, vec![3, 4, 5, 6]),
+                    (3, vec![3, 4, 5, 6]),
+                    (3, vec![3, 4, 5, 6]),
+                ],
+            ),
+        ];
+        for (fault_model, n, views, want) in cases {
+            let cfg = QuorumConfig {
+                mode: QuorumMode::Recommended,
+                fault_model,
+                ..QuorumConfig::default()
+            };
+            let peers = synthetic_peers(n);
+            let qsets: Vec<QuorumSet> = (0..n)
+                .map(|v| {
+                    let connected: Vec<libp2p::PeerId> = views[v]
+                        .iter()
+                        .filter(|&&x| x != v)
+                        .map(|&x| peers[x])
+                        .collect();
+                    let (qs, snap) = gated_scp_quorum_set(&cfg, &peers[v], &connected, None);
+                    // BUG #1844: every node's gate passes its own set.
+                    assert!(!snap.intersection_refused, "{fault_model:?} node {v}");
+                    qs
+                })
+                .collect();
+            let fleet = gate_fleet(&qsets, &peers);
+            assert_eq!(fleet, want, "{fault_model:?} fleet the gate builds");
+            // BUG #1844: ... and the fleet forks.
+            assert!(
+                !lean_fbas(&fleet).has_quorum_intersection(),
+                "BUG #1844 {fault_model:?} bowtie"
+            );
+        }
+    }
+
+    /// The fleet when nodes with their bit set in `runs_b` run Explicit config
+    /// `b` and the rest run `a`, every node connected to all peers, each
+    /// quorum set built by the real gate. Each node's gate must pass its own
+    /// set. Unlike Lean `mixed`, an off-roster node gets the roster plus
+    /// itself, since the gate always admits the local node.
+    fn gate_mixed(
+        peers: &[libp2p::PeerId],
+        a: &crate::config::QuorumConfig,
+        b: &crate::config::QuorumConfig,
+        runs_b: u32,
+    ) -> Vec<(usize, Vec<usize>)> {
+        let qsets: Vec<QuorumSet> = (0..peers.len())
+            .map(|v| {
+                let cfg = if runs_b & (1 << v) != 0 { b } else { a };
+                let (qs, snap) = gated_scp_quorum_set(cfg, &peers[v], peers, None);
+                assert!(!snap.intersection_refused, "node {v} runs_b={runs_b:#b}");
+                qs
+            })
+            .collect();
+        gate_fleet(&qsets, peers)
+    }
+
+    fn explicit_cfg(threshold: u32, members: &[libp2p::PeerId]) -> crate::config::QuorumConfig {
+        use crate::config::{QuorumConfig, QuorumMode};
+        QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold,
+            members: members.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        }
+    }
+
+    /// BUG #1845 (Lean `reroster_mixed_fork`,
+    /// `prod_4of5_rotate_two_not_despite_one`): the gate checks each Explicit
+    /// configuration on its own, never the configurations that coexist during
+    /// a rollout. Every node passes its gate, yet a re-roster forks and a
+    /// two-member swap of the 4-of-5 production roster loses intersection
+    /// despite one faulty node.
+    #[test]
+    fn bug_1845_rotation_through_gate() {
+        // Re-roster 2-of-{0,1,2} -> 2-of-{2,3,4}, nodes 3 and 4 moved first.
+        let p = synthetic_peers(5);
+        let fleet = gate_mixed(
+            &p,
+            &explicit_cfg(2, &p[0..3]),
+            &explicit_cfg(2, &p[2..5]),
+            0b11000,
+        );
+        assert_eq!(
+            fleet,
+            vec![
+                (2, vec![0, 1, 2]),
+                (2, vec![0, 1, 2]),
+                (2, vec![0, 1, 2]),
+                (2, vec![2, 3, 4]),
+                (2, vec![2, 3, 4]),
+            ]
+        );
+        assert!(
+            !lean_fbas(&fleet).has_quorum_intersection(),
+            "BUG #1845 re-roster forks"
+        );
+
+        // Two-member swap {0,1,2,3,4} -> {0,1,2,5,6} at 4-of-5, nodes 2, 5, 6
+        // moved, node 0 faulty: {1,3,4} and {2,5,6} are disjoint quorums.
+        let p = synthetic_peers(7);
+        let a = explicit_cfg(4, &p[0..5]);
+        let b = explicit_cfg(4, &[p[0], p[1], p[2], p[5], p[6]]);
+        let fleet = gate_mixed(&p, &a, &b, (1 << 2) | (1 << 5) | (1 << 6));
+        assert!(lean_fbas(&fleet).has_quorum_intersection());
+        assert!(
+            !lean_delete(&fleet, &[0]).has_quorum_intersection(),
+            "BUG #1845 two-member swap not despite 1"
+        );
+    }
+
+    /// The rotation conclusions of the Lean model hold for the quorum sets the
+    /// real gate builds, not only for the `mixed` abstraction (every split,
+    /// including off-roster nodes that run roster + self):
+    /// `prod_4of5_rotate_one_despite_one` (all 64 splits, every single
+    /// faulty node) and `prod_4of5_rotate_two_intersects` (all 128 splits).
+    #[test]
+    fn lean_rotation_instances_through_real_gate() {
+        let p = synthetic_peers(6);
+        let a = explicit_cfg(4, &p[0..5]);
+        let b = explicit_cfg(4, &[p[0], p[1], p[2], p[3], p[5]]);
+        for runs_b in 0..(1u32 << 6) {
+            let fleet = gate_mixed(&p, &a, &b, runs_b);
+            assert!(
+                lean_fbas(&fleet).has_quorum_intersection(),
+                "runs_b={runs_b:#b}"
+            );
+            for x in 0..6 {
+                assert!(
+                    lean_delete(&fleet, &[x]).has_quorum_intersection(),
+                    "one-member swap runs_b={runs_b:#b} faulty={x} {fleet:?}"
+                );
+            }
+        }
+        let p = synthetic_peers(7);
+        let a = explicit_cfg(4, &p[0..5]);
+        let b = explicit_cfg(4, &[p[0], p[1], p[2], p[5], p[6]]);
+        for runs_b in 0..(1u32 << 7) {
+            let fleet = gate_mixed(&p, &a, &b, runs_b);
+            assert!(
+                lean_fbas(&fleet).has_quorum_intersection(),
+                "two-member swap runs_b={runs_b:#b} {fleet:?}"
+            );
+        }
+    }
+
     // -- Operator-action apply path (#748) driven through the SAME gate --------
 
     use crate::operator_action::{ActionKind, OutcomeClass, ParsedEnvelope};

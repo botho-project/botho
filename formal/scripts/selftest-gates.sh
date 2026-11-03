@@ -949,6 +949,93 @@ printf '#print axioms Botho.selftest_STx\n' >>"$d/Theorems.lean"
 expect pass "IO-like names, comments and strings (full sorry gate)" sorry_gate "$d"
 expect pass "IO-like names, comments and strings (full axiom gate)" axiom_gate "$d"
 
+# Oversized gate data (#1714 review). The axiom gate once handed the report,
+# the `lean --json` output and the command list to python3 in environment
+# variables. Linux caps one argv or environment string at 128 KiB
+# (MAX_ARG_STRLEN), so once the report passed that, every formal build on
+# Linux failed with "Argument list too long", while macOS (no per-string
+# cap) passed. The case runs the gate under a python3 shim that enforces the
+# Linux limits on every platform, over a tree whose command list, manifest,
+# lean output and report are each well over 128 KiB whatever the size of the
+# model.
+real_python3="$(command -v python3)"
+shim="$scratch/linux-exec-limits"
+mkdir -p "$shim"
+cat >"$shim/python3" <<EOF
+#!/usr/bin/env bash
+# python3 shim: fail like Linux execve (E2BIG) when one argv or environment
+# string is over MAX_ARG_STRLEN (131072 bytes, with its NUL) or argv and the
+# environment together are over 2 MiB, else run the real python3.
+total=0
+over() {
+  local n
+  n="\$(printf '%s' "\$1" | wc -c)"
+  n=\$((n + 1))
+  total=\$((total + n))
+  [[ "\$n" -gt 131072 ]]
+}
+for a in "\$0" "\$@"; do
+  if over "\$a"; then
+    echo "python3 shim: Argument list too long (an argv string is over 128 KiB)" >&2
+    exit 126
+  fi
+done
+while IFS= read -r v; do
+  if over "\$v=\${!v}"; then
+    echo "python3 shim: Argument list too long (environment variable \$v is over 128 KiB)" >&2
+    exit 126
+  fi
+done < <(compgen -e)
+if [[ "\$total" -gt 2097152 ]]; then
+  echo "python3 shim: Argument list too long (argv + environment over 2 MiB)" >&2
+  exit 126
+fi
+exec "$real_python3" "\$@"
+EOF
+chmod +x "$shim/python3"
+limited() { PATH="$shim:$PATH" "$@"; }
+
+# Shim control: the shim itself rejects an oversized environment string, and
+# lets a small one through (so the case below is not vacuous).
+big_env="$(head -c 140000 /dev/zero | tr '\0' x)"
+expect_fail_with 'Argument list too long' \
+  "python3 shim rejects a 140000-byte environment string" \
+  limited env SELFTEST_BIG="$big_env" python3 -c 'pass'
+expect pass "python3 shim runs python3 for small arguments" \
+  limited python3 -c 'import sys; sys.exit(0)'
+
+# 150 theorems with ~1000-character names: the command list alone is
+# ~150 KiB, and the manifest, lean output and report are larger again.
+d="$(fresh_copy)"
+pad="$(head -c 1000 /dev/zero | tr '\0' x)"
+{
+  printf 'namespace Botho.SelftestBig\n\n'
+  for i in $(seq 1 150); do
+    printf 'theorem big_%03d_%s : %d + 1 = %d := rfl\n' "$i" "$pad" "$i" "$((i + 1))"
+  done
+  printf '\nend Botho.SelftestBig\n'
+} >"$d/Botho/SelftestBig.lean"
+printf 'import Botho.SelftestBig\n' >>"$d/Botho.lean"
+for i in $(seq 1 150); do
+  printf '#print axioms Botho.SelftestBig.big_%03d_%s\n' "$i" "$pad"
+done >>"$d/Theorems.lean"
+manifest_bytes="$(($(wc -c <"$d/Theorems.lean")))"
+if [[ "$manifest_bytes" -gt 131072 ]]; then
+  echo "ok   - oversized case: Theorems.lean is $manifest_bytes bytes (> 128 KiB)"
+else
+  echo "FAIL - oversized case: Theorems.lean is only $manifest_bytes bytes"
+  failures=$((failures + 1))
+fi
+expect pass "oversized gate data (> 128 KiB) under Linux exec limits (full axiom gate)" \
+  limited axiom_gate "$d"
+# The gate still fails for a real defect at that size: a sorry among them.
+printf '\ntheorem Botho.SelftestBig.big_sorry : 1 = 2 := sorryAx _ false\n' \
+  >>"$d/Botho/SelftestBig.lean"
+printf '#print axioms Botho.SelftestBig.big_sorry\n' >>"$d/Theorems.lean"
+expect_fail_with 'Botho.SelftestBig.big_sorry (depends on|reaches) sorryAx' \
+  "oversized gate data with a sorryAx theorem (axiom gate, no scan)" \
+  limited axiom_gate --no-scan "$d"
+
 echo
 if [[ "$failures" != 0 ]]; then
   echo "selftest: $failures case(s) FAILED"

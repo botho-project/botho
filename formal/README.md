@@ -211,13 +211,31 @@ FBAS-level questions the quorum gate depends on, several of which come out
 | The gate checks transitional safety | `reroster_mixed_fork`, `prod_4of5_rotate_two_not_despite_one` | refuted: #1845 |
 | 4-of-5 production instance | `prod_4of5_*` | `f = 1`; a one-member swap is safe despite 1, a two-member swap is not |
 
+**Abstraction in the rotation theorems.** `mixed N A B runsB` gives every
+node `A` or `B` verbatim. The node's Explicit gate always adds the local node
+to the configured roster, so a node that is not on roster `S` really runs
+`S ∪ {self}`. "Every split" in `rotation_sound`, `nested_rotation_safe` and
+`prod_4of5_rotate_*` therefore covers some quorum sets no node would run and
+misses the one an off-roster node does run. The counterexamples and
+`rotation_condition_necessary` use only self-listed nodes and are unaffected,
+and for the production instances the real-gate quorum sets are checked in
+Rust (below): the one-member swap stays despite-1 safe in all 64 splits and
+the two-member swap intersects in all 128.
+
 Status: every theorem is proven (model). The Rust side is tested by
 `#[cfg(test)]` checks in `botho/src/commands/run.rs`:
 
 - an exhaustive check of `symmetric_quorum_has_intersection` and
   `byzantine_tolerance` against the proven closed forms for `n <= 64`;
 - a re-check of each heterogeneous instance with `bth_quorum_sim`, through a
-  test-only mirror of `delete`.
+  test-only mirror of `delete`;
+- the three bugs through the node's own code: `gated_scp_quorum_set`,
+  `QuorumConfig::is_bft_fault_tolerant` and `byzantine_tolerance` (#1843,
+  odd-`n` Crash fleets flagged fault-tolerant with tolerance 0), the per-node
+  gate on bowtie views (#1844), and two Explicit configurations during a
+  re-roster and a two-member swap (#1845). These tests assert the current
+  behaviour, bugs included, and link the issue; fixing a bug means updating
+  its test.
 
 A random heterogeneous `formal-drt` leg is a follow-up.
 
