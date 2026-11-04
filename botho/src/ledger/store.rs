@@ -1769,17 +1769,20 @@ impl Ledger {
     /// Effective cluster wealth from a transaction's output tags, weighted
     /// against the committed global per-cluster wealth.
     ///
-    /// Mirrors the mempool's `effective_cluster_wealth_from_outputs`
-    /// (`mempool.rs:59`) but reads per-cluster wealth through the ledger's own
-    /// [`Ledger::get_cluster_wealth`], **fail-closed**: a DB read error
-    /// propagates as `LedgerError` rather than defaulting a cluster to zero
-    /// wealth (which would lower the progressive fee/factor — the M7 fail-open
-    /// bug). `effective_wealth = Σ_outputs Σ_tags (value·weight/SCALE·W_global)
-    /// / Σ_outputs value`; background (untagged) value contributes zero. Pure
-    /// integer u128 accumulation; no float, no HashMap iteration into the
-    /// result.
-    #[cfg(test)]
-    fn effective_cluster_wealth_from_outputs(
+    /// This is the single implementation shared by consensus
+    /// (`consensus_fee_floor`) and mempool admission (`mempool.rs`
+    /// `effective_cluster_wealth_from_outputs` delegates here, #1876), so relay
+    /// and consensus compute the identical claimed wealth. Per-cluster wealth
+    /// is read through [`Ledger::get_cluster_wealth`], **fail-closed**: a DB
+    /// read error propagates as `LedgerError` rather than defaulting a cluster
+    /// to zero wealth (which would lower the progressive fee/factor — the M7
+    /// fail-open bug). `effective_wealth = floor(Σ_outputs Σ_tags
+    /// (floor(value·weight/SCALE)·W_global) / Σ_outputs value)`, computed
+    /// exactly with a 256-bit numerator (`bth_cluster_tax::wide::WeightedMean`,
+    /// protocol 9.0.0) and clamped at u128::MAX only at the end; background
+    /// (untagged) value contributes zero. Pure integer arithmetic; no float, no
+    /// HashMap iteration into the result.
+    pub fn effective_cluster_wealth_from_outputs(
         &self,
         outputs: &[TxOutput],
     ) -> Result<u128, LedgerError> {

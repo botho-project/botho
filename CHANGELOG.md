@@ -32,7 +32,11 @@ peers are refused at the identify handshake. 9.0.0 is not yet complete: the
   result. A result above `u128::MAX` is clamped at the end, which is
   conservative because it maps to the 6000 maximum factor. That case can
   only arise from malformed tag weights, which Rule 1 rejects. No storage
-  format change.
+  format change. Mempool admission had its own copy of the claimed-wealth
+  computation with the same saturation, so relay would have admitted whale
+  transactions below the consensus floor. It now calls the ledger's exact
+  function, so relay and consensus compute the same claimed wealth and
+  relay stays at least as strict as consensus.
 
 ## Protocol 8.0.0
 
