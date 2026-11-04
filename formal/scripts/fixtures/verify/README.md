@@ -1,14 +1,46 @@
 # Verify-job fixtures (#1799)
 
-Each directory except `lakefile-benign` (a legitimate edit that must pass)
-is one pull request that tries to change the verdict of the trusted `verify`
-job (`../../verify-artifacts.sh`). `../../selftest-verify.sh`
-applies each fixture to a copy of the clean `formal/` tree, builds it the way
+Each directory describes one pull request to the trusted `verify` job
+(`../../verify-artifacts.sh`), including accepted controls such as
+`lakefile-benign`, `record-pending` and `manifest-drop-retired`.
+`../../selftest-verify.sh` applies each fixture to a fresh package containing
+the current real `Botho/Basic.lean` and its matching root/manifest, builds it
+the way
 the untrusted `build` job does (running the fixture's code), keeps only the
 files the workflow uploads, and runs the verifier with the clean allow-list,
 lakefile and statement record (`formal/statements.txt`, plus the fixture's
-`record.txt`), as the base branch would. Each fixture must fail for the reason in
-`expect.txt`, and none of its code may run inside the verifier.
+`record.txt`), as the base branch would. Each attack fixture must fail for
+the reason in `expect.txt`, and none of its code may run inside the verifier.
+
+`../../selftest-fixture.py` copies the actual toolchain, lakefile, dependency
+manifest and allow-list without alteration. It retains the full actual
+`statements.txt` (other modules' blocks are pending entries), selects Basic's
+claims from the current `Theorems.lean`, and copies Basic byte for byte. It
+requires Basic's claims in that actual manifest and rejects unsupported
+imports, namespaces or source layouts. The fixture's
+existing additions and retirements are then applied as before. No substitute
+statement hash is generated, and no `.lake` output is copied or shared.
+
+Every default invocation discovers all fixture directories and runs the clean case
+plus every fixture and its existing submodes. It also runs two fixed cold
+complete-library cases: `real-clean` and `real-definition-swap`. The latter
+must fail definition-closure binding and pass with statement checks disabled.
+These controls use the full current root and manifest. Full-library
+compilation and declaration walks therefore have fixed multiplicity instead
+of running once per attack fixture. Source-byte hashing still reads the
+whole model before each package is prepared; this checks contamination and
+does not compile or inspect declarations.
+
+The helper's executable preparation controls run on every invocation: case
+copies are independent, mutation leaves the template/next case unchanged,
+current Basic/configuration/toolchain changes propagate, unsupported
+dependency/layout changes fail, and full copies are exact and cold. During
+the verifier matrix, fingerprints also require the independent base inputs,
+source snapshot and record to survive the untrusted build and frontend
+control unchanged. The canonical source fingerprint must remain unchanged
+throughout the matrix. This is isolation of these test fixtures, not an OS
+sandbox for arbitrary code. A new fixture that needs another real module
+must extend the preparation contract explicitly; it is never skipped.
 
 The first four rows reproduce the bypasses found in the reviews of PR #1783:
 
