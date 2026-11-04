@@ -914,10 +914,16 @@ impl Mempool {
             .map_err(MempoolError::LedgerError)?;
         let demurrage_factor = demurrage_factor.max(import_floor);
 
-        // Current chain tip height. Used both for the demurrage clock below and
-        // for the relay-only-tightening invariant check (M1-B5), so the mempool
-        // and the consensus floor evaluate the demurrage at the identical height.
+        // Inclusion height: the earliest block that can carry this tx is the
+        // one after the current tip, and block validation prices the consensus
+        // fee floor at `block.height()` (= tip + 1). Evaluate the demurrage
+        // clock and rate there, not at the tip: under exact charging (#1875) the
+        // floor rises every block for any wealthy-cluster coin, so pricing at the
+        // tip would admit txs that make the next block invalid. Also used for the
+        // relay-only-tightening invariant check (M1-B5), so the mempool and the
+        // consensus floor evaluate the demurrage at the identical height.
         let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
+        let inclusion_height = chain_height.saturating_add(1);
 
         let demurrage = {
             let policy = crate::monetary::mainnet_policy();
@@ -930,7 +936,7 @@ impl Mempool {
             // exact kernel so relay and consensus agree on the demurrage clock.
             let elapsed = bth_cluster_tax::ring_elapsed_quantile(
                 &ring_members,
-                chain_height,
+                inclusion_height,
                 10_000, // quantile_bps = 10000 == max
             );
             let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
@@ -946,7 +952,7 @@ impl Mempool {
                 demurrage_factor,
                 claimed_factor,
                 elapsed,
-                policy.demurrage_rate_bps(chain_height),
+                policy.demurrage_rate_bps(inclusion_height),
                 blocks_per_year,
             )
         };
@@ -962,7 +968,8 @@ impl Mempool {
         //
         // Both sides compute the SAME base curve and the SAME demurrage kernel
         // (`ring_elapsed_quantile@max` + `ring_centroid_floored_factor`) at the
-        // SAME `chain_height`; the ONLY structural difference is the congestion
+        // SAME `inclusion_height` (tip + 1, the height block validation prices
+        // at); the ONLY structural difference is the congestion
         // term: the mempool multiplies in `dynamic_base = compute_base(..)` while
         // the consensus floor pins the base to the neutral `CONSENSUS_FEE_BASE`
         // (== `DynamicFeeBase::default().base_min`). Because `dynamic_base >=
@@ -978,7 +985,7 @@ impl Mempool {
         // never-fall-below-consensus contract and must be fixed before ship.
         debug_assert!(
             {
-                match ledger.consensus_fee_floor(&tx, chain_height) {
+                match ledger.consensus_fee_floor(&tx, inclusion_height) {
                     Ok(consensus_floor) => minimum_fee >= consensus_floor,
                     // A DB error recomputing the floor is not an invariant
                     // violation; skip the assertion rather than panic on
@@ -987,9 +994,9 @@ impl Mempool {
                 }
             },
             "mempool relay minimum_fee {} fell below the consensus fee floor \
-             (relay must only tighten, never fall below consensus; height {})",
+             (relay must only tighten, never fall below consensus; inclusion height {})",
             minimum_fee,
-            chain_height,
+            inclusion_height,
         );
 
         if tx.fee < minimum_fee {
@@ -2798,8 +2805,12 @@ mod tests {
             .unwrap();
 
         let policy = crate::monetary::mainnet_policy();
+        // Price at the inclusion height (tip + 1), exactly as
+        // `Mempool::validate_transaction` does.
         let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
-        let elapsed = bth_cluster_tax::ring_elapsed_quantile(&ring_members, chain_height, 10_000);
+        let inclusion_height = chain_height.saturating_add(1);
+        let elapsed =
+            bth_cluster_tax::ring_elapsed_quantile(&ring_members, inclusion_height, 10_000);
         let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
         // Mirror the mempool's real demurrage term (#925): the downgrade-aware
         // `spend_demurrage_charge`, so this helper stays in lockstep with both
@@ -2809,7 +2820,7 @@ mod tests {
             demurrage_factor,
             claimed_factor,
             elapsed,
-            policy.demurrage_rate_bps(chain_height),
+            policy.demurrage_rate_bps(inclusion_height),
             blocks_per_year,
         );
 
@@ -2872,9 +2883,11 @@ mod tests {
 
         let fee_config = FeeConfig::default();
 
-        // Consensus floor: congestion-free, evaluated at the same height the
+        // Consensus floor: congestion-free, evaluated at the inclusion height
+        // (tip + 1) — the height block validation prices at, and the height the
         // mempool uses for its demurrage clock.
-        let consensus_floor = ledger.consensus_fee_floor(&tx, tip_height).unwrap();
+        let inclusion_height = tip_height + 1;
+        let consensus_floor = ledger.consensus_fee_floor(&tx, inclusion_height).unwrap();
         assert!(
             consensus_floor > 0,
             "expected a positive floor for a wealthy old ring"
@@ -2930,7 +2943,7 @@ mod tests {
         };
         assert!(
             ledger
-                .verify_consensus_fee_floor_for_test(&at_floor_tx, tip_height)
+                .verify_consensus_fee_floor_for_test(&at_floor_tx, inclusion_height)
                 .is_ok(),
             "a tx at exactly the consensus floor must pass block validation"
         );
@@ -2940,7 +2953,7 @@ mod tests {
         };
         assert!(
             ledger
-                .verify_consensus_fee_floor_for_test(&under_tx, tip_height)
+                .verify_consensus_fee_floor_for_test(&under_tx, inclusion_height)
                 .is_err(),
             "a tx below the consensus floor must be rejected at block validation"
         );
@@ -3067,5 +3080,102 @@ mod tests {
             )
         };
         assert!(base_at(u128::MAX / big as u128) < base_at(wealth));
+    }
+
+    /// #1875 regression (Judge review on PR #1913): the relay minimum at the
+    /// tip must cover the consensus floor of the NEXT block (`tip + 1`), the
+    /// height block validation prices at. Under exact demurrage charging the
+    /// floor rises every block for a wealthy-cluster coin, so a mempool that
+    /// prices at the tip admits txs that make the next block invalid (a
+    /// terminal consensus failure). Before the fix this case fell short at
+    /// 64/64 tips (10/64 on the legacy quantized kernel).
+    #[test]
+    fn relay_minimum_at_tip_covers_next_block_floor() {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+        use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
+
+        const BTH: u64 = 1_000_000_000_000; // picocredits
+        let wealthy_cluster = 9u64;
+        let fee_config = FeeConfig::default();
+        let cold = DynamicFeeBase::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let base_tip = 8_000_000u64;
+        let mut floor_rose = 0usize;
+        for offset in 0..64u64 {
+            let tip_height = base_tip + offset;
+            // 1M BTH ring in a 10M BTH cluster.
+            let ring = seed_ring_via_snapshot(
+                &ledger,
+                &[
+                    (1_000_000 * BTH, 0, wealthy_cluster, 80),
+                    (1_000_000 * BTH, 10, wealthy_cluster, 81),
+                ],
+                tip_height,
+                &[(wealthy_cluster, 10_000_000u128 * BTH as u128)],
+            );
+            assert_eq!(
+                ledger.get_chain_state().unwrap().height,
+                tip_height,
+                "fixture must seed the tip"
+            );
+
+            // 0.9M BTH spend.
+            let tx = Transaction {
+                inputs: TxInputs::new(vec![ClsagRingInput {
+                    ring,
+                    key_image: [0u8; 32],
+                    commitment_key_image: [0u8; 32],
+                    clsag_signature: Vec::new(),
+                    pseudo_output_amount: 0,
+                }]),
+                outputs: vec![TxOutput {
+                    amount: 900_000 * BTH,
+                    target_key: [130; 32],
+                    public_key: [131; 32],
+                    e_memo: None,
+                    cluster_tags: ClusterTagVector::from_pairs(&[(
+                        ClusterId(wealthy_cluster),
+                        TAG_WEIGHT_SCALE,
+                    )]),
+                    kem_ciphertext: None,
+                }],
+                fee: 0,
+                created_at_height: 0,
+                settlement: None,
+            };
+
+            let relay_min = relay_minimum_fee(&tx, &ledger, &fee_config, &cold, false);
+            let floor_tip = ledger.consensus_fee_floor(&tx, tip_height).unwrap();
+            let floor_next = ledger.consensus_fee_floor(&tx, tip_height + 1).unwrap();
+            if floor_next > floor_tip {
+                floor_rose += 1;
+            }
+            assert!(
+                relay_min >= floor_next,
+                "tip {tip_height}: relay minimum {relay_min} is below the next block's \
+                 consensus floor {floor_next} (short by {})",
+                floor_next - relay_min
+            );
+            // A tx paying exactly the relay minimum must be valid in the next block.
+            let at_relay_min = Transaction {
+                fee: relay_min,
+                ..tx.clone()
+            };
+            assert!(
+                ledger
+                    .verify_consensus_fee_floor_for_test(&at_relay_min, tip_height + 1)
+                    .is_ok(),
+                "tip {tip_height}: a tx at the relay minimum must pass validation at tip + 1"
+            );
+        }
+        // Sensitivity: the case must actually exercise a per-block rising floor,
+        // otherwise pricing at the tip would pass too.
+        assert_eq!(
+            floor_rose, 64,
+            "expected the consensus floor to rise every block for this wealthy aged ring"
+        );
     }
 }

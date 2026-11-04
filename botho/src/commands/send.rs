@@ -251,7 +251,11 @@ pub(crate) fn prepare(
         let floor = ledger
             .consensus_fee_floor(&tx, state.height + 1)
             .map_err(|e| anyhow::anyhow!("Failed to compute the consensus fee floor: {}", e))?;
-        if fee >= floor {
+        // Accept only with headroom above the floor on EVERY pass, including
+        // the first: the floor keeps rising while the tx waits for inclusion
+        // (exact demurrage, #1875), so a fee that merely meets the next block's
+        // floor can fall under it one block later.
+        if fee_settles(fee, floor) {
             return Ok(PreparedSend {
                 tx,
                 fee,
@@ -259,7 +263,9 @@ pub(crate) fn prepare(
                 fee_config,
             });
         }
-        fee = floor.saturating_add(fee_headroom(floor));
+        // Re-sign with double headroom so the next pass still settles if the
+        // freshly drawn ring prices somewhat (just under one headroom) higher.
+        fee = floor.saturating_add(fee_headroom(floor).saturating_mul(2));
     }
     Err(anyhow::anyhow!(
         "Could not settle a fee meeting the consensus floor after {} passes",
@@ -272,6 +278,13 @@ pub(crate) fn prepare(
 /// signing passes without materially overpaying.
 fn fee_headroom(floor: u64) -> u64 {
     floor / 64
+}
+
+/// Whether a signed `fee` settles against the observed consensus `floor`:
+/// it must cover the floor plus [`fee_headroom`], so the tx stays valid
+/// through a short inclusion delay as the demurrage floor rises.
+fn fee_settles(fee: u64, floor: u64) -> bool {
+    fee >= floor.saturating_add(fee_headroom(floor))
 }
 
 /// Select inputs covering `amount + fee` (in discovery order), build the
@@ -439,3 +452,33 @@ fn parse_amount(s: &str) -> Result<u64> {
 // pending-QP-tx file handling) was removed with the QP transaction class;
 // see docs/decisions/0006-pq-architecture-ratification.md and git history.
 // An old pending_pq_txs.bin left in a wallet dir is simply ignored.
+
+#[cfg(test)]
+mod fee_settle_tests {
+    use super::{fee_headroom, fee_settles};
+
+    #[test]
+    fn first_pass_at_floor_does_not_settle() {
+        // A fee that only meets the floor carries zero headroom: re-sign.
+        let floor = 6_400_000u64;
+        assert!(!fee_settles(floor, floor));
+        assert!(!fee_settles(floor + fee_headroom(floor) - 1, floor));
+        assert!(fee_settles(floor + fee_headroom(floor), floor));
+    }
+
+    #[test]
+    fn retry_fee_settles_despite_one_headroom_of_ring_jitter() {
+        let floor = 6_400_000u64;
+        let retry = floor + 2 * fee_headroom(floor);
+        // The next pass's floor may drift up (fresh decoys); double headroom
+        // absorbs a drift of just under one headroom.
+        let jittered = floor + fee_headroom(floor) / 2;
+        assert!(fee_settles(retry, jittered));
+    }
+
+    #[test]
+    fn saturates_at_u64_max() {
+        assert!(fee_settles(u64::MAX, u64::MAX));
+        assert!(!fee_settles(u64::MAX - 1, u64::MAX));
+    }
+}
