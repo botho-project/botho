@@ -18,8 +18,8 @@
 //! ([`draw_age_similarity_window`]): the real input's age is uniform inside it,
 //! and decoys are drawn uniformly from it. A window centred on the real input
 //! made it the median-age ring member. The node, this crate's CLI ring builder
-//! (`ring_builder::select_rpc_decoys_from_history`) and the web/Snap picker
-//! use the same rule.
+//! (`ring_builder::select_rpc_decoys_from_history`), the web/Snap picker and
+//! the mobile bridge (through [`select_aged_decoys`], #1861) use the same rule.
 //!
 //! # Cluster-factor ceiling
 //!
@@ -124,6 +124,104 @@ pub fn age_similarity_envelope(real_input_age: u64) -> (u64, u64) {
             .max(MIN_DECOY_AGE_BLOCKS),
         real_input_age.saturating_add(width),
     )
+}
+
+/// Pick `count` ring decoys for one real input of age `real_input_age` from an
+/// aged pool, under the node/web rule (#1692 / #1693 / #1861).
+///
+/// `pool` pairs each candidate with its age in blocks (`chain_height −
+/// creation_height`). The entries must be distinct outputs: the helper selects
+/// by position, so it never returns the same entry twice, but it cannot see
+/// duplicate keys. The caller removes the real inputs and anything else that
+/// must not be a decoy before calling.
+///
+/// This is a pure port of the node's
+/// `GammaDecoySelector::select_decoys_for_input` and the web signer's
+/// `selectDecoysForInput` (`web/packages/wasm-signer/src/decoys.ts`):
+///
+/// 1. Keep candidates with age >= [`MIN_DECOY_AGE_BLOCKS`]. Refuse with
+///    [`DecoySelectionError::InsufficientDecoys`] if fewer than `count` remain.
+/// 2. Shuffle them with `rng`, then draw the random-offset window
+///    ([`draw_age_similarity_window`]).
+/// 3. Phase 1: take the first `count` in-window candidates, a uniform sample
+///    without replacement from the window.
+/// 4. Phase 2 (liveness fallback): fill remaining slots from the rest by
+///    nearest age `|age − real_input_age|`. The sort is stable over the
+///    shuffled order, so ties break randomly.
+/// 5. Shuffle the result so the ring does not reveal which phase chose a decoy.
+///
+/// A real input younger than [`MIN_DECOY_AGE_BLOCKS`] gives a degenerate
+/// window (nothing is in-window), so phase 2 fills the whole ring. That is the
+/// node/web behaviour.
+///
+/// The CLI builder (`ring_builder::select_rpc_decoys_from_history`) is
+/// deliberately stricter: it refuses when the window holds fewer than `count`,
+/// with no nearest-age fill. Whether to align the two is operator decision
+/// #1882, so this helper does not change the CLI.
+///
+/// Production callers pass a CSPRNG (`bth_util_from_random::OsRng`). Tests may
+/// inject a seeded RNG.
+pub fn select_aged_decoys<T: Clone, R: rand::Rng + ?Sized>(
+    pool: &[(T, u64)],
+    count: usize,
+    real_input_age: u64,
+    rng: &mut R,
+) -> DecoySelectionResult<Vec<T>> {
+    // 1. Confirmation floor.
+    let mut eligible: Vec<&(T, u64)> = pool
+        .iter()
+        .filter(|(_, age)| *age >= MIN_DECOY_AGE_BLOCKS)
+        .collect();
+    if eligible.len() < count {
+        return Err(DecoySelectionError::InsufficientDecoys {
+            required: count,
+            available: eligible.len(),
+        });
+    }
+
+    // 2. Randomize order, so neither phase depends on chain or key order (#1771),
+    //    then place the window at a random offset.
+    eligible.shuffle(rng);
+    let (min_age, max_age) = draw_age_similarity_window(real_input_age, rng);
+
+    // 3. Phase 1: the first `count` in-window candidates of the shuffled set.
+    let mut taken = vec![false; eligible.len()];
+    let mut selected: Vec<T> = Vec::with_capacity(count);
+    if min_age <= max_age {
+        for (i, (item, age)) in eligible.iter().map(|e| (&e.0, e.1)).enumerate() {
+            if selected.len() >= count {
+                break;
+            }
+            if age >= min_age && age <= max_age {
+                selected.push(item.clone());
+                taken[i] = true;
+            }
+        }
+    }
+
+    // 4. Phase 2: nearest-age fill (stable sort keeps the shuffled tie order).
+    if selected.len() < count {
+        let mut leftovers: Vec<&(T, u64)> = eligible
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !taken[*i])
+            .map(|(_, e)| *e)
+            .collect();
+        leftovers.sort_by_key(|(_, age)| age.abs_diff(real_input_age));
+        selected.extend(
+            leftovers
+                .into_iter()
+                .take(count - selected.len())
+                .map(|(item, _)| item.clone()),
+        );
+    }
+
+    // `eligible.len() >= count`, so phase 2 always fills the ring.
+    debug_assert_eq!(selected.len(), count);
+
+    // 5. Do not leak selection order (in-window first, fallback last).
+    selected.shuffle(rng);
+    Ok(selected)
 }
 
 /// Configuration for decoy selection constraints.
@@ -1104,5 +1202,137 @@ mod tests {
 
         let e4 = DecoySelectionError::InvalidRingSize;
         assert!(e4.to_string().contains("at least 2"));
+    }
+
+    /// Parity with the node and web pickers (#1861): the shared vectors in
+    /// `decoy-age-band.json` pin the window placement and the RNG-independent
+    /// nearest-age fallback that `select_aged_decoys` (the mobile route) runs.
+    #[test]
+    fn test_select_aged_decoys_matches_shared_web_fixture() {
+        use rand::SeedableRng;
+        let raw = include_str!("../../web/packages/wasm-signer/test/fixtures/decoy-age-band.json");
+        let fixture: serde_json::Value = serde_json::from_str(raw).expect("fixture parses");
+        assert_eq!(
+            fixture["minDecoyAgeBlocks"].as_u64().unwrap(),
+            MIN_DECOY_AGE_BLOCKS
+        );
+        assert_eq!(
+            fixture["ageSimilaritySpreadBps"].as_u64().unwrap(),
+            AGE_SIMILARITY_SPREAD_BPS
+        );
+
+        // fallback[]: the selected SET is RNG-independent by construction.
+        let fallback = fixture["fallback"].as_array().unwrap();
+        assert!(!fallback.is_empty());
+        for case in fallback {
+            let real = case["realAge"].as_u64().unwrap();
+            let count = case["count"].as_u64().unwrap() as usize;
+            let pool: Vec<(u64, u64)> = case["poolAges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| (a.as_u64().unwrap(), a.as_u64().unwrap()))
+                .collect();
+            let mut expected: Vec<u64> = case["expectedAges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_u64().unwrap())
+                .collect();
+            expected.sort_unstable();
+            for seed in 0..32u64 {
+                let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+                let mut ages = select_aged_decoys(&pool, count, real, &mut rng)
+                    .expect("fallback case selects");
+                ages.sort_unstable();
+                assert_eq!(ages, expected, "{}", case["name"]);
+            }
+        }
+
+        // windows[]: for each pinned (realAge, offset), a pool dense across the
+        // envelope must yield a ring entirely inside SOME drawn window, and
+        // every window the helper can draw is one of the pinned placements.
+        for v in fixture["windows"].as_array().unwrap() {
+            let real = v["realAge"].as_u64().unwrap();
+            let offset = v["offset"].as_u64().unwrap();
+            let window = age_similarity_window(real, offset);
+            assert_eq!(window.0, v["minAge"].as_u64().unwrap());
+            assert_eq!(window.1, v["maxAge"].as_u64().unwrap());
+            if v["degenerate"].as_bool().unwrap() {
+                continue;
+            }
+            // 19 copies of each sampled age in the envelope: phase 1 always
+            // fills, so every decoy must lie inside one window of width W that
+            // also contains the real age.
+            // Ages are sampled every `W / 20` blocks so any window of width W
+            // still holds well over 19 candidates, even for huge real ages.
+            let (lo, hi) = age_similarity_envelope(real);
+            let width = age_similarity_window_width(real);
+            let step = (width / 20).max(1) as usize;
+            let pool: Vec<(u64, u64)> = (lo..=hi)
+                .step_by(step)
+                .chain([hi])
+                .flat_map(|age| std::iter::repeat_n((age, age), 19))
+                .collect();
+            for seed in 0..8u64 {
+                let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ offset);
+                let ages = select_aged_decoys(&pool, 19, real, &mut rng).unwrap();
+                let min = *ages.iter().min().unwrap();
+                let max = *ages.iter().max().unwrap();
+                assert!(
+                    min.min(real) + width >= max.max(real),
+                    "ring {ages:?} for real {real} spans more than one window (W={width})"
+                );
+                assert!(ages.iter().all(|&a| a >= MIN_DECOY_AGE_BLOCKS));
+            }
+        }
+    }
+
+    #[test]
+    fn test_select_aged_decoys_phase1_stays_in_drawn_window() {
+        use rand::SeedableRng;
+        let real = 10_000u64;
+        let pool: Vec<(u64, u64)> = (10..30_000u64).map(|a| (a, a)).collect();
+        for seed in 0..64u64 {
+            // Replay the helper's RNG to recover the window it drew.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let picked = select_aged_decoys(&pool, 19, real, &mut rng).unwrap();
+            let mut replay = rand::rngs::StdRng::seed_from_u64(seed);
+            let mut eligible: Vec<&(u64, u64)> = pool.iter().collect();
+            eligible.shuffle(&mut replay);
+            let (min_age, max_age) = draw_age_similarity_window(real, &mut replay);
+            assert!(min_age <= real && real <= max_age);
+            assert_eq!(picked.len(), 19);
+            assert!(
+                picked.iter().all(|&a| a >= min_age && a <= max_age),
+                "seed {seed}: {picked:?} outside [{min_age}, {max_age}]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_select_aged_decoys_refuses_below_confirmation_floor() {
+        // 28 candidates, but only 18 are confirmed (age >= 10).
+        let pool: Vec<(u64, u64)> = (0..10u64).chain(100..118).map(|a| (a, a)).collect();
+        let err = select_aged_decoys(&pool, 19, 105, &mut OsRng).unwrap_err();
+        assert_eq!(
+            err,
+            DecoySelectionError::InsufficientDecoys {
+                required: 19,
+                available: 18
+            }
+        );
+    }
+
+    #[test]
+    fn test_select_aged_decoys_is_randomized_and_distinct() {
+        let pool: Vec<(u64, u64)> = (0..400u64).map(|i| (i, 1_000 + i)).collect();
+        let a = select_aged_decoys(&pool, 19, 1_200, &mut OsRng).unwrap();
+        let b = select_aged_decoys(&pool, 19, 1_200, &mut OsRng).unwrap();
+        assert_ne!(a, b, "two draws over a large pool should differ");
+        let mut sorted = a.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 19, "no entry is selected twice");
     }
 }

@@ -64,6 +64,7 @@ CI runs it (and the `privacy_routes` unit tests) in `workspace-build.yml`.
 | `node` | `GammaDecoySelector::select_decoys_for_input` (`botho/src/decoy_selection.rs:856`) | `Ledger::get_decoy_outputs_for_input`, node wallet, detached signer |
 | `cli`  | `select_rpc_decoys_from_history` → `select_rpc_decoy_pool` (`botho-wallet/src/ring_builder.rs:166`) | `botho-wallet` thin CLI wallet |
 | `web`  | `selectDecoysForInput` (`web/packages/wasm-signer/src/decoys.ts:227`, called per input at `send.ts:655`) | web wallet, MetaMask Snap, claim links |
+| (mobile) | `plan_send` (`mobile/rust-bridge/src/wallet_ops.rs`) → `botho_wallet::decoy_selection::select_aged_decoys` | mobile app (iOS/Android). No separate route: it is a Rust port of `selectDecoysForInput` (same confirmation floor, window draw, nearest-age fill and final shuffle) and is pinned to the same `decoy-age-band.json` vectors, so the `web` route's results apply (#1861) |
 | `web-pre-1735` | historical chain-ordered `decoyPool[(i*19 + j) % len]` window (`send.ts:657` at `596f64c0`, removed by #1735) | nothing — comparison only, not in `--route production` |
 
 **Node port provenance.** The `node` port is a literal copy of
