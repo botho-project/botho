@@ -101,3 +101,77 @@ saved regressions, with zero mismatches. The
 input-file hashes and branch coverage: 8,355 truncating fee casts, 16,344
 pool-saturation cases, and 29,150 carryover underflows. These unrestricted
 helper inputs do not establish that such states are reachable in consensus.
+
+## Actual accepted-block oracle (#1889)
+
+`botho::ledger::formal_drt_supply` is available only with `test-fixtures`.
+The isolated `formal-drt` crate exercises it with:
+
+```sh
+cd formal-drt
+cargo test --release supply_oracle -- --nocapture
+```
+
+This oracle observes real `Ledger::seal_block` / `Ledger::add_block`
+commits, including the production signature and checked-balance callback,
+key-image collision checks, V2 context writes and LMDB transaction commit.
+A separate read-only invocation of the production pre-writer V2 checks
+identifies the rejection stage; it does not replace validation in
+`add_block`. Database, encoding and other local errors fail the fixture;
+only `LedgerError::is_block_fault()` outcomes count as consensus rejection.
+
+The bounded fixture starts at fresh genesis and changes the stored
+difficulty to `u64::MAX`, matching the existing activation-test profile.
+Every header still passes actual PoW verification. Lottery maturity remains
+720 blocks, and candidate, fee and transaction validation rules are
+unchanged. This is a **genesis-origin chain under an altered test profile**,
+not canonical production-schedule reachability. It uses neither seeded
+snapshots nor the drawing double. Arbitrary storage fixtures and
+premise-satisfying scalar examples remain different evidence domains.
+
+Each observed case records the full signed candidate block, pre/post chain
+state and pool, every persisted output and derivation context, and watched
+key-image state. Newly persisted amounts are partitioned into coinbase,
+ordinary and lottery outputs. The independent ghost map contains the real
+source outpoints known to the fixture signer. It consumes each accepted
+source once and adds actual persisted outputs; the raw row sum is never
+called economic unspent value. The checked comparison is:
+
+```text
+new_output_value + pool_after + burn_delta
+  = known_real_spent_value + reward + pool_before
+```
+
+This cross-addition form permits a decreasing pool. Demurrage and settlement
+charges remain components of fees and are not subtracted again. The
+accounting comparison does not prove source ownership, general output
+spendability, CLSAG soundness or all accepted-block supply invariants.
+
+The profile covers zero fees with no candidates and carryover, three fresh
+signed transfers, real V2 payouts at maturity, a subsequently signed payout
+spend, replay, two independently signed transactions spending one source,
+and a signed-output mutation. The latter two are sealed with valid V2 body
+roots, pass the pre-writer check and fail in the real transaction/writer
+path. A payout-binding mutation is an earlier-stage control. Rejections
+compare complete observation fingerprints before/after and after closing
+and reopening LMDB. Accepted observations are also checked after reopen.
+An executable negative control changes observed `pool_after` by one,
+requires the comparison to fail, restores it, and requires success.
+
+The [oracle receipt](../formal-drt/results/accepted-block-oracle-1839.json)
+records measured runs. `SUPPLY_ORACLE_CASE` logs separate signing, sealing,
+precheck, actual add-block and observation costs. The receipt separates
+wallet initialization and cold chain construction from those steady-case
+costs. `SUPPLY_ORACLE_DIR` selects the retained evidence directory: it holds
+the entire signed chain and per-case observations/known inputs, with hashes
+in `receipt.json`. These are replay inputs, not cached acceptance counts.
+CI uploads them with the unit-test log for 14 days.
+
+The existing release unit-test step runs the new tests without a filter,
+with a 420-second command limit and eight-minute step limit. The profile
+also checks a 360-second execution bound. The separate five-minute random
+DRT tier is unchanged. There is no new random leg or nightly campaign in
+this stage: #1890 must use the measured real-verification costs to choose
+its fixture reuse and account for the existing million-case nightly budget.
+No Lean theorem or statement record is added here; the parent #1839 and
+its model-composition child #1890 remain separate work.

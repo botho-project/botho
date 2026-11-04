@@ -357,6 +357,19 @@ impl Ledger {
         ProductionView { ledger: self, txn }
     }
 
+    /// TEST/DRT ONLY: identify whether a candidate passes the pre-writer V2
+    /// stage. This read-only result grants no authority to commit a block.
+    #[cfg(feature = "test-fixtures")]
+    pub(in crate::ledger) fn fixture_validate_v2_structure(
+        &self,
+        block: &Block,
+    ) -> Result<(), LedgerError> {
+        let txn = self.env.read_txn().map_err(db_op("oracle precheck txn"))?;
+        let state = self.chain_state_in(&txn)?;
+        crate::ledger::lottery_v2::validate_block(&self.production_view(&txn), block, &state)
+            .map(|_| ())
+    }
+
     /// The V2 block-body producer (protocol 7.0.0, #1286 P3, #1640).
     ///
     /// Takes a block whose header, minting tx and ordinary transactions are
