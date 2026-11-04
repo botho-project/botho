@@ -429,7 +429,12 @@ generated separately.
 
 - **Profile:** exactly `run_id` (`qYYYYMMDD-xN-<label>`, validated by
   `fleet_provision.validate_run_id()`), `producer_role`, `node_end` and
-  `rpc_requests_per_minute`. Hostnames (`<role>.<run_id>.internal`), paths
+  `rpc_requests_per_minute`, plus an optional `mint_until`. That is an
+  integer epoch after now and strictly before `node_end`. It moves only the
+  producer's `--testnet-mint-until` earlier, so a sustained-memory
+  qualification cohort gets a real idle period while every node runs until
+  `node_end`. See [the qualification runbook](sustained-memory-qualification.md#qualifying-an-x2-candidate).
+  Campaign profiles omit it. Hostnames (`<role>.<run_id>.internal`), paths
   (`/opt/botho-<run_id>`, `/var/lib/botho-<run_id>`) and unit names
   (`botho-<run_id>.service`) are derived from `run_id`, so no token rename is
   needed.

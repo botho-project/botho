@@ -397,6 +397,39 @@ class NodeEndTests(unittest.TestCase):
         self.assertIn('const MAX_TESTNET_MINT_WINDOW_SECS: u64 = 82 * 60 * 60;', run_rs.read_text())
 
 
+class MintUntilTests(unittest.TestCase):
+    """Optional earlier mint deadline for a sustained-memory qualification cohort (#1452)."""
+
+    def profile(self, until):
+        return dict(PROFILE, mint_until=until)
+
+    def test_producer_stops_minting_at_mint_until_but_node_runs_to_node_end(self):
+        until = NOW + 5 * 3600
+        profile = self.profile(until)
+        unit = fn.render_node_unit('n3', INVENTORY, profile, NOW)
+        self.assertIn(' --testnet-mint-until %d' % until, unit)
+        self.assertNotIn('--testnet-mint-until %d' % NODE_END, unit)
+        self.assertNotIn('--mint', fn.render_node_unit('n1', INVENTORY, profile, NOW))
+        _, timer = fn.render_node_stop(profile, NOW)
+        self.assertIn('OnCalendar=%s' % fp.on_calendar(NODE_END), timer.splitlines())
+        self.assertEqual(fn.mint_until(profile), until)
+
+    def test_absent_mint_until_keeps_node_end(self):
+        self.assertEqual(fn.mint_until(PROFILE), NODE_END)
+        self.assertIn(' --testnet-mint-until %d' % NODE_END, fn.render_node_unit('n3', INVENTORY, PROFILE, NOW))
+
+    def test_refusals(self):
+        for until, why in ((NODE_END, 'before node_end'), (NODE_END + 1, 'before node_end'),
+                           (0, 'before node_end'), (float(NOW + 60), 'before node_end'),
+                           (True, 'before node_end'), (NOW, 'not in the future'),
+                           (NOW - 60, 'not in the future')):
+            with self.subTest(until=until):
+                with self.assertRaisesRegex(ValueError, why):
+                    fn.render_node_unit('n3', INVENTORY, self.profile(until), NOW)
+        with self.assertRaisesRegex(ValueError, 'exactly'):
+            fn.validate_profile(dict(PROFILE, mint_untill=NOW + 60))
+
+
 class CliTests(unittest.TestCase):
     def test_render_writes_private_payloads(self):
         with tempfile.TemporaryDirectory() as tmp:

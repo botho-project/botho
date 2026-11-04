@@ -6,7 +6,11 @@
 //! RPC -- it is a native port of the browser wallet's `send.ts` flow so the
 //! mobile bridge produces transactions the node verifier accepts byte-for-byte.
 
+use botho_wallet::decoy_selection::{
+    select_aged_decoys, DecoySelectionError, MIN_DECOY_AGE_BLOCKS,
+};
 use bth_transaction_clsag::{DEFAULT_RING_SIZE, DUST_THRESHOLD, MIN_TX_FEE};
+use bth_util_from_random::OsRng;
 use bth_wasm_signer::core::{
     build_and_sign_inner, compute_owned_output_key_images_inner, scan_owned_outputs_inner,
     ChainOutput, DecoyOutput, KeyImageRequest, OwnedOutput, RecipientAddress, ScanRequest,
@@ -64,6 +68,10 @@ pub struct Candidate {
     /// `lottery` flag from `chain_getOutputs`. A flagged row WITHOUT a
     /// `lotteryContext` is a legacy (V1) payout aliasing its source (#1450).
     pub lottery: bool,
+    /// Height of the block that created this output (from `chain_getOutputs`;
+    /// the RPC client fails closed when a block omits it). Ring decoys are
+    /// chosen by age `chain_height − height` (#1861).
+    pub height: u64,
 }
 
 impl Candidate {
@@ -111,6 +119,7 @@ fn candidate_from_rpc(o: crate::rpc::RpcOutput) -> Candidate {
             lottery_context: o.lottery_context,
         },
         lottery: o.lottery,
+        height: o.height,
     }
 }
 
@@ -188,7 +197,20 @@ pub fn legacy_payouts_block_selection(
 }
 
 /// Ring decoys: canonical, non-lottery, non-input, non-genesis outputs.
+///
+/// The send path uses [`aged_decoy_pool`] (it needs each row's height). This
+/// output-only view is kept for the decoy-exclusion tests.
+#[cfg(test)]
 pub fn decoy_pool<'a>(canonical: &[&'a Candidate], inputs: &[OwnedOutput]) -> Vec<&'a ChainOutput> {
+    aged_decoy_pool(canonical, inputs)
+        .into_iter()
+        .map(|c| &c.output)
+        .collect()
+}
+
+/// [`decoy_pool`] as full candidates, so the send path can read each decoy's
+/// creation height.
+fn aged_decoy_pool<'a>(canonical: &[&'a Candidate], inputs: &[OwnedOutput]) -> Vec<&'a Candidate> {
     let input_keys: std::collections::HashSet<&str> =
         inputs.iter().map(|i| i.target_key.as_str()).collect();
     canonical
@@ -198,7 +220,7 @@ pub fn decoy_pool<'a>(canonical: &[&'a Candidate], inputs: &[OwnedOutput]) -> Ve
                 && !input_keys.contains(c.output.target_key.as_str())
                 && !is_zero_key(&c.output.target_key)
         })
-        .map(|c| &c.output)
+        .copied()
         .collect()
 }
 
@@ -363,6 +385,8 @@ pub async fn send(
 /// decoy gathering, and the [`SignRequest`] for the shared signer core. Split
 /// out of [`send`] (which only adds the RPC fetch, sign and submit) so the
 /// selection rules are testable without a node.
+///
+/// Decoys come from the OS CSPRNG; see [`plan_send_with_rng`].
 pub fn plan_send(
     keys: &SignerKeys,
     recipient: RecipientAddress,
@@ -371,6 +395,24 @@ pub fn plan_send(
     height: u64,
     spendable: &[OwnedOutput],
     candidates: &[Candidate],
+) -> Result<SignRequest, SendError> {
+    plan_send_with_rng(
+        keys, recipient, amount, fee, height, spendable, candidates, &mut OsRng,
+    )
+}
+
+/// [`plan_send`] with an injectable RNG for the decoy draw. Production passes
+/// a CSPRNG; tests may pass a seeded one.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_send_with_rng<R: rand::Rng + ?Sized>(
+    keys: &SignerKeys,
+    recipient: RecipientAddress,
+    amount: u64,
+    fee: u64,
+    height: u64,
+    spendable: &[OwnedOutput],
+    candidates: &[Candidate],
+    rng: &mut R,
 ) -> Result<SignRequest, SendError> {
     let target = amount
         .checked_add(fee)
@@ -393,51 +435,73 @@ pub fn plan_send(
     // Decoys may include the wallet's own other outputs (the node's decoy
     // selector only excludes the real inputs), which keeps a low-traffic
     // testnet spendable.
+    //
+    // Per-input selection (#1861) uses the node/web rule through the shared
+    // `botho_wallet::decoy_selection::select_aged_decoys`: confirmed decoys
+    // (>= 10 blocks), drawn with a CSPRNG from a random-offset ±5% age window
+    // that holds the real input's age, filled by nearest age when the window
+    // is thin, then shuffled. This replaces the chain-ordered
+    // `pool[(i*k + j) % len]` window, which gave every ring the same outputs
+    // regardless of the real input's age.
     let decoys_per_input = DEFAULT_RING_SIZE - 1;
-    let decoy_pool = decoy_pool(&canonical, &inputs);
-
-    if decoy_pool.len() < decoys_per_input {
-        return Err(SendError::Other(format!(
-            "not enough decoys on chain for a ring of {DEFAULT_RING_SIZE}: need {decoys_per_input} \
-             per input, found {}. Wait for more on-chain outputs.",
-            decoy_pool.len()
-        )));
-    }
-
-    let spend_inputs: Vec<SpendInput> = inputs
+    let aged_pool: Vec<(&ChainOutput, u64)> = aged_decoy_pool(&canonical, &inputs)
+        .into_iter()
+        .map(|c| (&c.output, height.saturating_sub(c.height)))
+        .collect();
+    let canonical_height: std::collections::HashMap<&str, u64> = canonical
         .iter()
-        .enumerate()
-        .map(|(i, input)| {
-            let decoys: Vec<DecoyOutput> = (0..decoys_per_input)
-                .map(|j| {
-                    let d = decoy_pool[(i * decoys_per_input + j) % decoy_pool.len()];
-                    DecoyOutput {
-                        target_key: d.target_key.clone(),
-                        public_key: d.public_key.clone(),
-                        amount: d.amount,
+        .map(|c| (c.output.target_key.as_str(), c.height))
+        .collect();
+
+    let mut spend_inputs: Vec<SpendInput> = Vec::with_capacity(inputs.len());
+    for input in &inputs {
+        // The real input's age comes from its canonical chain row, as web's
+        // `outputAge(original, height)` does. `supported_inputs` only admits
+        // inputs that have one.
+        let input_height = *canonical_height
+            .get(input.target_key.as_str())
+            .ok_or_else(|| {
+                SendError::Other("Selected input is missing from the chain scan".into())
+            })?;
+        let real_age = height.saturating_sub(input_height);
+        let decoys: Vec<DecoyOutput> =
+            select_aged_decoys(&aged_pool, decoys_per_input, real_age, rng)
+                .map_err(|e| match e {
+                    DecoySelectionError::InsufficientDecoys { available, .. } => {
+                        SendError::Other(format!(
+                            "Not enough decoys on chain for a ring of {DEFAULT_RING_SIZE}: need \
+                             {decoys_per_input} confirmed (>= {MIN_DECOY_AGE_BLOCKS} blocks old) \
+                             per input, found {available}. Wait for more on-chain outputs."
+                        ))
                     }
+                    other => SendError::Other(format!("decoy selection failed: {other}")),
+                })?
+                .into_iter()
+                .map(|d| DecoyOutput {
+                    target_key: d.target_key.clone(),
+                    public_key: d.public_key.clone(),
+                    amount: d.amount,
                 })
                 .collect();
-            SpendInput {
-                target_key: input.target_key.clone(),
-                public_key: input.public_key.clone(),
-                amount: input.amount,
-                subaddress_index: input.subaddress_index,
-                // Thread the hybrid metadata scanned on the receive side (#988):
-                // under protocol 6.0.0 the one-time key is bound to
-                // `output_index` and recovered by decapsulating `kem_ciphertext`
-                // with the wallet seed. Omitting these would classically recover
-                // a hybrid input's spend key, yielding the wrong one-time key and
-                // an invalid CLSAG signature — the same bug this PR fixes for web.
-                output_index: input.output_index,
-                kem_ciphertext: input.kem_ciphertext.clone(),
-                // V2 lottery payout input: recovered through its context with
-                // the x·G == P check (#1645).
-                lottery_context: input.lottery_context.clone(),
-                decoys,
-            }
-        })
-        .collect();
+        spend_inputs.push(SpendInput {
+            target_key: input.target_key.clone(),
+            public_key: input.public_key.clone(),
+            amount: input.amount,
+            subaddress_index: input.subaddress_index,
+            // Thread the hybrid metadata scanned on the receive side (#988):
+            // under protocol 6.0.0 the one-time key is bound to
+            // `output_index` and recovered by decapsulating `kem_ciphertext`
+            // with the wallet seed. Omitting these would classically recover
+            // a hybrid input's spend key, yielding the wrong one-time key and
+            // an invalid CLSAG signature — the same bug this PR fixes for web.
+            output_index: input.output_index,
+            kem_ciphertext: input.kem_ciphertext.clone(),
+            // V2 lottery payout input: recovered through its context with
+            // the x·G == P check (#1645).
+            lottery_context: input.lottery_context.clone(),
+            decoys,
+        });
+    }
 
     let request = SignRequest {
         spend_private_key: keys.spend_private_key.clone(),
@@ -689,5 +753,197 @@ mod lottery_v2_tests {
             &candidates,
         );
         assert!(matches!(result, Err(SendError::Insufficient)));
+    }
+}
+
+/// Ring decoy selection in `plan_send` (#1861): the node/web random-offset age
+/// window through the shared `botho_wallet::decoy_selection` helper, not the
+/// old chain-ordered `pool[(i*k + j) % len]` window.
+#[cfg(test)]
+mod decoy_selection_tests {
+    use super::*;
+    use botho_wallet::decoy_selection::age_similarity_window_width;
+
+    const CHAIN_HEIGHT: u64 = 10_000;
+    const REAL_KEY: &str = "ee00000000000000000000000000000000000000000000000000000000000000";
+    const REAL_AGE: u64 = 2_000;
+
+    fn keys() -> SignerKeys {
+        SignerKeys {
+            spend_private_key: "11".repeat(32),
+            view_private_key: "22".repeat(32),
+            sender_kem_public_key: String::new(),
+            seed: "33".repeat(64),
+        }
+    }
+
+    fn recipient() -> RecipientAddress {
+        RecipientAddress {
+            spend_public_key: "55".repeat(32),
+            view_public_key: "44".repeat(32),
+            kem_public_key: String::new(),
+        }
+    }
+
+    fn row(key: String, height: u64, amount: u64) -> Candidate {
+        Candidate {
+            output: ChainOutput {
+                public_key: format!("{:0>64}", &key[..8]),
+                target_key: key,
+                amount,
+                output_index: 0,
+                kem_ciphertext: None,
+                lottery_context: None,
+            },
+            lottery: false,
+            height,
+        }
+    }
+
+    /// Decoy age encoded in the key, so a ring member's age is readable from
+    /// the signer request.
+    fn decoy_key(age: u64) -> String {
+        format!("{age:016x}{:048x}", 1)
+    }
+
+    fn age_of(key: &str) -> u64 {
+        u64::from_str_radix(&key[..16], 16).unwrap()
+    }
+
+    /// `young` unconfirmed rows (age < 10) plus `confirmed` rows at ages
+    /// `20, 30, …`, then the real input (age [`REAL_AGE`]).
+    fn chain(confirmed: u64, young: u64) -> (Vec<Candidate>, Vec<OwnedOutput>) {
+        let mut rows: Vec<Candidate> = (0..young)
+            .map(|i| row(decoy_key(i % 10), CHAIN_HEIGHT - i % 10, 1))
+            .collect();
+        rows.extend((0..confirmed).map(|i| {
+            let age = 20 + i * 10;
+            row(decoy_key(age), CHAIN_HEIGHT - age, 1)
+        }));
+        let real = row(REAL_KEY.into(), CHAIN_HEIGHT - REAL_AGE, 5_000_000_000_000);
+        let owned = OwnedOutput {
+            target_key: real.output.target_key.clone(),
+            public_key: real.output.public_key.clone(),
+            amount: real.output.amount,
+            subaddress_index: 0,
+            output_index: 0,
+            kem_ciphertext: None,
+            lottery_context: None,
+        };
+        rows.push(real);
+        (rows, vec![owned])
+    }
+
+    fn ring_ages(request: &SignRequest) -> Vec<u64> {
+        assert_eq!(request.inputs.len(), 1);
+        assert_eq!(request.inputs[0].target_key, REAL_KEY);
+        request.inputs[0]
+            .decoys
+            .iter()
+            .map(|d| age_of(&d.target_key))
+            .collect()
+    }
+
+    fn plan(candidates: &[Candidate], spendable: &[OwnedOutput]) -> Result<SignRequest, SendError> {
+        plan_send(
+            &keys(),
+            recipient(),
+            1_000_000_000_000,
+            MIN_TX_FEE,
+            CHAIN_HEIGHT,
+            spendable,
+            candidates,
+        )
+    }
+
+    #[test]
+    fn plan_send_draws_random_confirmed_decoys_inside_one_age_window() {
+        // 400 confirmed rows (ages 20..=4010, every 10 blocks) and 30 young
+        // ones. W = 200 at age 2000, so every window holds >= 20 candidates
+        // and phase 1 always fills the ring.
+        let (candidates, spendable) = chain(400, 30);
+        let width = age_similarity_window_width(REAL_AGE);
+        assert_eq!(width, 200);
+
+        let old_ring: Vec<String> = {
+            let canonical = canonical_candidates(&candidates);
+            let pool = decoy_pool(&canonical, &spendable);
+            (0..DEFAULT_RING_SIZE - 1)
+                .map(|j| pool[j % pool.len()].target_key.clone())
+                .collect()
+        };
+
+        let mut rings = Vec::new();
+        for _ in 0..8 {
+            let request = plan(&candidates, &spendable).ok().expect("plan a send");
+            let decoys = &request.inputs[0].decoys;
+            assert_eq!(decoys.len(), DEFAULT_RING_SIZE - 1);
+            let keys: Vec<String> = decoys.iter().map(|d| d.target_key.clone()).collect();
+            assert_ne!(keys, old_ring, "chain-ordered window is gone");
+            let mut unique = keys.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(unique.len(), keys.len(), "no decoy twice in one ring");
+
+            let ages = ring_ages(&request);
+            assert!(
+                ages.iter().all(|&a| a >= MIN_DECOY_AGE_BLOCKS),
+                "unconfirmed decoy in {ages:?}"
+            );
+            let lo = ages.iter().copied().chain([REAL_AGE]).min().unwrap();
+            let hi = ages.iter().copied().chain([REAL_AGE]).max().unwrap();
+            assert!(
+                hi - lo <= width,
+                "ring {ages:?} does not fit one window of width {width} around {REAL_AGE}"
+            );
+            rings.push(keys);
+        }
+        rings.sort();
+        rings.dedup();
+        assert!(rings.len() > 1, "plan_send rings must be randomized");
+    }
+
+    #[test]
+    fn plan_send_refuses_below_nineteen_confirmed_decoys() {
+        // 18 confirmed plus plenty of young rows: the old pool-size check
+        // would have accepted this.
+        let (candidates, spendable) = chain(18, 40);
+        let result = plan(&candidates, &spendable);
+        match result {
+            Err(SendError::Other(m)) => {
+                assert!(
+                    m.contains("need 19 confirmed (>= 10 blocks old) per input, found 18"),
+                    "{m}"
+                );
+            }
+            _ => panic!("expected a decoy refusal"),
+        }
+    }
+
+    #[test]
+    fn plan_send_fills_a_thin_window_by_nearest_age() {
+        // 19 confirmed rows far from the real age: the window is empty, so the
+        // node/web nearest-age fill takes them all (the CLI would refuse,
+        // #1882).
+        let (candidates, spendable) = chain(19, 0);
+        let request = plan(&candidates, &spendable).ok().expect("plan a send");
+        let mut ages = ring_ages(&request);
+        ages.sort_unstable();
+        assert_eq!(ages, (0..19).map(|i| 20 + i * 10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn rpc_height_reaches_the_candidate() {
+        let blocks = vec![serde_json::json!({
+            "height": 77,
+            "outputs": [{
+                "targetKey": REAL_KEY,
+                "publicKey": "ab",
+                "amountCommitment": hex::encode(5u64.to_le_bytes()),
+            }],
+        })];
+        let rows = crate::rpc::flatten_outputs(&blocks).unwrap();
+        let candidate = candidate_from_rpc(rows.into_iter().next().unwrap());
+        assert_eq!(candidate.height, 77);
     }
 }

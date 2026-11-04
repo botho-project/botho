@@ -19,6 +19,7 @@ mod demurrage;
 mod fixtures;
 mod gen;
 mod legs;
+mod legs_difficulty;
 mod legs_tags;
 mod model;
 mod runner;
@@ -77,6 +78,19 @@ const LEGS: &[(&str, LegFn)] = &[
     (
         legs_tags::ImportFloor::NAME,
         runner::run::<legs_tags::ImportFloor>,
+    ),
+    // #1841: difficulty controller and dynamic slot duration.
+    (
+        legs_difficulty::DifficultyStep::NAME,
+        runner::run::<legs_difficulty::DifficultyStep>,
+    ),
+    (
+        legs_difficulty::DifficultyRun::NAME,
+        runner::run::<legs_difficulty::DifficultyRun>,
+    ),
+    (
+        legs_difficulty::SlotDuration::NAME,
+        runner::run::<legs_difficulty::SlotDuration>,
     ),
 ];
 

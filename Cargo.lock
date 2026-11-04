@@ -1963,6 +1963,7 @@ dependencies = [
  "bth-crypto-keys",
  "bth-crypto-pq",
  "bth-transaction-clsag",
+ "bth-util-from-random",
  "bth-wasm-signer",
  "hex",
  "rand 0.10.3",

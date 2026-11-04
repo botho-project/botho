@@ -516,20 +516,31 @@ def analyze(plan, observations):
     }
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
-    parser.add_argument("samples", type=Path)
-    args = parser.parse_args()
+    parser.add_argument(
+        "samples",
+        type=Path,
+        nargs="+",
+        help="raw JSONL files (e.g. one per host), read in the order given",
+    )
+    args = parser.parse_args(argv)
     try:
         plan = json.loads(args.manifest.read_text())
-        rows, parse_errors = [], []
-        raw = args.samples.read_bytes()
-        for line_number, line in enumerate(raw.decode().splitlines(), 1):
-            try:
-                rows.append(json.loads(line))
-            except ValueError:
-                parse_errors.append(f"invalid JSONL line {line_number}")
+        rows, parse_errors, files = [], [], []
+        for path in args.samples:
+            data = path.read_bytes()
+            # Each collector writes its own file; never merge or rewrite them.
+            files.append(
+                {"path": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+            )
+            prefix = f"{path}: " if len(args.samples) > 1 else ""
+            for line_number, line in enumerate(data.decode().splitlines(), 1):
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    parse_errors.append(f"{prefix}invalid JSONL line {line_number}")
         if parse_errors:
             # An undecodable row has no trustworthy timestamp. It may belong
             # to measurement, so invalidate trend eligibility conservatively.
@@ -537,7 +548,9 @@ def main():
                 {"node_id": n["node_id"], "errors": parse_errors} for n in plan["nodes"]
             )
         result = analyze(plan, rows)
-        result["observations_sha256"] = hashlib.sha256(raw).hexdigest()
+        if len(files) == 1:
+            result["observations_sha256"] = files[0]["sha256"]
+        result["observation_files"] = files
         if parse_errors:
             result["incomplete_reasons"].extend(parse_errors)
             if result["status"] != "failed":

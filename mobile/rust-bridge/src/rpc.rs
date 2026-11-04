@@ -61,6 +61,12 @@ pub struct RpcOutput {
     /// recovers the payout key with the `x·G == P` check (#1645).
     #[serde(rename = "lotteryContext", default)]
     pub lottery_context: Option<LotteryContext>,
+    /// Height of the block that created this output. `chain_getOutputs`
+    /// reports it once per block, not per output, so [`flatten_outputs`] sets
+    /// it from the enclosing block. The send path needs it to choose
+    /// age-similar ring decoys (#1861).
+    #[serde(skip)]
+    pub height: u64,
 }
 
 /// Spent/pending status of a key image from `chain_areKeyImagesSpent`.
@@ -164,17 +170,7 @@ impl NodeRpc {
         })
         .await?;
 
-        let mut outputs = Vec::new();
-        for block in &blocks {
-            if let Some(arr) = block.get("outputs").and_then(|o| o.as_array()) {
-                for out in arr {
-                    if let Ok(parsed) = serde_json::from_value::<RpcOutput>(out.clone()) {
-                        outputs.push(parsed);
-                    }
-                }
-            }
-        }
-        Ok(outputs)
+        flatten_outputs(&blocks)
     }
 
     /// Query spent/pending status for a batch of hex key images.
@@ -235,6 +231,36 @@ where
         next = last + 1;
     }
     Ok(blocks)
+}
+
+/// Flatten `chain_getOutputs` blocks into outputs, stamping each with its
+/// block's `height`.
+///
+/// Fails closed if any block has no numeric `height` (#1861). Decoy selection
+/// needs every output's age, and an output with no height must never fall back
+/// to chain-ordered decoys or age 0. This matches the web signer's `outputAge`
+/// (#1693). Rows that do not parse as outputs are skipped, as before.
+pub fn flatten_outputs(blocks: &[Value]) -> Result<Vec<RpcOutput>, String> {
+    let mut outputs = Vec::new();
+    for block in blocks {
+        let height = block
+            .get("height")
+            .and_then(|h| h.as_u64())
+            .ok_or_else(|| {
+                "chain_getOutputs block missing height: refusing to build rings without \
+             output ages (#1861)"
+                    .to_string()
+            })?;
+        if let Some(arr) = block.get("outputs").and_then(|o| o.as_array()) {
+            for out in arr {
+                if let Ok(mut parsed) = serde_json::from_value::<RpcOutput>(out.clone()) {
+                    parsed.height = height;
+                    outputs.push(parsed);
+                }
+            }
+        }
+    }
+    Ok(outputs)
 }
 
 /// Recover the transparent u64 amount from an `amountCommitment` hex string
@@ -299,5 +325,45 @@ mod tests {
         })
         .await
         .is_err());
+    }
+
+    fn output_row(key: &str) -> Value {
+        json!({
+            "targetKey": key,
+            "publicKey": "ab",
+            "amountCommitment": hex::encode(7u64.to_le_bytes()),
+        })
+    }
+
+    /// #1861: each output carries its block's height.
+    #[test]
+    fn flatten_outputs_stamps_block_height() {
+        let blocks = vec![
+            json!({"height": 4, "outputs": [output_row("aa"), output_row("bb")]}),
+            json!({"height": 9, "outputs": [output_row("cc")]}),
+            json!({"height": 10, "outputs": []}),
+        ];
+        let outputs = flatten_outputs(&blocks).unwrap();
+        let got: Vec<(&str, u64)> = outputs
+            .iter()
+            .map(|o| (o.target_key.as_str(), o.height))
+            .collect();
+        assert_eq!(got, vec![("aa", 4), ("bb", 4), ("cc", 9)]);
+    }
+
+    /// #1861: a block without a height fails the fetch (and so the send)
+    /// instead of defaulting the age to 0 or falling back to chain order.
+    #[test]
+    fn flatten_outputs_fails_closed_on_missing_height() {
+        for bad in [
+            json!({"outputs": [output_row("aa")]}),
+            json!({"height": null, "outputs": [output_row("aa")]}),
+            json!({"height": "12", "outputs": [output_row("aa")]}),
+            json!({"height": -1, "outputs": []}),
+        ] {
+            let blocks = vec![json!({"height": 1, "outputs": [output_row("zz")]}), bad];
+            let err = flatten_outputs(&blocks).unwrap_err();
+            assert!(err.contains("missing height"), "{err}");
+        }
     }
 }
