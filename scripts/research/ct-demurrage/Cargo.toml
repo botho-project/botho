@@ -10,7 +10,6 @@ description = "Inactive exact-integer CT demurrage constraint research"
 bth-crypto-keys = { path = "../../../crypto/keys" }
 bth-util-from-random = { path = "../../../util/from-random" }
 rand = { workspace = true }
-bth-cluster-tax = { path = "../../../cluster-tax" }
 bth-crypto-ring-signature = { path = "../../../crypto/ring-signature", features = ["alloc"] }
 num-bigint = "0.5"
 curve25519-dalek-v4 = { workspace = true }

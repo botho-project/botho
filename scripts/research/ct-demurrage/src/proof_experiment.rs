@@ -271,8 +271,9 @@ fn fixture(
     let charge = c.result("settled");
     assert_eq!(
         charge,
-        bth_cluster_tax::demurrage_charge(value, fi, e, rate, year).max(
-            bth_cluster_tax::capitalized_reset_charge(value, fi, fo, horizon, rate, year)
+        // Frozen pre-9.0.0 reference, not live production (#1914).
+        crate::legacy_kernel::demurrage_charge(value, fi, e, rate, year).max(
+            crate::legacy_kernel::capitalized_reset_charge(value, fi, fo, horizon, rate, year)
         )
     );
     let s = PublicStatement {

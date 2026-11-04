@@ -4,6 +4,7 @@
 //! accepted ADR.
 #![cfg(test)]
 
+mod legacy_kernel;
 mod proof_experiment;
 use bulletproofs_og::{
     r1cs::{ConstraintSystem, LinearCombination, Metrics, Prover, Verifier},
@@ -357,7 +358,9 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bth_cluster_tax::{
+    // The circuit models the pre-9.0.0 quantized kernel, so the differential
+    // reference is a frozen crate-local copy, not live production (#1914).
+    use crate::legacy_kernel::{
         capitalized_reset_charge, demurrage_charge, spend_demurrage_charge, BLOCKS_PER_YEAR_5S,
         SETTLEMENT_HORIZON_BLOCKS,
     };
