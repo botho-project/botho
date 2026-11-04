@@ -123,6 +123,10 @@ obligation; the sampler verifies executable bytes, not the build history.
    also keeps the top-level `observations_sha256`). A node whose rows are
    missing, duplicated across files or out of order is incomplete.
 
+   The analyzer also requires the collector's own completion record (see
+   [collector completion rule](#collector-completion-rule)). Files assembled
+   by hand from step 5 have none, so they are diagnostic and can never pass.
+
    Analyzer exit codes: 0 `passed`, 1 `failed`, 2 `incomplete`. Check `scope`
    even on exit 0. Raw data is never rewritten. Archive the result together
    with raw observations, manifest and their hashes. Do not publish private
@@ -151,9 +155,18 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
   ```sh
   python3 scripts/stress/collect_sustained_memory.py manifest --out manifest.json \
     --campaign-id RUN_ID --source-revision COMMIT --chain-id RUN_ID \
-    --started-at T0 --min-blocks 10 --producer n3 \
+    --started-at T0 --min-blocks MIN_BLOCKS --producer n3 \
     --node n1=n1-identity.json ... --node n5=n5-identity.json
   ```
+
+  `MIN_BLOCKS` is a floor on the block-height increase in **every** one of
+  the 48 fixed 300 s sustained windows, on every node. A single window below
+  the floor makes the run `incomplete`. Derive it from a cadence soak
+  measured on this fleet just before the manifest is built (see
+  [choosing `MIN_BLOCKS`](#choosing-min_blocks)), never from a target, a
+  mean, or an older run. The floor only proves the workload is active. It is
+  not the memory test, so raising it gains nothing. `validate_manifest`
+  requires at least 1.
 
   It refuses a t0 in the past (a readiness delay may never shorten warmup),
   a t0 more than an hour ahead, differing artifact hashes, shared cgroups, an
@@ -176,16 +189,31 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
   read-only `node_getStatus` call per node through `rpc_sustained_memory`,
   then one local sample through `sample_sustained_memory`. Every row,
   including error rows, is appended to the new file, and each tick is
-  fsynced. A tick more than half an interval late is skipped and logged,
-  never replayed. A late start, a slow tick, an RPC outage or a process
-  restart therefore stays visible as a gap or an error row, and the analyzer
-  reports it as incomplete. SIGTERM or SIGINT stops it after the current
-  tick and keeps every row. Collection ends at the profile end or the hard
-  deadline, whichever comes first. The final JSON summary on stdout gives
-  rows, error rows, skipped ticks, `interrupted` and the file's SHA256. Exit
-  0 only for a complete, error-free collection starting at t0; otherwise
-  exit 2. A collector exit is never a qualification verdict: run the
-  analyzer on the files.
+  fsynced. A tick more than half an interval (2.5 s) late is skipped and
+  logged, never replayed. A late start, a slow tick, an RPC outage or a
+  process restart therefore stays visible as a missed tick or an error row.
+  SIGTERM or SIGINT stops it after the current tick and keeps every row.
+  Collection ends at the profile end or the hard deadline, whichever comes
+  first. Only when it has sampled the final profile tick without
+  interruption does it append one terminal record as the file's last line,
+  then fsync it:
+
+  ```json
+  {"record": "collector_terminal", "schema": 1, "manifest_sha256": "...",
+   "nodes": ["n1"], "started_at_unix_s": 1790000000, "first_tick_unix_s": 1790000000,
+   "ticks_expected": 3607, "ticks_written": 3607, "ticks_missed": 0,
+   "rows_written": 3607, "error_rows": 0, "finished_at_unix_s": 1790018030.4,
+   "complete": true}
+  ```
+
+  An interrupted, crashed or hard-deadline run writes no terminal record. A
+  run that finishes after a late start or a skipped tick writes one with
+  `ticks_missed > 0` and `complete: false`. The final JSON summary on stdout
+  gives rows, error rows, skipped and missed ticks, `interrupted`,
+  `terminal_record_written` and the file's SHA256. Exit 0 only for a
+  complete, error-free collection starting at t0; otherwise exit 2. A
+  collector exit is never a qualification verdict: run the analyzer on the
+  files. The analyzer applies the collector completion rule below.
 
 Run it as the node's own service user (or root): `/proc/PID/exe` and the
 cgroup files must be readable. **Local mode:** on a single Linux host, give
@@ -195,9 +223,51 @@ topology limits below.
 
 ## Gate and interpretation
 
+### Collector completion rule
+
+The analyzer reports `incomplete` unless **every** raw file passed to it
+ends with exactly one `collector_terminal` record, and that record:
+
+- carries the manifest's canonical `manifest_sha256` and `schema` 1;
+- names only manifest nodes, each once, and every row in the file belongs
+  to one of them;
+- has `ticks_expected` equal to the profile's grid tick count,
+  `ceil(profile_s / sample_interval_s) + 1` (3607 for minting, 3961 for
+  payments), with `ticks_written` equal to it and `ticks_missed` = 0;
+- has `rows_written` = `ticks_written` × its node count, `error_rows` = 0,
+  `first_tick_unix_s` exactly t0 and `complete: true`.
+
+Every manifest node must be covered by exactly one such record. Each node's
+observation count must equal the written ticks. Nothing may follow the
+record in its file. The record is the collector's own account of its run,
+so this rule is separate from the evidence checks below and adds to them.
+
+**Threat model.** The terminal record is unauthenticated: it has no MAC or
+signature, and anyone who can write the file can forge or edit it. It
+detects incomplete collection and operator error, such as a late start, a
+skipped tick, a restart, an interrupted run, a truncated, missing,
+duplicated or extra file, or a stale manifest. It does not detect deliberate
+fabrication. A hand-built record over clean rows, or one edited row
+timestamp with the count unchanged, still passes. Integrity rests on what
+is captured at collection time and archived: each raw file's SHA256, the
+collector's stdout summary (which carries `out_sha256`) and stderr log, its
+exit status, and the manifest (see step 7 and
+[qualifying an x2 candidate](#qualifying-an-x2-candidate), step 5). Treat a
+raw file whose hash differs from the one recorded at collection time as
+untrusted.
+It closes a gap: a 15 s gap tolerance alone admits a 4 s or 12 s late start,
+one 9 s stall, or a collector restart with an 8 s gap (two files), although
+the collector already knew each of those runs was incomplete (#1902).
+Each now comes out `incomplete`. The tolerance never rebases a baseline or
+replays a tick.
+
+### Observation evidence
+
 Every node must have complete coverage of the original warmup, measurement and
 follow-up windows, with boundary error and inter-sample gaps at most fifteen
-seconds. Counter regressions and PID/start changes make the run incomplete.
+seconds. That fifteen-second tolerance applies to the timestamps of the
+evidence. On its own it is not the completeness rule; the collector completion
+rule above also applies. Counter regressions and PID/start changes make the run incomplete.
 Source, artifact, host, cgroup, chain or manifest identity changes fail it. Malformed
 or missing observations are incomplete, never implicit zeros or a pass.
 
@@ -362,20 +432,72 @@ cohort** before the x2 fleet is provisioned:
    With `mint_until`, the producer gets `--testnet-mint-until mint_until` and
    every node still runs until the `node_end` stop timer. Without it, the
    producer mints until `node_end`, as before.
-3. Before t0, start the five units. Verify quorum, peers and genesis, then
-   on each host run `sample_sustained_memory.py --identity $(systemctl show
-   -p MainPID --value botho-RUN.service)`. Build the manifest once with
-   `collect_sustained_memory.py manifest --started-at T0`. Use
-   `--min-blocks` from the reviewed expected block cadence. Then start one
+3. Before t0, start the five units. Verify quorum, peers and genesis.
+4. With the producer minting, run the cadence soak and choose `MIN_BLOCKS`
+   ([choosing `MIN_BLOCKS`](#choosing-min_blocks)). Do not continue if the
+   soak fails its start condition. Then on each host run
+   `sample_sustained_memory.py --identity $(systemctl show -p MainPID
+   --value botho-RUN.service)`. Build the manifest once with
+   `collect_sustained_memory.py manifest --started-at T0 --min-blocks
+   MIN_BLOCKS`, and archive the soak data with it. Then start one
    `collect` per host against `http://127.0.0.1:19090/rpc` (the
-   `fleet_provision.RPC_PORT`), in a transient unit or `nohup`.
-4. After the profile end, copy each host's `n*.jsonl`, collector log and
-   exit status, run `sustained_memory.py manifest.json n1.jsonl ...
-   n5.jsonl`, and archive everything with hashes. Then let the stop timers
-   and host deadline run out.
+   `fleet_provision.RPC_PORT`), in a transient unit or `nohup`. Record each
+   collector's stdout summary and stderr log as it runs.
+   **Early abort:** if any 300 s window during warmup shows 0 blocks on any
+   node, stop. Remeasure instead of spending the remaining ~5 h on a run that
+   cannot pass, and use a new t0 and a new manifest.
+5. After the profile end, copy each host's `n*.jsonl`, collector log, stdout
+   summary and exit status, run `sustained_memory.py manifest.json n1.jsonl
+   ... n5.jsonl`, and archive everything with hashes. Check each file's
+   SHA256 against the `out_sha256` its collector printed. Then let the stop
+   timers and host deadline run out.
+
+#### Choosing `MIN_BLOCKS`
+
+The manifest is hashed before t0, so warmup data cannot set its floor.
+Measure the cadence first.
+
+1. **Soak.** After quorum is verified and before building the manifest, let
+   the producer mint for at least 30-60 min. Poll `node_getStatus`
+   `chainHeight` every 5 s on every node. Compute the height delta over
+   consecutive fixed 300 s windows. Archive the raw polls and the deltas
+   alongside the manifest.
+2. **Start condition.** Do not start the qualification if any soak window on
+   any node shows 0 blocks, or if the mean is below about 7 blocks per
+   window.
+3. **Choose** `MIN_BLOCKS = max(1, floor(min_window / 2))`, where
+   `min_window` is the smallest soak delta on any node. Then lower it, but
+   not below 1, until the chance that all 48 sustained windows meet it is
+   at least 95% at the measured mean `λ`, assuming random (Poisson) arrival:
+   `(1 - P(X < MIN_BLOCKS; λ))^48 >= 0.95`.
+
+| mean blocks / window | floor 1 | floor 2 | floor 3 |
+|---|---|---|---|
+| 2.5 | 1.6% | ~0% | ~0% |
+| 5 | 72% | 14% | 0.2% |
+| 7 | 96% | 70% | 24% |
+| 7.5 | 97% | 80% | 37% |
+| 10 | 99.8% | 98% | 88% |
+| 15 | ~100% | ~100% | 99.8% |
+
+Blocks are paced by the consensus slot, not by PoW: the default slot is 20 s
+and the idle tier is 40 s. A continuously minting producer with no wallet
+traffic should therefore make about 7.5-15 blocks per window, more regularly
+than random arrival would. Expect `MIN_BLOCKS = 1`. Use 2 only if the
+soak's minimum window is at least 4 and its mean is at least 10. A fleet
+below the start condition cannot be memory-qualified by this gate at any
+allowed floor. Diagnose the cadence instead of starting.
+
+The 2026-09-27 run (height about 4 to 47 in about 1.5 h, about 2.5 blocks
+per window) is **not** a valid reference. It came from a near-genesis chain
+with older consensus issues. At that cadence even `MIN_BLOCKS = 1` passes
+about 1.6% of the time.
 
 Treat x2 as memory-qualified only if this assessment is `passed` with scope
-`limited_minting` for the same node SHA256 that x2 deploys. `incomplete`
+`limited_minting` for the same node SHA256 that x2 deploys. `passed` already
+implies every host's collector finished with zero missed ticks (the
+[collector completion rule](#collector-completion-rule)). A collector that
+exited 2 can never yield `passed`, so a collector exit 2 means rerun. `incomplete`
 means rerun as a new experiment, not a longer one. `failed` blocks x2 on a
 leak fix. After expiry the producer pauses only under the normal
 high-balance, empty-mempool policy
@@ -417,6 +539,10 @@ The collector tests run the real loop with a fake clock and a scripted
 passes. The 49 MiB/hour trace and a tightened gate fail. A miner that never
 pauses, a late start, a stalled tick, an RPC outage, a process restart and an
 interrupt all come out incomplete. Per-host files join in the analyzer.
+The #1902 cases keep every gap within fifteen seconds and still come out
+incomplete only through the collector completion rule. They are a 4 s and a
+12 s late start, an 8 s collector restart into two files, a single 9 s stall,
+and a missing, non-final, duplicated, forged or wrong-manifest terminal record.
 Preflight, output-reuse and configuration refusals are also covered. One run
 reads real `/proc` and cgroup fixture files each tick. The rest replace only
 the sampler's three filesystem readers, so they stay fast.

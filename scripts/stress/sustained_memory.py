@@ -1,5 +1,37 @@
 #!/usr/bin/env python3
-"""Analyze immutable, local sustained-memory observations; never launch a node."""
+"""Analyze immutable, local sustained-memory observations; never launch a node.
+
+Two independent conditions must both hold for ``passed``:
+
+* The observation evidence itself is complete and within the gates: fixed
+  warmup/measurement/follow-up coverage, inter-sample gaps of at most the
+  manifest's ``max_gap_s`` (15 s), no errors, identity changes or counter
+  regressions, and growth within the thresholds.
+* The collector finished cleanly and says so (#1902). Every raw file must end
+  with exactly one ``collector_terminal`` record, which
+  ``collect_sustained_memory.py`` writes only after sampling the final profile
+  tick without interruption. That record must carry the manifest's SHA256,
+  the full expected tick count (``ceil(profile / sample_interval_s) + 1``) as
+  written, zero missed ticks, zero error rows, a first tick at exactly t0 and
+  ``complete: true``. Every manifest node must be covered by exactly one such
+  record, and each node's observation count must equal the written ticks.
+
+The 15 s gap tolerance alone admits a 4-12 s late start, a single slow tick or
+a short collector restart, all of which the collector already knows were
+incomplete. The terminal record makes the analyzer fail closed on them: any
+missed tick, a missing or extra terminal record, a terminal record for another
+manifest, or rows appended after it, yields ``incomplete``. Observation
+failures (growth, resource limits, identity changes) still take precedence
+over ``incomplete`` and are never hidden by it.
+
+Threat model: the terminal record is an unauthenticated self-attestation, with
+no MAC or signature. It detects incomplete collection and operator error, such
+as wrong, missing, extra, truncated or concatenated files or a stale manifest.
+It does not detect deliberate fabrication: a hand-built record over clean rows,
+or one edited row timestamp with the count unchanged, still passes. Integrity
+rests on the raw-file SHA256s, the collector's stdout summary and log, and the
+manifest, all archived at collection time.
+"""
 
 import argparse
 import hashlib
@@ -36,6 +68,8 @@ COUNTERS = (
     "chain_height",
     "confirmed_transfers",
 )
+# The ``record`` value of the collector's terminal completion row (#1902).
+TERMINAL_RECORD = "collector_terminal"
 
 
 def number(value):
@@ -181,6 +215,143 @@ def windows(plan):
         stages.append((phase["name"], cursor, end))
         cursor = end
     return stages
+
+
+def expected_ticks(plan):
+    """Grid ticks ``started_at + k * sample_interval_s`` through the profile end."""
+    start, end = plan["started_at_unix_s"], windows(plan)[-1][2]
+    return math.ceil((end - start) / plan["sample_interval_s"]) + 1
+
+
+def terminal_record(
+    plan,
+    nodes,
+    *,
+    first_tick_unix_s,
+    ticks_written,
+    rows_written,
+    error_rows,
+    finished_at_unix_s,
+):
+    """The collector's durable completion record, written once at a clean finish."""
+    expected = expected_ticks(plan)
+    missed = expected - ticks_written
+    return {
+        "record": TERMINAL_RECORD,
+        "schema": 1,
+        "manifest_sha256": manifest_digest(plan),
+        "nodes": list(nodes),
+        "started_at_unix_s": plan["started_at_unix_s"],
+        "first_tick_unix_s": first_tick_unix_s,
+        "ticks_expected": expected,
+        "ticks_written": ticks_written,
+        "ticks_missed": missed,
+        "rows_written": rows_written,
+        "error_rows": error_rows,
+        "finished_at_unix_s": finished_at_unix_s,
+        "complete": missed == 0
+        and error_rows == 0
+        and first_tick_unix_s == plan["started_at_unix_s"],
+    }
+
+
+def is_terminal(row):
+    return isinstance(row, dict) and row.get("record") == TERMINAL_RECORD
+
+
+def _count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def terminal_problem(plan, record):
+    """Why ``record`` does not attest a complete collection, or None."""
+    if record.get("schema") != 1 or record.get("manifest_sha256") != manifest_digest(
+        plan
+    ):
+        return "does not match the manifest SHA256"
+    nodes = record.get("nodes")
+    known = {node["node_id"] for node in plan["nodes"]}
+    if (
+        not isinstance(nodes, list)
+        or not nodes
+        or any(not isinstance(n, str) or n not in known for n in nodes)
+        or len(set(nodes)) != len(nodes)
+    ):
+        return "names no, unknown or duplicate manifest nodes"
+    fields = ("ticks_expected", "ticks_written", "ticks_missed")
+    fields += ("rows_written", "error_rows")
+    if any(not _count(record.get(key)) for key in fields):
+        return "has missing or invalid tick counts"
+    expected = expected_ticks(plan)
+    if record["ticks_expected"] != expected:
+        return f"expects {record['ticks_expected']} ticks, not the profile's {expected}"
+    if record["ticks_missed"] != 0 or record["ticks_written"] != expected:
+        return (
+            f"missed {record['ticks_missed']} tick(s); "
+            f"wrote {record['ticks_written']} of {expected}"
+        )
+    if record["rows_written"] != record["ticks_written"] * len(nodes):
+        return "row count is not one row per node per tick"
+    if record["error_rows"] != 0:
+        return f"wrote {record['error_rows']} error row(s)"
+    if record.get("first_tick_unix_s") != plan["started_at_unix_s"]:
+        return "first tick is not t0"
+    if record.get("complete") is not True:
+        return "is not marked complete"
+    return None
+
+
+def collector_incomplete_reasons(plan, terminals, by_node):
+    """Fail closed unless one complete terminal record covers each node (#1902)."""
+    reasons, covered = set(), {}
+    for record in terminals:
+        problem = terminal_problem(plan, record)
+        nodes = record.get("nodes")
+        label = (
+            ",".join(n for n in nodes if isinstance(n, str))
+            if isinstance(nodes, list)
+            else "?"
+        )
+        if problem:
+            reasons.add(f"collector terminal record for {label or '?'} {problem}")
+            continue
+        for node in nodes:
+            covered[node] = covered.get(node, 0) + 1
+    expected = expected_ticks(plan)
+    for node in plan["nodes"]:
+        name = node["node_id"]
+        if covered.get(name, 0) == 0:
+            reasons.add(f"{name}: no complete collector terminal record")
+        elif covered[name] > 1:
+            reasons.add(f"{name}: more than one collector terminal record")
+        if len(by_node[name]) != expected:
+            reasons.add(
+                f"{name}: {len(by_node[name])} observations, "
+                f"not the collector's {expected} ticks"
+            )
+    return reasons
+
+
+def file_incomplete_reasons(path, rows):
+    """Per raw file: exactly one terminal record, as the final line, covering it."""
+    indices = [i for i, row in enumerate(rows) if is_terminal(row)]
+    if not indices:
+        return [f"{path}: missing collector terminal record (no clean finish)"]
+    reasons = []
+    if len(indices) > 1 or indices[-1] != len(rows) - 1:
+        reasons.append(
+            f"{path}: collector terminal record is not the single final line"
+        )
+    nodes = rows[indices[-1]].get("nodes")
+    nodes = set(nodes) if isinstance(nodes, list) else set()
+    if any(
+        row is not None  # an unparseable line is reported separately
+        and not is_terminal(row)
+        and (not isinstance(row, dict) or row.get("node_id") not in nodes)
+        for row in rows
+    ):
+        reasons.append(f"{path}: rows for a node its terminal record does not cover")
+    return reasons
 
 
 def memory_stats(rows, field):
@@ -471,6 +642,8 @@ def analyze(plan, observations):
     validate_manifest(plan)
     failures, incomplete = set(), set()
     by_node = {node["node_id"]: [] for node in plan["nodes"]}
+    terminals = [row for row in observations if is_terminal(row)]
+    observations = [row for row in observations if not is_terminal(row)]
     for row in observations:
         if not isinstance(row, dict) or not isinstance(row.get("node_id"), str):
             incomplete.add("malformed observation node")
@@ -493,6 +666,8 @@ def analyze(plan, observations):
             if key in hashes and hashes[key][1] != node["node_id"]:
                 compared.add(key)
             hashes[key] = (row["chain_hash"], node["node_id"])
+    # After every evidence check, so a collector gap never masks a failure.
+    incomplete |= collector_incomplete_reasons(plan, terminals, by_node)
     return {
         "schema": 1,
         "manifest_sha256": manifest_digest(plan),
@@ -504,6 +679,7 @@ def analyze(plan, observations):
         "incomplete_reasons": sorted(incomplete),
         "nodes": results,
         "same_height_comparisons": len(compared),
+        "collector_terminal_records": len(terminals),
         "thresholds": {
             "slope_mib_per_hour": thresholds(plan)["slope_limit_mib_per_hour"],
             "net_growth_mib": thresholds(plan)["net_growth_limit_mib"],
@@ -528,7 +704,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         plan = json.loads(args.manifest.read_text())
-        rows, parse_errors, files = [], [], []
+        rows, parse_errors, files, file_reasons = [], [], [], []
         for path in args.samples:
             data = path.read_bytes()
             # Each collector writes its own file; never merge or rewrite them.
@@ -536,11 +712,15 @@ def main(argv=None):
                 {"path": str(path), "sha256": hashlib.sha256(data).hexdigest()}
             )
             prefix = f"{path}: " if len(args.samples) > 1 else ""
+            file_rows = []
             for line_number, line in enumerate(data.decode().splitlines(), 1):
                 try:
-                    rows.append(json.loads(line))
+                    file_rows.append(json.loads(line))
                 except ValueError:
+                    file_rows.append(None)  # keeps "final line" positional
                     parse_errors.append(f"{prefix}invalid JSONL line {line_number}")
+            file_reasons.extend(file_incomplete_reasons(path, file_rows))
+            rows.extend(row for row in file_rows if row is not None)
         if parse_errors:
             # An undecodable row has no trustworthy timestamp. It may belong
             # to measurement, so invalidate trend eligibility conservatively.
@@ -551,8 +731,8 @@ def main(argv=None):
         if len(files) == 1:
             result["observations_sha256"] = files[0]["sha256"]
         result["observation_files"] = files
-        if parse_errors:
-            result["incomplete_reasons"].extend(parse_errors)
+        if parse_errors or file_reasons:
+            result["incomplete_reasons"].extend(parse_errors + file_reasons)
             if result["status"] != "failed":
                 result["status"] = "incomplete"
     except (OSError, ValueError, KeyError, TypeError) as error:

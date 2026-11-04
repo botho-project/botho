@@ -9,14 +9,43 @@ import tempfile
 import unittest
 
 from sustained_memory import (
-    analyze,
+    analyze as analyze_raw,
+    expected_ticks,
     manifest_digest,
     profile_phases,
+    terminal_record,
     validate_manifest,
     windows,
 )
 
 MIB = 1024 * 1024
+
+
+def complete_terminals(plan):
+    """One clean-finish collector record per node, as the real collector writes."""
+    ticks = expected_ticks(plan)
+    return [
+        terminal_record(
+            plan,
+            [node["node_id"]],
+            first_tick_unix_s=plan["started_at_unix_s"],
+            ticks_written=ticks,
+            rows_written=ticks,
+            error_rows=0,
+            finished_at_unix_s=windows(plan)[-1][2] + 1,
+        )
+        for node in plan["nodes"]
+    ]
+
+
+def analyze(plan, rows):
+    """Evidence controls: these traces come from a collector that finished cleanly.
+
+    Collector completeness itself is exercised in ``CollectorCompletionTests``
+    below and in ``test_collect_sustained_memory``; every gap, truncation and
+    identity control here still runs against the unchanged evidence checks.
+    """
+    return analyze_raw(plan, rows + complete_terminals(plan))
 
 
 def manifest(workload="payments"):
@@ -344,6 +373,75 @@ class SustainedMemoryTests(unittest.TestCase):
         self.plan["phases"][1]["duration_s"] = 300
         with self.assertRaises(ValueError):
             validate_manifest(self.plan)
+
+
+class CollectorCompletionTests(unittest.TestCase):
+    """#1902: evidence alone never passes; a clean collector record is required."""
+
+    def setUp(self):
+        self.plan = manifest("minting")
+        self.rows = samples(self.plan)
+
+    def test_clean_evidence_without_terminal_record_is_incomplete(self):
+        result = analyze_raw(self.plan, self.rows)
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(
+            result["incomplete_reasons"], ["n1: no complete collector terminal record"]
+        )
+        self.assertEqual(result["collector_terminal_records"], 0)
+        terminals = complete_terminals(self.plan)
+        self.assertEqual(
+            analyze_raw(self.plan, self.rows + terminals)["status"], "passed"
+        )
+
+    def test_terminal_record_fields_are_all_enforced(self):
+        good = complete_terminals(self.plan)[0]
+        ticks = expected_ticks(self.plan)
+        for change in (
+            {"manifest_sha256": "0" * 64},
+            {"schema": 2},
+            {"nodes": []},
+            {"nodes": ["n9"]},
+            {"nodes": ["n1", "n1"]},
+            {"ticks_expected": ticks - 1},
+            {"ticks_written": ticks - 1, "ticks_missed": 1, "rows_written": ticks - 1},
+            {"ticks_missed": 1},
+            {"ticks_written": True},
+            {"rows_written": ticks + 1},
+            {"error_rows": 1},
+            {"first_tick_unix_s": self.plan["started_at_unix_s"] + 5},
+            {"complete": False},
+        ):
+            with self.subTest(change=change):
+                result = analyze_raw(self.plan, self.rows + [{**good, **change}])
+                self.assertEqual(result["status"], "incomplete")
+                self.assertIn(
+                    "n1: no complete collector terminal record",
+                    result["incomplete_reasons"],
+                )
+
+    def test_observation_count_must_match_the_written_ticks(self):
+        rows = self.rows[:300] + self.rows[301:]  # a 10 s gap the 15 s rule admits
+        result = analyze_raw(self.plan, rows + complete_terminals(self.plan))
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(
+            result["incomplete_reasons"],
+            [
+                f"n1: {len(rows)} observations, not the collector's {len(self.rows)} ticks"
+            ],
+        )
+
+    def test_failure_still_takes_precedence(self):
+        result = analyze_raw(self.plan, samples(self.plan, 49))
+        self.assertEqual(result["status"], "failed")
+        self.assertIn(
+            "n1: no complete collector terminal record", result["incomplete_reasons"]
+        )
+
+    def test_expected_ticks_match_the_fixed_profiles(self):
+        self.assertEqual(expected_ticks(self.plan), 18030 // 5 + 1)
+        self.assertEqual(expected_ticks(manifest("payments")), 19800 // 5 + 1)
+        self.assertEqual(expected_ticks(self.plan), len(self.rows))
 
 
 if __name__ == "__main__":
