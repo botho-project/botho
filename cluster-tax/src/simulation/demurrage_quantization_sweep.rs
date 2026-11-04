@@ -1,10 +1,17 @@
 //! Demurrage time-quantization study (issue #1875): compares candidate fixes
-//! for the six-block dead zone in [`crate::demurrage_charge`].
+//! for the six-block dead zone in the pre-9.0.0 `demurrage_charge`.
+//!
+//! Protocol 9.0.0 adopted option 1: production [`crate::demurrage_charge`] is
+//! now the exact kernel (pinned to [`exact_charge`] by
+//! `quantized_floor_matches_production`). This study describes the pre-fix
+//! world, so its "defer" / "today" baseline is the legacy quantized formula,
+//! re-implemented here as [`quantized_time_charge`] with `ceil_time = false`,
+//! and its published tables are unchanged by the fix.
 //!
 //! # The finding under study
 //!
-//! `demurrage_charge` folds elapsed time into `TIME_SCALE = 1e6` units of a
-//! `blocks_per_year` year **before** applying the value:
+//! The pre-9.0.0 `demurrage_charge` folded elapsed time into `TIME_SCALE = 1e6`
+//! units of a `blocks_per_year` year **before** applying the value:
 //!
 //! ```text
 //! time_fraction = elapsed × 1_000_000 / blocks_per_year      // floored
@@ -22,19 +29,19 @@
 //!
 //! The operator ruling on #1875 is "simulate before choosing". This module
 //! scores the candidate fixes; it does **not** change consensus and it does
-//! not change `demurrage_charge`. The operator picks the fix.
+//! not change `demurrage_charge`. The operator picks the fix (9.0.0: option 1).
 //!
 //! # Candidates ([`Candidate`])
 //!
 //! | option | rule |
 //! |--------|------|
-//! | 4 (defer) | the production [`crate::demurrage_charge`], called directly |
+//! | 4 (defer) | the pre-9.0.0 quantized kernel ([`quantized_time_charge`] with `ceil_time = false`) |
 //! | 1 (exact) | `floor(value × rate × p × elapsed / (10_000 × 5_000 × bpy))`, no intermediate quantization ([`exact_charge`]) |
-//! | 2a | the production charge, but at least 1 pico whenever the true charge is nonzero |
-//! | 2b | the production formula with the time fraction rounded **up** |
+//! | 2a | the pre-9.0.0 charge, but at least 1 pico whenever the true charge is nonzero |
+//! | 2b | the pre-9.0.0 formula with the time fraction rounded **up** |
 //! | 2c | option 1 rounded up (`ceil` of the exact rational) — a variant, not in the ruling's list |
-//! | 3a(M) | production charge; consensus rejects a ring with **any** member younger than `M` (the real input must be `M` blocks old) |
-//! | 3b(M) | production charge; consensus rejects a ring whose **oldest** member is younger than `M`. Under the `@max` quantile this is the same as charging `max(elapsed, M)` |
+//! | 3a(M) | pre-9.0.0 charge; consensus rejects a ring with **any** member younger than `M` (the real input must be `M` blocks old) |
+//! | 3b(M) | pre-9.0.0 charge; consensus rejects a ring whose **oldest** member is younger than `M`. Under the `@max` quantile this is the same as charging `max(elapsed, M)` |
 //!
 //! # What is measured
 //!
@@ -95,8 +102,8 @@ pub const BLOCKS_PER_YEAR: u64 = MAINNET_BLOCKS_PER_YEAR;
 /// The epoch-1 demurrage rate, bps (shared with the sibling sweeps).
 pub const RATE_BPS: u32 = super::settlement_horizon_sweep::RATE_BPS;
 
-/// The production kernel's time scale (a function-local constant inside
-/// `demurrage_charge`; pinned to it by `quantized_floor_matches_production`).
+/// The pre-9.0.0 kernel's time scale (a function-local constant inside the
+/// legacy `demurrage_charge`; production is exact since 9.0.0, #1875).
 pub const TIME_SCALE: u128 = 1_000_000;
 
 /// Ring size the node requires (real input + 19 decoys).
@@ -239,8 +246,9 @@ pub fn rational_charge(
 // Candidate kernels
 // ============================================================================
 
-/// The production formula with the time fraction floored (`ceil_time =
-/// false`, identical to `demurrage_charge`) or rounded up (option 2b).
+/// The pre-9.0.0 production formula with the time fraction floored
+/// (`ceil_time = false`, identical to the legacy `demurrage_charge` and the
+/// study's "defer" / "today" baseline) or rounded up (option 2b).
 pub fn quantized_time_charge(
     value: u64,
     factor: u64,
@@ -315,13 +323,13 @@ pub fn exact_charge(
 /// A candidate fix (or the status quo).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Candidate {
-    /// Option 4: defer (the production `demurrage_charge`).
+    /// Option 4: defer (the pre-9.0.0 quantized `demurrage_charge`).
     Defer,
     /// Option 1: exact, floored once at the end.
     Exact,
-    /// Option 2a: production charge, at least 1 pico if the true charge > 0.
+    /// Option 2a: pre-9.0.0 charge, at least 1 pico if the true charge > 0.
     AtLeastOne,
-    /// Option 2b: production formula with the time fraction rounded up.
+    /// Option 2b: pre-9.0.0 formula with the time fraction rounded up.
     CeilTime,
     /// Option 2c (variant): exact, rounded up once at the end.
     ExactCeil,
@@ -387,10 +395,10 @@ impl Candidate {
         bpy: u64,
     ) -> Option<u64> {
         Some(match *self {
-            Candidate::Defer => demurrage_charge(value, factor, elapsed, rate_bps, bpy),
+            Candidate::Defer => quantized_time_charge(value, factor, elapsed, rate_bps, bpy, false),
             Candidate::Exact => exact_charge(value, factor, elapsed, rate_bps, bpy, false),
             Candidate::AtLeastOne => {
-                let c = demurrage_charge(value, factor, elapsed, rate_bps, bpy);
+                let c = quantized_time_charge(value, factor, elapsed, rate_bps, bpy, false);
                 if c == 0 && !rational_charge(value, factor, elapsed, rate_bps, bpy).is_zero {
                     1
                 } else {
@@ -405,10 +413,10 @@ impl Candidate {
                 if min_age < m {
                     return None;
                 }
-                demurrage_charge(value, factor, elapsed, rate_bps, bpy)
+                quantized_time_charge(value, factor, elapsed, rate_bps, bpy, false)
             }
             Candidate::MinRingMax(m) => {
-                demurrage_charge(value, factor, elapsed.max(m), rate_bps, bpy)
+                quantized_time_charge(value, factor, elapsed.max(m), rate_bps, bpy, false)
             }
         })
     }
@@ -766,7 +774,14 @@ pub fn honest_stats(candidate: Candidate, pop: &[HonestSpend]) -> HonestStats {
     let mut errs = Vec::with_capacity(pop.len());
     let (mut max_rel, mut changed, mut rejected) = (0f64, 0usize, 0usize);
     for s in pop {
-        let today = demurrage_charge(s.value, s.factor, s.elapsed, RATE_BPS, BLOCKS_PER_YEAR);
+        let today = quantized_time_charge(
+            s.value,
+            s.factor,
+            s.elapsed,
+            RATE_BPS,
+            BLOCKS_PER_YEAR,
+            false,
+        );
         let truth = rational_charge(s.value, s.factor, s.elapsed, RATE_BPS, BLOCKS_PER_YEAR);
         let Some(k) = candidate.charge_ring(
             s.value,
@@ -1638,10 +1653,28 @@ mod tests {
         );
     }
 
-    /// The re-implemented quantized formula (floored time) is the production
-    /// kernel, so option 2b differs from it only in the rounding direction.
+    /// Since protocol 9.0.0 (#1875) production `demurrage_charge` IS the
+    /// study's option 1 (`Candidate::Exact`): equal to [`exact_charge`]
+    /// wherever that kernel is exact (`bpy <= EXACT_BPY_LIMIT`), and to the
+    /// 256-bit oracle's clamped floor everywhere. This guards the study: if
+    /// production drifts from the candidate it adopted, this fails.
     #[test]
     fn quantized_floor_matches_production() {
+        let check = |v: u64, f: u64, h: u64, r: u32, bpy: u64| {
+            let prod = demurrage_charge(v, f, h, r, bpy);
+            assert_eq!(
+                prod,
+                rational_charge(v, f, h, r, bpy).floor,
+                "{v} {f} {h} {r} {bpy}"
+            );
+            if bpy <= EXACT_BPY_LIMIT {
+                assert_eq!(
+                    Candidate::Exact.charge(v, f, h, r, bpy),
+                    Some(prod),
+                    "{v} {f} {h} {r} {bpy}"
+                );
+            }
+        };
         let mut rng = ChaCha8Rng::seed_from_u64(2);
         for _ in 0..5_000 {
             let v = rng.random::<u64>() >> rng.random_range(0..64);
@@ -1649,20 +1682,10 @@ mod tests {
             let h = rng.random::<u64>() >> rng.random_range(0..64);
             let r = rng.random_range(0..20_000u32);
             let bpy = (rng.random::<u64>() >> rng.random_range(0..64)).max(1);
-            assert_eq!(
-                quantized_time_charge(v, f, h, r, bpy, false),
-                demurrage_charge(v, f, h, r, bpy),
-            );
+            check(v, f, h, r, bpy);
         }
-        for &(v, f, h, r, bpy) in &extremes()
-            .iter()
-            .map(|e| (e.1, e.2, e.3, e.4, e.5))
-            .collect::<Vec<_>>()
-        {
-            assert_eq!(
-                quantized_time_charge(v, f, h, r, bpy, false),
-                demurrage_charge(v, f, h, r, bpy)
-            );
+        for e in extremes() {
+            check(e.1, e.2, e.3, e.4, e.5);
         }
     }
 
@@ -1804,7 +1827,7 @@ mod tests {
             let v = rng.random::<u64>() >> rng.random_range(0..64);
             let f = rng.random_range(0..8_000);
             let h = rng.random_range(0..20_000_000u64);
-            let today = demurrage_charge(v, f, h, RATE_BPS, BLOCKS_PER_YEAR);
+            let today = quantized_time_charge(v, f, h, RATE_BPS, BLOCKS_PER_YEAR, false);
             let exact = exact_charge(v, f, h, RATE_BPS, BLOCKS_PER_YEAR, false);
             let ceil = exact_charge(v, f, h, RATE_BPS, BLOCKS_PER_YEAR, true);
             let ceil_time = quantized_time_charge(v, f, h, RATE_BPS, BLOCKS_PER_YEAR, true);
