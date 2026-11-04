@@ -31,6 +31,14 @@
 //! invariant to churn frequency; churning just adds transaction fees on
 //! top (which also feed the lottery pool).
 //!
+//! Since protocol 9.0.0 (#1875) this holds to the picocredit: the charge is
+//! ONE floor of the full rational (no intermediate time quantization), so
+//! splitting a hold into n same-class spends pays the unsplit charge less
+//! fewer than n pico. Before 9.0.0 the elapsed time was first floored to
+//! `1e6` units of a year, which zeroed every hold of 1..=6 blocks at the 5 s
+//! year and let six-block churn escape all demurrage
+//! (`docs/research/demurrage-quantization-study.md`, PR #1908).
+//!
 //! ### Scope of the churn-invariance claim: it holds WITHIN a wealth class
 //!
 //! Churn-invariance is invariance of *accrued* demurrage under re-spending at
@@ -104,8 +112,16 @@ pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
 /// * `blocks_per_year` - Blocks per year at the policy's assumed block time
 ///
 /// # Returns
-/// The charge in base units. Zero for factor-1 coins, zero rate, or zero
-/// elapsed time.
+/// The charge in base units:
+///
+/// ```text
+/// floor(value × rate_bps × (factor − 1000) × elapsed / (10_000 × 5_000 × blocks_per_year))
+/// ```
+///
+/// exactly (one floor, no intermediate rounding; #1875, protocol 9.0.0),
+/// clamped to `u64::MAX`. Zero for factor-1 coins, zero rate, zero elapsed
+/// time or zero `blocks_per_year`. Deterministic and panic-free for every
+/// input (u128 arithmetic only, overflow checks on).
 pub fn demurrage_charge(
     transfer_value: u64,
     cluster_factor: u64,
@@ -124,28 +140,54 @@ pub fn demurrage_charge(
         return 0;
     }
 
-    // charge = value × rate_bps/10_000 × progressivity/5000 ×
-    // elapsed/blocks_per_year
+    // EXACT (#1875): one floor of the full rational
     //
-    // Multiply before dividing to preserve precision; u128 bounds:
-    // value (2^64) × rate_bps (2^14) × progressivity (2^13) ≈ 2^91, then
-    // × elapsed (2^64) would overflow — so fold elapsed/blocks_per_year in
-    // a separate u128 stage with a precision scale.
-    const TIME_SCALE: u128 = 1_000_000;
-    let time_fraction = (elapsed_blocks as u128 * TIME_SCALE) / blocks_per_year as u128;
-
-    let charge = transfer_value as u128 * rate_bps as u128 * progressivity as u128
-        / 10_000
-        / (MAX_FACTOR_SCALED - FACTOR_SCALE) as u128;
-    // Saturating: absurd elapsed × rate combinations clamp to u64::MAX
-    // rather than panic (the charge is bounded by the balance check anyway).
-    // `checked_mul(..).unwrap_or(u128::MAX)` is `saturating_mul` for unsigned
+    //     charge = floor(value × rate_bps × progressivity × elapsed
+    //                    / (10_000 × 5_000 × blocks_per_year))
+    //
+    // clamped to u64::MAX. There is NO intermediate truncation: the pre-9.0.0
+    // kernel floored `elapsed × 1e6 / blocks_per_year` first, which zeroed
+    // every hold of 1..=6 blocks at the 5 s year and charged every 7..=12
+    // block hold as one 1e6 unit (the short-hold churn escape, #1875; the
+    // legacy formula is kept in the tests as `legacy_quantized_charge`).
+    //
+    // u128-only, panic-free with overflow checks on. With
+    //   num = value × rate × p       < 2^64 · 2^32 · 2^13 = 2^109
+    //   den = 10_000 × 5_000 × bpy   < 2^26 · 2^64       = 2^90
+    //   q = num / den, r = num % den   (r < den)
+    // the charge is q·e + floor(r·e / den). `r·e` can exceed u128 when bpy is
+    // large, so e is split as e1·2^32 + e0 (e1, e0 < 2^32):
+    //   r·e1 < 2^122;  q1 = r·e1 / den < 2^32;  r1 = r·e1 % den < 2^90
+    //   floor(r·e / den) = q1·2^32 + floor((r1·2^32 + r·e0) / den)
+    // with r1·2^32 + r·e0 < 2^123. Every product below is therefore in range
+    // EXCEPT q·e, whose overflow (checked) means the true charge exceeds
+    // 2^128 > u64::MAX, so saturating it is the exact clamp. The result
+    // equals the 256-bit exact floor (clamped) for EVERY u64/u32 input,
+    // including absurd blocks_per_year (tests: `exact_kernel_matches_u256`).
+    //
+    // `checked_*(..).unwrap_or(u128::MAX)` is `saturating_*` for unsigned
     // integers, spelled with operations Aeneas models (#1820).
+    const BPS: u128 = 10_000;
+    const PROG_SPAN: u128 = (MAX_FACTOR_SCALED - FACTOR_SCALE) as u128;
+    const SPLIT: u128 = 0x1_0000_0000; // 2^32
+    let num = transfer_value as u128 * rate_bps as u128 * progressivity as u128;
+    let den = BPS * PROG_SPAN * blocks_per_year as u128;
+    let elapsed = elapsed_blocks as u128;
+    let whole = num / den;
+    let rem = num % den;
+    let e_hi = elapsed / SPLIT;
+    let e_lo = elapsed % SPLIT;
+    let hi = rem * e_hi;
+    let part = (hi / den) * SPLIT + ((hi % den) * SPLIT + rem * e_lo) / den;
     #[allow(
         clippy::manual_saturating_arithmetic,
-        reason = "saturating_mul has no Aeneas model; this spelling extracts to Lean (#1820)"
+        reason = "saturating_mul/add have no Aeneas model; this spelling extracts to Lean (#1820)"
     )]
-    let charge = charge.checked_mul(time_fraction).unwrap_or(u128::MAX) / TIME_SCALE;
+    let charge = whole
+        .checked_mul(elapsed)
+        .unwrap_or(u128::MAX)
+        .checked_add(part)
+        .unwrap_or(u128::MAX);
 
     // Clamp to u64::MAX. Same result as `u64::try_from(charge)
     // .unwrap_or(u64::MAX)`, but Aeneas has no model of the u128 -> u64
@@ -1100,36 +1142,34 @@ mod tests {
 
     // ========================================================================
     // Independent Rust reproductions of codex's Lean findings #1875 / #1876.
-    // These pin CURRENT (buggy) behaviour on the production functions; the
-    // fixes are operator-gated consensus changes. A fix must flip them.
+    // #1875 is FIXED (exact arithmetic, protocol 9.0.0): its reproduction now
+    // asserts the fix. #1876 pins current behaviour until its own fix lands.
     // ========================================================================
 
-    /// BUG #1875 (codex; Lean `six_block_dead_zone`, `churn_counterexample`):
-    /// `demurrage_charge` folds elapsed time into `TIME_SCALE = 1e6` units of
-    /// a 6,307,200-block year BEFORE applying the value, so
-    /// `elapsed * 1e6 / 6_307_200 == 0` for every `elapsed <= 6`. Any value
-    /// (even `u64::MAX`), at the max factor and the live 200 bps rate, accrues
-    /// exactly zero demurrage for a hold of up to six blocks (30 s), and
-    /// same-class churn every six blocks pays zero for a whole year.
+    /// FIXED #1875 (codex; Lean `six_block_dead_zone`, `churn_counterexample`
+    /// are the pre-9.0.0 witnesses, kept as the legacy model
+    /// `Botho.Demurrage.charge`). Before 9.0.0 `demurrage_charge` folded
+    /// elapsed time into `TIME_SCALE = 1e6` units of a 6,307,200-block year
+    /// BEFORE applying the value, so `elapsed * 1e6 / 6_307_200 == 0` for
+    /// every `elapsed <= 6`: any value accrued zero demurrage for a hold of up
+    /// to six blocks, and same-class churn every six blocks paid zero for a
+    /// whole year.
     ///
-    /// This asserts the CURRENT behaviour. A fix to the rounding (or a
-    /// documented churn bound that excludes this window) must flip this test.
+    /// The kernel now takes one floor of the full rational charge, so every
+    /// positive-rate, positive-progressivity hold of a large value pays, and
+    /// splitting a hold into n spends loses less than n pico in total.
     #[test]
-    fn bug_1875_short_hold_demurrage_rounds_to_zero() {
+    fn bug_1875_short_hold_demurrage_charged_since_9_0_0() {
         let bpy = BLOCKS_PER_YEAR_5S;
         let rate = 200u32;
 
-        // Dead zone: value-independent, factor-independent, elapsed 1..=6.
+        // No dead zone: elapsed 1..=6 now charges, in-class too.
         for elapsed in 1..=6u64 {
             for value in [1_000_000_000_000u64, 1_000_000_000_000_000_000, u64::MAX] {
-                assert_eq!(
-                    demurrage_charge(value, MAX_FACTOR_SCALED, elapsed, rate, bpy),
-                    0,
-                    "elapsed={elapsed} value={value}"
-                );
+                let charge = demurrage_charge(value, MAX_FACTOR_SCALED, elapsed, rate, bpy);
+                assert!(charge > 0, "elapsed={elapsed} value={value}");
                 // The consensus composition (`spend_demurrage_charge`) for an
-                // in-class spend (no downgrade) is also zero: the capitalized
-                // term does not cover same-class churn.
+                // in-class spend (no downgrade) is the accrued charge.
                 assert_eq!(
                     spend_demurrage_charge(
                         value,
@@ -1139,45 +1179,104 @@ mod tests {
                         rate,
                         bpy
                     ),
-                    0,
+                    charge,
                     "in-class spend elapsed={elapsed} value={value}"
                 );
             }
         }
-        // First non-zero block is 7: u64::MAX at 6x pays ~0.369 BTH.
+        // Pinned exact values (floor(v·200·5000·e / (5e7·6_307_200))).
+        // u64::MAX at 6x: 1 block = ~0.0585 BTH; 7 blocks (the old first
+        // non-zero block, 368_934_881_474 pre-fix) now 409_459_692_148.
+        assert_eq!(
+            demurrage_charge(u64::MAX, MAX_FACTOR_SCALED, 1, rate, bpy),
+            58_494_241_735
+        );
+        assert_eq!(
+            demurrage_charge(u64::MAX, MAX_FACTOR_SCALED, 6, rate, bpy),
+            350_965_450_413
+        );
         assert_eq!(
             demurrage_charge(u64::MAX, MAX_FACTOR_SCALED, 7, rate, bpy),
-            368_934_881_474
+            409_459_692_148
         );
 
         // Churn counterexample (issue's table): 1M BTH at 6x.
         let value = 1_000_000_000_000_000_000u64; // 1M BTH in picocredits
+        let one = demurrage_charge(value, MAX_FACTOR_SCALED, 1, rate, bpy);
         let six = demurrage_charge(value, MAX_FACTOR_SCALED, 6, rate, bpy);
+        let seven = demurrage_charge(value, MAX_FACTOR_SCALED, 7, rate, bpy);
         let twelve = demurrage_charge(value, MAX_FACTOR_SCALED, 12, rate, bpy);
-        assert_eq!(six + six, 0, "two six-block holds pay nothing");
+        assert_eq!(one, 3_170_979_198);
+        assert_eq!(six, 19_025_875_190, "six blocks: ~0.019 BTH (was 0)");
+        assert_eq!(seven, 22_196_854_388);
         assert_eq!(
-            twelve, 20_000_000_000,
-            "one twelve-block hold pays 0.02 BTH"
+            twelve, 38_051_750_380,
+            "twelve blocks: ~0.038 BTH (was 0.02)"
         );
+        // Two six-block spends equal one twelve-block spend within the split
+        // bound: an n-way split loses less than n pico (here 0 <= loss < 2).
+        assert!(six + six <= twelve && twelve - (six + six) < 2);
+        // No longer one TIME_SCALE unit for every 7..=12 block hold.
+        assert!(seven < twelve);
 
-        // A year of six-block churn (1,051,200 hops) pays 0, versus the
-        // 20,000 BTH a one-year hold pays on the same principal.
+        // A year of six-block churn (1,051,200 hops) now pays the one-year
+        // hold's 20,000 BTH less under 1,051,200 pico (~1.05e-6 BTH).
         let hops = bpy / 6;
         assert_eq!(hops, 1_051_200);
         let churned: u64 = (0..hops)
             .map(|_| demurrage_charge(value, MAX_FACTOR_SCALED, 6, rate, bpy))
             .sum();
         let held = demurrage_charge(value, MAX_FACTOR_SCALED, bpy, rate, bpy);
-        assert_eq!(churned, 0);
         assert_eq!(held, 20_000_000_000_000_000, "20,000 BTH/year at 6x, 2%");
+        assert!(churned <= held && held - churned < hops, "{held} {churned}");
+        assert_eq!(churned, 19_999_999_999_728_000);
+    }
 
-        // The same floor truncation under-charges beyond the dead zone too:
-        // every hop of 7..=12 blocks is charged as exactly one TIME_SCALE unit
-        // (~6.31 blocks), so a 12-block hold pays the same as a 7-block hold.
-        assert_eq!(
-            demurrage_charge(value, MAX_FACTOR_SCALED, 7, rate, bpy),
-            twelve
-        );
+    /// #1875 split bound, swept: for any split of a hold into n consecutive
+    /// spends at the same class, the n charges sum to at most the unsplit
+    /// charge and lose less than n pico (each floor drops < 1 pico). Also
+    /// monotone in elapsed.
+    #[test]
+    fn fix_1875_split_loss_below_n_pico() {
+        let mut state = 0x1875_0009_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        for i in 0..20_000u64 {
+            let value = next() >> (next() % 40);
+            let factor = 1_000 + next() % 5_001;
+            let rate = [1u32, 200, 10_000][(i % 3) as usize];
+            let bpy = if i % 2 == 0 {
+                BLOCKS_PER_YEAR_5S
+            } else {
+                1 + next() % 10_000_000
+            };
+            let n = 1 + next() % 16;
+            let parts: Vec<u64> = (0..n).map(|_| next() % 100_000).collect();
+            let total: u64 = parts.iter().sum();
+            let whole = demurrage_charge(value, factor, total, rate, bpy);
+            if whole == u64::MAX {
+                continue; // clamped: the split bound is about the exact range
+            }
+            let split: u128 = parts
+                .iter()
+                .map(|&e| demurrage_charge(value, factor, e, rate, bpy) as u128)
+                .sum();
+            let whole = whole as u128;
+            assert!(split <= whole, "v={value} f={factor} r={rate} b={bpy}");
+            assert!(
+                whole - split < n as u128,
+                "v={value} f={factor} r={rate} b={bpy} n={n}"
+            );
+            assert!(
+                demurrage_charge(value, factor, total + 1, rate, bpy) as u128 >= whole,
+                "monotone in elapsed"
+            );
+        }
     }
 
     /// Pre-9.0.0 `ring_centroid_implied_factor` centroid, kept verbatim as the
@@ -1363,17 +1462,27 @@ mod tests {
     }
 }
 
-/// Differential tests for the #1820 Aeneas-friendly rewrites of
-/// `demurrage_charge` (`saturating_mul` -> `checked_mul(..).unwrap_or(MAX)`,
-/// and `u64::try_from(..).unwrap_or(u64::MAX)` -> `min(u64::MAX) as u64`),
-/// which `capitalized_reset_charge` calls. The pre-#1820 implementations are
-/// kept verbatim as reference copies.
+/// Differential tests for the exact #1875 kernel (protocol 9.0.0).
+///
+/// `demurrage_charge` is compared against an independent 256-bit oracle of
+/// the exact rational charge, `floor(value × rate × p × elapsed / (10_000 ×
+/// 5_000 × bpy))` clamped to `u64::MAX`, over the whole u64/u32 input domain.
+/// Kept for the record (CLAUDE.md: preserve, don't delete):
+///
+/// - `legacy_quantized_charge`: the pre-9.0.0 kernel (time fraction floored at
+///   `1e6` units first, then `saturating_mul`, then `try_from`), which was the
+///   #1820 Aeneas-rewrite reference. The exact kernel never charges less.
+/// - `study_exact_charge`: the u128 candidate from the #1875 simulation study
+///   (PR #1908, `exact_charge`), exact only for `bpy <= STUDY_EXACT_BPY_LIMIT`
+///   and saturating upward beyond. The production kernel splits `elapsed` so it
+///   is exact everywhere; the tests below confirm both claims.
 #[cfg(test)]
-mod aeneas_refactor_drt {
+mod exact_kernel_drt {
     use super::*;
 
-    /// Pre-#1820 `demurrage_charge` (reference copy).
-    fn demurrage_charge_reference(
+    /// Pre-9.0.0 (pre-#1875-fix) `demurrage_charge`, verbatim from before
+    /// #1820 (reference copy, the historical quantized semantics).
+    fn legacy_quantized_charge(
         transfer_value: u64,
         cluster_factor: u64,
         elapsed_blocks: u64,
@@ -1397,34 +1506,101 @@ mod aeneas_refactor_drt {
         u64::try_from(charge).unwrap_or(u64::MAX)
     }
 
-    /// Pre-#1820 `capitalized_reset_charge` (reference copy; it was already
-    /// unchanged, but it now reaches the rewritten `demurrage_charge`).
-    fn capitalized_reset_charge_reference(
-        transfer_value: u64,
-        input_floor_factor: u64,
-        output_factor: u64,
-        horizon_blocks: u64,
-        rate_bps: u32,
-        blocks_per_year: u64,
-    ) -> u64 {
-        if output_factor >= input_floor_factor {
+    const DEN_PER_BPY: u128 = 10_000 * (MAX_FACTOR_SCALED - FACTOR_SCALE) as u128;
+
+    /// The study's bound: `rem × elapsed` fits u128 for all u64 inputs iff
+    /// `10_000 × 5_000 × bpy <= 2^64 + 2`.
+    const STUDY_EXACT_BPY_LIMIT: u64 = (((1u128 << 64) + 2) / DEN_PER_BPY) as u64;
+
+    /// The #1908 study's `exact_charge` (round_up = false), verbatim logic.
+    fn study_exact_charge(value: u64, factor: u64, elapsed: u64, rate_bps: u32, bpy: u64) -> u64 {
+        if rate_bps == 0 || elapsed == 0 || bpy == 0 {
             return 0;
         }
-        let at_floor = demurrage_charge_reference(
-            transfer_value,
-            input_floor_factor,
-            horizon_blocks,
-            rate_bps,
-            blocks_per_year,
-        );
-        let at_output = demurrage_charge_reference(
-            transfer_value,
-            output_factor,
-            horizon_blocks,
-            rate_bps,
-            blocks_per_year,
-        );
-        at_floor.saturating_sub(at_output)
+        let p = factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED) - FACTOR_SCALE;
+        if p == 0 {
+            return 0;
+        }
+        let num = value as u128 * rate_bps as u128 * p as u128;
+        let den = DEN_PER_BPY * bpy as u128;
+        let elapsed = elapsed as u128;
+        let Some(whole) = (num / den).checked_mul(elapsed) else {
+            return u64::MAX;
+        };
+        let Some(rem_scaled) = (num % den).checked_mul(elapsed) else {
+            return u64::MAX;
+        };
+        whole.saturating_add(rem_scaled / den).min(u64::MAX as u128) as u64
+    }
+
+    /// `a × b` as a 256-bit `(hi, lo)` pair.
+    fn mul_wide(a: u128, b: u128) -> (u128, u128) {
+        const M: u128 = u64::MAX as u128;
+        let (a1, a0) = (a >> 64, a & M);
+        let (b1, b0) = (b >> 64, b & M);
+        let p00 = a0 * b0;
+        let p01 = a0 * b1;
+        let p10 = a1 * b0;
+        let p11 = a1 * b1;
+        let mid = (p00 >> 64) + (p01 & M) + (p10 & M);
+        let lo = (p00 & M) | (mid << 64);
+        let hi = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+        (hi, lo)
+    }
+
+    /// `(hi, lo) / d` by binary long division: `(q_hi, q_lo)`.
+    fn div_wide(hi: u128, lo: u128, d: u128) -> (u128, u128) {
+        let (mut q_hi, mut q_lo, mut rem) = (0u128, 0u128, 0u128);
+        for i in (0..256u32).rev() {
+            let bit = if i >= 128 {
+                (hi >> (i - 128)) & 1
+            } else {
+                (lo >> i) & 1
+            };
+            let carry = rem >> 127;
+            rem = (rem << 1) | bit;
+            if carry == 1 || rem >= d {
+                rem = rem.wrapping_sub(d);
+                if i >= 128 {
+                    q_hi |= 1 << (i - 128);
+                } else {
+                    q_lo |= 1 << i;
+                }
+            }
+        }
+        (q_hi, q_lo)
+    }
+
+    /// The exact rational charge by 256-bit arithmetic, clamped to u64::MAX.
+    fn oracle(value: u64, factor: u64, elapsed: u64, rate_bps: u32, bpy: u64) -> u64 {
+        let p = factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED) - FACTOR_SCALE;
+        if rate_bps == 0 || elapsed == 0 || bpy == 0 || p == 0 {
+            return 0;
+        }
+        let num = value as u128 * rate_bps as u128 * p as u128; // < 2^109
+        let den = DEN_PER_BPY * bpy as u128; // < 2^90
+        let (hi, lo) = mul_wide(num, elapsed as u128);
+        let (q_hi, q_lo) = div_wide(hi, lo, den);
+        if q_hi != 0 || q_lo > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            q_lo as u64
+        }
+    }
+
+    /// Exact composition reference for `capitalized_reset_charge`.
+    fn capitalized_reset_oracle(
+        v: u64,
+        fi: u64,
+        fo: u64,
+        horizon: u64,
+        rate_bps: u32,
+        bpy: u64,
+    ) -> u64 {
+        if fo >= fi {
+            return 0;
+        }
+        oracle(v, fi, horizon, rate_bps, bpy).saturating_sub(oracle(v, fo, horizon, rate_bps, bpy))
     }
 
     struct Gen(u64);
@@ -1481,30 +1657,45 @@ mod aeneas_refactor_drt {
         u64::MAX,
     ];
     const FACTORS: [u64; 7] = [0, 1_000, 1_001, 3_500, 6_000, 6_001, u64::MAX];
-    const ELAPSED: [u64; 6] = [
+    const ELAPSED: [u64; 9] = [
         0,
         1,
+        6,
+        7,
         6_307_200,
         SETTLEMENT_HORIZON_BLOCKS,
+        1 << 32,
         u64::MAX - 1,
         u64::MAX,
     ];
     const RATES: [u32; 5] = [0, 1, 200, 10_000, u32::MAX];
-    // Includes the zero divisor (blocks_per_year == 0 returns early).
-    const BPY: [u64; 5] = [0, 1, 2, BLOCKS_PER_YEAR_5S, u64::MAX];
+    // Includes the zero divisor (blocks_per_year == 0 returns early) and both
+    // sides of the study's exactness limit.
+    const BPY: [u64; 8] = [
+        0,
+        1,
+        2,
+        BLOCKS_PER_YEAR_5S,
+        STUDY_EXACT_BPY_LIMIT,
+        STUDY_EXACT_BPY_LIMIT + 1,
+        u64::MAX / 2,
+        u64::MAX,
+    ];
 
     #[test]
-    fn demurrage_charge_matches_reference_on_grid() {
+    fn exact_kernel_matches_u256_on_grid() {
         for &v in &VALUES {
             for &f in &FACTORS {
                 for &e in &ELAPSED {
                     for &r in &RATES {
                         for &b in &BPY {
+                            let exact = oracle(v, f, e, r, b);
                             assert_eq!(
                                 demurrage_charge(v, f, e, r, b),
-                                demurrage_charge_reference(v, f, e, r, b),
+                                exact,
                                 "v={v} f={f} e={e} r={r} b={b}"
                             );
+                            assert!(legacy_quantized_charge(v, f, e, r, b) <= exact);
                         }
                     }
                 }
@@ -1512,20 +1703,62 @@ mod aeneas_refactor_drt {
         }
     }
 
-    /// The saturating branch is reachable: a full-factor u64::MAX transfer at
-    /// rate u32::MAX over u64::MAX blocks at one block per year overflows the
-    /// u128 product, and both versions clamp it to u64::MAX.
+    /// The u128 overflow branch (`whole × elapsed`) is reachable and is the
+    /// exact clamp: the true charge exceeds 2^128.
     #[test]
-    fn demurrage_charge_overflow_saturates_identically() {
+    fn exact_kernel_overflow_saturates_to_u64_max() {
         let (v, f, e, r, b) = (u64::MAX, 6_000, u64::MAX, u32::MAX, 1);
-        let charge = (v as u128 * r as u128 * 5_000) / 10_000 / 5_000;
-        let time_fraction = e as u128 * 1_000_000;
-        assert!(
-            charge.checked_mul(time_fraction).is_none(),
-            "case must hit the overflow"
-        );
+        let num = v as u128 * r as u128 * 5_000;
+        assert!((num / DEN_PER_BPY).checked_mul(e as u128).is_none());
         assert_eq!(demurrage_charge(v, f, e, r, b), u64::MAX);
-        assert_eq!(demurrage_charge_reference(v, f, e, r, b), u64::MAX);
+        assert_eq!(oracle(v, f, e, r, b), u64::MAX);
+        assert_eq!(legacy_quantized_charge(v, f, e, r, b), u64::MAX);
+    }
+
+    /// The study's claim, verified: its u128-only `exact_charge` equals the
+    /// 256-bit oracle for every `bpy <= STUDY_EXACT_BPY_LIMIT`
+    /// (368_934_881_474, any block time above ~86 µs) and beyond that only
+    /// ever saturates UPWARD. The production kernel's elapsed split removes
+    /// that region: it is exact there too.
+    #[test]
+    fn study_exact_charge_limit_claim_holds() {
+        assert_eq!(STUDY_EXACT_BPY_LIMIT, 368_934_881_474);
+        // At the limit the remainder product cannot overflow.
+        let den = DEN_PER_BPY * STUDY_EXACT_BPY_LIMIT as u128;
+        assert!((den - 1).checked_mul(u64::MAX as u128).is_some());
+        let den = DEN_PER_BPY * (STUDY_EXACT_BPY_LIMIT as u128 + 1);
+        assert!((den - 1).checked_mul(u64::MAX as u128).is_none());
+
+        let mut g = Gen(0x1875_1908);
+        let mut beyond_saturated = 0u32;
+        for i in 0..100_000u32 {
+            let (v, f, e, r) = (g.edge_u64(), g.factor(), g.edge_u64(), g.rate());
+            let b = match i % 3 {
+                0 => g.next() % (STUDY_EXACT_BPY_LIMIT + 1),
+                1 => STUDY_EXACT_BPY_LIMIT + 1 + g.next() % (u64::MAX - STUDY_EXACT_BPY_LIMIT),
+                _ => g.edge_u64(),
+            };
+            let exact = oracle(v, f, e, r, b);
+            let study = study_exact_charge(v, f, e, r, b);
+            assert_eq!(
+                demurrage_charge(v, f, e, r, b),
+                exact,
+                "v={v} f={f} e={e} r={r} b={b}"
+            );
+            if b <= STUDY_EXACT_BPY_LIMIT {
+                assert_eq!(study, exact, "v={v} f={f} e={e} r={r} b={b}");
+            } else {
+                assert!(
+                    study == exact || study == u64::MAX,
+                    "v={v} f={f} e={e} r={r} b={b}"
+                );
+                beyond_saturated += u32::from(study != exact);
+            }
+        }
+        assert!(
+            beyond_saturated > 0,
+            "the study kernel's upward saturation is reachable"
+        );
     }
 
     /// The clamp rewrite, checked directly at the u64 boundary.
@@ -1551,7 +1784,7 @@ mod aeneas_refactor_drt {
     }
 
     #[test]
-    fn capitalized_reset_charge_matches_reference_on_grid() {
+    fn capitalized_reset_charge_matches_exact_on_grid() {
         for &v in &VALUES {
             for &fi in &FACTORS {
                 for &fo in &FACTORS {
@@ -1560,7 +1793,7 @@ mod aeneas_refactor_drt {
                             for &b in &BPY {
                                 assert_eq!(
                                     capitalized_reset_charge(v, fi, fo, e, r, b),
-                                    capitalized_reset_charge_reference(v, fi, fo, e, r, b),
+                                    capitalized_reset_oracle(v, fi, fo, e, r, b),
                                     "v={v} in={fi} out={fo} e={e} r={r} b={b}"
                                 );
                             }
@@ -1572,7 +1805,7 @@ mod aeneas_refactor_drt {
     }
 
     #[test]
-    fn demurrage_kernels_match_reference_sweep() {
+    fn demurrage_kernels_match_exact_sweep() {
         let mut g = Gen(0x1820_0020);
         for _ in 0..200_000 {
             let (v, f, fo, e, r, b) = (
@@ -1583,15 +1816,68 @@ mod aeneas_refactor_drt {
                 g.rate(),
                 g.edge_u64(),
             );
+            let exact = oracle(v, f, e, r, b);
             assert_eq!(
                 demurrage_charge(v, f, e, r, b),
-                demurrage_charge_reference(v, f, e, r, b),
+                exact,
                 "v={v} f={f} e={e} r={r} b={b}"
             );
+            assert!(legacy_quantized_charge(v, f, e, r, b) <= exact);
             assert_eq!(
                 capitalized_reset_charge(v, f, fo, e, r, b),
-                capitalized_reset_charge_reference(v, f, fo, e, r, b),
+                capitalized_reset_oracle(v, f, fo, e, r, b),
                 "v={v} in={f} out={fo} e={e} r={r} b={b}"
+            );
+        }
+    }
+
+    /// Pinned short-elapsed and large-value fixtures (#1875): exact values,
+    /// with the legacy (pre-9.0.0) value alongside.
+    #[test]
+    fn fix_1875_pinned_fixtures() {
+        const Y: u64 = BLOCKS_PER_YEAR_5S;
+        const BTH: u64 = 1_000_000_000_000;
+        // (value, factor, elapsed, rate, exact, legacy)
+        let cases: [(u64, u64, u64, u32, u64, u64); 10] = [
+            (1_000_000 * BTH, 6_000, 1, 200, 3_170_979_198, 0),
+            (1_000_000 * BTH, 6_000, 6, 200, 19_025_875_190, 0),
+            (
+                1_000_000 * BTH,
+                6_000,
+                7,
+                200,
+                22_196_854_388,
+                20_000_000_000,
+            ),
+            (
+                1_000_000 * BTH,
+                6_000,
+                12,
+                200,
+                38_051_750_380,
+                20_000_000_000,
+            ),
+            (
+                1_000_000 * BTH,
+                6_000,
+                Y,
+                200,
+                20_000_000_000_000_000,
+                20_000_000_000_000_000,
+            ),
+            (u64::MAX, 6_000, 1, 200, 58_494_241_735, 0),
+            (u64::MAX, 6_000, 6, 200, 350_965_450_413, 0),
+            (u64::MAX, 6_000, 7, 200, 409_459_692_148, 368_934_881_474),
+            (900_000 * BTH, 5_745, 6, 200, 16_250_000_000, 0),
+            (1, 6_000, 1, 200, 0, 0),
+        ];
+        for (v, f, e, r, exact, legacy) in cases {
+            assert_eq!(demurrage_charge(v, f, e, r, Y), exact, "v={v} f={f} e={e}");
+            assert_eq!(oracle(v, f, e, r, Y), exact, "oracle v={v} f={f} e={e}");
+            assert_eq!(
+                legacy_quantized_charge(v, f, e, r, Y),
+                legacy,
+                "legacy v={v} f={f} e={e}"
             );
         }
     }

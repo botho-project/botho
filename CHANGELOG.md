@@ -14,8 +14,8 @@ bumps (`0.X.Y`) are backwards-compatible.
 
 Consensus-breaking; fresh chains from genesis (testnet reset).
 `PROTOCOL_VERSION` and `MIN_SUPPORTED_PROTOCOL_VERSION` are both 9.0.0, so 8.x
-peers are refused at the identify handshake. 9.0.0 is not yet complete: the
-#1875 demurrage fix is planned for the same release.
+peers are refused at the identify handshake. The release carries two fixes:
+the #1876 exact fee-floor means and the #1875 exact demurrage charge.
 
 - **Exact fee-floor weighted means (#1876).** The consensus fee floor takes
   three value-weighted means of cumulative cluster wealth: the ring-centroid
@@ -37,6 +37,20 @@ peers are refused at the identify handshake. 9.0.0 is not yet complete: the
   transactions below the consensus floor. It now calls the ledger's exact
   function, so relay and consensus compute the same claimed wealth and
   relay stays at least as strict as consensus.
+- **Demurrage is computed exactly (#1875).** `demurrage_charge` now takes one
+  floor of the full rational charge,
+  `value × rate × (factor − 1000) × elapsed / (10_000 × 5_000 × blocks_per_year)`,
+  clamped to `u64::MAX`. The 8.x kernel first floored the elapsed time to
+  `1e6` units of a year. At the 5 s year that zeroed every hold of 1 to 6
+  blocks, for any value, and charged every 7 to 12 block hold the same
+  amount. A wallet that kept its ring members young could churn every six
+  blocks and pay no demurrage. Splitting a hold into n same-class spends now
+  pays the unsplit charge less fewer than n pico. Honest charges rise only by
+  the 8.x under-charge (for example, 1M BTH at 6x for 12 blocks: 0.038 BTH,
+  was 0.02 BTH). The operator chose this fix after the simulation study in
+  PR #1908. Rates, `SETTLEMENT_HORIZON_BLOCKS` and the emission schedule are
+  unchanged. Downgrade (#925) and settlement (#831) charges call the same
+  kernel and are exact too.
 
 ## Protocol 8.0.0
 

@@ -1,5 +1,7 @@
-//! DRT for the #1711 counterexample models against actual cluster-tax
-//! functions.
+//! DRT for the #1711 demurrage models against actual cluster-tax
+//! functions. Since #1875 (protocol 9.0.0) the `demurrage_charge` leg runs
+//! the exact model `Botho.Demurrage.exactCharge`; the legacy quantized model
+//! `Botho.Demurrage.charge` keeps its counterexample theorems.
 use crate::{fixtures::Fixtures, gen, legs::Leg, wire};
 use bth_cluster_tax::{demurrage_charge, ring_centroid_implied_factor, ClusterFactorCurve};
 use proptest::{collection::vec, prelude::*};
@@ -32,7 +34,18 @@ impl Leg for Charge {
                 Just(321_667_200)
             ],
             prop_oneof![Just(0u32), Just(200u32), any::<u32>()],
-            prop_oneof![3 => Just(6_307_200u64), 1 => gen::u64_edge()],
+            // 368_934_881_474 is where the #1908 study's u128 kernel stopped
+            // being exact; the production kernel splits elapsed so it is
+            // exact on both sides (#1875).
+            prop_oneof![
+                3 => Just(6_307_200u64),
+                1 => gen::u64_edge(),
+                1 => prop_oneof![
+                    Just(368_934_881_474u64),
+                    Just(368_934_881_475u64),
+                    368_934_881_475u64..=u64::MAX
+                ]
+            ],
         )
             .prop_map(|(value, factor, elapsed, rate, year)| ChargeIn {
                 value,
@@ -59,7 +72,7 @@ impl Leg for Charge {
             && i.factor > 1000
             && i.value > 0
         {
-            "positive inputs, six-block dead zone".into()
+            "positive inputs, short hold (pre-9.0.0 dead zone)".into()
         } else if r == &wire::n(u64::MAX) {
             "clamped to u64 max".into()
         } else if r == &wire::n(0) {

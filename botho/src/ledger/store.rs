@@ -5791,17 +5791,20 @@ mod tests {
         mk_transfer_tx(ring, outputs, 0)
     }
 
-    /// BUG #1875 (codex; Lean `six_block_dead_zone`), reproduced through the
-    /// real consensus gate: `Ledger::consensus_fee_floor` for an in-class
-    /// spend of a 1M BTH wealthy coin whose whole ring is six blocks old, in a
-    /// positive-rate epoch, charges ZERO demurrage (floor == size/base fee).
-    /// At seven blocks the same tx is charged. Consensus enforces no minimum
+    /// FIXED #1875 (codex; Lean `six_block_dead_zone`, the pre-9.0.0
+    /// witness), through the real consensus gate. Before protocol 9.0.0,
+    /// `Ledger::consensus_fee_floor` for an in-class spend of a 1M BTH wealthy
+    /// coin whose whole ring was six blocks old, in a positive-rate epoch,
+    /// charged ZERO demurrage (floor == size/base fee), and every 7..=12 block
+    /// hold paid one `TIME_SCALE` unit. Consensus enforces no minimum
     /// ring-member age (`MIN_DECOY_AGE_BLOCKS` is wallet-side only), so a
-    /// custom wallet can keep a ring this young and churn every six blocks.
+    /// custom wallet could keep a ring this young and churn every six blocks.
     ///
-    /// This asserts the CURRENT behaviour. A fix must flip this test.
+    /// The exact kernel (one floor of the full rational) now charges every
+    /// hold of 1..=6 blocks, and two six-block hops pay the twelve-block hold
+    /// less than 2 pico.
     #[test]
-    fn bug_1875_consensus_floor_short_hold_pays_no_demurrage() {
+    fn bug_1875_consensus_floor_short_hold_pays_demurrage_since_9_0_0() {
         use bth_transaction_types::ClusterId;
         let policy = crate::monetary::mainnet_policy();
         let block_height = policy.halving_interval + 10_000; // epoch 1
@@ -5825,25 +5828,32 @@ mod tests {
             (floor - base, base)
         };
 
-        let (d6, base6) = demurrage_at(6);
+        // Every short hold is charged, and the gate charges exactly the kernel.
+        for age in 1..=6u64 {
+            let (d, base) = demurrage_at(age);
+            assert!(d > 0, "{age}-block in-class hold of 0.9M BTH must pay");
+            assert_eq!(
+                d,
+                bth_cluster_tax::demurrage_charge(out, 5745, age, rate, bpy),
+                "age={age}"
+            );
+            // The per-hop size fee (CONSENSUS_FEE_BASE = 1 pico/byte; this
+            // signature-less test tx underestimates a real CLSAG tx's size)
+            // is negligible next to what even a one-block hold now owes.
+            assert!(base.saturating_mul(1000) < d, "base={base} d={d}");
+        }
+        let (d1, _) = demurrage_at(1);
+        let (d6, _) = demurrage_at(6);
         let (d7, _) = demurrage_at(7);
         let (d12, _) = demurrage_at(12);
-        // Economics: the per-hop size fee (CONSENSUS_FEE_BASE = 1 pico/byte;
-        // this signature-less test tx underestimates a real CLSAG tx's size)
-        // is negligible next to the ~0.017 BTH a short hold should owe, even
-        // at 1000x the size. Six-block churn of 0.9M BTH avoids ~17,082
-        // BTH/year of demurrage for ~1.05M hops of size fee.
-        assert!(base6.saturating_mul(1000) < d7, "base={base6} d7={d7}");
-        assert_eq!(
-            d6, 0,
-            "six-block in-class hold of 0.9M BTH pays no demurrage"
-        );
-        assert_eq!(
-            d7,
-            bth_cluster_tax::demurrage_charge(out, 5745, 7, rate, bpy)
-        );
-        assert!(d7 > 0);
-        assert_eq!(d12, d7, "7..=12 blocks all charge one TIME_SCALE unit");
+        // Pinned exact values: floor(0.9e18 · 200 · 4745 · e / (5e7 · bpy)).
+        assert_eq!(d1, 2_708_333_333);
+        assert_eq!(d6, 16_250_000_000, "six blocks: 0.01625 BTH (was 0)");
+        assert_eq!(d7, 18_958_333_333);
+        assert_eq!(d12, 32_500_000_000, "twelve blocks (was = d7)");
+        // Split bound: two six-block spends pay one twelve-block spend less
+        // than 2 pico (an n-way split loses < n pico).
+        assert!(d6 + d6 <= d12 && d12 - (d6 + d6) < 2);
     }
 
     /// FIXED #1876 (codex; Lean `saturation_lowers_charge`; reproduced in

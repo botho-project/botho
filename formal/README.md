@@ -258,6 +258,10 @@ A random heterogeneous `formal-drt` leg is a follow-up.
 The separate [demurrage counterexample model](DEMURRAGE.md) covers the
 charge kernel and default ring factor (#1711), including refutations of
 the positive-charge threshold, churn identity and conservative-overflow claim.
+Those theorems are about the pre-9.0.0 kernel (`charge`), kept as the record
+of #1875; the 9.0.0 exact kernel is modelled by `exactCharge`
+(`Botho/Demurrage/ExactCharge.lean`), which the `demurrage_charge` DRT leg now
+compares against (its theorems are a follow-up).
 
 ## The cluster-tag model
 
