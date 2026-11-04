@@ -29,9 +29,19 @@ Three subcommands:
     Sample the named local nodes on the absolute grid
     ``started_at + k * sample_interval_s`` until the fixed profile end, and
     append every row (including error rows) to a new, exclusively created
-    JSONL file, fsyncing each tick. It never rebases the schedule: a late
-    start, a slow tick or a collector restart leaves a gap that the analyzer
-    reports as ``incomplete``; missed ticks are never replayed.
+    JSONL file, fsyncing each tick. It never rebases the schedule and never
+    replays a missed tick. Only after sampling the final profile tick without
+    interruption does it append one ``collector_terminal`` record (manifest
+    SHA256, ticks expected/written/missed, rows and error rows) as the file's
+    last line, fsynced. An interrupted, crashed or hard-deadline run has no
+    terminal record.
+
+The analyzer returns ``incomplete`` unless every raw file ends with a terminal
+record that matches the manifest and reports zero missed ticks, zero error
+rows and a first tick at t0 (#1902). Its 15 s gap tolerance is therefore not
+the completeness rule: a 4-12 s late start, one 9 s stall or an 8 s restart
+(two files) each misses at least one tick and is ``incomplete`` even though
+no gap exceeds 15 s.
 
 The collector never launches, pauses, signals or reconfigures a node.
 """
@@ -58,8 +68,10 @@ from rpc_sustained_memory import (
 from sample_sustained_memory import identity, sample
 from sustained_memory import (
     THRESHOLD_DEFAULTS,
+    expected_ticks,
     manifest_digest,
     profile_phases,
+    terminal_record,
     validate_manifest,
     windows,
 )
@@ -231,7 +243,9 @@ def collect(
 
     ``targets`` is ``[(manifest_node, rpc_url, transfer_source_path_or_None)]``.
     Returns a summary; ``complete`` is true only if every grid tick from t0 to
-    the profile end produced an error-free row for every target.
+    the profile end produced an error-free row for every target. At a clean
+    finish (the final tick sampled, not interrupted) the durable terminal
+    record is appended as the last line; the analyzer requires it (#1902).
     """
     start = plan["started_at_unix_s"]
     interval = plan["sample_interval_s"]
@@ -242,6 +256,7 @@ def collect(
         "schema": 1,
         "manifest_sha256": manifest_digest(plan),
         "nodes": [node["node_id"] for node, _, _ in targets],
+        "ticks_expected": expected_ticks(plan),
         "ticks_sampled": 0,
         "ticks_skipped": 0,
         "rows_written": 0,
@@ -250,6 +265,7 @@ def collect(
         "last_row_unix_s": None,
         "reached_profile_end": False,
         "interrupted": False,
+        "terminal_record_written": False,
     }
     previous = -1
     while True:
@@ -317,13 +333,32 @@ def collect(
         if due == last:
             summary["reached_profile_end"] = True
             break
+    summary["ticks_missed"] = summary["ticks_expected"] - summary["ticks_sampled"]
     summary["complete"] = (
         summary["reached_profile_end"]
         and not summary["interrupted"]
         and summary["ticks_skipped"] == 0
+        and summary["ticks_missed"] == 0
         and summary["error_rows"] == 0
         and summary["first_tick_unix_s"] == start
     )
+    if summary["reached_profile_end"] and not summary["interrupted"]:
+        # Written only at a clean finish, after every tick is already durable;
+        # an incomplete clean finish still records exactly what it missed.
+        record = terminal_record(
+            plan,
+            summary["nodes"],
+            first_tick_unix_s=summary["first_tick_unix_s"],
+            ticks_written=summary["ticks_sampled"],
+            rows_written=summary["rows_written"],
+            error_rows=summary["error_rows"],
+            finished_at_unix_s=now(),
+        )
+        output.write(json.dumps(record, allow_nan=False) + "\n")
+        output.flush()
+        fsync(output.fileno())
+        summary["terminal_record_written"] = True
+        summary["complete"] = summary["complete"] and record["complete"]
     return summary
 
 
@@ -436,10 +471,10 @@ def collect_command(args, now, sleep, fetch, stopped, paths):
     problems = preflight(plan, targets, **paths)
     if problems:
         raise ValueError("preflight identity mismatch: " + "; ".join(problems))
-    if current > plan["started_at_unix_s"] + plan["max_gap_s"]:
+    if current > plan["started_at_unix_s"] + plan["sample_interval_s"] / 2:
         print(
-            "warning: started after t0; warmup coverage is already missing and "
-            "the run will be incomplete (evidence is still recorded)",
+            "warning: started after t0; the t0 tick is already missed and the "
+            "run will be incomplete (evidence is still recorded)",
             file=sys.stderr,
         )
     context = None

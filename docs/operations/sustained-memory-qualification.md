@@ -123,6 +123,10 @@ obligation; the sampler verifies executable bytes, not the build history.
    also keeps the top-level `observations_sha256`). A node whose rows are
    missing, duplicated across files or out of order is incomplete.
 
+   The analyzer also requires the collector's own completion record (see
+   [collector completion rule](#collector-completion-rule)). Files assembled
+   by hand from step 5 have none, so they are diagnostic and can never pass.
+
    Analyzer exit codes: 0 `passed`, 1 `failed`, 2 `incomplete`. Check `scope`
    even on exit 0. Raw data is never rewritten. Archive the result together
    with raw observations, manifest and their hashes. Do not publish private
@@ -151,9 +155,20 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
   ```sh
   python3 scripts/stress/collect_sustained_memory.py manifest --out manifest.json \
     --campaign-id RUN_ID --source-revision COMMIT --chain-id RUN_ID \
-    --started-at T0 --min-blocks 10 --producer n3 \
+    --started-at T0 --min-blocks MIN_BLOCKS --producer n3 \
     --node n1=n1-identity.json ... --node n5=n5-identity.json
   ```
+
+  `MIN_BLOCKS` is a floor on the block-height increase in **every** fixed
+  300 s sustained window on every node, so derive it from the reviewed block
+  cadence of the same topology, never from a target. Use the smallest
+  per-300 s height increase seen in the reviewed cadence evidence (at least
+  1), not its mean. For example, the 2026-09-27 run went from about height
+  4 to height 47 in about 1.5 h, a mean of about 2.5 blocks per window. On
+  that cadence a floor of 3 or more fails most windows, and a quiet window
+  can fall below even 2. The old example value `10` would always end
+  `incomplete` there. A floor that the cadence cannot meet does not test
+  memory. Record the cadence evidence you used with the manifest.
 
   It refuses a t0 in the past (a readiness delay may never shorten warmup),
   a t0 more than an hour ahead, differing artifact hashes, shared cgroups, an
@@ -176,16 +191,31 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
   read-only `node_getStatus` call per node through `rpc_sustained_memory`,
   then one local sample through `sample_sustained_memory`. Every row,
   including error rows, is appended to the new file, and each tick is
-  fsynced. A tick more than half an interval late is skipped and logged,
-  never replayed. A late start, a slow tick, an RPC outage or a process
-  restart therefore stays visible as a gap or an error row, and the analyzer
-  reports it as incomplete. SIGTERM or SIGINT stops it after the current
-  tick and keeps every row. Collection ends at the profile end or the hard
-  deadline, whichever comes first. The final JSON summary on stdout gives
-  rows, error rows, skipped ticks, `interrupted` and the file's SHA256. Exit
-  0 only for a complete, error-free collection starting at t0; otherwise
-  exit 2. A collector exit is never a qualification verdict: run the
-  analyzer on the files.
+  fsynced. A tick more than half an interval (2.5 s) late is skipped and
+  logged, never replayed. A late start, a slow tick, an RPC outage or a
+  process restart therefore stays visible as a missed tick or an error row.
+  SIGTERM or SIGINT stops it after the current tick and keeps every row.
+  Collection ends at the profile end or the hard deadline, whichever comes
+  first. Only when it has sampled the final profile tick without
+  interruption does it append one terminal record as the file's last line,
+  then fsync it:
+
+  ```json
+  {"record": "collector_terminal", "schema": 1, "manifest_sha256": "...",
+   "nodes": ["n1"], "started_at_unix_s": 1790000000, "first_tick_unix_s": 1790000000,
+   "ticks_expected": 3607, "ticks_written": 3607, "ticks_missed": 0,
+   "rows_written": 3607, "error_rows": 0, "finished_at_unix_s": 1790018030.4,
+   "complete": true}
+  ```
+
+  An interrupted, crashed or hard-deadline run writes no terminal record. A
+  run that finishes after a late start or a skipped tick writes one with
+  `ticks_missed > 0` and `complete: false`. The final JSON summary on stdout
+  gives rows, error rows, skipped and missed ticks, `interrupted`,
+  `terminal_record_written` and the file's SHA256. Exit 0 only for a
+  complete, error-free collection starting at t0; otherwise exit 2. A
+  collector exit is never a qualification verdict: run the analyzer on the
+  files. The analyzer applies the collector completion rule below.
 
 Run it as the node's own service user (or root): `/proc/PID/exe` and the
 cgroup files must be readable. **Local mode:** on a single Linux host, give
@@ -195,9 +225,37 @@ topology limits below.
 
 ## Gate and interpretation
 
+### Collector completion rule
+
+The analyzer reports `incomplete` unless **every** raw file passed to it
+ends with exactly one `collector_terminal` record, and that record:
+
+- carries the manifest's canonical `manifest_sha256` and `schema` 1;
+- names only manifest nodes, each once, and every row in the file belongs
+  to one of them;
+- has `ticks_expected` equal to the profile's grid tick count,
+  `ceil(profile_s / sample_interval_s) + 1` (3607 for minting, 3961 for
+  payments), with `ticks_written` equal to it and `ticks_missed` = 0;
+- has `rows_written` = `ticks_written` × its node count, `error_rows` = 0,
+  `first_tick_unix_s` exactly t0 and `complete: true`.
+
+Every manifest node must be covered by exactly one such record. Each node's
+observation count must equal the written ticks. Nothing may follow the
+record in its file. The record is the collector's own account of its run,
+so this rule is separate from the evidence checks below and adds to them.
+It closes a gap: a 15 s gap tolerance alone admits a 4 s or 12 s late start,
+one 9 s stall, or a collector restart with an 8 s gap (two files), although
+the collector already knew each of those runs was incomplete (#1902).
+Each now comes out `incomplete`. The tolerance never rebases a baseline or
+replays a tick.
+
+### Observation evidence
+
 Every node must have complete coverage of the original warmup, measurement and
 follow-up windows, with boundary error and inter-sample gaps at most fifteen
-seconds. Counter regressions and PID/start changes make the run incomplete.
+seconds. That fifteen-second tolerance applies to the timestamps of the
+evidence. On its own it is not the completeness rule; the collector completion
+rule above also applies. Counter regressions and PID/start changes make the run incomplete.
 Source, artifact, host, cgroup, chain or manifest identity changes fail it. Malformed
 or missing observations are incomplete, never implicit zeros or a pass.
 
@@ -365,8 +423,10 @@ cohort** before the x2 fleet is provisioned:
 3. Before t0, start the five units. Verify quorum, peers and genesis, then
    on each host run `sample_sustained_memory.py --identity $(systemctl show
    -p MainPID --value botho-RUN.service)`. Build the manifest once with
-   `collect_sustained_memory.py manifest --started-at T0`. Use
-   `--min-blocks` from the reviewed expected block cadence. Then start one
+   `collect_sustained_memory.py manifest --started-at T0`. Derive
+   `--min-blocks` from the reviewed block cadence as described under
+   `manifest` above (about 2.5 blocks per window on the 2026-09-27 run, so
+   at most 2). Then start one
    `collect` per host against `http://127.0.0.1:19090/rpc` (the
    `fleet_provision.RPC_PORT`), in a transient unit or `nohup`.
 4. After the profile end, copy each host's `n*.jsonl`, collector log and
@@ -375,7 +435,10 @@ cohort** before the x2 fleet is provisioned:
    and host deadline run out.
 
 Treat x2 as memory-qualified only if this assessment is `passed` with scope
-`limited_minting` for the same node SHA256 that x2 deploys. `incomplete`
+`limited_minting` for the same node SHA256 that x2 deploys. `passed` already
+implies every host's collector finished with zero missed ticks (the
+[collector completion rule](#collector-completion-rule)). A collector that
+exited 2 can never yield `passed`, so a collector exit 2 means rerun. `incomplete`
 means rerun as a new experiment, not a longer one. `failed` blocks x2 on a
 leak fix. After expiry the producer pauses only under the normal
 high-balance, empty-mempool policy
@@ -417,6 +480,10 @@ The collector tests run the real loop with a fake clock and a scripted
 passes. The 49 MiB/hour trace and a tightened gate fail. A miner that never
 pauses, a late start, a stalled tick, an RPC outage, a process restart and an
 interrupt all come out incomplete. Per-host files join in the analyzer.
+The #1902 cases keep every gap within fifteen seconds and still come out
+incomplete only through the collector completion rule. They are a 4 s and a
+12 s late start, an 8 s collector restart into two files, a single 9 s stall,
+and a missing, non-final, duplicated, forged or wrong-manifest terminal record.
 Preflight, output-reuse and configuration refusals are also covered. One run
 reads real `/proc` and cgroup fixture files each tick. The rest replace only
 the sampler's three filesystem readers, so they stay fast.

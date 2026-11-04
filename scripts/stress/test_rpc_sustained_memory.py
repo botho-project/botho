@@ -14,9 +14,10 @@ from rpc_sustained_memory import (
     observation_from_status,
     rpc_url_problem,
 )
-from sustained_memory import analyze
 from test_sample_sustained_memory import SamplerTests
-from test_sustained_memory import MIB, manifest, samples
+
+# Synthetic series from a collector that finished cleanly (see the wrapper).
+from test_sustained_memory import MIB, analyze, manifest, samples
 
 
 def status(height, mining=True, transactions=0, **extra):

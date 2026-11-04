@@ -16,7 +16,14 @@ from unittest import mock
 
 import collect_sustained_memory as csm
 import sample_sustained_memory
-from sustained_memory import analyze, manifest_digest, validate_manifest
+from sustained_memory import (
+    analyze,
+    expected_ticks,
+    is_terminal,
+    main as analyze_main,
+    manifest_digest,
+    validate_manifest,
+)
 
 MIB = 1024 * 1024
 T0 = 1_790_000_000
@@ -206,6 +213,11 @@ class Fleet:
             yield
 
 
+def observations(rows):
+    """The raw file minus its collector terminal record."""
+    return [row for row in rows if not is_terminal(row)]
+
+
 def make_plan(fleet, **limits):
     return csm.build_manifest(
         campaign_id="q20261104-x2-memqual",
@@ -392,12 +404,26 @@ class CollectTests(Harness):
         self.assertEqual(summary["ticks_sampled"], 18030 // 5 + 1)
         self.assertEqual(summary["rows_written"], 2 * summary["ticks_sampled"])
         self.assertEqual(summary["first_tick_unix_s"], T0)
-        self.assertEqual(len(self.fsyncs), summary["ticks_sampled"])
-        # Every row sits on the absolute grid; nothing before t0, nothing rebased.
-        self.assertTrue(
-            all(0 <= (r["observed_at_unix_s"] - T0) % 5 < 0.1 for r in rows)
+        # One fsync per tick, plus one for the terminal record.
+        self.assertEqual(len(self.fsyncs), summary["ticks_sampled"] + 1)
+        self.assertTrue(summary["terminal_record_written"])
+        self.assertEqual(summary["ticks_missed"], 0)
+        terminal = rows[-1]
+        self.assertTrue(is_terminal(terminal))
+        self.assertEqual(sum(map(is_terminal, rows)), 1)
+        self.assertEqual(
+            (terminal["ticks_expected"], terminal["ticks_written"]),
+            (expected_ticks(plan), expected_ticks(plan)),
         )
-        self.assertGreaterEqual(min(r["observed_at_unix_s"] for r in rows), T0)
+        self.assertEqual(terminal["ticks_missed"], 0)
+        self.assertEqual(terminal["manifest_sha256"], manifest_digest(plan))
+        self.assertTrue(terminal["complete"])
+        # Every row sits on the absolute grid; nothing before t0, nothing rebased.
+        samples = observations(rows)
+        self.assertTrue(
+            all(0 <= (r["observed_at_unix_s"] - T0) % 5 < 0.1 for r in samples)
+        )
+        self.assertGreaterEqual(min(r["observed_at_unix_s"] for r in samples), T0)
         result = analyze(plan, rows)
         self.assertEqual(
             result["status"],
@@ -459,7 +485,9 @@ class CollectTests(Harness):
         plan = make_plan(fleet)
         summary, rows, _ = self.run_collect(fleet, plan)
         self.assertFalse(summary["complete"])
-        self.assertGreaterEqual(min(r["observed_at_unix_s"] for r in rows), T0 + 600)
+        self.assertGreaterEqual(
+            min(r["observed_at_unix_s"] for r in observations(rows)), T0 + 600
+        )
         result = analyze(plan, rows)
         self.assertEqual(result["status"], "incomplete")
         self.assertIn(
@@ -485,7 +513,7 @@ class CollectTests(Harness):
         summary, rows, _ = self.run_collect(fleet, plan)
         self.assertTrue(summary["reached_profile_end"])
         self.assertEqual(summary["error_rows"], 2)
-        bad = [r for r in rows if r["errors"]]
+        bad = [r for r in observations(rows) if r["errors"]]
         self.assertTrue(
             all("node_getStatus request failed" in r["errors"][0] for r in bad)
         )
@@ -527,8 +555,6 @@ class CollectTests(Harness):
             files.append(str(out))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            from sustained_memory import main as analyze_main
-
             code = analyze_main([str(manifest), *files])
         result = json.loads(out.getvalue())
         self.assertEqual((code, result["status"]), (0, "passed"))
@@ -536,6 +562,165 @@ class CollectTests(Harness):
         self.assertNotIn("observations_sha256", result)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(analyze_main([str(manifest), files[0]]), 2)  # n2 missing
+
+
+class CollectorCompletionGateTests(Harness):
+    """#1902: the analyzer fails closed on any collector-incomplete run.
+
+    Each case below keeps every inter-sample gap within the analyzer's 15 s
+    tolerance, so the observation evidence alone would pass. Before #1902 the
+    analyzer reported ``passed`` for all of them although the collector exited
+    incomplete; now the missing terminal record or its missed ticks make the
+    result ``incomplete``, and no other reason is needed to reach it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.files = 0
+
+    def assess(self, plan, *paths):
+        manifest = self.root / "manifest.json"
+        if not manifest.exists():
+            manifest.write_text(json.dumps(plan))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = analyze_main([str(manifest), *map(str, paths)])
+        return code, json.loads(out.getvalue())
+
+    def out(self):
+        self.files += 1
+        return self.root / f"raw-{self.files}.jsonl"
+
+    def assert_collector_only_incomplete(self, code, result):
+        self.assertEqual((code, result["status"]), (2, "incomplete"), result)
+        self.assertEqual(result["failures"], [])
+        reasons = result["incomplete_reasons"]
+        self.assertTrue(reasons)
+        # Only the collector rule catches these traces; the evidence is clean.
+        self.assertTrue(all("collector" in reason for reason in reasons), reasons)
+
+    def test_late_start_of_4_or_12_seconds_is_incomplete(self):
+        for late, missed in ((4, 1), (12, 2)):
+            with self.subTest(late_s=late):
+                self.root = Path(self.temp.name) / f"late-{late}"
+                self.root.mkdir()
+                fleet = self.fleet(start=T0 + late)
+                plan = make_plan(fleet)
+                out = self.out()
+                summary, rows, _ = self.run_collect(fleet, plan, out=out)
+                self.assertFalse(summary["complete"])
+                self.assertTrue(summary["terminal_record_written"])
+                self.assertEqual(summary["ticks_missed"], missed)
+                self.assertEqual(rows[-1]["ticks_missed"], missed)
+                self.assertFalse(rows[-1]["complete"])
+                samples = observations(rows)
+                first = min(r["observed_at_unix_s"] for r in samples)
+                self.assertLessEqual(first - T0, plan["max_gap_s"])
+                self.assert_collector_only_incomplete(*self.assess(plan, out))
+                self.assertIn(
+                    f"collector terminal record for n1,n2 missed {missed} tick(s); "
+                    f"wrote {expected_ticks(plan) - missed} of {expected_ticks(plan)}",
+                    analyze(plan, rows)["incomplete_reasons"],
+                )
+
+    def test_restart_with_8_second_gap_in_two_files_is_incomplete(self):
+        fleet = self.fleet()
+        plan = make_plan(fleet)
+        first_out, second_out = self.out(), self.out()
+        first, first_rows, _ = self.run_collect(
+            fleet, plan, out=first_out, stopped=lambda: self.clock.now() > T0 + 3600
+        )
+        self.assertTrue(first["interrupted"])
+        self.assertFalse(first["terminal_record_written"])
+        self.assertFalse(any(map(is_terminal, first_rows)))
+        last = max(r["observed_at_unix_s"] for r in first_rows)
+        self.clock.time = last + 8  # the collector process is down for 8 s
+        second, second_rows, _ = self.run_collect(fleet, plan, out=second_out)
+        self.assertTrue(second["terminal_record_written"])
+        self.assertGreater(second_rows[-1]["ticks_missed"], 0)
+        resumed = min(r["observed_at_unix_s"] for r in observations(second_rows))
+        self.assertLessEqual(resumed - last, plan["max_gap_s"])
+        code, result = self.assess(plan, first_out, second_out)
+        self.assert_collector_only_incomplete(code, result)
+        self.assertIn(
+            f"{first_out}: missing collector terminal record (no clean finish)",
+            result["incomplete_reasons"],
+        )
+
+    def test_single_9_second_stall_is_incomplete(self):
+        fleet = self.fleet()
+        fleet.stalls[3600] = 9.0
+        plan = make_plan(fleet)
+        out = self.out()
+        summary, rows, _ = self.run_collect(fleet, plan, out=out)
+        self.assertEqual(summary["ticks_skipped"], 1)
+        self.assertEqual(rows[-1]["ticks_missed"], 1)
+        samples = observations(rows)
+        for node in NODES:
+            times = [r["observed_at_unix_s"] for r in samples if r["node_id"] == node]
+            self.assertLessEqual(
+                max(b - a for a, b in zip(times, times[1:])), plan["max_gap_s"]
+            )
+        self.assert_collector_only_incomplete(*self.assess(plan, out))
+
+    def test_terminal_record_must_be_present_final_and_match_the_manifest(self):
+        fleet = self.fleet()
+        plan = make_plan(fleet)
+        clean = self.out()
+        summary, rows, _ = self.run_collect(fleet, plan, out=clean)
+        self.assertTrue(summary["complete"])
+        self.assertEqual(self.assess(plan, clean)[0], 0)  # the clean file passes
+        lines = clean.read_text().splitlines()
+        terminal = json.loads(lines[-1])
+        wrong_hash = json.dumps({**terminal, "manifest_sha256": "0" * 64})
+        forged_count = json.dumps({**terminal, "ticks_missed": 1})
+        cases = {
+            "missing": (lines[:-1], "missing collector terminal record"),
+            "wrong manifest hash": (
+                lines[:-1] + [wrong_hash],
+                "does not match the manifest SHA256",
+            ),
+            "missed ticks": (lines[:-1] + [forged_count], "missed 1 tick(s)"),
+            "rows after it": (lines + [lines[-2]], "not the single final line"),
+            "duplicated": (lines + [lines[-1]], "not the single final line"),
+            "a row deleted": (lines[:100] + lines[102:], "not the collector's"),
+        }
+        for name, (content, reason) in cases.items():
+            with self.subTest(case=name):
+                path = self.out()
+                path.write_text("\n".join(content) + "\n")
+                code, result = self.assess(plan, path)
+                self.assertEqual((code, result["status"]), (2, "incomplete"))
+                self.assertTrue(
+                    any(reason in r for r in result["incomplete_reasons"]),
+                    result["incomplete_reasons"],
+                )
+
+    def test_two_complete_hosts_must_cover_every_node_exactly_once(self):
+        fleet = self.fleet()
+        plan = make_plan(fleet)
+        n1 = self.out()
+        self.assertTrue(
+            self.run_collect(fleet, plan, nodes=("n1",), out=n1)[0]["complete"]
+        )
+        self.clock.time = T0 - 30
+        both = self.out()
+        self.assertTrue(self.run_collect(fleet, plan, out=both)[0]["complete"])
+        code, result = self.assess(plan, n1, both)
+        self.assertEqual((code, result["status"]), (2, "incomplete"))
+        self.assertIn(
+            "n1: more than one collector terminal record", result["incomplete_reasons"]
+        )
+
+    def test_collector_gap_never_masks_a_growth_failure(self):
+        fleet = self.fleet(start=T0 + 4, slope_mib_per_hour=49.0)
+        plan = make_plan(fleet)
+        out = self.out()
+        summary, _, _ = self.run_collect(fleet, plan, out=out)
+        self.assertFalse(summary["complete"])
+        code, result = self.assess(plan, out)
+        self.assertEqual((code, result["status"]), (1, "failed"))
+        self.assertIn("n1: rss_plus_swap sustained growth exceeded", result["failures"])
 
 
 class CollectCliTests(Harness):
