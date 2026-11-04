@@ -2,8 +2,8 @@
 # Self-test for the trusted verify job (#1799).
 #
 # For the clean tree and each fixture under fixtures/verify/ this script:
-#   1. copies the formal/ tree to a scratch directory and applies the fixture
-#      (the pull request);
+#   1. prepares a cold package from the current Basic scaffold and matching
+#      manifest, then applies the fixture (the pull request);
 #   2. snapshots the sources (the verify job reads its own checkout, which
 #      build-time code cannot touch), then runs `lake build` in the tree,
 #      which runs the fixture's code, as the untrusted `build` job does;
@@ -39,10 +39,14 @@
 set -euo pipefail
 
 main() {
-local here root lake sysroot
+local here root lake sysroot prep
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 lake="${LAKE:-lake}"
+prep="$here/selftest-fixture.py"
+SELFTEST_SOURCE_HASH="$(python3 -I "$prep" source-hash "$root")"
+export SELFTEST_SOURCE_HASH
+python3 -I "$prep" selftest "$root"
 sysroot="${LEAN_SYSROOT:-$(lean --print-prefix)}"
 sysroot="$(cd "$sysroot" && pwd)"
 local fixtures="$here/fixtures/verify"
@@ -64,11 +68,25 @@ for c in "${cases[@]}"; do
     fail=1
   fi
 done
+# Fixed complete-library controls: the full current root/manifest and a
+# compiled definition forgery, both cold and through every existing submode.
+# Their cost does not multiply with the number of attack fixtures.
+for c in clean definition-swap; do
+  if ! run_case "real-$c" full "$c"; then
+    echo "SELFTEST FAIL: real-$c" >&2
+    fail=1
+  fi
+done
+if [[ "$(python3 -I "$prep" source-hash "$root")" != "$SELFTEST_SOURCE_HASH" ]]; then
+  echo "SELFTEST FAIL: source changed during the matrix" >&2
+  fail=1
+fi
 if [[ "$fail" != 0 ]]; then
   echo "FAIL: verify self-test" >&2
   exit 1
 fi
 echo "OK: verify self-test passed (${#cases[@]} cases)"
+echo "OK: complete real-library controls passed (clean and definition-swap, cold)"
 }
 
 # The files the build job uploads, relative to .lake/build/lib/lean. Keep in
@@ -194,16 +212,13 @@ PY
 }
 
 run_case() {
-  local name="$1" dir="$tmp/$1" fx=""
+  local name="$1" dir="$tmp/$1" fx="" scope="${2:-minimal}" fixture_name="${3:-$1}"
   echo "== verify self-test: $name"
   mkdir -p "$dir/tree" "$dir/artifact" "$dir/cwd"
-  local f
-  for f in Botho.lean Botho Theorems.lean lakefile.toml lean-toolchain \
-    lake-manifest.json axioms-allowlist.txt; do
-    cp -R "$root/$f" "$dir/tree/$f"
-  done
-  if [[ "$name" != clean ]]; then
-    fx="$fixtures/$name"
+  python3 -I "$prep" prepare "$scope" "$root" "$dir/base" || return 1
+  cp -R "$dir/base/." "$dir/tree/"
+  if [[ "$fixture_name" != clean ]]; then
+    fx="$fixtures/$fixture_name"
     if [[ ! -d "$fx" ]]; then
       echo "no fixture $fx" >&2
       return 1
@@ -259,15 +274,28 @@ run_case() {
   # The base branch's statement record: the clean one, plus the fixture's
   # record.txt (blocks a reviewer accepted, for example the claimed
   # `one_eq_two : 1 = 2`).
-  cp "$root/statements.txt" "$dir/record.txt"
+  cp "$dir/base/statements.txt" "$dir/record.txt"
   if [[ -n "$fx" && -f "$fx/record.txt" ]]; then
     { printf '\n'; cat "$fx/record.txt"; } >>"$dir/record.txt"
   fi
+
+  # Fixture execution may change its build tree, never the base inputs or
+  # the source snapshot that stands for the verifier's independent checkout.
+  local base_hash sources_hash record_hash
+  base_hash="$(python3 -I "$prep" fingerprint "$dir/base")"
+  sources_hash="$(python3 -I "$prep" fingerprint "$dir/sources")"
+  record_hash="$(python3 -I "$prep" fingerprint "$dir/record.txt")"
 
   # Untrusted build: the fixture's code runs here.
   if ! (cd "$dir/tree" && "$lake" build) >"$dir/build.log" 2>&1; then
     cat "$dir/build.log"
     echo "lake build failed for $name" >&2
+    return 1
+  fi
+  if [[ "$(python3 -I "$prep" fingerprint "$dir/base")" != "$base_hash" ||
+        "$(python3 -I "$prep" fingerprint "$dir/sources")" != "$sources_hash" ||
+        "$(python3 -I "$prep" fingerprint "$dir/record.txt")" != "$record_hash" ]]; then
+    echo "fixture altered independent verification inputs: $name" >&2
     return 1
   fi
   local lib="$dir/tree/.lake/build/lib/lean" rel
@@ -316,7 +344,7 @@ run_case() {
   local canary="$dir/init-canary" ok=1 expect="" pass=0 scan_only="" run rc log
   local stmt_re=""
   local runs=(full no-scan)
-  if [[ "$name" == clean ]]; then
+  if [[ "$fixture_name" == clean ]]; then
     pass=1
     runs=(full no-lean-path no-record no-base-manifest)
   elif [[ -f "$fx/pass" ]]; then
@@ -339,8 +367,8 @@ run_case() {
     log="$dir/verify-$run.log"
     rc=0
     printf 'propext\n' >"$dir/cwd/axioms-allowlist.txt"
-    local extra=() base_lakefile="$root/lakefile.toml" env_cmd=(env)
-    local record="$dir/record.txt" base_manifest="$root/Theorems.lean"
+    local extra=() base_lakefile="$dir/base/lakefile.toml" env_cmd=(env)
+    local record="$dir/record.txt" base_manifest="$dir/base/Theorems.lean"
     case "$run" in
       no-scan) extra=(--no-scan) ;;
       no-scan-no-statements) extra=(--no-scan --no-statements) ;;
@@ -355,7 +383,7 @@ run_case() {
     esac
     (cd "$dir/cwd" && "${env_cmd[@]}" BOTHO_INIT_CANARY="$canary" \
       bash "$here/verify-artifacts.sh" --lib "$dir/artifact" --sources "$dir/sources" \
-        --sysroot "$sysroot" --allowlist "$root/axioms-allowlist.txt" \
+        --sysroot "$sysroot" --allowlist "$dir/base/axioms-allowlist.txt" \
         --base-lakefile "$base_lakefile" --statements "$record" \
         --base-manifest "$base_manifest" \
         ${extra[@]+"${extra[@]}"}) >"$log" 2>&1 || rc=$?
@@ -454,7 +482,13 @@ run_case() {
   if [[ "$ok" != 1 ]]; then
     return 1
   fi
-  if [[ "$name" == clean ]]; then
+  if [[ "$(python3 -I "$prep" fingerprint "$dir/base")" != "$base_hash" ||
+        "$(python3 -I "$prep" fingerprint "$dir/sources")" != "$sources_hash" ||
+        "$(python3 -I "$prep" fingerprint "$dir/record.txt")" != "$record_hash" ]]; then
+    echo "fixture altered independent verification inputs after its controls: $name" >&2
+    return 1
+  fi
+  if [[ "$fixture_name" == clean ]]; then
     echo "  ok: clean tree passes, also with no lean, lake or elan on PATH"
     echo "  ok: fails closed with no statement record ($(grep -E -m1 -- \
       'FAIL: statement record' "$dir/verify-no-record.log"))"

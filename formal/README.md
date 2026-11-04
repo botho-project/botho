@@ -334,8 +334,8 @@ model sources. An executable needs all three, so it is a separate package
 next to `formal/`, never scanned by the gates or built by the verify job. It
 runs the gated model sources unchanged. The Rust crate is kept beside it so
 that DRT changes do not touch the gated tree: the formal gate job does not
-re-run for them, and `selftest-gates.sh` (which copies all of `formal/` for
-each case) never copies a Cargo build.
+re-run for them, and the self-tests copy only Lean package inputs, never a
+Cargo build.
 
 The Rust crate is its own Cargo workspace (excluded from the root one, like
 `fuzz/`): it enables botho's `test-fixtures` feature, which must never be
@@ -647,11 +647,13 @@ and the source scan below, over the pull request's sources as data:
   copies afterwards, and the axiom gate runs the independent walk before it
   compiles `Theorems.lean`. This keeps local runs honest against cruder
   tricks; it is not what the verdict rests on (see [Limits](#limits)).
-- **Self-test** (`scripts/selftest-gates.sh`) copies the tree, injects a
+- **Self-test** (`scripts/selftest-gates.sh`) prepares fresh packages from
+  the current `Botho/Basic.lean`, injects a
   `sorry`, an `admit`, a `native_decide`, a bogus axiom, a `sorryAx` and an
   empty manifest, and asserts that the matching gate fails each time. It also
-  checks that the clean tree passes and that the tokens are ignored inside
-  comments, strings, raw strings and char literals. Since #1724 it also covers
+  checks that a cold complete real-library tree passes and that the tokens
+  are ignored inside comments, strings, raw strings and char literals.
+  Since #1724 it also covers
   `sorry` hidden after a `'"'` char literal or an `r#"a"b"#` raw string, a
   `_root_.sorryAx` term, and primed theorem names in the axiom gate. Since
   #1770 it covers each known bypass of the in-tree gates, and checks that the
@@ -730,6 +732,18 @@ and the source scan below, over the pull request's sources as data:
   same initializer does run when the library is imported through the Lean
   frontend. The clean tree is also verified with no `lean`, `lake` or `elan`
   on `PATH`, as in the verify job.
+  The default matrix discovers every fixture directory and uses fresh
+  packages from current Basic, its actual manifest entries and the actual
+  statement record; it shares no compiled output. Two additional cold
+  complete-library cases (`real-clean` and `real-definition-swap`) retain
+  integration coverage without multiplying full-library builds and walks
+  by the fixture count. Preparation controls check independent copies,
+  current-source/configuration binding and explicit failure on unsupported
+  dependency/layout changes. Source-byte fingerprints still traverse the
+  whole model to detect fixture contamination. See the
+  [fixture contract](scripts/fixtures/verify/README.md) for the scope and
+  isolation checks. The production build/gates and trusted verify job
+  continue to cover the complete model.
 
 ### The verify job
 

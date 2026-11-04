@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Self-test for the formal gates (#1705; extended in #1724 and #1770).
 #
-# Copies the formal/ tree into scratch directories, injects a defect into each
-# copy, and asserts that the matching gate rejects it. Also checks positive
-# and negative controls, so a gate that always fails is caught too.
+# Prepares fresh current Basic packages, injects a defect into each, and
+# asserts that the matching gate rejects it. A cold full-library positive
+# control and the negative controls also catch a gate that always fails.
 #
 # Usage: selftest-gates.sh
 # Environment: LAKE overrides the lake binary (default: lake).
@@ -14,12 +14,16 @@ src="$(cd "$here/.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 failures=0
+prep="$here/selftest-fixture.py"
+SELFTEST_SOURCE_HASH="$(python3 -I "$prep" source-hash "$src")"
+export SELFTEST_SOURCE_HASH
+python3 -I "$prep" selftest "$src"
 
 fresh_copy() {
   local dst
   dst="$(mktemp -d "$scratch/case.XXXXXX")"
-  # Copy .lake too (when present) so each case reuses the existing build.
-  (cd "$src" && tar cf - --exclude='./scripts' .) | (cd "$dst" && tar xf -)
+  # No shared artifacts: mutations compile a fresh current Basic scaffold.
+  python3 -I "$prep" prepare "${1:-minimal}" "$src" "$dst" || return 1
   echo "$dst"
 }
 
@@ -70,8 +74,8 @@ axiom_gate() { "$here/check-axioms.sh" "$@"; }
 # test a later layer on its own skip the scan with --no-scan, and where it
 # matters a second run proves the full gate fails too.
 
-# Positive control: the committed tree passes both gates.
-d="$(fresh_copy)"
+# Fixed real-library positive control, cold even if the caller has .lake.
+d="$(fresh_copy full)"
 expect pass "unmodified tree passes sorry gate" sorry_gate "$d"
 expect pass "unmodified tree passes axiom gate" axiom_gate "$d"
 
@@ -1037,6 +1041,9 @@ expect_fail_with 'Botho.SelftestBig.big_sorry (depends on|reaches) sorryAx' \
   limited axiom_gate --no-scan "$d"
 
 echo
+[[ "$(python3 -I "$prep" source-hash "$src")" == "$SELFTEST_SOURCE_HASH" ]] || {
+  echo "FAIL: self-test source changed during the matrix" >&2; exit 1;
+}
 if [[ "$failures" != 0 ]]; then
   echo "selftest: $failures case(s) FAILED"
   exit 1
