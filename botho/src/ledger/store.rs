@@ -5767,6 +5767,145 @@ mod tests {
         );
     }
 
+    /// Build an in-class or downgrade transfer whose ring is one `coin` plus
+    /// nineteen 1-BTH decoys, all tagged to `cluster` and created at
+    /// `created_at`; returns the tx (fee 0). Used by the #1875/#1876
+    /// reproductions below.
+    #[cfg(test)]
+    fn mk_whale_ring_tx(
+        ledger: &Ledger,
+        cluster: u64,
+        coin: u64,
+        created_at: u64,
+        output_amount: u64,
+        output_tags: ClusterTagVector,
+    ) -> BothoTransaction {
+        let mut specs = vec![(coin, created_at, cluster, 200u8)];
+        for i in 0..19u8 {
+            specs.push((1_000_000_000_000, created_at, cluster, 201 + i));
+        }
+        let ring = seed_ring_utxos(ledger, &specs);
+        let outputs = vec![mk_tagged_output(output_amount, 240, output_tags)];
+        mk_transfer_tx(ring, outputs, 0)
+    }
+
+    /// BUG #1875 (codex; Lean `six_block_dead_zone`), reproduced through the
+    /// real consensus gate: `Ledger::consensus_fee_floor` for an in-class
+    /// spend of a 1M BTH wealthy coin whose whole ring is six blocks old, in a
+    /// positive-rate epoch, charges ZERO demurrage (floor == size/base fee).
+    /// At seven blocks the same tx is charged. Consensus enforces no minimum
+    /// ring-member age (`MIN_DECOY_AGE_BLOCKS` is wallet-side only), so a
+    /// custom wallet can keep a ring this young and churn every six blocks.
+    ///
+    /// This asserts the CURRENT behaviour. A fix must flip this test.
+    #[test]
+    fn bug_1875_consensus_floor_short_hold_pays_no_demurrage() {
+        use bth_transaction_types::ClusterId;
+        let policy = crate::monetary::mainnet_policy();
+        let block_height = policy.halving_interval + 10_000; // epoch 1
+        let rate = policy.demurrage_rate_bps(block_height);
+        assert_eq!(rate, 200, "positive-rate epoch");
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+
+        let cluster = 9u64;
+        let wealth: u128 = 10_000_000_000_000_000_000; // 10M BTH -> factor 5745
+        let coin = 1_000_000_000_000_000_000u64; // 1M BTH
+        let out = 900_000_000_000_000_000u64;
+        let in_class = || ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)]);
+
+        let demurrage_at = |age: u64| {
+            let dir = tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            ledger.set_cluster_wealth_for_test(cluster, wealth).unwrap();
+            let tx = mk_whale_ring_tx(&ledger, cluster, coin, block_height - age, out, in_class());
+            let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+            let base = base_only_fee(&ledger, &tx);
+            (floor - base, base)
+        };
+
+        let (d6, base6) = demurrage_at(6);
+        let (d7, _) = demurrage_at(7);
+        let (d12, _) = demurrage_at(12);
+        // Economics: the per-hop size fee (CONSENSUS_FEE_BASE = 1 pico/byte;
+        // this signature-less test tx underestimates a real CLSAG tx's size)
+        // is negligible next to the ~0.017 BTH a short hold should owe, even
+        // at 1000x the size. Six-block churn of 0.9M BTH avoids ~17,082
+        // BTH/year of demurrage for ~1.05M hops of size fee.
+        assert!(base6.saturating_mul(1000) < d7, "base={base6} d7={d7}");
+        assert_eq!(
+            d6, 0,
+            "six-block in-class hold of 0.9M BTH pays no demurrage"
+        );
+        assert_eq!(
+            d7,
+            bth_cluster_tax::demurrage_charge(out, 5745, 7, rate, bpy)
+        );
+        assert!(d7 > 0);
+        assert_eq!(d12, d7, "7..=12 blocks all charge one TIME_SCALE unit");
+    }
+
+    /// BUG #1876 (codex; Lean `saturation_lowers_charge`), reproduced through
+    /// the real consensus gate: a young 10M BTH coin in a cluster with 1B BTH
+    /// cumulative tagged wealth (true factor 6000), spent to a background
+    /// output, is priced by the #925 capitalized downgrade charge at the
+    /// ring-centroid floor. The `Σ value·wealth` sum saturates, the floor
+    /// drops to 5919, and the charge is 16,200 BTH (1.62%) lower than at the
+    /// true 6000. A 100k BTH coin in the same cluster is unaffected (ring
+    /// value below the ~830.8k BTH safe bound), so the lowering hits only
+    /// whale-scale rings, and in the wrong (regressive) direction.
+    ///
+    /// This asserts the CURRENT behaviour. A fix must flip this test.
+    #[test]
+    fn bug_1876_consensus_floor_saturated_ring_lowers_downgrade_charge() {
+        let policy = crate::monetary::mainnet_policy();
+        let block_height = policy.halving_interval + 10_000;
+        let rate = policy.demurrage_rate_bps(block_height);
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let cluster = 11u64;
+        let wealth: u128 = 1_000_000_000_000_000_000_000; // 1B BTH cumulative
+
+        let downgrade_demurrage = |coin: u64, out: u64| {
+            let dir = tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            ledger.set_cluster_wealth_for_test(cluster, wealth).unwrap();
+            let tx = mk_whale_ring_tx(
+                &ledger,
+                cluster,
+                coin,
+                block_height,
+                out,
+                ClusterTagVector::empty(),
+            );
+            let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+            floor - base_only_fee(&ledger, &tx)
+        };
+        let capitalized = |out: u64, factor: u64| {
+            bth_cluster_tax::capitalized_reset_charge(
+                out,
+                factor,
+                bth_cluster_tax::demurrage::FACTOR_SCALE,
+                bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+                rate,
+                bpy,
+            )
+        };
+
+        // Control: 100k BTH coin, ring value below the safe bound -> 6000.
+        let small = 100_000_000_000_000_000u64;
+        assert_eq!(downgrade_demurrage(small, small), capitalized(small, 6000));
+
+        // Whale: 10M BTH coin -> floor saturates to 5919.
+        let big = 10_000_000_000_000_000_000u64;
+        let d = downgrade_demurrage(big, big);
+        assert_eq!(d, capitalized(big, 5919));
+        assert_eq!(d, 983_800_000_000_000_000);
+        assert_eq!(
+            capitalized(big, 6000) - d,
+            16_200_000_000_000_000,
+            "16,200 BTH less"
+        );
+    }
+
     /// Congestion independence: the consensus floor never reads the dynamic fee
     /// base, so it is identical regardless of any node's congestion state. Here
     /// we assert the floor equals the base computed with the pinned
