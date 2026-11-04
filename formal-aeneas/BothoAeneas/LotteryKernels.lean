@@ -45,11 +45,12 @@ theorem sybil_reward_cap_spec (k : Usize) :
   · obtain ⟨-, hz, -⟩ := o_post
     simp [hz, hi, hi1]
 
-/-- `is_eligible_at` is the Path C window test, with `age` the truncated
-difference `current_block - creation_block` (Rust's `saturating_sub`). -/
-theorem is_eligible_at_spec (cb v cur age win minv : U64) :
-    lottery.is_eligible_at cb v cur age win minv ⦃ r =>
-      r = decide (age.val ≤ cur.val - cb.val ∧ cur.val - cb.val ≤ win.val ∧
+/-- `is_eligible_at` is the Path C window test, with `minAge` the minimum UTXO
+age (`min_utxo_age`) and the actual age the truncated difference
+`current_block - creation_block` (Rust's `saturating_sub`). -/
+theorem is_eligible_at_spec (cb v cur minAge win minv : U64) :
+    lottery.is_eligible_at cb v cur minAge win minv ⦃ r =>
+      r = decide (minAge.val ≤ cur.val - cb.val ∧ cur.val - cb.val ≤ win.val ∧
         minv.val ≤ v.val) ⦄ := by
   unfold lottery.is_eligible_at
   simp [lift, u64_saturating_sub_val]
@@ -131,11 +132,11 @@ theorem sybil_reward_cap_eq (k : Usize) :
   eq_ok_of_spec (sybil_reward_cap_spec k)
 
 /-- `is_eligible_at` never fails and returns the window test. -/
-theorem is_eligible_at_eq (cb v cur age win minv : U64) :
-    lottery.is_eligible_at cb v cur age win minv =
-      ok (decide (age.val ≤ cur.val - cb.val ∧ cur.val - cb.val ≤ win.val ∧
+theorem is_eligible_at_eq (cb v cur minAge win minv : U64) :
+    lottery.is_eligible_at cb v cur minAge win minv =
+      ok (decide (minAge.val ≤ cur.val - cb.val ∧ cur.val - cb.val ≤ win.val ∧
         minv.val ≤ v.val)) := by
-  obtain ⟨r, hr, h⟩ := eq_ok_of_spec (is_eligible_at_spec cb v cur age win minv)
+  obtain ⟨r, hr, h⟩ := eq_ok_of_spec (is_eligible_at_spec cb v cur minAge win minv)
   rw [hr, h]
 
 /-- The lottery share never exceeds half the block reward (the 50% cap),
