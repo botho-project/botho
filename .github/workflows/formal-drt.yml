@@ -28,6 +28,8 @@ on:
       - 'botho/src/ledger/lottery_v2.rs'
       - 'botho/src/ledger/formal_drt.rs'
       - 'botho/src/ledger/formal_drt_tags.rs'
+      - 'botho/src/ledger/formal_drt_supply.rs'
+      - 'botho/src/ledger/mod.rs'
       - 'transaction/types/src/cluster_tags.rs'
       - 'botho/src/ledger/store.rs'
       - 'botho/src/ledger/store/validation.rs'
@@ -49,6 +51,8 @@ on:
       - 'botho/src/ledger/lottery_v2.rs'
       - 'botho/src/ledger/formal_drt.rs'
       - 'botho/src/ledger/formal_drt_tags.rs'
+      - 'botho/src/ledger/formal_drt_supply.rs'
+      - 'botho/src/ledger/mod.rs'
       - 'transaction/types/src/cluster_tags.rs'
       - 'botho/src/ledger/store.rs'
       - 'botho/src/ledger/store/validation.rs'
@@ -134,7 +138,23 @@ jobs:
         run: cargo clippy --release --all-targets -- -D warnings
       - name: Unit tests
         working-directory: formal-drt
-        run: cargo test --release
+        timeout-minutes: 8
+        env:
+          SUPPLY_ORACLE_DIR: ${{ runner.temp }}/supply-oracle
+        run: |
+          set -o pipefail
+          timeout 420s cargo test --release -- --nocapture 2>&1 \
+            | tee "$RUNNER_TEMP/supply-oracle-unit-tests.log"
+      - name: Upload actual-commit oracle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: supply-oracle-evidence
+          path: |
+            ${{ runner.temp }}/supply-oracle/
+            ${{ runner.temp }}/supply-oracle-unit-tests.log
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Build the runner
         working-directory: formal-drt
         run: cargo build --release

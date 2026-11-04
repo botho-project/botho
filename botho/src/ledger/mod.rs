@@ -20,6 +20,10 @@ pub mod formal_drt;
 #[cfg(feature = "test-fixtures")]
 #[doc(hidden)]
 pub mod formal_drt_tags;
+// TEST/DRT ONLY (#1889): real seal/add-block commits and factual observations.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub mod formal_drt_supply;
 // Drift guards pinning the cluster-tax emission model to the node (#1699).
 #[cfg(test)]
 mod emission_parity_tests;

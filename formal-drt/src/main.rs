@@ -22,6 +22,8 @@ mod legs;
 mod legs_tags;
 mod model;
 mod runner;
+#[cfg(test)]
+mod supply_oracle_tests;
 mod wire;
 
 use legs::Leg;
