@@ -110,6 +110,26 @@ import Botho
 #print axioms Botho.Supply.Block.height_and_loss_boundaries
 #print axioms Botho.Supply.Block.summary_and_wire_rejection_boundaries
 
+-- Botho.Monetary (#1921; checked production policy, explicit supply domain/refutations)
+#print axioms Botho.Monetary.phase_safe
+#print axioms Botho.Monetary.halving_nonincreasing
+#print axioms Botho.Monetary.tail_success_iff
+#print axioms Botho.Monetary.tail_safe_domain
+#print axioms Botho.Monetary.tail_u64_domain
+#print axioms Botho.Monetary.demurrage_current
+#print axioms Botho.Monetary.block_reward_safe
+#print axioms Botho.Monetary.successor_safe
+#print axioms Botho.Monetary.successor_failures
+#print axioms Botho.Monetary.lottery_emission_bound
+#print axioms Botho.Monetary.phase1_exact_sum
+#print axioms Botho.Monetary.production_domain_numbers
+#print axioms Botho.Monetary.synthetic_tail_counterexamples
+#print axioms Botho.Monetary.unrestricted_tail_claims_refuted
+#print axioms Botho.Monetary.tail_boundary_values
+#print axioms Botho.Monetary.phase_boundary_values
+#print axioms Botho.Monetary.first_tail_value
+#print axioms Botho.Monetary.successor_boundary_values
+
 -- Botho.Lottery.Conservation (#1849; proven (model), including saturation loss).
 #print axioms Botho.Lottery.splitFees_conserves
 #print axioms Botho.Lottery.splitFees_canonical_conserves
