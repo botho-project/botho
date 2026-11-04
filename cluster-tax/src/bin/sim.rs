@@ -837,6 +837,22 @@ mod cli {
         /// NOT wire anything into consensus.
         BridgeImportSweep,
 
+        /// Demurrage time-quantization study (#1875, operator ruling
+        /// "simulate before choosing"): compares the candidate fixes for the
+        /// six-block dead zone in `demurrage_charge` (defer, exact u128,
+        /// round-up variants, consensus minimum ring-member age). Reports the
+        /// churn attack's net escape at the real fee floor across hold
+        /// lengths, principals and factors; the honest-user extra charge and
+        /// rounding error versus the exact rational charge; split-versus-
+        /// unsplit loss; young-coin spendability and ring privacy for a
+        /// minimum ring age; and the kernels at extreme inputs. Does NOT
+        /// wire anything into consensus.
+        DemurrageQuantizationSweep {
+            /// Small grid for a quick check
+            #[arg(long)]
+            smoke: bool,
+        },
+
         /// Honest-overcharge sweep (empirical gate for #950, informs #925):
         /// measures the honest false-positive / over-charge surface of the
         /// #925 base-layer downgrade charge across 1mo/6mo/1yr/2yr/5yr of
@@ -1318,6 +1334,9 @@ mod cli {
                 smoke,
             } => run_decoy_flood_sweep_cli(trials, seed, smoke),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
+            Command::DemurrageQuantizationSweep { smoke } => {
+                run_demurrage_quantization_sweep_cli(smoke)
+            }
             Command::HonestOverchargeSweep { ring_size } => {
                 run_honest_overcharge_sweep_cli(ring_size)
             }
@@ -5677,6 +5696,17 @@ mod cli {
         let report = run_decoy_flood_sweep(&config);
         println!("# Decoy-Flood Cost Sweep at the Real Fee Floor (issue #1701)\n");
         println!("{}", to_markdown(&report));
+    }
+
+    fn run_demurrage_quantization_sweep_cli(smoke: bool) {
+        use bth_cluster_tax::simulation::demurrage_quantization_sweep::{to_markdown, SweepParams};
+        let params = if smoke {
+            SweepParams::smoke()
+        } else {
+            SweepParams::default()
+        };
+        println!("# Demurrage Time-Quantization Study (issue #1875)\n");
+        println!("{}", to_markdown(&params));
     }
 
     fn run_honest_overcharge_sweep_cli(ring_size: usize) {

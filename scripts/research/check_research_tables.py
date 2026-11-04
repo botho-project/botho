@@ -51,6 +51,8 @@ GENERATORS = [
               "docs/research/settlement-horizon-calibration.md", True),
     Generator("honest-overcharge-sweep", ("honest-overcharge-sweep",),
               "docs/research/demurrage-downgrade-overcharge.md", True),
+    Generator("demurrage-quantization-sweep", ("demurrage-quantization-sweep",),
+              "docs/research/demurrage-quantization-study.md", True),
     Generator("lottery-reward-cap-sweep", ("lottery-reward-cap-sweep",),
               "docs/research/ct-compatible-lottery-selection.md", True),
     Generator("lottery-reward-cap-sweep-faithful", ("lottery-reward-cap-sweep", "--faithful"),
