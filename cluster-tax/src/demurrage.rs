@@ -1084,4 +1084,174 @@ mod tests {
             "the opt-in settlement price equals the implicit downgrade price on the shared horizon"
         );
     }
+
+    // ========================================================================
+    // Independent Rust reproductions of codex's Lean findings #1875 / #1876.
+    // These pin CURRENT (buggy) behaviour on the production functions; the
+    // fixes are operator-gated consensus changes. A fix must flip them.
+    // ========================================================================
+
+    /// BUG #1875 (codex; Lean `six_block_dead_zone`, `churn_counterexample`):
+    /// `demurrage_charge` folds elapsed time into `TIME_SCALE = 1e6` units of
+    /// a 6,307,200-block year BEFORE applying the value, so
+    /// `elapsed * 1e6 / 6_307_200 == 0` for every `elapsed <= 6`. Any value
+    /// (even `u64::MAX`), at the max factor and the live 200 bps rate, accrues
+    /// exactly zero demurrage for a hold of up to six blocks (30 s), and
+    /// same-class churn every six blocks pays zero for a whole year.
+    ///
+    /// This asserts the CURRENT behaviour. A fix to the rounding (or a
+    /// documented churn bound that excludes this window) must flip this test.
+    #[test]
+    fn bug_1875_short_hold_demurrage_rounds_to_zero() {
+        let bpy = BLOCKS_PER_YEAR_5S;
+        let rate = 200u32;
+
+        // Dead zone: value-independent, factor-independent, elapsed 1..=6.
+        for elapsed in 1..=6u64 {
+            for value in [1_000_000_000_000u64, 1_000_000_000_000_000_000, u64::MAX] {
+                assert_eq!(
+                    demurrage_charge(value, MAX_FACTOR_SCALED, elapsed, rate, bpy),
+                    0,
+                    "elapsed={elapsed} value={value}"
+                );
+                // The consensus composition (`spend_demurrage_charge`) for an
+                // in-class spend (no downgrade) is also zero: the capitalized
+                // term does not cover same-class churn.
+                assert_eq!(
+                    spend_demurrage_charge(
+                        value,
+                        MAX_FACTOR_SCALED,
+                        MAX_FACTOR_SCALED,
+                        elapsed,
+                        rate,
+                        bpy
+                    ),
+                    0,
+                    "in-class spend elapsed={elapsed} value={value}"
+                );
+            }
+        }
+        // First non-zero block is 7: u64::MAX at 6x pays ~0.369 BTH.
+        assert_eq!(
+            demurrage_charge(u64::MAX, MAX_FACTOR_SCALED, 7, rate, bpy),
+            368_934_881_474
+        );
+
+        // Churn counterexample (issue's table): 1M BTH at 6x.
+        let value = 1_000_000_000_000_000_000u64; // 1M BTH in picocredits
+        let six = demurrage_charge(value, MAX_FACTOR_SCALED, 6, rate, bpy);
+        let twelve = demurrage_charge(value, MAX_FACTOR_SCALED, 12, rate, bpy);
+        assert_eq!(six + six, 0, "two six-block holds pay nothing");
+        assert_eq!(
+            twelve, 20_000_000_000,
+            "one twelve-block hold pays 0.02 BTH"
+        );
+
+        // A year of six-block churn (1,051,200 hops) pays 0, versus the
+        // 20,000 BTH a one-year hold pays on the same principal.
+        let hops = bpy / 6;
+        assert_eq!(hops, 1_051_200);
+        let churned: u64 = (0..hops)
+            .map(|_| demurrage_charge(value, MAX_FACTOR_SCALED, 6, rate, bpy))
+            .sum();
+        let held = demurrage_charge(value, MAX_FACTOR_SCALED, bpy, rate, bpy);
+        assert_eq!(churned, 0);
+        assert_eq!(held, 20_000_000_000_000_000, "20,000 BTH/year at 6x, 2%");
+
+        // The same floor truncation under-charges beyond the dead zone too:
+        // every hop of 7..=12 blocks is charged as exactly one TIME_SCALE unit
+        // (~6.31 blocks), so a 12-block hold pays the same as a 7-block hold.
+        assert_eq!(
+            demurrage_charge(value, MAX_FACTOR_SCALED, 7, rate, bpy),
+            twelve
+        );
+    }
+
+    /// BUG #1876 (codex; Lean `homogeneous_ring_scale_counterexample`,
+    /// `homogeneous_centroid_counterexample`, `saturation_lowers_charge`):
+    /// `ring_centroid_implied_factor` saturates `Σ value·wealth` at
+    /// `u128::MAX` and THEN divides by the exact `Σ value`, so on overflow the
+    /// centroid is `u128::MAX / Σ value` — LOWER than the true (homogeneous)
+    /// wealth, not pinned high as the code comment claims. The factor floor,
+    /// and every demurrage charge it multiplies, drop.
+    ///
+    /// Reachable magnitudes on the default curve: the factor reaches 6000 at
+    /// W = 409,597,882,509,719,240,704 pico (~409.6M BTH). If the ring's total
+    /// value Σv is at most `u128::MAX / that` = 830,771,792,168,295,675 pico
+    /// (~830.8k BTH), saturation implies the true factor is already 6000 and
+    /// nothing is lost. Above that, the factor is capped at
+    /// `factor(u128::MAX / Σv)`: one 20-member ring (each member <= u64::MAX)
+    /// can not go below 5029, and a 16-input tx bounded by the ~611M BTH
+    /// Phase-1 supply can not go below 4711.
+    ///
+    /// This asserts the CURRENT behaviour. An overflow-safe weighted mean (or
+    /// a genuinely conservative overflow policy) must flip this test.
+    #[test]
+    fn bug_1876_ring_saturation_lowers_fee_floor() {
+        let curve = ClusterFactorCurve::default();
+        let w: u128 = 100_000_000_000_000_000_000; // 100M BTH
+
+        // Issue's homogeneous rings: twenty members with identical wealth.
+        let small = vec![(100_000_000_000_000_000u64, w); 20]; // 100k BTH each
+        let large = vec![(1_000_000_000_000_000_000u64, w); 20]; // 1M BTH each
+        assert_eq!(curve.factor(w), 5949, "true factor of the common wealth");
+        assert_eq!(ring_centroid_implied_factor(&small, &curve), 5949);
+        assert_eq!(
+            ring_centroid_implied_factor(&large, &curve),
+            5841,
+            "scaling every value 10x lowers the homogeneous ring's floor"
+        );
+        // Each product fits; the 20-term sum is what saturates.
+        assert!((1_000_000_000_000_000_000u128).checked_mul(w).is_some());
+        assert_eq!(
+            u128::MAX / (20 * 1_000_000_000_000_000_000u128),
+            17_014_118_346_046_923_173
+        );
+
+        // Safe region: Σv <= ~830.8k BTH cannot lose anything.
+        let w6000: u128 = 409_597_882_509_719_240_704;
+        assert_eq!(curve.factor(w6000), 6000);
+        assert!(curve.factor(w6000 - 1) < 6000);
+        assert_eq!(u128::MAX / w6000, 830_771_792_168_295_675);
+
+        // Lower bounds on the damage.
+        assert_eq!(
+            curve.factor(u128::MAX / (20 * u64::MAX as u128)),
+            5029,
+            "one ring of 20 u64::MAX members"
+        );
+        let supply: u128 = 611_010_000 * 1_000_000_000_000;
+        assert_eq!(
+            curve.factor(u128::MAX / supply),
+            4711,
+            "whole Phase-1 supply"
+        );
+
+        // Whale-scale single-coin rings: a 1M / 10M BTH coin plus nineteen
+        // 1-BTH decoys, all in a cluster with 1B BTH cumulative wealth (true
+        // factor 6000; the accumulator is monotonic, so this is cumulative
+        // tagged throughput, not holdings).
+        let w_big: u128 = 1_000_000_000_000_000_000_000;
+        assert_eq!(curve.factor(w_big), 6000);
+        let ring_with = |coin: u64| {
+            let mut r = vec![(coin, w_big)];
+            r.extend(std::iter::repeat_n((1_000_000_000_000u64, w_big), 19));
+            r
+        };
+        let one_m = 1_000_000_000_000_000_000u64;
+        let ten_m = 10_000_000_000_000_000_000u64;
+        let f1 = ring_centroid_implied_factor(&ring_with(one_m), &curve);
+        let f10 = ring_centroid_implied_factor(&ring_with(ten_m), &curve);
+        assert_eq!(f1, 5985);
+        assert_eq!(f10, 5919);
+
+        // Consensus-relevant charge: the #925 capitalized downgrade charge
+        // (young wealthy coin to background) is computed from this floor.
+        let charge =
+            |v: u64, f: u64| spend_demurrage_charge(v, f, FACTOR_SCALE, 0, 200, BLOCKS_PER_YEAR);
+        assert_eq!(charge(one_m, 6000), 100_000_000_000_000_000); // 100,000 BTH
+        assert_eq!(charge(one_m, f1), 99_700_000_000_000_000); // -300 BTH
+        assert_eq!(charge(ten_m, 6000), 1_000_000_000_000_000_000); // 1,000,000 BTH
+        assert_eq!(charge(ten_m, f10), 983_800_000_000_000_000); // -16,200 BTH
+    }
 }
