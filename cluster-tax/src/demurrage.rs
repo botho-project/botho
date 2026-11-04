@@ -492,25 +492,29 @@ pub fn ring_centroid_implied_factor(
     members: &[(u64, u128)],
     curve: &crate::fee_curve::ClusterFactorCurve,
 ) -> u64 {
-    let mut weighted: u128 = 0;
-    let mut total_value: u128 = 0;
-
+    // Exact value-weighted centroid (#1876, protocol 9.0.0):
+    // floor(Σ value_i·wealth_i / Σ value_i) with a 256-bit numerator.
+    //
+    // `value` is a u64 coin amount and `member_wealth` full-u128 cumulative
+    // cluster wealth (#626), so a single product reaches ~2^192 and the sum
+    // over a ring routinely exceeds u128::MAX for whale-scale rings. Before
+    // 9.0.0 the numerator saturated at u128::MAX and was then divided by the
+    // unsaturated total value. That did NOT pin the centroid to u128::MAX (the
+    // old comment's "conservative" claim was false): it LOWERED the centroid,
+    // so scaling every value in a homogeneous ring by 10 lowered its floor from
+    // 5949 to 5841. The exact mean is scale invariant.
+    //
+    // A weighted mean never exceeds its largest term, so the result is at most
+    // max(member_wealth) <= u128::MAX: the final clamp in `WeightedMean::floor`
+    // is unreachable here. On every ring whose old u128 numerator did not
+    // overflow, the result is bit-identical to the pre-9.0.0 one.
+    let mut mean = crate::wide::WeightedMean::new();
     for &(value, member_wealth) in members {
-        // `member_wealth` is now full-u128 cumulative cluster wealth (#626 PR3;
-        // the accumulator was widened in PR2). `value` is a u64 coin amount, so
-        // the product can reach ~1.8e19 × 1e19 ≈ 1.8e38 per member and the sum
-        // over a ring can cross u128::MAX (3.4e38) once cumulative wealth grows
-        // into the tens-of-millions-of-BTH range. Use saturating arithmetic:
-        // on the (astronomically distant) overflow the centroid pins to
-        // u128::MAX, which `factor()` maps to the exact 6000 (max) floor — the
-        // conservative direction for an anti-gaming floor, and deterministic on
-        // every node (no fork). This replaces the `.min(u64::MAX)` clamp PR2
-        // added while `factor()` still took u64.
-        weighted = weighted.saturating_add((value as u128).saturating_mul(member_wealth));
-        total_value = total_value.saturating_add(value as u128);
+        mean.add_product(value as u128, member_wealth);
+        mean.add_weight(value as u128);
     }
 
-    let centroid_wealth = weighted.checked_div(total_value).unwrap_or(0);
+    let centroid_wealth = mean.floor();
 
     curve.factor(centroid_wealth)
 }
@@ -1176,25 +1180,42 @@ mod tests {
         );
     }
 
-    /// BUG #1876 (codex; Lean `homogeneous_ring_scale_counterexample`,
-    /// `homogeneous_centroid_counterexample`, `saturation_lowers_charge`):
-    /// `ring_centroid_implied_factor` saturates `Σ value·wealth` at
-    /// `u128::MAX` and THEN divides by the exact `Σ value`, so on overflow the
-    /// centroid is `u128::MAX / Σ value` — LOWER than the true (homogeneous)
-    /// wealth, not pinned high as the code comment claims. The factor floor,
-    /// and every demurrage charge it multiplies, drop.
+    /// Pre-9.0.0 `ring_centroid_implied_factor` centroid, kept verbatim as the
+    /// reference for the #1876 fix: the numerator saturates at `u128::MAX`
+    /// and is then divided by the unsaturated total value.
+    fn centroid_pre_1876(members: &[(u64, u128)]) -> u128 {
+        let mut weighted: u128 = 0;
+        let mut total_value: u128 = 0;
+        for &(value, member_wealth) in members {
+            weighted = weighted.saturating_add((value as u128).saturating_mul(member_wealth));
+            total_value = total_value.saturating_add(value as u128);
+        }
+        weighted.checked_div(total_value).unwrap_or(0)
+    }
+
+    /// Reference exact centroid over the 256-bit accumulator.
+    fn centroid_exact(members: &[(u64, u128)]) -> u128 {
+        let mut m = crate::wide::WeightedMean::new();
+        for &(v, w) in members {
+            m.add_product(v as u128, w);
+            m.add_weight(v as u128);
+        }
+        m.floor()
+    }
+
+    /// FIXED #1876 (codex; Lean `homogeneous_ring_scale_counterexample`,
+    /// `homogeneous_centroid_counterexample`, `saturation_lowers_charge`;
+    /// reproduced in #1899). Before protocol 9.0.0
+    /// `ring_centroid_implied_factor` saturated `Σ value·wealth` at
+    /// `u128::MAX` and THEN divided by the exact `Σ value`, so on overflow the
+    /// centroid was `u128::MAX / Σ value`, LOWER than the true (homogeneous)
+    /// wealth: 20 × (1M BTH, W=1e20) gave centroid 17,014,118,346,046,923,173
+    /// and factor 5841 instead of 5949, and a 10M BTH whale coin in a 1B BTH
+    /// cluster was charged a 5919 floor instead of 6000 (16,200 BTH less on
+    /// the #925 downgrade charge).
     ///
-    /// Reachable magnitudes on the default curve: the factor reaches 6000 at
-    /// W = 409,597,882,509,719,240,704 pico (~409.6M BTH). If the ring's total
-    /// value Σv is at most `u128::MAX / that` = 830,771,792,168,295,675 pico
-    /// (~830.8k BTH), saturation implies the true factor is already 6000 and
-    /// nothing is lost. Above that, the factor is capped at
-    /// `factor(u128::MAX / Σv)`: one 20-member ring (each member <= u64::MAX)
-    /// can not go below 5029, and a 16-input tx bounded by the ~611M BTH
-    /// Phase-1 supply can not go below 4711.
-    ///
-    /// This asserts the CURRENT behaviour. An overflow-safe weighted mean (or
-    /// a genuinely conservative overflow policy) must flip this test.
+    /// The centroid is now the exact rational floor, so it is scale invariant:
+    /// a homogeneous ring's centroid is its common wealth at every value scale.
     #[test]
     fn bug_1876_ring_saturation_lowers_fee_floor() {
         let curve = ClusterFactorCurve::default();
@@ -1207,39 +1228,24 @@ mod tests {
         assert_eq!(ring_centroid_implied_factor(&small, &curve), 5949);
         assert_eq!(
             ring_centroid_implied_factor(&large, &curve),
-            5841,
-            "scaling every value 10x lowers the homogeneous ring's floor"
+            5949,
+            "scale invariance: 10x every value keeps the homogeneous floor"
         );
-        // Each product fits; the 20-term sum is what saturates.
-        assert!((1_000_000_000_000_000_000u128).checked_mul(w).is_some());
-        assert_eq!(
-            u128::MAX / (20 * 1_000_000_000_000_000_000u128),
-            17_014_118_346_046_923_173
-        );
+        assert_eq!(centroid_exact(&small), w);
+        assert_eq!(centroid_exact(&large), w, "exact centroid = common wealth");
 
-        // Safe region: Σv <= ~830.8k BTH cannot lose anything.
-        let w6000: u128 = 409_597_882_509_719_240_704;
-        assert_eq!(curve.factor(w6000), 6000);
-        assert!(curve.factor(w6000 - 1) < 6000);
-        assert_eq!(u128::MAX / w6000, 830_771_792_168_295_675);
-
-        // Lower bounds on the damage.
-        assert_eq!(
-            curve.factor(u128::MAX / (20 * u64::MAX as u128)),
-            5029,
-            "one ring of 20 u64::MAX members"
-        );
-        let supply: u128 = 611_010_000 * 1_000_000_000_000;
-        assert_eq!(
-            curve.factor(u128::MAX / supply),
-            4711,
-            "whole Phase-1 supply"
-        );
+        // The large ring's numerator (2e39) does overflow u128: the old code
+        // returned u128::MAX / Σv here (the pre-fix Lean witness).
+        assert!((20u128 * 1_000_000_000_000_000_000u128)
+            .checked_mul(w)
+            .is_none());
+        assert_eq!(centroid_pre_1876(&large), 17_014_118_346_046_923_173);
+        assert_eq!(curve.factor(centroid_pre_1876(&large)), 5841);
 
         // Whale-scale single-coin rings: a 1M / 10M BTH coin plus nineteen
         // 1-BTH decoys, all in a cluster with 1B BTH cumulative wealth (true
         // factor 6000; the accumulator is monotonic, so this is cumulative
-        // tagged throughput, not holdings).
+        // tagged throughput, not holdings). Pre-fix floors were 5985 / 5919.
         let w_big: u128 = 1_000_000_000_000_000_000_000;
         assert_eq!(curve.factor(w_big), 6000);
         let ring_with = |coin: u64| {
@@ -1249,19 +1255,111 @@ mod tests {
         };
         let one_m = 1_000_000_000_000_000_000u64;
         let ten_m = 10_000_000_000_000_000_000u64;
+        assert_eq!(curve.factor(centroid_pre_1876(&ring_with(one_m))), 5985);
+        assert_eq!(curve.factor(centroid_pre_1876(&ring_with(ten_m))), 5919);
         let f1 = ring_centroid_implied_factor(&ring_with(one_m), &curve);
         let f10 = ring_centroid_implied_factor(&ring_with(ten_m), &curve);
-        assert_eq!(f1, 5985);
-        assert_eq!(f10, 5919);
+        assert_eq!(f1, 6000);
+        assert_eq!(f10, 6000);
 
         // Consensus-relevant charge: the #925 capitalized downgrade charge
-        // (young wealthy coin to background) is computed from this floor.
+        // (young wealthy coin to background) is computed from this floor and
+        // is now the full 6x charge.
         let charge =
             |v: u64, f: u64| spend_demurrage_charge(v, f, FACTOR_SCALE, 0, 200, BLOCKS_PER_YEAR);
-        assert_eq!(charge(one_m, 6000), 100_000_000_000_000_000); // 100,000 BTH
-        assert_eq!(charge(one_m, f1), 99_700_000_000_000_000); // -300 BTH
-        assert_eq!(charge(ten_m, 6000), 1_000_000_000_000_000_000); // 1,000,000 BTH
-        assert_eq!(charge(ten_m, f10), 983_800_000_000_000_000); // -16,200 BTH
+        assert_eq!(charge(one_m, f1), 100_000_000_000_000_000); // 100,000 BTH
+        assert_eq!(charge(ten_m, f10), 1_000_000_000_000_000_000); // 1,000,000 BTH
+
+        // Worst cases the old code allowed are gone too: a ring of 20
+        // u64::MAX coins in a 1B BTH cluster now floors at 6000, not 5029.
+        let maxed = vec![(u64::MAX, w_big); 20];
+        assert_eq!(curve.factor(centroid_pre_1876(&maxed)), 5029);
+        assert_eq!(ring_centroid_implied_factor(&maxed, &curve), 6000);
+    }
+
+    /// #1876 boundary: the exact centroid equals the old one whenever the old
+    /// u128 numerator did not overflow, and differs exactly from the first
+    /// overflowing numerator on.
+    #[test]
+    fn bug_1876_exact_versus_old_boundary() {
+        // Numerator exactly u128::MAX: no overflow, identical.
+        let at = [(1u64, u128::MAX)];
+        assert_eq!(centroid_pre_1876(&at), u128::MAX);
+        assert_eq!(centroid_exact(&at), u128::MAX);
+
+        // Numerator u128::MAX + 1 = 2^128: the old code saturated and gave
+        // floor((2^128 - 1) / 2) = 2^127 - 1; the exact mean is 2^127.
+        let over = [(1u64, u128::MAX), (1u64, 1)];
+        assert_eq!(centroid_pre_1876(&over), (1u128 << 127) - 1);
+        assert_eq!(centroid_exact(&over), 1u128 << 127);
+
+        // Largest homogeneous ring the old code handled exactly: Σv·w <= MAX.
+        let w: u128 = 100_000_000_000_000_000_000;
+        let v_ok = (u128::MAX / w / 20) as u64;
+        let ok = vec![(v_ok, w); 20];
+        let bad = vec![(v_ok + 1, w); 20];
+        assert!((20 * v_ok as u128).checked_mul(w).is_some());
+        assert!((20 * (v_ok as u128 + 1)).checked_mul(w).is_none());
+        assert_eq!(centroid_pre_1876(&ok), w);
+        assert_eq!(centroid_exact(&ok), w);
+        assert!(centroid_pre_1876(&bad) < w, "old: saturation lowers it");
+        assert_eq!(centroid_exact(&bad), w, "new: exact");
+
+        // Deterministic sweep: wherever the old numerator fits, new == old.
+        // Wherever it overflows, new >= old (the old result was always low).
+        let mut x: u64 = 0x1876_1876_1876_1876;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..2_000 {
+            let n = (next() % 24) as usize;
+            let members: Vec<(u64, u128)> = (0..n)
+                .map(|_| {
+                    let v = next() >> (next() % 64);
+                    let w = (((next() as u128) << 64) | next() as u128) >> (next() % 128);
+                    (v, w)
+                })
+                .collect();
+            let fits = members.iter().try_fold(0u128, |s, &(v, w)| {
+                (v as u128).checked_mul(w).and_then(|p| s.checked_add(p))
+            });
+            let (old, new) = (centroid_pre_1876(&members), centroid_exact(&members));
+            if fits.is_some() {
+                assert_eq!(old, new, "{members:?}");
+            } else {
+                assert!(new >= old, "{members:?}");
+            }
+            // The mean never exceeds the largest member wealth.
+            let max_w = members.iter().map(|m| m.1).max().unwrap_or(0);
+            assert!(new <= max_w);
+            assert_eq!(
+                ring_centroid_implied_factor(&members, &ClusterFactorCurve::default()),
+                ClusterFactorCurve::default().factor(new)
+            );
+        }
+    }
+
+    /// #1876: the true ring centroid can never exceed u128::MAX. A weighted
+    /// mean is at most its largest term and every member wealth is a u128, so
+    /// the final clamp in `WeightedMean::floor` is unreachable from this
+    /// kernel. The extreme ring (every value and wealth at its maximum) is
+    /// exact and maps to the maximum factor.
+    #[test]
+    fn bug_1876_true_mean_above_u128_unreachable() {
+        let curve = ClusterFactorCurve::default();
+        let extreme = vec![(u64::MAX, u128::MAX); 40];
+        assert_eq!(centroid_exact(&extreme), u128::MAX);
+        assert_eq!(ring_centroid_implied_factor(&extreme, &curve), 6000);
+        let mixed = vec![(u64::MAX, u128::MAX), (1, 0), (u64::MAX, u128::MAX - 1)];
+        // floor(((2^64-1)(2^128-1) + (2^64-1)(2^128-2)) / (2^65-1)), computed
+        // independently with arbitrary-precision integers.
+        assert_eq!(
+            centroid_exact(&mixed),
+            340_282_366_920_938_463_454_151_235_394_913_435_646
+        );
     }
 }
 

@@ -10,6 +10,30 @@ still mutable. Within the `0.x` line, a `MINOR` bump (`0.X.0`) signals
 consensus-breaking changes that require a coordinated network reset; `PATCH`
 bumps (`0.X.Y`) are backwards-compatible.
 
+## Protocol 9.0.0 (unreleased, in progress)
+
+Consensus-breaking; fresh chains from genesis (testnet reset).
+`PROTOCOL_VERSION` and `MIN_SUPPORTED_PROTOCOL_VERSION` are both 9.0.0, so 8.x
+peers are refused at the identify handshake. 9.0.0 is not yet complete: the
+#1875 demurrage fix is planned for the same release.
+
+- **Exact fee-floor weighted means (#1876).** The consensus fee floor takes
+  three value-weighted means of cumulative cluster wealth: the ring-centroid
+  floor (`ring_centroid_implied_factor`), each ring member's tag-weighted
+  wealth (`ring_centroid_floored_factor`), and the output-tag claimed wealth
+  (`effective_cluster_wealth_from_outputs`). In 8.x each one saturated its
+  numerator at `u128::MAX` and then divided by the unsaturated total value,
+  which lowered the result for whale-scale rings rather than pinning it to the
+  maximum. For example, a 10M BTH coin in a cluster with 1B BTH cumulative
+  wealth got a floor of 5919 instead of 6000 and paid 16,200 BTH too little on
+  the #925 downgrade charge. All three now compute the exact rational floor
+  over a 256-bit numerator (`bth_cluster_tax::wide`). The centroid is scale
+  invariant, and every input the 8.x arithmetic did not overflow gives the same
+  result. A result above `u128::MAX` is clamped at the end, which is
+  conservative because it maps to the 6000 maximum factor. That case can
+  only arise from malformed tag weights, which Rule 1 rejects. No storage
+  format change.
+
 ## Protocol 8.0.0
 
 Consensus-breaking; fresh chains from genesis (testnet reset).

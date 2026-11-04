@@ -281,34 +281,38 @@ pub(in crate::ledger) trait ValidationReads {
         &self,
         outputs: &[TxOutput],
     ) -> Result<u128, LedgerError> {
-        let mut total_weighted_wealth: u128 = 0;
-        let mut total_value: u128 = 0;
+        // Exact value-weighted mean (#1876, protocol 9.0.0):
+        // floor(Σ_out Σ_tag value_fraction·W_global / Σ_out amount) with a
+        // 256-bit numerator (`bth_cluster_tax::wide::WeightedMean`).
+        //
+        // `get_cluster_wealth` is full-u128 (16-byte accumulator, #626 PR2)
+        // and monotonic, so `value_fraction × W_global` and its sum can exceed
+        // u128::MAX. Before 9.0.0 they saturated at u128::MAX and were then
+        // divided by the unsaturated total value. That did NOT pin the result
+        // to u128::MAX / factor 6000 as the old comment claimed: it LOWERED
+        // the claimed wealth (and the progressive base fee) for large outputs.
+        //
+        // `value_fraction = floor(amount × weight / TAG_WEIGHT_SCALE)` keeps
+        // its per-entry floor (it fits u128: u64 × u32), so every input the
+        // old arithmetic did not overflow gives a bit-identical result. With
+        // well-formed tags (Σ weight <= TAG_WEIGHT_SCALE per output, Rule 1)
+        // the mean is at most the largest cluster wealth, so it fits u128; a
+        // malformed vector can push it higher, and the result is then clamped
+        // at u128::MAX (factor 6000), the conservative direction.
+        let mut mean = bth_cluster_tax::wide::WeightedMean::new();
 
         for output in outputs {
-            total_value = total_value.saturating_add(output.amount as u128);
+            mean.add_weight(output.amount as u128);
             for entry in &output.cluster_tags.entries {
                 let value_fraction =
                     (output.amount as u128 * entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
-                // `get_cluster_wealth` is full-u128 (16-byte accumulator, #626
-                // PR2). The consensus fee floor now consumes u128 wealth
-                // end-to-end (#626 PR3): the prior `as u64` truncation of the
-                // centroid is gone, so `minimum_fee_dynamic_with_outputs` and
-                // `cluster_factor` see the exact value. Saturating math keeps
-                // the (astronomically-distant) u128 overflow deterministic —
-                // pinning to u128::MAX → factor 6000 (max floor), the
-                // conservative consensus direction; every node computes the
-                // identical result, so no fork.
                 let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
-                total_weighted_wealth = total_weighted_wealth
-                    .saturating_add(value_fraction.saturating_mul(global_wealth));
+                mean.add_product(value_fraction, global_wealth);
             }
         }
 
-        if total_value == 0 {
-            return Ok(0);
-        }
-
-        Ok(total_weighted_wealth / total_value)
+        // Zero total value gives 0, as before.
+        Ok(mean.floor())
     }
     fn import_floor_factor_from_outputs(&self, outputs: &[TxOutput]) -> Result<u64, LedgerError> {
         use bth_cluster_tax::{ClusterFactorCurve, BRIDGE_IMPORT_FACTOR_FLOOR};
@@ -360,22 +364,32 @@ pub(in crate::ledger) trait ValidationReads {
             for entry in &tags.entries {
                 // `get_cluster_wealth` is full-u128 (16-byte LE accumulator).
                 let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
-                member_wealth = member_wealth.saturating_add(
-                    (entry.weight as u128).saturating_mul(global_wealth) / TAG_WEIGHT_SCALE as u128,
-                );
+                // Exact floor(weight × W_global / TAG_WEIGHT_SCALE) (#1876,
+                // protocol 9.0.0). Before 9.0.0 the product saturated at
+                // u128::MAX BEFORE the divide, which lowered the member's
+                // wealth to u128::MAX / TAG_WEIGHT_SCALE for any cluster past
+                // ~3.4e32 pico. The per-tag floor is kept, so non-overflowing
+                // inputs are bit-identical to before.
+                //
+                // The sum saturates. Each term is already exact (clamped only
+                // if it alone exceeds u128::MAX), so the saturating sum equals
+                // min(true sum, u128::MAX): a final clamp, not a lowering
+                // intermediate. With well-formed tags (Σ weight <=
+                // TAG_WEIGHT_SCALE) the sum is at most max W_global and never
+                // clamps; a malformed vector clamps to u128::MAX (factor
+                // 6000), the conservative direction.
+                member_wealth = member_wealth.saturating_add(bth_cluster_tax::wide::mul_div_floor(
+                    entry.weight as u128,
+                    global_wealth,
+                    TAG_WEIGHT_SCALE as u128,
+                ));
             }
-            // `ring_centroid_implied_factor` now takes full-u128 wealth (#626
-            // PR3) — the prior `.min(u64::MAX)` clamp is gone, so the consensus
-            // fee floor sees the exact per-member cumulative wealth.
-            //
-            // Overflow is saturated at each multiply on this consensus path:
-            //   - here, `weight × global_wealth` saturates to u128::MAX before the divide
-            //     (global_wealth is the unbounded, monotonic PR2 accumulator, so the
-            //     product is not provably < u128::MAX);
-            //   - inside `ring_centroid_implied_factor`, the `value × member_wealth` and
-            //     `total_value` products likewise saturate.
-            // A saturated wealth maps deterministically to factor 6000 (the max,
-            // most-conservative fee floor) — identical on every node → no fork.
+            // `ring_centroid_implied_factor` takes full-u128 wealth (#626
+            // PR3) and, since protocol 9.0.0 (#1876), computes the exact
+            // value-weighted centroid with a 256-bit numerator (see that
+            // function). A weighted mean is at most its largest member wealth,
+            // so the centroid always fits u128: no saturation remains on this
+            // consensus path, and every node computes the identical result.
             members.push((*value, member_wealth));
         }
 

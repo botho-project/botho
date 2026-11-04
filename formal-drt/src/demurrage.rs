@@ -159,9 +159,9 @@ impl Leg for RingFactor {
         if i.members.is_empty() {
             "empty"
         } else if sum.is_none() {
-            "weighted numerator saturates"
+            "weighted numerator exceeds u128 (pre-#1876 saturated)"
         } else {
-            "weighted numerator exact"
+            "weighted numerator fits u128"
         }
         .into()
     }
