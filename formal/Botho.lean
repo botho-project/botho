@@ -7,6 +7,7 @@ Every model module under `Botho/` must be imported here so that
 import Botho.Basic
 import Botho.Supply.Accounting
 import Botho.Supply.Transactions
+import Botho.Supply.Block
 import Botho.Lottery.Arith
 import Botho.Lottery.Prims
 import Botho.Lottery.SybilExpectation
