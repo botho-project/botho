@@ -175,3 +175,20 @@ this stage: #1890 must use the measured real-verification costs to choose
 its fixture reuse and account for the existing million-case nightly budget.
 No Lean theorem or statement record is added here; the parent #1839 and
 its model-composition child #1890 remain separate work.
+
+The first optimized Linux CI measurement at PR head `87bc3798` passed all
+three unfiltered unit tests (two oracle tests) in 18.99 seconds. Its oracle
+profile committed 743 blocks, with seven observed accepted scenarios, four
+intentional consensus rejections and zero unexpected infrastructure errors.
+Cold chain construction took 17.90 seconds; the three fresh ordinary
+signed commits took 6.06–6.24 ms each, with 6.57–7.03 ms signing costs.
+The mature payout spend took 7.97 ms in `add_block`, plus 7.90 ms signing,
+3.28 ms precheck and 4.85 ms observation. Reopening, artifact writing and
+setup are additional costs, not hidden in the commit timing.
+
+A million cases in 60 minutes on four ideally scaling workers allows only
+14.4 ms per case. Even the measured ordinary signing/sealing/precheck/
+commit/observation totals exceed that budget. This is arithmetic on a small
+measurement, not a parallel-throughput benchmark. Stage #1890 must measure
+its fixture and observation strategy; it cannot assume the nightly budget
+fits, omit real verification or count cached acceptance as fresh cases.
