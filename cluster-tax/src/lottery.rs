@@ -188,11 +188,17 @@ impl LotteryCandidate {
     /// (`age <= circulation_window`, the recency filter that forces a splitter
     /// to keep re-paying base fees), and clear the dust floor
     /// (`value >= min_utxo_value`). All bounds are integer and deterministic.
+    ///
+    /// Delegates to the integer-only kernel [`is_eligible_at`] (#1820).
     pub fn is_eligible(&self, current_block: u64, config: &LotteryDrawConfig) -> bool {
-        let age = current_block.saturating_sub(self.creation_block);
-        age >= config.min_utxo_age
-            && age <= config.circulation_window
-            && self.value >= config.min_utxo_value
+        is_eligible_at(
+            self.creation_block,
+            self.value,
+            current_block,
+            config.min_utxo_age,
+            config.circulation_window,
+            config.min_utxo_value,
+        )
     }
 
     /// Calculate the lottery weight based on selection mode.
@@ -249,15 +255,98 @@ impl LotteryCandidate {
 ///
 /// CONSENSUS-CRITICAL: a pure count over [`LotteryCandidate::is_eligible`], so
 /// proposer and validators agree exactly.
+///
+/// Delegates to the integer-only kernel [`count_eligible_in`], so the count
+/// itself has no `f64` in reach and extracts to Lean with Charon + Aeneas
+/// (#1820, `formal-aeneas/`). Same result as the former
+/// `candidates.iter().filter(|c| c.is_eligible(..)).count()`.
 pub fn count_eligible(
     candidates: &[LotteryCandidate],
     current_block: u64,
     config: &LotteryDrawConfig,
 ) -> usize {
-    candidates
-        .iter()
-        .filter(|c| c.is_eligible(current_block, config))
-        .count()
+    count_eligible_in(
+        candidates,
+        current_block,
+        config.min_utxo_age,
+        config.circulation_window,
+        config.min_utxo_value,
+    )
+}
+
+/// Path C eligibility of one output, as a pure integer predicate.
+///
+/// `age = current_block - creation_block` (saturating at 0 for an output
+/// "from the future"); eligible iff `min_utxo_age <= age <= circulation_window`
+/// and `value >= min_utxo_value`. [`LotteryCandidate::is_eligible`] and
+/// [`count_eligible_in`] both use it.
+///
+/// CONSENSUS-CRITICAL: integer-only so it extracts to Lean (#1820).
+pub fn is_eligible_at(
+    creation_block: u64,
+    value: u64,
+    current_block: u64,
+    min_utxo_age: u64,
+    circulation_window: u64,
+    min_utxo_value: u64,
+) -> bool {
+    let age = current_block.saturating_sub(creation_block);
+    age >= min_utxo_age && age <= circulation_window && value >= min_utxo_value
+}
+
+/// The integer fields of an output that [`is_eligible_at`] reads.
+///
+/// Lets [`count_eligible_in`] count over [`LotteryCandidate`] (which also
+/// carries an `f64`) without copying the candidates into an integer-only
+/// slice, while the kernel itself stays generic and `f64`-free.
+pub trait EligibilityView {
+    /// Block height at which the output was created.
+    fn creation_block(&self) -> u64;
+    /// Output value in base units.
+    fn value(&self) -> u64;
+}
+
+impl EligibilityView for LotteryCandidate {
+    fn creation_block(&self) -> u64 {
+        self.creation_block
+    }
+
+    fn value(&self) -> u64 {
+        self.value
+    }
+}
+
+/// Count the outputs in `items` that pass [`is_eligible_at`].
+///
+/// An explicit `while` loop rather than `iter().filter().count()`: Aeneas
+/// models the loop but not the iterator adapters (#1820). The count is at
+/// most `items.len()`, so `n += 1` cannot overflow.
+///
+/// CONSENSUS-CRITICAL: the body of [`count_eligible`].
+pub fn count_eligible_in<T: EligibilityView>(
+    items: &[T],
+    current_block: u64,
+    min_utxo_age: u64,
+    circulation_window: u64,
+    min_utxo_value: u64,
+) -> usize {
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i < items.len() {
+        let item = &items[i];
+        if is_eligible_at(
+            item.creation_block(),
+            item.value(),
+            current_block,
+            min_utxo_age,
+            circulation_window,
+            min_utxo_value,
+        ) {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
 }
 
 /// Path C endogenous reward cap `ρ · base_fee`, in base units (picocredits).
@@ -278,8 +367,18 @@ pub fn count_eligible(
 /// ~2.5e11, so the product can exceed `u64` in principle; the consensus caller
 /// clamps it against the block reward (anti-grinding) before it is used as a
 /// `u64` payout.
+///
+/// `checked_mul(..).unwrap_or(u128::MAX)` is `saturating_mul` for unsigned
+/// integers, spelled with operations Aeneas models (#1820). The product cannot
+/// overflow anyway (`usize <= 2^64`, base fee `< 2^38`).
+#[allow(
+    clippy::manual_saturating_arithmetic,
+    reason = "saturating_mul has no Aeneas model; this spelling extracts to Lean (#1820)"
+)]
 pub fn sybil_reward_cap(eligible_count: usize) -> u128 {
-    (eligible_count as u128).saturating_mul(LOTTERY_BASE_FEE_PICO as u128)
+    (eligible_count as u128)
+        .checked_mul(LOTTERY_BASE_FEE_PICO as u128)
+        .unwrap_or(u128::MAX)
 }
 
 /// Result of a lottery drawing.
@@ -859,5 +958,276 @@ mod tests {
             gaming_ratio > 1.0 && gaming_ratio < 5.0,
             "Hybrid α=0.3 gaming ratio should be ~3.84x, got {gaming_ratio}"
         );
+    }
+}
+
+/// Differential tests for the #1820 Aeneas-friendly rewrites: the pre-#1820
+/// implementations are kept verbatim below as reference copies (preserve, not
+/// delete), and the rewritten kernels must agree with them on boundary values
+/// and on a deterministic pseudo-random sweep.
+#[cfg(test)]
+mod aeneas_refactor_drt {
+    use super::*;
+
+    /// Pre-#1820 `sybil_reward_cap` (reference copy).
+    fn sybil_reward_cap_reference(eligible_count: usize) -> u128 {
+        (eligible_count as u128).saturating_mul(LOTTERY_BASE_FEE_PICO as u128)
+    }
+
+    /// Pre-#1820 `LotteryCandidate::is_eligible` (reference copy).
+    fn is_eligible_reference(
+        c: &LotteryCandidate,
+        current_block: u64,
+        config: &LotteryDrawConfig,
+    ) -> bool {
+        let age = current_block.saturating_sub(c.creation_block);
+        age >= config.min_utxo_age
+            && age <= config.circulation_window
+            && c.value >= config.min_utxo_value
+    }
+
+    /// Pre-#1820 `count_eligible` (reference copy).
+    fn count_eligible_reference(
+        candidates: &[LotteryCandidate],
+        current_block: u64,
+        config: &LotteryDrawConfig,
+    ) -> usize {
+        candidates
+            .iter()
+            .filter(|c| is_eligible_reference(c, current_block, config))
+            .count()
+    }
+
+    /// splitmix64: a tiny deterministic generator, so the sweep needs no
+    /// extra dev-dependency and every run checks the same cases.
+    struct Gen(u64);
+
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        /// A u64 biased toward edges: 0, 1, MAX, MAX-1, powers of two ± 1,
+        /// small values, or uniform.
+        fn edge_u64(&mut self) -> u64 {
+            match self.next() % 6 {
+                0 => [0, 1, 2, u64::MAX, u64::MAX - 1, u64::MAX / 2][(self.next() % 6) as usize],
+                1 => {
+                    let p = 1u64 << (self.next() % 64);
+                    match self.next() % 3 {
+                        0 => p - 1,
+                        1 => p,
+                        _ => p.wrapping_add(1),
+                    }
+                }
+                2 => self.next() % 32,
+                _ => self.next(),
+            }
+        }
+
+        /// A value near `anchor` (within ±3, wrapping), to probe the
+        /// inclusive/exclusive edges of the window and dust bounds.
+        fn near(&mut self, anchor: u64) -> u64 {
+            anchor.wrapping_add(self.next() % 7).wrapping_sub(3)
+        }
+    }
+
+    fn candidate(creation_block: u64, value: u64, tag_entropy: f64) -> LotteryCandidate {
+        LotteryCandidate {
+            id: [0u8; 36],
+            value,
+            cluster_factor: FACTOR_SCALE,
+            tag_entropy,
+            creation_block,
+        }
+    }
+
+    #[test]
+    fn sybil_reward_cap_matches_reference() {
+        let edges = [
+            0usize,
+            1,
+            2,
+            720,
+            10_000,
+            u32::MAX as usize,
+            usize::MAX / 2,
+            usize::MAX - 1,
+            usize::MAX,
+        ];
+        for &k in &edges {
+            assert_eq!(
+                sybil_reward_cap(k),
+                sybil_reward_cap_reference(k),
+                "k = {k}"
+            );
+        }
+        let mut g = Gen(0x1820_0001);
+        for _ in 0..100_000 {
+            let k = g.edge_u64() as usize;
+            assert_eq!(
+                sybil_reward_cap(k),
+                sybil_reward_cap_reference(k),
+                "k = {k}"
+            );
+        }
+    }
+
+    /// The equivalence the rewrite rests on, checked directly at the u128
+    /// overflow boundary (the cap itself cannot reach it).
+    #[test]
+    #[allow(
+        clippy::manual_saturating_arithmetic,
+        reason = "the spelling under test"
+    )]
+    fn checked_mul_unwrap_or_max_is_saturating_mul_u128() {
+        let edges = [
+            0u128,
+            1,
+            2,
+            3,
+            LOTTERY_BASE_FEE_PICO as u128,
+            u64::MAX as u128,
+            u64::MAX as u128 + 1,
+            1u128 << 64,
+            (1u128 << 64) + 1,
+            u128::MAX / 2,
+            u128::MAX / 2 + 1,
+            u128::MAX / 3,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        for &a in &edges {
+            for &b in &edges {
+                assert_eq!(
+                    a.checked_mul(b).unwrap_or(u128::MAX),
+                    a.saturating_mul(b),
+                    "{a} * {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn is_eligible_matches_reference() {
+        let mut g = Gen(0x1820_0002);
+        for _ in 0..200_000 {
+            let config = LotteryDrawConfig {
+                min_utxo_age: g.edge_u64(),
+                circulation_window: g.edge_u64(),
+                min_utxo_value: g.edge_u64(),
+                ..LotteryDrawConfig::default()
+            };
+            let current = g.edge_u64();
+            // Half the cases put age and value right at the bounds.
+            let (creation, value) = if g.next() % 2 == 0 {
+                let age = match g.next() % 2 {
+                    0 => g.near(config.min_utxo_age),
+                    _ => g.near(config.circulation_window),
+                };
+                (current.wrapping_sub(age), g.near(config.min_utxo_value))
+            } else {
+                (g.edge_u64(), g.edge_u64())
+            };
+            let c = candidate(creation, value, 0.0);
+            let want = is_eligible_reference(&c, current, &config);
+            assert_eq!(c.is_eligible(current, &config), want);
+            assert_eq!(
+                is_eligible_at(
+                    creation,
+                    value,
+                    current,
+                    config.min_utxo_age,
+                    config.circulation_window,
+                    config.min_utxo_value,
+                ),
+                want
+            );
+        }
+    }
+
+    #[test]
+    fn is_eligible_window_edges() {
+        let config = LotteryDrawConfig::default(); // 720 / 10_000 / 1_000_000
+        let at = |creation, value, current| {
+            let c = candidate(creation, value, 0.0);
+            let got = c.is_eligible(current, &config);
+            assert_eq!(got, is_eligible_reference(&c, current, &config));
+            got
+        };
+        let v = config.min_utxo_value;
+        assert!(!at(1_000, v, 1_000 + 719)); // age 719 < min age
+        assert!(at(1_000, v, 1_000 + 720)); // age 720 = min age (inclusive)
+        assert!(at(1_000, v, 1_000 + 10_000)); // age = window (inclusive)
+        assert!(!at(1_000, v, 1_000 + 10_001)); // age > window
+        assert!(!at(1_000, v - 1, 1_000 + 720)); // below dust floor
+        assert!(!at(5_000, v, 1_000)); // created "after" current: age 0
+        assert!(!at(u64::MAX, u64::MAX, 0));
+        assert!(!at(0, u64::MAX, u64::MAX)); // age u64::MAX > window
+    }
+
+    #[test]
+    fn count_eligible_matches_reference() {
+        let config = LotteryDrawConfig::default();
+        // Empty slice.
+        assert_eq!(count_eligible(&[], 0, &config), 0);
+        assert_eq!(
+            count_eligible(&[], u64::MAX, &config),
+            count_eligible_reference(&[], u64::MAX, &config)
+        );
+
+        let mut g = Gen(0x1820_0003);
+        for _ in 0..5_000 {
+            let config = if g.next() % 3 == 0 {
+                LotteryDrawConfig::default()
+            } else {
+                LotteryDrawConfig {
+                    min_utxo_age: g.next() % 2_000,
+                    circulation_window: g.next() % 20_000,
+                    min_utxo_value: g.next() % 2_000_000,
+                    ..LotteryDrawConfig::default()
+                }
+            };
+            let current = match g.next() % 4 {
+                0 => g.edge_u64(),
+                _ => 10_000 + g.next() % 40_000,
+            };
+            let len = (g.next() % 64) as usize;
+            let cs: Vec<LotteryCandidate> = (0..len)
+                .map(|_| {
+                    let creation = match g.next() % 4 {
+                        0 => g.edge_u64(),
+                        1 => current.wrapping_sub(g.near(config.min_utxo_age)),
+                        2 => current.wrapping_sub(g.near(config.circulation_window)),
+                        _ => current.saturating_sub(g.next() % 25_000),
+                    };
+                    let value = match g.next() % 3 {
+                        0 => g.near(config.min_utxo_value),
+                        _ => g.edge_u64(),
+                    };
+                    // tag_entropy must not matter; include non-finite values.
+                    let entropy =
+                        [0.0, 1.5, -1.0, f64::NAN, f64::INFINITY][(g.next() % 5) as usize];
+                    candidate(creation, value, entropy)
+                })
+                .collect();
+            let want = count_eligible_reference(&cs, current, &config);
+            assert_eq!(count_eligible(&cs, current, &config), want);
+            assert_eq!(
+                count_eligible_in(
+                    &cs,
+                    current,
+                    config.min_utxo_age,
+                    config.circulation_window,
+                    config.min_utxo_value,
+                ),
+                want
+            );
+            assert!(want <= cs.len());
+        }
     }
 }

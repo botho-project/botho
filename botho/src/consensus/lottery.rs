@@ -165,10 +165,21 @@ impl LotteryFeeConfig {
     ///
     /// Returns (pool_amount, burn_amount).
     pub fn split_fees(&self, total_fees: u64) -> (u64, u64) {
-        let pool_amount = (total_fees as u128 * self.pool_fraction_permille as u128 / 1000) as u64;
-        let burn_amount = total_fees.saturating_sub(pool_amount);
-        (pool_amount, burn_amount)
+        split_fees_permille(total_fees, self.pool_fraction_permille)
     }
+}
+
+/// Split fees into lottery pool and burn amounts, given the pool share in
+/// permille. Returns (pool_amount, burn_amount).
+///
+/// The integer-only body of [`LotteryFeeConfig::split_fees`]: it takes the one
+/// field it reads instead of the config, whose `draw_config` carries `f64`
+/// (no Lean model), so it extracts with Charon + Aeneas (#1820). The
+/// `as u64` is lossless while `pool_fraction_permille <= 1000`.
+pub fn split_fees_permille(total_fees: u64, pool_fraction_permille: u32) -> (u64, u64) {
+    let pool_amount = (total_fees as u128 * pool_fraction_permille as u128 / 1000) as u64;
+    let burn_amount = total_fees.saturating_sub(pool_amount);
+    (pool_amount, burn_amount)
 }
 
 /// Split fees into lottery pool and burn amounts.
@@ -330,7 +341,30 @@ pub fn compute_pool_accounting(
     payout_cap: u64,
     config: &LotteryFeeConfig,
 ) -> LotteryPoolAccounting {
-    let (fee_pool, fee_burn) = config.split_fees(total_fees);
+    compute_pool_accounting_permille(
+        total_fees,
+        emission_share,
+        stored_pool,
+        payout_cap,
+        config.pool_fraction_permille,
+    )
+}
+
+/// [`compute_pool_accounting`] with the fee split given as
+/// `pool_fraction_permille` instead of the whole [`LotteryFeeConfig`].
+///
+/// The integer-only kernel behind [`compute_pool_accounting`] (which is a thin
+/// wrapper passing `config.pool_fraction_permille`): `LotteryFeeConfig`
+/// reaches `f64` through its `draw_config`, which has no Lean model, so this
+/// form is the one extracted with Charon + Aeneas (#1820, `formal-aeneas/`).
+pub fn compute_pool_accounting_permille(
+    total_fees: u64,
+    emission_share: u64,
+    stored_pool: u128,
+    payout_cap: u64,
+    pool_fraction_permille: u32,
+) -> LotteryPoolAccounting {
+    let (fee_pool, fee_burn) = split_fees_permille(total_fees, pool_fraction_permille);
     // Cumulative carryover: widened to u128 so sustained high-fee inflow can
     // never saturate (see LotteryPoolAccounting::available).
     let available = stored_pool
@@ -1734,6 +1768,166 @@ mod tests {
             // Tail reward + block reward must not panic for extreme supply.
             let _ = policy.calculate_tail_reward(r);
             let _ = crate::block::calculate_block_reward(h, r as u128);
+        }
+    }
+}
+
+/// Differential tests for the #1820 Aeneas-friendly rewrite of the pool
+/// accounting: [`compute_pool_accounting`] and [`LotteryFeeConfig::split_fees`]
+/// now delegate to the integer-only [`compute_pool_accounting_permille`] /
+/// [`split_fees_permille`]. The pre-#1820 implementations are kept verbatim as
+/// reference copies.
+#[cfg(test)]
+mod aeneas_refactor_drt {
+    use super::*;
+
+    /// Pre-#1820 `LotteryFeeConfig::split_fees` (reference copy).
+    fn split_fees_reference(config: &LotteryFeeConfig, total_fees: u64) -> (u64, u64) {
+        let pool_amount =
+            (total_fees as u128 * config.pool_fraction_permille as u128 / 1000) as u64;
+        let burn_amount = total_fees.saturating_sub(pool_amount);
+        (pool_amount, burn_amount)
+    }
+
+    /// Pre-#1820 `compute_pool_accounting` (reference copy).
+    fn compute_pool_accounting_reference(
+        total_fees: u64,
+        emission_share: u64,
+        stored_pool: u128,
+        payout_cap: u64,
+        config: &LotteryFeeConfig,
+    ) -> LotteryPoolAccounting {
+        let (fee_pool, fee_burn) = split_fees_reference(config, total_fees);
+        let available = stored_pool
+            .saturating_add(emission_share as u128)
+            .saturating_add(fee_pool as u128);
+        let payout = available.min(payout_cap as u128) as u64;
+        LotteryPoolAccounting {
+            fee_pool,
+            fee_burn,
+            emission_share,
+            available,
+            payout,
+        }
+    }
+
+    struct Gen(u64);
+
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn edge_u64(&mut self) -> u64 {
+            match self.next() % 6 {
+                0 => [0, 1, 2, u64::MAX, u64::MAX - 1, u64::MAX / 2][(self.next() % 6) as usize],
+                1 => {
+                    let p = 1u64 << (self.next() % 64);
+                    match self.next() % 3 {
+                        0 => p - 1,
+                        1 => p,
+                        _ => p.wrapping_add(1),
+                    }
+                }
+                2 => self.next() % 32,
+                _ => self.next(),
+            }
+        }
+
+        fn edge_u128(&mut self) -> u128 {
+            match self.next() % 4 {
+                0 => [0, 1, u64::MAX as u128, u128::MAX - 1, u128::MAX][(self.next() % 5) as usize],
+                1 => u128::MAX - self.next() as u128,
+                _ => ((self.next() as u128) << 64) | self.next() as u128,
+            }
+        }
+
+        fn permille(&mut self) -> u32 {
+            match self.next() % 3 {
+                // In-range values (the ratified 800 among them).
+                0 => [0, 1, 750, 800, 999, 1_000][(self.next() % 6) as usize],
+                // Out-of-range values: the truncating `as u64` and the
+                // saturating burn must behave the same in both versions.
+                1 => [1_001, 2_000, u32::MAX - 1, u32::MAX][(self.next() % 4) as usize],
+                _ => self.next() as u32,
+            }
+        }
+    }
+
+    fn config(permille: u32) -> LotteryFeeConfig {
+        LotteryFeeConfig {
+            pool_fraction_permille: permille,
+            draw_config: bth_cluster_tax::LotteryDrawConfig::default(),
+        }
+    }
+
+    fn check(total_fees: u64, emission: u64, stored: u128, cap: u64, permille: u32) {
+        let cfg = config(permille);
+        let want = compute_pool_accounting_reference(total_fees, emission, stored, cap, &cfg);
+        assert_eq!(
+            compute_pool_accounting(total_fees, emission, stored, cap, &cfg),
+            want,
+            "fees={total_fees} emission={emission} stored={stored} cap={cap} permille={permille}"
+        );
+        assert_eq!(
+            compute_pool_accounting_permille(total_fees, emission, stored, cap, permille),
+            want
+        );
+        let split = split_fees_reference(&cfg, total_fees);
+        assert_eq!(cfg.split_fees(total_fees), split);
+        assert_eq!(split_fees(total_fees, &cfg), split);
+        assert_eq!(split_fees_permille(total_fees, permille), split);
+    }
+
+    #[test]
+    fn pool_accounting_matches_reference_on_grid() {
+        let u64s = [
+            0u64,
+            1,
+            999,
+            1_000,
+            1_001,
+            u64::MAX / 1_000,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        let u128s = [
+            0u128,
+            1,
+            u64::MAX as u128,
+            u128::MAX - u64::MAX as u128,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        let permilles = [0u32, 1, 800, 999, 1_000, 1_001, u32::MAX];
+        for &f in &u64s {
+            for &e in &u64s {
+                for &s in &u128s {
+                    for &c in &[0u64, 1, u64::MAX] {
+                        for &p in &permilles {
+                            check(f, e, s, c, p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pool_accounting_matches_reference_sweep() {
+        let mut g = Gen(0x1820_0030);
+        for _ in 0..200_000 {
+            check(
+                g.edge_u64(),
+                g.edge_u64(),
+                g.edge_u128(),
+                g.edge_u64(),
+                g.permille(),
+            );
         }
     }
 }

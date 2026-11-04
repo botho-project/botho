@@ -4,13 +4,13 @@
   "production": [
     {
       "path": "cluster-tax/src/demurrage.rs",
-      "sha256": "91d74f2625f4c7b51eb904b55dddc7e9893222b17f23645f37bb65a9c6aa4de1",
+      "sha256": "8ba49ea1b2a3b37a15c8dd4a76da44c86c9b56e436f0daf88fb90ffa99605fe4",
       "symbols": [
         "pub fn demurrage_charge(",
         "pub fn capitalized_reset_charge(",
         "pub fn ring_elapsed_quantile("
       ],
-      "reviewed_change": "#1471/5d3384e2: replace the explicit zero-denominator branch with u128 checked_div(...).unwrap_or(0) for the newer compiler Clippy lint. Zero still returns zero; nonzero integer division is unchanged. Current source provenance only; historical measurements not rerun. #1899 (#1875/#1876): mod tests only: bug_1875_short_hold_demurrage_rounds_to_zero and bug_1876_ring_saturation_lowers_fee_floor pin the current six-block dead zone and the saturate-then-divide ring centroid. No production code touched; demurrage and ring-centroid arithmetic unchanged. Current provenance only; historical measurements not rerun."
+      "reviewed_change": "#1471/5d3384e2: replace the explicit zero-denominator branch with u128 checked_div(...).unwrap_or(0) for the newer compiler Clippy lint. Zero still returns zero; nonzero integer division is unchanged. Current source provenance only; historical measurements not rerun. #1899 (#1875/#1876): mod tests only: bug_1875_short_hold_demurrage_rounds_to_zero and bug_1876_ring_saturation_lowers_fee_floor pin the current six-block dead zone and the saturate-then-divide ring centroid. No production code touched; demurrage and ring-centroid arithmetic unchanged. Current provenance only; historical measurements not rerun. #1820: in demurrage_charge, charge.saturating_mul(time_fraction) is now spelled charge.checked_mul(time_fraction).unwrap_or(u128::MAX) (identical for u128), and u64::try_from(charge).unwrap_or(u64::MAX) is now charge.min(u64::MAX as u128) as u64 (identical), so the kernel extracts to axiom-free Lean with Charon + Aeneas. capitalized_reset_charge and ring_elapsed_quantile are unchanged. A #[cfg(test)] differential test against the verbatim old code (mod aeneas_refactor_drt) covers both. No consensus arithmetic changed. Current provenance only; historical measurements not rerun."
     },
     {
       "path": "cluster-tax/src/fee_curve.rs",
@@ -32,8 +32,8 @@
     },
     {
       "path": "cluster-tax/src/monetary.rs",
-      "sha256": "e8d929aa0583f5e09e30e51a0807b199e6ef0dee39b0da8130c922c0c855d453",
-      "reviewed_change": "#1699: pinned symbol pub fn demurrage_rate_bps( unchanged. Sim-only additions: block_reward_at, cumulative_issuance_at/issuance_at_checkpoints, node_constants, mainnet_policy_mirror, the DifficultyController gross-issuance tail recompute and block-time difficulty target (inflation kernel retained as dead code), PartialEq on MonetaryPolicy, and a doc-comment caveat on the MonetaryState.gross_issued serde default. No node or consensus arithmetic changed. Current provenance only; historical measurements not rerun.",
+      "sha256": "c46a2bc4eca0b14476e4846de304eecbdf37390c0fad5a8e40f8bd7d10fd4188",
+      "reviewed_change": "#1699: pinned symbol pub fn demurrage_rate_bps( unchanged. Sim-only additions: block_reward_at, cumulative_issuance_at/issuance_at_checkpoints, node_constants, mainnet_policy_mirror, the DifficultyController gross-issuance tail recompute and block-time difficulty target (inflation kernel retained as dead code), PartialEq on MonetaryPolicy, and a doc-comment caveat on the MonetaryState.gross_issued serde default. No node or consensus arithmetic changed. Current provenance only; historical measurements not rerun. #1820: pinned symbol pub fn demurrage_rate_bps( unchanged. In lottery_emission_bps, epoch.saturating_mul(1_000) is now spelled epoch.checked_mul(1_000).unwrap_or(u32::MAX) (identical for u32) so it extracts with Charon + Aeneas; a #[cfg(test)] differential test against the verbatim old code is added. No consensus result changed. Current provenance only; historical measurements not rerun.",
       "symbols": [
         "pub fn demurrage_rate_bps("
       ]

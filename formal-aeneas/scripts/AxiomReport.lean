@@ -4,8 +4,8 @@ Axiom report for the formal-aeneas gate (#1821).
 Run as `lake env lean --run scripts/AxiomReport.lean OUT [NAME ...]` from
 `formal-aeneas/`, after `lake build`.
 
-It imports the compiled modules `MonetaryKernels` (the Aeneas extraction)
-and `BothoAeneas` (the proofs) with `loadExts := false`, so no environment
+It imports the compiled modules `MonetaryKernels` and `PoolAccounting` (the
+Aeneas extraction) and `BothoAeneas` (the proofs) with `loadExts := false`, so no environment
 extension and no `[init]` declaration of any imported module runs, and walks
 the declaration bodies itself. It does not use `#print axioms` or
 `Lean.collectAxioms`, so nothing written in the proofs can change what it
@@ -26,7 +26,8 @@ It writes to the file OUT, one tab-separated record per line:
   MODULE <mod>                 each package module that was loaded
   DONE <count>                 last line; <count> package declarations swept
 
-Package modules are `MonetaryKernels` and `BothoAeneas` / `BothoAeneas.*`.
+Package modules are `MonetaryKernels`, `PoolAccounting` and `BothoAeneas` /
+`BothoAeneas.*`.
 Every other module (Lean core, Mathlib, Aeneas) is a dependency: its axioms
 show up in the AXIOMS / OWN lists of the package declarations that reach
 them, and the calling script checks those lists against the allow-list.
@@ -80,14 +81,15 @@ partial def axiomsOf (env : Environment) (c : Name) : StateM Memo (Array Name) :
   return result
 
 def isPkgModule (m : Name) : Bool :=
-  m == `MonetaryKernels || (`BothoAeneas).isPrefixOf m
+  m == `MonetaryKernels || m == `PoolAccounting || (`BothoAeneas).isPrefixOf m
 
 def main (args : List String) : IO UInt32 := do
   let out :: names := args
     | IO.eprintln "usage: AxiomReport.lean OUT [NAME ...]"
       return 2
   initSearchPath (← findSysroot)
-  let env ← importModules #[{ module := `MonetaryKernels }, { module := `BothoAeneas }] {}
+  let env ← importModules
+    #[{ module := `MonetaryKernels }, { module := `PoolAccounting }, { module := `BothoAeneas }] {}
     (loadExts := false)
   let mut lines : Array String := #[]
   let mut memo : Memo := {}

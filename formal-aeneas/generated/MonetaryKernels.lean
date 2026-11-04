@@ -20,6 +20,183 @@ set_option maxRecDepth 2048
 
 namespace bth_cluster_tax
 
+/-- [bth_cluster_tax::demurrage::FACTOR_SCALE]
+    Source: 'cluster-tax/src/demurrage.rs', lines 89:0-89:35
+    Visibility: public -/
+@[global_simps, irreducible] def demurrage.FACTOR_SCALE : Std.U64 := 1000#u64
+
+/-- [bth_cluster_tax::demurrage::MAX_FACTOR_SCALED]
+    Source: 'cluster-tax/src/demurrage.rs', lines 92:0-92:52
+    Visibility: public -/
+@[global_simps, irreducible]
+def demurrage.MAX_FACTOR_SCALED : Result Std.U64 :=
+  6#u64 * demurrage.FACTOR_SCALE
+
+/-- [bth_cluster_tax::demurrage::demurrage_charge::TIME_SCALE]
+    Source: 'cluster-tax/src/demurrage.rs', lines 134:4-134:39 -/
+@[global_simps, irreducible]
+def demurrage.demurrage_charge.TIME_SCALE : Std.U128 := 1000000#u128
+
+/-- [bth_cluster_tax::demurrage::demurrage_charge]:
+    Source: 'cluster-tax/src/demurrage.rs', lines 109:0-154:1
+    Visibility: public -/
+def demurrage.demurrage_charge
+  (transfer_value : Std.U64) (cluster_factor : Std.U64)
+  (elapsed_blocks : Std.U64) (rate_bps : Std.U32) (blocks_per_year : Std.U64) :
+  Result Std.U64
+  := do
+  if rate_bps = 0#u32
+  then ok 0#u64
+  else
+    if elapsed_blocks = 0#u64
+    then ok 0#u64
+    else
+      if blocks_per_year = 0#u64
+      then ok 0#u64
+      else
+        let i ← demurrage.MAX_FACTOR_SCALED
+        let factor ←
+          core.cmp.impls.OrdU64.clamp cluster_factor demurrage.FACTOR_SCALE i
+        let progressivity ← factor - demurrage.FACTOR_SCALE
+        if progressivity = 0#u64
+        then ok 0#u64
+        else
+          let i1 ← lift (UScalar.cast .U128 elapsed_blocks)
+          let i2 ← i1 * demurrage.demurrage_charge.TIME_SCALE
+          let i3 ← lift (UScalar.cast .U128 blocks_per_year)
+          let time_fraction ← i2 / i3
+          let i4 ← lift (UScalar.cast .U128 transfer_value)
+          let i5 ← lift (UScalar.cast .U128 rate_bps)
+          let i6 ← i4 * i5
+          let i7 ← lift (UScalar.cast .U128 progressivity)
+          let i8 ← i6 * i7
+          let i9 ← i8 / 10000#u128
+          let i10 ← i - demurrage.FACTOR_SCALE
+          let i11 ← lift (UScalar.cast .U128 i10)
+          let charge ← i9 / i11
+          let o ← lift (U128.checked_mul charge time_fraction)
+          let i12 ← lift (core.option.Option.unwrap_or o core.num.U128.MAX)
+          let charge1 ← i12 / demurrage.demurrage_charge.TIME_SCALE
+          let i13 ← lift (UScalar.cast .U128 core.num.U64.MAX)
+          let i14 ← lift (core.cmp.impls.OrdU128.min charge1 i13)
+          ok (UScalar.cast .U64 i14)
+
+/-- [bth_cluster_tax::demurrage::capitalized_reset_charge]:
+    Source: 'cluster-tax/src/demurrage.rs', lines 207:0-233:1
+    Visibility: public -/
+def demurrage.capitalized_reset_charge
+  (transfer_value : Std.U64) (input_floor_factor : Std.U64)
+  (output_factor : Std.U64) (horizon_blocks : Std.U64) (rate_bps : Std.U32)
+  (blocks_per_year : Std.U64) :
+  Result Std.U64
+  := do
+  if output_factor >= input_floor_factor
+  then ok 0#u64
+  else
+    let at_floor ←
+      demurrage.demurrage_charge transfer_value input_floor_factor
+        horizon_blocks rate_bps blocks_per_year
+    let at_output ←
+      demurrage.demurrage_charge transfer_value output_factor horizon_blocks
+        rate_bps blocks_per_year
+    ok (core.num.U64.saturating_sub at_floor at_output)
+
+/-- [bth_cluster_tax::lottery::LOTTERY_BASE_FEE_PICO]
+    Source: 'cluster-tax/src/lottery.rs', lines 55:0-55:55
+    Visibility: public -/
+@[global_simps, irreducible]
+def lottery.LOTTERY_BASE_FEE_PICO : Std.U64 := 250000000000#u64
+
+/-- [bth_cluster_tax::lottery::is_eligible_at]:
+    Source: 'cluster-tax/src/lottery.rs', lines 285:0-295:1
+    Visibility: public -/
+def lottery.is_eligible_at
+  (creation_block : Std.U64) (value : Std.U64) (current_block : Std.U64)
+  (min_utxo_age : Std.U64) (circulation_window : Std.U64)
+  (min_utxo_value : Std.U64) :
+  Result Bool
+  := do
+  let age ← lift (core.num.U64.saturating_sub current_block creation_block)
+  if age >= min_utxo_age
+  then
+    if age <= circulation_window
+    then ok (value >= min_utxo_value)
+    else ok false
+  else ok false
+
+/-- Trait declaration: [bth_cluster_tax::lottery::EligibilityView]
+    Source: 'cluster-tax/src/lottery.rs', lines 302:0-307:1
+    Visibility: public -/
+structure lottery.EligibilityView (Self : Type _) where
+  creation_block : Self → Result Std.U64
+  value : Self → Result Std.U64
+
+/-- [bth_cluster_tax::lottery::count_eligible_in]: loop body 0:
+    Source: 'cluster-tax/src/lottery.rs', lines 335:4-348:5
+    Visibility: public -/
+@[rust_loop_body]
+def lottery.count_eligible_in_loop.body
+  {T : Type _} (EligibilityViewInst : lottery.EligibilityView T)
+  (items : Slice T) (current_block : Std.U64) (min_utxo_age : Std.U64)
+  (circulation_window : Std.U64) (min_utxo_value : Std.U64) (n : Std.Usize)
+  (i : Std.Usize) :
+  Result (ControlFlow (Std.Usize × Std.Usize) Std.Usize)
+  := do
+  let i1 := Slice.len items
+  if i < i1
+  then
+    let item ← Slice.index_usize items i
+    let i2 ← EligibilityViewInst.creation_block item
+    let i3 ← EligibilityViewInst.value item
+    let b ←
+      lottery.is_eligible_at i2 i3 current_block min_utxo_age
+        circulation_window min_utxo_value
+    let n1 ← if b
+               then n + 1#usize
+               else ok n
+    let i4 ← i + 1#usize
+    ok (cont (n1, i4))
+  else ok (done n)
+
+/-- [bth_cluster_tax::lottery::count_eligible_in]: loop 0:
+    Source: 'cluster-tax/src/lottery.rs', lines 335:4-348:5
+    Visibility: public -/
+@[rust_loop]
+def lottery.count_eligible_in_loop
+  {T : Type _} (EligibilityViewInst : lottery.EligibilityView T)
+  (items : Slice T) (current_block : Std.U64) (min_utxo_age : Std.U64)
+  (circulation_window : Std.U64) (min_utxo_value : Std.U64) (n : Std.Usize)
+  (i : Std.Usize) :
+  Result Std.Usize
+  := do
+  loop
+    (fun (n1, i1) => lottery.count_eligible_in_loop.body EligibilityViewInst
+      items current_block min_utxo_age circulation_window min_utxo_value n1 i1)
+    (n, i)
+
+/-- [bth_cluster_tax::lottery::count_eligible_in]:
+    Source: 'cluster-tax/src/lottery.rs', lines 326:0-350:1
+    Visibility: public -/
+@[reducible]
+def lottery.count_eligible_in
+  {T : Type _} (EligibilityViewInst : lottery.EligibilityView T)
+  (items : Slice T) (current_block : Std.U64) (min_utxo_age : Std.U64)
+  (circulation_window : Std.U64) (min_utxo_value : Std.U64) :
+  Result Std.Usize
+  := do
+  lottery.count_eligible_in_loop EligibilityViewInst items current_block
+    min_utxo_age circulation_window min_utxo_value 0#usize 0#usize
+
+/-- [bth_cluster_tax::lottery::sybil_reward_cap]:
+    Source: 'cluster-tax/src/lottery.rs', lines 378:0-382:1
+    Visibility: public -/
+def lottery.sybil_reward_cap
+  (eligible_count : Std.Usize) : Result Std.U128 := do
+  let i ← lift (UScalar.cast .U128 eligible_count)
+  let i1 ← lift (UScalar.cast .U128 lottery.LOTTERY_BASE_FEE_PICO)
+  let o ← lift (U128.checked_mul i i1)
+  ok (core.option.Option.unwrap_or o core.num.U128.MAX)
+
 /-- [bth_cluster_tax::monetary::MonetaryPolicy]
     Source: 'cluster-tax/src/monetary.rs', lines 97:0-139:1
     Visibility: public -/
@@ -43,8 +220,55 @@ def monetary.MonetaryPolicy.tail_emission_start_height
   let i ← lift (UScalar.cast .U64 self.halving_count)
   self.halving_interval * i
 
+/-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_bps::LOTTERY_EMISSION_MAX_BPS]
+    Source: 'cluster-tax/src/monetary.rs', lines 262:8-262:52 -/
+@[global_simps, irreducible]
+def monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_MAX_BPS
+  : Std.U32 :=
+  5000#u32
+
+/-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_bps::LOTTERY_EMISSION_STEP_BPS]
+    Source: 'cluster-tax/src/monetary.rs', lines 260:8-260:53 -/
+@[global_simps, irreducible]
+def monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_STEP_BPS
+  : Std.U32 :=
+  1000#u32
+
+/-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_bps]:
+    Source: 'cluster-tax/src/monetary.rs', lines 258:4-274:5
+    Visibility: public -/
+def monetary.MonetaryPolicy.lottery_emission_bps
+  (self : monetary.MonetaryPolicy) (height : Std.U64) : Result Std.U32 := do
+  if self.halving_interval = 0#u64
+  then ok 0#u32
+  else
+    let i ← height / self.halving_interval
+    let i1 ← lift (UScalar.cast .U64 core.num.U32.MAX)
+    let i2 ← lift (core.cmp.impls.OrdU64.min i i1)
+    let epoch ← lift (UScalar.cast .U32 i2)
+    let o ←
+      lift (U32.checked_mul epoch
+        monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_STEP_BPS)
+    let i3 ← lift (core.option.Option.unwrap_or o core.num.U32.MAX)
+    ok (core.cmp.impls.OrdU32.min i3
+      monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_MAX_BPS)
+
+/-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_share]:
+    Source: 'cluster-tax/src/monetary.rs', lines 278:4-280:5
+    Visibility: public -/
+def monetary.MonetaryPolicy.lottery_emission_share
+  (self : monetary.MonetaryPolicy) (height : Std.U64) (reward : Std.U64) :
+  Result Std.U64
+  := do
+  let i ← lift (UScalar.cast .U128 reward)
+  let i1 ← monetary.MonetaryPolicy.lottery_emission_bps self height
+  let i2 ← lift (UScalar.cast .U128 i1)
+  let i3 ← i * i2
+  let i4 ← i3 / 10000#u128
+  ok (UScalar.cast .U64 i4)
+
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::is_halving_phase]:
-    Source: 'cluster-tax/src/monetary.rs', lines 300:4-302:5
+    Source: 'cluster-tax/src/monetary.rs', lines 307:4-309:5
     Visibility: public -/
 def monetary.MonetaryPolicy.is_halving_phase
   (self : monetary.MonetaryPolicy) (height : Std.U64) : Result Bool := do
@@ -52,7 +276,7 @@ def monetary.MonetaryPolicy.is_halving_phase
   ok (height < i)
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::halving_reward]:
-    Source: 'cluster-tax/src/monetary.rs', lines 306:4-313:5
+    Source: 'cluster-tax/src/monetary.rs', lines 313:4-320:5
     Visibility: public -/
 def monetary.MonetaryPolicy.halving_reward
   (self : monetary.MonetaryPolicy) (height : Std.U64) :
@@ -67,7 +291,7 @@ def monetary.MonetaryPolicy.halving_reward
   else ok none
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::calculate_tail_reward_u128]:
-    Source: 'cluster-tax/src/monetary.rs', lines 335:4-354:5
+    Source: 'cluster-tax/src/monetary.rs', lines 342:4-361:5
     Visibility: public -/
 def monetary.MonetaryPolicy.calculate_tail_reward_u128
   (self : monetary.MonetaryPolicy) (supply_at_transition : Std.U128) :

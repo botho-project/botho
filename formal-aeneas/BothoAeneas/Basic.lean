@@ -24,4 +24,20 @@ theorem eq_ok_of_spec {α : Type} {x : Result α} {P : α → Prop}
   | vis i k => exact ((WP.spec_vis i k).mp h).elim
   | div => exact (WP.spec_div.mp h).elim
 
+/-- `saturating_sub` on `u64` (which the Aeneas library defines but states
+no lemma for) is truncated natural-number subtraction. -/
+theorem u64_saturating_sub_val (x y : U64) :
+    (core.num.U64.saturating_sub x y).val = x.val - y.val := by
+  have hx : x.bv.toNat < 2 ^ 64 := x.bv.isLt
+  simp only [core.num.U64.saturating_sub, UScalar.saturating_sub, UScalar.val,
+    BitVec.toNat_ofNat, UScalarTy.numBits]
+  rw [Nat.mod_eq_of_lt] <;> omega
+
+/-- `saturating_add` on `u128` is the sum clamped at `u128::MAX`. -/
+theorem u128_saturating_add_val (x y : U128) :
+    (core.num.U128.saturating_add x y).val = min (x.val + y.val) U128.max := by
+  simp only [core.num.U128.saturating_add, UScalar.saturating_add, UScalar.val,
+    BitVec.toNat_ofNat, UScalarTy.numBits, UScalar.max, U128.max, U128.numBits]
+  rw [Nat.mod_eq_of_lt] <;> omega
+
 end BothoAeneas

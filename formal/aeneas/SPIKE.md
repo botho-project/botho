@@ -11,6 +11,14 @@ a drift CI job. `draw_eligible` stays out of scope for Aeneas.
 
 Nothing in this PR changes Rust code or consensus behavior.
 
+**Update (#1820):** the five kernels marked "needs a refactor" below now
+extract axiom-free after behaviour-preserving rewrites, each covered by a
+differential test against the old code, and are checked in under
+`formal-aeneas/generated/`. One more blocker turned up that the table does
+not list: `demurrage_charge`'s `u64::try_from(u128).unwrap_or(u64::MAX)`
+extracts to an axiom for the `TryFrom` impl, so it is now spelled
+`min(u64::MAX as u128) as u64`. See `formal-aeneas/README.md`.
+
 ## What was run
 
 Everything ran in isolated locations. The workspace `rust-toolchain`
