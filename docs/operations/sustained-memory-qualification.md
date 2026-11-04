@@ -117,10 +117,81 @@ obligation; the sampler verifies executable bytes, not the build history.
      > assessment.json
    ```
 
+   With one raw file per host, pass every file unchanged, in any fixed order:
+   `sustained_memory.py manifest.json n1.jsonl n2.jsonl ...`. The report then
+   lists each file and its SHA256 under `observation_files` (a single file
+   also keeps the top-level `observations_sha256`). A node whose rows are
+   missing, duplicated across files or out of order is incomplete.
+
    Analyzer exit codes: 0 `passed`, 1 `failed`, 2 `incomplete`. Check `scope`
    even on exit 0. Raw data is never rewritten. Archive the result together
    with raw observations, manifest and their hashes. Do not publish private
    operational artifacts automatically.
+
+## Fixed-schedule collector
+
+Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
+(stdlib only, Python 3.10+). It has three subcommands.
+
+- **`schedule`** prints the absolute timeline, so the producer's
+  `--testnet-mint-until` and t0 agree before anything starts:
+
+  ```sh
+  python3 scripts/stress/collect_sustained_memory.py schedule --mint-until MINT_UNTIL
+  # or: ... schedule --started-at T0
+  ```
+
+  For the minting profile, `mint_until = t0 + 16200` (warmup plus sustained),
+  the profile ends at `t0 + 18030`, and the independent lab deadline is
+  `t0 + 6 h`. `recommended_node_end_unix_s` is the profile end plus 15 min,
+  so the nodes outlive the last tick.
+- **`manifest`** writes the manifest exactly once from the
+  `sample_sustained_memory.py --identity PID` JSON each host printed:
+
+  ```sh
+  python3 scripts/stress/collect_sustained_memory.py manifest --out manifest.json \
+    --campaign-id RUN_ID --source-revision COMMIT --chain-id RUN_ID \
+    --started-at T0 --min-blocks 10 --producer n3 \
+    --node n1=n1-identity.json ... --node n5=n5-identity.json
+  ```
+
+  It refuses a t0 in the past (a readiness delay may never shorten warmup),
+  a t0 more than an hour ahead, differing artifact hashes, shared cgroups, an
+  unknown producer, a relaxed threshold (`--slope-limit` and
+  `--net-growth-limit` may only tighten) and an existing output file. It
+  prints the canonical `manifest_sha256`. Copy the same file to every host.
+- **`collect`** samples the named local nodes on the fixed grid
+  `t0 + k * 5 s` until the profile end:
+
+  ```sh
+  python3 scripts/stress/collect_sustained_memory.py collect \
+    --manifest manifest.json --node n1=http://127.0.0.1:19090/rpc \
+    --expected-network NETWORK --out n1.jsonl 2> n1.collector.log
+  ```
+
+  Before writing anything, it checks each named process against the
+  manifest (PID, start ID, host, cgroup and executable SHA256) and refuses on
+  any mismatch. It also refuses an existing output file, a profile that has
+  already ended and a t0 more than an hour ahead. Each tick makes one
+  read-only `node_getStatus` call per node through `rpc_sustained_memory`,
+  then one local sample through `sample_sustained_memory`. Every row,
+  including error rows, is appended to the new file, and each tick is
+  fsynced. A tick more than half an interval late is skipped and logged,
+  never replayed. A late start, a slow tick, an RPC outage or a process
+  restart therefore stays visible as a gap or an error row, and the analyzer
+  reports it as incomplete. SIGTERM or SIGINT stops it after the current
+  tick and keeps every row. Collection ends at the profile end or the hard
+  deadline, whichever comes first. The final JSON summary on stdout gives
+  rows, error rows, skipped ticks, `interrupted` and the file's SHA256. Exit
+  0 only for a complete, error-free collection starting at t0; otherwise
+  exit 2. A collector exit is never a qualification verdict: run the
+  analyzer on the files.
+
+Run it as the node's own service user (or root): `/proc/PID/exe` and the
+cgroup files must be readable. **Local mode:** on a single Linux host, give
+one `--node` per local process (for example five loopback-only nodes in
+separate cgroups) and use one output file. Same-host results keep the
+topology limits below.
 
 ## Gate and interpretation
 
@@ -271,6 +342,49 @@ error, so the run is incomplete rather than counted. `--transfer-source` is
 refused for a minting manifest. Submission or acceptance counts from the
 controller journal are never transfer evidence.
 
+### Qualifying an x2 candidate
+
+The 72-hour x-series run cannot provide this evidence. Its producer mints
+until `node_end` (no idle period), and degrade steps restart nodes on
+purpose. So qualify the exact x2 node artifact on a **separate, dedicated
+cohort** before the x2 fleet is provisioned:
+
+1. Freeze a rehearsal-lifetime fleet under its own run id, for example
+   `qYYYYMMDD-x2-memqual`, with `fleet_provision.infrastructure_plan(...,
+   execution_mode='rehearsal_only', lifetime=8 * 3600)` and the same
+   instance types as x2. Do not start a controller, observers, prefunding or
+   wallet traffic.
+2. Choose t0 after expected staging plus cold readiness, then run
+   `collect_sustained_memory.py schedule --started-at T0`. Render the
+   validators with `fleet_nodes.py render`. Its profile takes the optional
+   `mint_until` key (the schedule's `mint_until_unix_s`) and a `node_end` no
+   earlier than `recommended_node_end_unix_s` and inside the host lifetime.
+   With `mint_until`, the producer gets `--testnet-mint-until mint_until` and
+   every node still runs until the `node_end` stop timer. Without it, the
+   producer mints until `node_end`, as before.
+3. Before t0, start the five units. Verify quorum, peers and genesis, then
+   on each host run `sample_sustained_memory.py --identity $(systemctl show
+   -p MainPID --value botho-RUN.service)`. Build the manifest once with
+   `collect_sustained_memory.py manifest --started-at T0`. Use
+   `--min-blocks` from the reviewed expected block cadence. Then start one
+   `collect` per host against `http://127.0.0.1:19090/rpc` (the
+   `fleet_provision.RPC_PORT`), in a transient unit or `nohup`.
+4. After the profile end, copy each host's `n*.jsonl`, collector log and
+   exit status, run `sustained_memory.py manifest.json n1.jsonl ...
+   n5.jsonl`, and archive everything with hashes. Then let the stop timers
+   and host deadline run out.
+
+Treat x2 as memory-qualified only if this assessment is `passed` with scope
+`limited_minting` for the same node SHA256 that x2 deploys. `incomplete`
+means rerun as a new experiment, not a longer one. `failed` blocks x2 on a
+leak fix. After expiry the producer pauses only under the normal
+high-balance, empty-mempool policy
+([bounded minting](bounded-testnet-minting.md)). If it keeps mining, the
+idle gate is incomplete, not passed. During x2 itself the controller's
+`memory_cycle` gate and `reporting.py heap` remain the long-horizon signal.
+They do not replace this qualification. A sustained-payments profile still
+needs #1437's reviewed transfer counter.
+
 ### Inference limits
 
 - A passing result covers only the stated `scope` and topology, for one
@@ -292,10 +406,20 @@ controller journal are never transfer evidence.
 
 ```sh
 python3 -m unittest discover -s scripts/stress -p '*sustained_memory.py'
+python3 -m unittest discover -s scripts/stress -p 'test_fleet_nodes.py'
 python3 -m unittest discover -s scripts/stress -p 'test_*.py'
 ruff check scripts/stress/*sustained_memory.py
 ruff format --check scripts/stress/*sustained_memory.py
 ```
+
+The collector tests run the real loop with a fake clock and a scripted
+`node_getStatus` over the whole five-hour minting profile. A constant trace
+passes. The 49 MiB/hour trace and a tightened gate fail. A miner that never
+pauses, a late start, a stalled tick, an RPC outage, a process restart and an
+interrupt all come out incomplete. Per-host files join in the analyzer.
+Preflight, output-reuse and configuration refusals are also covered. One run
+reads real `/proc` and cgroup fixture files each tick. The rest replace only
+the sampler's three filesystem readers, so they stay fast.
 
 Synthetic controls include constant and warmed plateau traces, the historical
 49 MiB/hour growth rate, swap-only growth, missing/restarted processes, altered
