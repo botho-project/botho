@@ -1,0 +1,74 @@
+{
+  "issue": 1875,
+  "date": "2026-11-04",
+  "status": "tested; exact kernel (protocol 9.0.0) against Botho.Demurrage.exactCharge",
+  "rust_source_commit": "f098d648f08fafb03636d89a30fe2554c9829d3f",
+  "toolchains": {
+    "lean": "leanprover/lean4:v4.35.0",
+    "rust": "rustc 1.98.0-nightly (cb46fbb8c 2026-06-08)"
+  },
+  "command": "botho-formal-drt --cases 100000 --seed 1875 --legs demurrage_charge,default_cluster_factor,ring_centroid_factor --no-write-regressions --json /tmp/demurrage-1875.json",
+  "sha256": {
+    "formal/Botho/Demurrage/ExactCharge.lean": "be38ca3d11448cbdd31a124fa08f99b035da6ede5d685896900a5e87423acdff",
+    "formal/Botho/Demurrage/Counterexamples.lean": "6bb46e297de0c3f9bb298b33a8112822177b3fc2de57297475ceb870e5d1398d",
+    "formal-drt/src/demurrage.rs": "73bf31442b3221de81540f74e21da6c0877b357c8733b477e40414e8b1919d1e",
+    "formal-drt/lean/Drt/Codec.lean": "120f0f280438d214a92a1aef5bbb22c9aad7e4436b4a244873cb020eb1d4572d",
+    "cluster-tax/src/demurrage.rs": "afd22ed71373d9ec8c335d51a4f85d4a47f73386dd4c073efa4cd57c16144f2f",
+    "cluster-tax/src/fee_curve.rs": "d8b649fac7999cb175a23e13b10f167c742b00584452e844ee25452d492591b8",
+    "formal-drt/regressions/demurrage_charge.jsonl": "4c2eb32874fae7a1b537d22f3e352c6413d286c0f48cbeb757b85eca2d18b043",
+    "formal-drt/regressions/default_cluster_factor.jsonl": "76e37ff9e10d60b2a6e79f39311a33e48977aa634a86e12f225ed41448407925",
+    "formal-drt/regressions/ring_centroid_factor.jsonl": "92fdca67969703501a6ea79b3ed31d75f741f10fd439d74794be818bd6697df0"
+  },
+  "report": {
+    "cases_per_leg": 100000,
+    "legs": [
+      {
+        "cases": 100000,
+        "classes": {
+          "clamped to u64 max": 12523,
+          "positive": 25591,
+          "positive inputs, short hold (pre-9.0.0 dead zone)": 3606,
+          "zero": 58280
+        },
+        "leg": "demurrage_charge",
+        "mismatches": [],
+        "replayed": 8,
+        "rust": "bth_cluster_tax::demurrage_charge",
+        "seconds": 1.151113
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "interior": 43183,
+          "maximum": 52340,
+          "minimum": 4477
+        },
+        "leg": "default_cluster_factor",
+        "mismatches": [],
+        "replayed": 6,
+        "rust": "bth_cluster_tax::ClusterFactorCurve::default_params().factor",
+        "seconds": 0.704167958
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "empty": 1232,
+          "weighted numerator exact": 24132,
+          "weighted numerator saturates": 74636
+        },
+        "leg": "ring_centroid_factor",
+        "mismatches": [],
+        "replayed": 2,
+        "rust": "bth_cluster_tax::ring_centroid_implied_factor",
+        "seconds": 12.537246
+      }
+    ],
+    "seed": "1875"
+  },
+  "control": "With Drt/Codec.lean dispatching demurrage_charge to the legacy Botho.Demurrage.charge instead, the 8 replayed demurrage_charge regressions gave 5 mismatches against this Rust kernel.",
+  "limits": [
+    "Handwritten model correspondence is tested, not proved.",
+    "exactCharge has no recorded theorems yet (records-first follow-up).",
+    "Default curve only for the factor legs."
+  ]
+}
