@@ -24847,3 +24847,657 @@ theorem Botho.Supply.Block.summary_and_wire_rejection_boundaries sha256:b06d86a5
   theorem Botho.Supply.Transactions.instDecidableEqEntry.decEq._proof_3 : ∀ (a a_1 b b_1 : Nat), Not (@Eq.{1} Nat a b) → @Eq.{1} Botho.Supply.Transactions.Entry { id := a, amount := a_1 } { id := b, amount := b_1 } → False
   def Botho.Supply.Transactions.instDecidableEqEntry.decEq.match_1 : (motive : Botho.Supply.Transactions.Entry → Botho.Supply.Transactions.Entry → Sort u_1) → (x x_1 : Botho.Supply.Transactions.Entry) → ((a a_1 b b_1 : Nat) → motive { id := a, amount := a_1 } { id := b, amount := b_1 }) → motive x x_1
     := fun (motive : Botho.Supply.Transactions.Entry → Botho.Supply.Transactions.Entry → Sort u_1) (x x_1 : Botho.Supply.Transactions.Entry) (h_1 : (a a_1 b b_1 : Nat) → motive { id := a, amount := a_1 } { id := b, amount := b_1 }) => @Botho.Supply.Transactions.Entry.casesOn.{u_1} (fun (x : Botho.Supply.Transactions.Entry) => motive x x_1) x fun (id amount : Nat) => @Botho.Supply.Transactions.Entry.casesOn.{u_1} (fun (x : Botho.Supply.Transactions.Entry) => motive { id := id, amount := amount } x) x_1 fun (id_1 amount_1 : Nat) => h_1 id amount id_1 amount_1
+
+theorem Botho.Monetary.phase_safe sha256:3bb8a4f3478638fc289c4f159154b0095c3de19b784df95dccce4d5cfe50a32b
+  : ∀ (height : Nat), @LE.le.{0} Nat instLENat height Botho.Lottery.U64_MAX → And (@LT.lt.{0} Nat instLTNat (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) Botho.Monetary.halvingInterval) (And (@LT.lt.{0} Nat instLTNat (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) Botho.Monetary.referenceBlockTime) (And (@Eq.{1} Nat Botho.Monetary.blocksPerYear Botho.Monetary.halvingInterval) (And (@Eq.{1} Nat Botho.Monetary.tailEmissionStartHeight (@OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000)))) (And (@LE.le.{0} Nat instLENat Botho.Monetary.tailEmissionStartHeight Botho.Lottery.U64_MAX) (And (Iff (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (@LT.lt.{0} Nat instLTNat height (@OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))))) (And (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true → And (@LT.lt.{0} Nat instLTNat (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5)))) (And (@LT.lt.{0} Nat instLTNat (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@Eq.{1} (Option.{0} Nat) (Botho.Monetary.halvingReward height) (@Option.some.{0} Nat (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.initialReward (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))))))) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.false → @Eq.{1} (Option.{0} Nat) (Botho.Monetary.halvingReward height) (@Option.none.{0} Nat))))))))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+
+theorem Botho.Monetary.halving_nonincreasing sha256:63dcdbf447cee31763fe727527bcb21f557138e701c1f1ae3c7d3f367be03aae
+  : ∀ (a b : Nat), @LE.le.{0} Nat instLENat a b → @LT.lt.{0} Nat instLTNat b Botho.Monetary.tailEmissionStartHeight → @Exists.{1} Nat fun (ra : Nat) => @Exists.{1} Nat fun (rb : Nat) => And (@Eq.{1} (Option.{0} Nat) (Botho.Monetary.halvingReward a) (@Option.some.{0} Nat ra)) (And (@Eq.{1} (Option.{0} Nat) (Botho.Monetary.halvingReward b) (@Option.some.{0} Nat rb)) (@LE.le.{0} Nat instLENat rb ra))
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+
+theorem Botho.Monetary.tail_success_iff sha256:5892736a17703328cbdc60116991488182b76f89d5acc8b6177e34962c69eb0e
+  : ∀ (supply reward : Nat), @LE.le.{0} Nat instLENat supply Botho.Lottery.U128_MAX → Iff (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU128 supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat reward)) (And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (@Eq.{1} Nat reward (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.tail_safe_domain sha256:14892fe56d91d6888ce920b74a024ac736b497872dfa036b9dffaedd75252fc9
+  : ∀ (supply : Nat), @LE.le.{0} Nat instLENat supply Botho.Monetary.safeSupply → And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU128 supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Monetary.tailPreCast supply))) (And (@LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (Botho.Monetary.tailPreCast supply)) (@LE.le.{0} Nat instLENat (Botho.Monetary.tailPreCast supply) Botho.Lottery.U64_MAX)))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.tail_u64_domain sha256:d411d60146011ca1f78f71b9bc108c5a7d0cf60c9a19365370e981ac95ba6956
+  : ∀ (supply : Nat), @LE.le.{0} Nat instLENat supply Botho.Lottery.U64_MAX → And (@LE.le.{0} Nat instLENat supply Botho.Monetary.safeSupply) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU64 supply) (Botho.Monetary.tailRewardU128 supply)) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU64 supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Monetary.tailPreCast supply))) (And (@LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (Botho.Monetary.tailPreCast supply)) (@LE.le.{0} Nat instLENat (Botho.Monetary.tailPreCast supply) Botho.Lottery.U64_MAX))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  def Botho.Monetary.tailRewardU64 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (Botho.Monetary.tailRewardU128 supply)
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.demurrage_current sha256:ac734255755212f2601272d297d208c5dd25478addee5740b706827c37ce6988
+  : ∀ (height : Nat), And (@LT.lt.{0} Nat instLTNat height Botho.Monetary.halvingInterval → @Eq.{1} Nat (Botho.Monetary.demurrageRateBps height) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@LE.le.{0} Nat instLENat Botho.Monetary.halvingInterval height → @Eq.{1} Nat (Botho.Monetary.demurrageRateBps height) (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))
+  def Botho.Monetary.demurrageRateBps : Nat → Nat
+    := fun (height : Nat) => @ite.{1} Nat (Or (@Eq.{1} Nat Botho.Monetary.halvingInterval (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@LT.lt.{0} Nat instLTNat height Botho.Monetary.halvingInterval)) (@instDecidableOr (@Eq.{1} Nat Botho.Monetary.halvingInterval (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@LT.lt.{0} Nat instLTNat height Botho.Monetary.halvingInterval) (instDecidableEqNat Botho.Monetary.halvingInterval (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (Nat.decLt height Botho.Monetary.halvingInterval)) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+
+theorem Botho.Monetary.block_reward_safe sha256:a610dfb957fb011bc5813bb02ed67c2b4171c55e1a1258e04fb0a62d80bd4097
+  : ∀ (height supply : Nat), @LE.le.{0} Nat instLENat height Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat supply Botho.Monetary.safeSupply → @Exists.{1} Nat fun (reward : Nat) => And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.blockRewardAt height supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat reward)) (And (@LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) reward) (@LE.le.{0} Nat instLENat reward Botho.Lottery.U64_MAX))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blockRewardAt : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.heightWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (Botho.Monetary.tailRewardU128 supply)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.successor_safe sha256:a338e6fd14ea6047eee1597ff5c05b3f664b6038e0f7c474c6d2b52faa3ee3f1
+  : ∀ (height supply : Nat), @LT.lt.{0} Nat instLTNat height Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat supply Botho.Monetary.safeSupply → @Exists.{1} Botho.Monetary.Successor fun (after : Botho.Monetary.Successor) => And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor height supply) (@Except.ok.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor after)) (And (@Eq.{1} Nat (Botho.Monetary.Successor.height after) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) height (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (And (@LE.le.{0} Nat instLENat (Botho.Monetary.Successor.height after) Botho.Lottery.U64_MAX) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.blockRewardAt (Botho.Monetary.Successor.height after) supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Monetary.Successor.reward after))) (And (@LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (Botho.Monetary.Successor.reward after)) (And (@LE.le.{0} Nat instLENat (Botho.Monetary.Successor.reward after) Botho.Lottery.U64_MAX) (And (@Eq.{1} Nat (Botho.Monetary.Successor.gross after) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) supply (Botho.Monetary.Successor.reward after))) (@LE.le.{0} Nat instLENat (Botho.Monetary.Successor.gross after) Botho.Lottery.U128_MAX)))))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.checkedAdd : Nat → Nat → Nat → Option.{0} Nat
+    := fun (max a b : Nat) => @ite.{1} (Option.{0} Nat) (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (Nat.decLe (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (@Option.some.{0} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b)) (@Option.none.{0} Nat)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  inductive Botho.Monetary.Successor : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blockRewardAt : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.heightWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (Botho.Monetary.tailRewardU128 supply)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.issuanceSuccessor : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightWidth) (Botho.Monetary.issuanceSuccessor.match_1.{1} (fun (x : Option.{0} Nat) => Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Lottery.checkedAdd Botho.Lottery.U64_MAX height (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (fun (_ : Unit) => @Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightSuccessor) fun (next : Nat) => @Bind.bind.{0, 0} (Except.{0, 0} Botho.Monetary.Error) (@Monad.toBind.{0, 0} (Except.{0, 0} Botho.Monetary.Error) (@Except.instMonad.{0, 0} Botho.Monetary.Error)) Nat Botho.Monetary.Successor (Botho.Monetary.blockRewardAt next supply) fun (reward : Nat) => Botho.Monetary.issuanceSuccessor.match_1.{1} (fun (x : Option.{0} Nat) => Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Lottery.checkedAdd Botho.Lottery.U128_MAX supply reward) (fun (_ : Unit) => @Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.grossAdd) fun (gross : Nat) => @Except.ok.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor { height := next, reward := reward, gross := gross })
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+  def Botho.Monetary.Successor.gross : Botho.Monetary.Successor → Nat
+    := fun (self : Botho.Monetary.Successor) => self.3
+  def Botho.Monetary.Successor.height : Botho.Monetary.Successor → Nat
+    := fun (self : Botho.Monetary.Successor) => self.1
+  constructor Botho.Monetary.Successor.mk : Nat → Nat → Nat → Botho.Monetary.Successor
+  def Botho.Monetary.Successor.reward : Botho.Monetary.Successor → Nat
+    := fun (self : Botho.Monetary.Successor) => self.2
+  def Botho.Monetary.issuanceSuccessor.match_1 : (motive : Option.{0} Nat → Sort u_1) → (x : Option.{0} Nat) → (Unit → motive (@Option.none.{0} Nat)) → ((gross : Nat) → motive (@Option.some.{0} Nat gross)) → motive x
+    := fun (motive : Option.{0} Nat → Sort u_1) (x : Option.{0} Nat) (h_1 : Unit → motive (@Option.none.{0} Nat)) (h_2 : (gross : Nat) → motive (@Option.some.{0} Nat gross)) => @Option.casesOn.{u_1, 0} Nat (fun (x : Option.{0} Nat) => motive x) x (h_1 Unit.unit) fun (val : Nat) => h_2 val
+
+theorem Botho.Monetary.successor_failures sha256:b54f84b6cc3d7b938fa3a36d78b6f4160b39af7771e5a613cea9212b4e5bebce
+  : ∀ (height supply reward : Nat), @LE.le.{0} Nat instLENat height Botho.Lottery.U64_MAX → And (Iff (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor height supply) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightSuccessor)) (@Eq.{1} Nat height Botho.Lottery.U64_MAX)) (@LT.lt.{0} Nat instLTNat height Botho.Lottery.U64_MAX → @Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.blockRewardAt (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) height (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat reward) → Iff (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor height supply) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.grossAdd)) (@LT.lt.{0} Nat instLTNat Botho.Lottery.U128_MAX (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) supply reward)))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.checkedAdd : Nat → Nat → Nat → Option.{0} Nat
+    := fun (max a b : Nat) => @ite.{1} (Option.{0} Nat) (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (Nat.decLe (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (@Option.some.{0} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b)) (@Option.none.{0} Nat)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  inductive Botho.Monetary.Successor : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blockRewardAt : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.heightWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (Botho.Monetary.tailRewardU128 supply)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.issuanceSuccessor : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightWidth) (Botho.Monetary.issuanceSuccessor.match_1.{1} (fun (x : Option.{0} Nat) => Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Lottery.checkedAdd Botho.Lottery.U64_MAX height (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (fun (_ : Unit) => @Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightSuccessor) fun (next : Nat) => @Bind.bind.{0, 0} (Except.{0, 0} Botho.Monetary.Error) (@Monad.toBind.{0, 0} (Except.{0, 0} Botho.Monetary.Error) (@Except.instMonad.{0, 0} Botho.Monetary.Error)) Nat Botho.Monetary.Successor (Botho.Monetary.blockRewardAt next supply) fun (reward : Nat) => Botho.Monetary.issuanceSuccessor.match_1.{1} (fun (x : Option.{0} Nat) => Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Lottery.checkedAdd Botho.Lottery.U128_MAX supply reward) (fun (_ : Unit) => @Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.grossAdd) fun (gross : Nat) => @Except.ok.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor { height := next, reward := reward, gross := gross })
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Successor.mk : Nat → Nat → Nat → Botho.Monetary.Successor
+  def Botho.Monetary.issuanceSuccessor.match_1 : (motive : Option.{0} Nat → Sort u_1) → (x : Option.{0} Nat) → (Unit → motive (@Option.none.{0} Nat)) → ((gross : Nat) → motive (@Option.some.{0} Nat gross)) → motive x
+    := fun (motive : Option.{0} Nat → Sort u_1) (x : Option.{0} Nat) (h_1 : Unit → motive (@Option.none.{0} Nat)) (h_2 : (gross : Nat) → motive (@Option.some.{0} Nat gross)) => @Option.casesOn.{u_1, 0} Nat (fun (x : Option.{0} Nat) => motive x) x (h_1 Unit.unit) fun (val : Nat) => h_2 val
+
+theorem Botho.Monetary.lottery_emission_bound sha256:3ec8eef4fb9f76ce104b22122913a54b062b51d883603fba8233031557e03e94
+  : ∀ (headerHeight mintHeight supply reward : Nat), @LE.le.{0} Nat instLENat headerHeight Botho.Lottery.U64_MAX → @LE.le.{0} Nat instLENat supply Botho.Monetary.safeSupply → @Eq.{1} Nat mintHeight headerHeight → @Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.blockRewardAt headerHeight supply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat reward) → And (@Eq.{1} Nat Botho.Supply.Block.productionInterval Botho.Monetary.halvingInterval) (And (@LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) reward) (And (@LE.le.{0} Nat instLENat reward Botho.Lottery.U64_MAX) (And (@LE.le.{0} Nat instLENat (Botho.Supply.Block.emissionEpoch mintHeight Botho.Monetary.halvingInterval) Botho.Lottery.U32_MAX) (And (@Eq.{1} Nat (@HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) (Botho.Supply.Block.emissionEpoch mintHeight Botho.Monetary.halvingInterval) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 32) (instOfNatNat (nat_lit 32))))) (Botho.Supply.Block.emissionEpoch mintHeight Botho.Monetary.halvingInterval)) (And (@LE.le.{0} Nat instLENat (Botho.Supply.Block.emissionBps mintHeight Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 5000) (instOfNatNat (nat_lit 5000)))) (And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) reward (Botho.Supply.Block.emissionBps mintHeight Botho.Monetary.halvingInterval)) Botho.Lottery.U128_MAX) (And (@Eq.{1} Nat (Botho.Supply.Block.emission mintHeight reward Botho.Monetary.halvingInterval) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) reward (Botho.Supply.Block.emissionBps mintHeight Botho.Monetary.halvingInterval)) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000))))) (And (@LE.le.{0} Nat instLENat (Botho.Supply.Block.emission mintHeight reward Botho.Monetary.halvingInterval) reward) (@Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Supply.Block.coinbaseAmount mintHeight reward Botho.Monetary.halvingInterval) (Botho.Supply.Block.emission mintHeight reward Botho.Monetary.halvingInterval)) reward)))))))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U32_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 32) (instOfNatNat (nat_lit 32)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.minN : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
+  def Botho.Lottery.satMul : Nat → Nat → Nat → Nat
+    := fun (max a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) a b) max) (Nat.decLe (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) a b) max) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) a b) max
+  def Botho.Lottery.satSub : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat b a) (Nat.decLe b a) (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) a b) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blockRewardAt : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.heightWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (Botho.Monetary.tailRewardU128 supply)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+  def Botho.Supply.Block.coinbaseAmount : Nat → Nat → Nat → Nat
+    := fun (height reward interval : Nat) => Botho.Lottery.satSub reward (Botho.Supply.Block.emission height reward interval)
+  def Botho.Supply.Block.emission : Nat → Nat → Nat → Nat
+    := fun (height reward interval : Nat) => Botho.Lottery.truncU64 (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) reward (Botho.Supply.Block.emissionBps height interval)) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000))))
+  def Botho.Supply.Block.emissionBps : Nat → Nat → Nat
+    := fun (height interval : Nat) => @ite.{1} Nat (@Eq.{1} Nat interval (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (instDecidableEqNat interval (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (Botho.Lottery.minN (Botho.Lottery.satMul Botho.Lottery.U32_MAX (@HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) (Botho.Supply.Block.emissionEpoch height interval) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 32) (instOfNatNat (nat_lit 32))))) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000)))) (@OfNat.ofNat.{0} Nat (nat_lit 5000) (instOfNatNat (nat_lit 5000))))
+  def Botho.Supply.Block.emissionEpoch : Nat → Nat → Nat
+    := fun (height interval : Nat) => Botho.Lottery.minN (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height interval) Botho.Lottery.U32_MAX
+  def Botho.Supply.Block.productionInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+
+theorem Botho.Monetary.phase1_exact_sum sha256:640b46c9ea3a1f0d0968b893302529a8b745c126b865fd98219190d4c9199ebe
+  : And (@Eq.{1} Nat (@List.sum.{0} Nat instAddNat (@Zero.ofOfNat0.{0} Nat (instOfNatNat (nat_lit 0))) (@List.map.{0, 0} Nat Nat (fun (i : Nat) => Botho.Monetary.halvingAmount (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) i (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (List.range (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) Botho.Monetary.tailEmissionStartHeight (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))))) Botho.Monetary.acceptedPhase1) (And (@Eq.{1} Nat Botho.Monetary.nominalPhase1 (@OfNat.ofNat.{0} Nat (nat_lit 611010000000000000000) (instOfNatNat (nat_lit 611010000000000000000)))) (And (@Eq.{1} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Monetary.acceptedPhase1 Botho.Monetary.initialReward) Botho.Monetary.nominalPhase1) (And (@Eq.{1} Nat Botho.Monetary.acceptedPhase1 (@OfNat.ofNat.{0} Nat (nat_lit 611009950000000000000) (instOfNatNat (nat_lit 611009950000000000000)))) (@Eq.{1} Nat (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.acceptedPhase1 (@OfNat.ofNat.{0} Nat (nat_lit 1000000000000) (instOfNatNat (nat_lit 1000000000000)))) (@OfNat.ofNat.{0} Nat (nat_lit 611009950) (instOfNatNat (nat_lit 611009950)))))))
+  def Botho.Monetary.acceptedPhase1 : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) Botho.Monetary.nominalPhase1 Botho.Monetary.initialReward
+  def Botho.Monetary.halvingAmount : Nat → Nat
+    := fun (height : Nat) => @Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.nominalPhase1 : Nat
+    := @List.sum.{0} Nat instAddNat (@Zero.ofOfNat0.{0} Nat (instOfNatNat (nat_lit 0))) (@List.map.{0, 0} Nat Nat (fun (k : Nat) => @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.initialReward (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) k))) (List.range Botho.Monetary.halvingCount))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+
+theorem Botho.Monetary.production_domain_numbers sha256:aea194d6cb876f4be8814b8b64fd045c2a648b929b94b523b946ab343b7af10a
+  : And (@Eq.{1} Nat Botho.Monetary.safeSupply (@OfNat.ofNat.{0} Nat (nat_lit 4653892168868035357845120000) (instOfNatNat (nat_lit 4653892168868035357845120000)))) (And (@LE.le.{0} Nat instLENat Botho.Lottery.U64_MAX Botho.Monetary.safeSupply) (And (@LT.lt.{0} Nat instLTNat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Monetary.safeSupply Botho.Lottery.U64_MAX) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128))))) (@Eq.{1} Nat Botho.Monetary.zeroCastSupply (@OfNat.ofNat.{0} Nat (nat_lit 4653892168868035358097408000) (instOfNatNat (nat_lit 4653892168868035358097408000))))))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.zeroCastSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Lottery.U64_MAX (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+
+theorem Botho.Monetary.synthetic_tail_counterexamples sha256:39f02487e3e2625324c48609e6219126aa8d335db6571d297fa717d171bcd178
+  : And (@LE.le.{0} Nat instLENat Botho.Monetary.zeroCastSupply Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.zeroCastSupply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.zeroCastSupply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (And (@LE.le.{0} Nat instLENat (Botho.Monetary.annualGross Botho.Monetary.zeroCastSupply) Botho.Lottery.U128_MAX) (And (@Eq.{1} Nat (Botho.Monetary.tailPreCast Botho.Monetary.zeroCastSupply) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU128 Botho.Monetary.zeroCastSupply) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))))) (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU128 Botho.Lottery.U128_MAX) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply)))))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  def Botho.Monetary.zeroCastSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Lottery.U64_MAX (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.unrestricted_tail_claims_refuted sha256:484addd39e7c16700043c3db368f14cf5c46fb5a10ebf2a0888d06b64ee19f12
+  : And (Not (∀ (s : Nat), @LE.le.{0} Nat instLENat s Botho.Lottery.U128_MAX → @Exists.{1} Nat fun (r : Nat) => @Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU128 s) (@Except.ok.{0, 0} Botho.Monetary.Error Nat r))) (Not (∀ (s r : Nat), @LE.le.{0} Nat instLENat s Botho.Lottery.U128_MAX → @Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.tailRewardU128 s) (@Except.ok.{0, 0} Botho.Monetary.Error Nat r) → @LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) r))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.tail_boundary_values sha256:868a499dfde228169a68ce91d61aac8dd2a509595680bb91a7dcb9f0b6e643dc
+  : @Eq.{1} (List.{0} (Option.{0} Nat)) (@List.map.{0, 0} Nat (Option.{0} Nat) (fun (s : Nat) => Botho.Monetary.resultValue✝ (Botho.Monetary.tailRewardU128 s)) (@List.cons.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (@List.cons.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@List.cons.{0} Nat Botho.Lottery.U64_MAX (@List.cons.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) Botho.Monetary.safeSupply (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@List.cons.{0} Nat Botho.Monetary.safeSupply (@List.cons.{0} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Monetary.safeSupply (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@List.cons.{0} Nat Botho.Monetary.zeroCastSupply (@List.nil.{0} Nat))))))))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 73117802169) (instOfNatNat (nat_lit 73117802169)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) Botho.Lottery.U64_MAX (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat Botho.Lottery.U64_MAX) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat Botho.Lottery.U64_MAX) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@List.nil.{0} (Option.{0} Nat)))))))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  def Botho.Monetary.zeroCastSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Lottery.U64_MAX (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def _private.Botho.Monetary.Emission.0.Botho.Monetary.resultValue : Except.{0, 0} Botho.Monetary.Error Nat → Option.{0} Nat
+    := fun (x : Except.{0, 0} Botho.Monetary.Error Nat) => Botho.Monetary.resultValue.match_1✝.{1} (fun (x : Except.{0, 0} Botho.Monetary.Error Nat) => Option.{0} Nat) x (fun (n : Nat) => @Option.some.{0} Nat n) fun (a : Botho.Monetary.Error) => @Option.none.{0} Nat
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+  def _private.Botho.Monetary.Emission.0.Botho.Monetary.resultValue.match_1 : (motive : Except.{0, 0} Botho.Monetary.Error Nat → Sort u_1) → (x : Except.{0, 0} Botho.Monetary.Error Nat) → ((n : Nat) → motive (@Except.ok.{0, 0} Botho.Monetary.Error Nat n)) → ((a : Botho.Monetary.Error) → motive (@Except.error.{0, 0} Botho.Monetary.Error Nat a)) → motive x
+    := fun (motive : Except.{0, 0} Botho.Monetary.Error Nat → Sort u_1) (x : Except.{0, 0} Botho.Monetary.Error Nat) (h_1 : (n : Nat) → motive (@Except.ok.{0, 0} Botho.Monetary.Error Nat n)) (h_2 : (a : Botho.Monetary.Error) → motive (@Except.error.{0, 0} Botho.Monetary.Error Nat a)) => @Except.casesOn.{u_1, 0, 0} Botho.Monetary.Error Nat (fun (x : Except.{0, 0} Botho.Monetary.Error Nat) => motive x) x (fun (a : Botho.Monetary.Error) => h_2 a) fun (a : Nat) => h_1 a
+
+theorem Botho.Monetary.phase_boundary_values sha256:c4d92abb1a6c8b32e0898585082a95620fc79f89db265c717d5936f49b5ea764
+  : @Eq.{1} (List.{0} (Option.{0} Nat)) (@List.map.{0, 0} Nat (Option.{0} Nat) Botho.Monetary.halvingReward (@HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.cons.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) (@List.cons.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@List.nil.{0} Nat))) (@List.flatMap.{0, 0} Nat Nat (fun (i : Nat) => @List.cons.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) i (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@List.cons.{0} Nat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) i (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Monetary.halvingInterval) (@List.cons.{0} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) i (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@List.nil.{0} Nat)))) (List.range (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5)))))) (@List.cons.{0} Nat Botho.Lottery.U64_MAX (@List.nil.{0} Nat)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 25000000000000) (instOfNatNat (nat_lit 25000000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 25000000000000) (instOfNatNat (nat_lit 25000000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 25000000000000) (instOfNatNat (nat_lit 25000000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 12500000000000) (instOfNatNat (nat_lit 12500000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 12500000000000) (instOfNatNat (nat_lit 12500000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 12500000000000) (instOfNatNat (nat_lit 12500000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 6250000000000) (instOfNatNat (nat_lit 6250000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 6250000000000) (instOfNatNat (nat_lit 6250000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 6250000000000) (instOfNatNat (nat_lit 6250000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 3125000000000) (instOfNatNat (nat_lit 3125000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 3125000000000) (instOfNatNat (nat_lit 3125000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.some.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 3125000000000) (instOfNatNat (nat_lit 3125000000000)))) (@List.cons.{0} (Option.{0} Nat) (@Option.none.{0} Nat) (@List.cons.{0} (Option.{0} Nat) (@Option.none.{0} Nat) (@List.cons.{0} (Option.{0} Nat) (@Option.none.{0} Nat) (@List.nil.{0} (Option.{0} Nat))))))))))))))))))))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+
+theorem Botho.Monetary.first_tail_value sha256:7381795cca01d44f2a763f73fd62ef94fd9a2c09158e562c21921b10a48f2507
+  : @Eq.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (Botho.Monetary.blockRewardAt Botho.Monetary.tailEmissionStartHeight Botho.Monetary.acceptedPhase1) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@OfNat.ofNat.{0} Nat (nat_lit 2421874801813) (instOfNatNat (nat_lit 2421874801813))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  def Botho.Monetary.acceptedPhase1 : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) Botho.Monetary.nominalPhase1 Botho.Monetary.initialReward
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blockRewardAt : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.heightWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (Botho.Monetary.tailRewardU128 supply)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.nominalPhase1 : Nat
+    := @List.sum.{0} Nat instAddNat (@Zero.ofOfNat0.{0} Nat (instOfNatNat (nat_lit 0))) (@List.map.{0, 0} Nat Nat (fun (k : Nat) => @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.initialReward (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) k))) (List.range Botho.Monetary.halvingCount))
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+
+theorem Botho.Monetary.successor_boundary_values sha256:53849e9a4db427fe82cf960c12c5791bffa0c058cbaed011761505a51c7aff77
+  : And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) Botho.Lottery.U64_MAX (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@Except.ok.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor { height := Botho.Lottery.U64_MAX, reward := @OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)), gross := @OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)) })) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor Botho.Lottery.U64_MAX (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightSuccessor)) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) Botho.Lottery.U128_MAX) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.grossAdd)) (And (@Eq.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Monetary.issuanceSuccessor (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0))) Botho.Monetary.safeSupply) (@Except.ok.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor { height := @OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)), reward := Botho.Monetary.initialReward, gross := @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Monetary.safeSupply Botho.Monetary.initialReward })) (@LT.lt.{0} Nat instLTNat Botho.Monetary.safeSupply (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) Botho.Monetary.safeSupply Botho.Monetary.initialReward)))))
+  def Botho.Lottery.U128_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 128) (instOfNatNat (nat_lit 128)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.checkedAdd : Nat → Nat → Nat → Option.{0} Nat
+    := fun (max a b : Nat) => @ite.{1} (Option.{0} Nat) (@LE.le.{0} Nat instLENat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (Nat.decLe (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) max) (@Option.some.{0} Nat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b)) (@Option.none.{0} Nat)
+  def Botho.Lottery.truncU64 : Nat → Nat
+    := fun (x : Nat) => @HMod.hMod.{0, 0, 0} Nat Nat Nat (@instHMod.{0} Nat Nat.instMod) x (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64))))
+  inductive Botho.Monetary.Error : Type
+  inductive Botho.Monetary.Successor : Type
+  def Botho.Monetary.annualBurn : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.annualGross : Nat → Nat
+    := fun (supply : Nat) => @HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) (Botho.Monetary.annualNet supply) (Botho.Monetary.annualBurn supply)
+  def Botho.Monetary.annualNet : Nat → Nat
+    := fun (supply : Nat) => @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000)))
+  def Botho.Monetary.blockRewardAt : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.heightWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (@Option.getD.{0} Nat (Botho.Monetary.halvingReward height) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))))) (Botho.Monetary.tailRewardU128 supply)))
+  def Botho.Monetary.blocksPerYear : Nat
+    := @HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) Botho.Monetary.secondsPerYear Botho.Monetary.referenceBlockTime
+  def Botho.Monetary.halvingCount : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.halvingInterval : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 6307200) (instOfNatNat (nat_lit 6307200))
+  def Botho.Monetary.halvingReward : Nat → Option.{0} Nat
+    := fun (height : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Bool (Botho.Monetary.isHalvingPhase height) Bool.true) (instDecidableEqBool (Botho.Monetary.isHalvingPhase height) Bool.true) (@Option.some.{0} Nat (@HShiftRight.hShiftRight.{0, 0, 0} Nat Nat Nat (@instHShiftRightOfShiftRight.{0} Nat Nat.instShiftRight) Botho.Monetary.initialReward (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) height Botho.Monetary.halvingInterval))) (@Option.none.{0} Nat)
+  def Botho.Monetary.initialReward : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 50000000000000) (instOfNatNat (nat_lit 50000000000000))
+  def Botho.Monetary.isHalvingPhase : Nat → Bool
+    := fun (height : Nat) => @Decidable.decide (@LT.lt.{0} Nat instLTNat height Botho.Monetary.tailEmissionStartHeight) (Nat.decLt height Botho.Monetary.tailEmissionStartHeight)
+  def Botho.Monetary.issuanceSuccessor : Nat → Nat → Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor
+    := fun (height supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (@GT.gt.{0} Nat instLTNat height Botho.Lottery.U64_MAX) (Nat.decLt Botho.Lottery.U64_MAX height) (@Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightWidth) (Botho.Monetary.issuanceSuccessor.match_1.{1} (fun (x : Option.{0} Nat) => Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Lottery.checkedAdd Botho.Lottery.U64_MAX height (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))) (fun (_ : Unit) => @Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.heightSuccessor) fun (next : Nat) => @Bind.bind.{0, 0} (Except.{0, 0} Botho.Monetary.Error) (@Monad.toBind.{0, 0} (Except.{0, 0} Botho.Monetary.Error) (@Except.instMonad.{0, 0} Botho.Monetary.Error)) Nat Botho.Monetary.Successor (Botho.Monetary.blockRewardAt next supply) fun (reward : Nat) => Botho.Monetary.issuanceSuccessor.match_1.{1} (fun (x : Option.{0} Nat) => Except.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor) (Botho.Lottery.checkedAdd Botho.Lottery.U128_MAX supply reward) (fun (_ : Unit) => @Except.error.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor Botho.Monetary.Error.grossAdd) fun (gross : Nat) => @Except.ok.{0, 0} Botho.Monetary.Error Botho.Monetary.Successor { height := next, reward := reward, gross := gross })
+  def Botho.Monetary.referenceBlockTime : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))
+  def Botho.Monetary.safeSupply : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Lottery.U64_MAX Botho.Monetary.halvingInterval) (@OfNat.ofNat.{0} Nat (nat_lit 40) (instOfNatNat (nat_lit 40)))
+  def Botho.Monetary.secondsPerYear : Nat
+    := @OfNat.ofNat.{0} Nat (nat_lit 31536000) (instOfNatNat (nat_lit 31536000))
+  def Botho.Monetary.tailEmissionStartHeight : Nat
+    := @HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) Botho.Monetary.halvingInterval Botho.Monetary.halvingCount
+  def Botho.Monetary.tailPreCast : Nat → Nat
+    := fun (supply : Nat) => @Max.max.{0} Nat Nat.instMax (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1))) (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (Botho.Monetary.annualGross supply) Botho.Monetary.blocksPerYear)
+  def Botho.Monetary.tailRewardU128 : Nat → Except.{0, 0} Botho.Monetary.Error Nat
+    := fun (supply : Nat) => @ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat supply Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX supply) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.supplyWidth) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 200) (instOfNatNat (nat_lit 200))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.netMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50)))) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) supply (@OfNat.ofNat.{0} Nat (nat_lit 50) (instOfNatNat (nat_lit 50))))) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.burnMultiply) (@ite.{1} (Except.{0, 0} Botho.Monetary.Error Nat) (@GT.gt.{0} Nat instLTNat (Botho.Monetary.annualGross supply) Botho.Lottery.U128_MAX) (Nat.decLt Botho.Lottery.U128_MAX (Botho.Monetary.annualGross supply)) (@Except.error.{0, 0} Botho.Monetary.Error Nat Botho.Monetary.Error.annualAdd) (@Except.ok.{0, 0} Botho.Monetary.Error Nat (Botho.Lottery.truncU64 (Botho.Monetary.tailPreCast supply))))))
+  constructor Botho.Monetary.Error.annualAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.burnMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.grossAdd : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightSuccessor : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.heightWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.netMultiply : Botho.Monetary.Error
+  constructor Botho.Monetary.Error.supplyWidth : Botho.Monetary.Error
+  constructor Botho.Monetary.Successor.mk : Nat → Nat → Nat → Botho.Monetary.Successor
+  def Botho.Monetary.issuanceSuccessor.match_1 : (motive : Option.{0} Nat → Sort u_1) → (x : Option.{0} Nat) → (Unit → motive (@Option.none.{0} Nat)) → ((gross : Nat) → motive (@Option.some.{0} Nat gross)) → motive x
+    := fun (motive : Option.{0} Nat → Sort u_1) (x : Option.{0} Nat) (h_1 : Unit → motive (@Option.none.{0} Nat)) (h_2 : (gross : Nat) → motive (@Option.some.{0} Nat gross)) => @Option.casesOn.{u_1, 0} Nat (fun (x : Option.{0} Nat) => motive x) x (h_1 Unit.unit) fun (val : Nat) => h_2 val
