@@ -68,9 +68,9 @@ lottery fee-burn share in the cumulative burn counter.
 
 | Premise | Rust source / remaining obligation |
 |---|---|
-| `I = O + F` | `transaction/clsag/src/lib.rs::Transaction::verify_ring_signatures` checks per-transaction sums with `checked_add` and exact equality. Formalize the list aggregation and connect pseudo-output amounts to actual spent values. |
-| `I ≤ U` | Trust CLSAG soundness, authenticated ring-member resolution, unique key images and fresh output identities; prove that their accepted-block composition means distinct economic coins are consumed at most once. The arithmetic theorem does not establish this. |
-| `F ≤ u64::MAX` | `lottery_v2::drawing` and `store/validation.rs` reject a fee-sum overflow. Model the checked fold. |
+| `I = O + F` | `Transactions.batch_balance` derives exact Nat aggregation from the checked arithmetic model. `checked_ordinary_flow` connects those amounts to available stored sources under the named binding predicates below. Production correspondence remains trusted/tested, not proved. |
+| `I ≤ U` | `Transactions.checked_keys_sources` constructs distinct prestate consumption under `CLSAGBinding`, `KeyAssociation` and `UnspentCorrespondence`; `consume_partition` derives its value bound. This is a finite model theorem under explicit cryptographic/ledger assumptions. |
+| `F ≤ u64::MAX` | `Transactions.checked_sum_exact` and `batch_balance` prove the existing `sumFeesChecked` fold returns the exact Nat fee sum within u64 on success. Rust/model correspondence remains a separate obligation. |
 | `E ≤ R` | `cluster-tax/src/monetary.rs::lottery_emission_bps` caps the rate at 5000/10000; the exact schedule/model bridge remains #1710. |
 | `D ≤ available`, payout outputs sum to `D` | Connect `Draw`, V2 payout validation and no-winner behavior; #1849 covers the lottery conservation proofs. |
 | Genesis and issuance induction | Bind the zero genesis state, checked successor and reward width to the state transition. `issuance_step_fits` supplies the arithmetic induction step. |
@@ -82,6 +82,97 @@ of records in `utxo_db`: the database retains spent outputs as ring decoys,
 and spending records key images. A raw database sum is not a supply measure.
 Confidential amounts (#904) would replace the public-amount balance bridge
 with a commitment-balance argument; the scalar identity alone cannot do so.
+
+## Checked ordinary transactions and finite sources (#1894)
+
+**Proven (model):** `Botho/Supply/Transactions.lean` supplies the transaction
+and finite-source premises for the later block-composition layer. All amounts
+and totals are naturals. Only the individual input/output/final-fee checks and
+the separate aggregate fee fold constrain a result to `u64::MAX`; global input
+and output totals can exceed it. No new fee-split or lottery theorem is assumed.
+
+The source mapping was rechecked at
+`7e3905550ca65f89af8377255b5ae6d9fc6a3beb`:
+
+| Model / public result | Production source and precise boundary |
+|---|---|
+| `checkTransaction`, `transaction_balance` | `transaction/clsag/src/lib.rs::verify_ring_signatures`: checked input fold, checked output fold, separate output-plus-fee checked addition, then equality. Signature validation is outside this arithmetic model. |
+| `checkBatch`, `checked_sum_exact`, `batch_balance` | `botho/src/ledger/lottery_v2.rs::drawing`: `try_fold(0u64, checked_add)` over fees. The reused `Lottery.sumFeesChecked` nil case returns its accumulator unchanged, so the generalized theorem requires an initially bounded accumulator. |
+| `lookup`, `consume`, `consume_partition` | `store/validation.rs::verify_transaction` and `verify_ring_members` read one pinned pre-block snapshot. The finite economic map is a semantic projection; Rust retains spent rows and records keys instead of deleting real-input rows. |
+| `checkKeys`, `checked_keys_sources` | `store/writer.rs::record_key_image` rejects keys already in the incremental writer transaction. The batch model checks absence from old history and pairwise distinct new keys. Its sound source-selection bridge additionally requires the three predicates below. |
+| `insertFresh`, `insertion_preserves` | `store/writer.rs::Representation::check_new` rejects IDs in either output or context storage. The model checks the complete retained domain, including spent decoys, then extends that domain for each insertion. Its correspondence to both tables needs `ContextDomainAgreement` below. |
+| `ordinaryStep`, `ordinary_step_preserves`, `checked_ordinary_flow` | A checked ghost projection from prestate plus transaction/source witnesses. Sources are consumed before any ordinary output is inserted, so an output created in the block cannot fund another transaction in that block. This is not a replacement Rust validator. |
+| `ordinary_step_correspondence` | Preserves the semantic key/history invariant under the explicit `IdentityExtension` obligation for new identities; it proves no cryptographic key-generation property. |
+
+`Input.source.id` is a supplied semantic real-source witness.
+`Input.source.amount` is the authenticated pseudo amount used by the arithmetic
+checks; it denotes the actual persisted amount only when `CLSAGBinding` or the
+explicit checked source lookup establishes that equality. Identifiers and keys
+are abstract naturals, without a claim about a wire encoding or hidden-input
+recovery. `Store.unspent` is economic U, `Store.retained` includes spent decoys,
+and `Store.history` is the explicitly known spent-key history. `WellFormed`
+requires unique economic/stored identities and identical amounts for every
+economic row in the retained store. Theorems carry this invariant explicitly;
+the executable functions do not silently repair a malformed prestate.
+
+**Trusted (cryptography/ledger), as separate theorem parameters:**
+
+- `CLSAGBinding`: every authenticated claim identifies a retained source with
+  exactly the claimed amount and its associated semantic key image. Resolving
+  every public ring member and finding an amount match does not itself identify
+  the hidden real input or prove this premise.
+- `KeyAssociation`: one stable function maps retained output identities to
+  semantic key images, injectively on that domain. The function is a logical
+  parameter, not an implementation extracted from CLSAG or the public ring.
+- `UnspentCorrespondence`: for each authenticated retained row, its amount is
+  present in economic U **if and only if** its associated key is absent from
+  history. The reverse implication is essential to fresh-key availability.
+- `IdentityExtension`: the association remains injective on the enlarged stored
+  domain, with each newly created identity's key absent from the resulting
+  history. Fresh outpoint bytes alone do not establish this property.
+
+`checked_keys_sources` derives distinct available pre-block sources from
+successful key checks and the first three predicates, then constructs successful
+checked removals. It does not assume the desired removals or a spent-value bound.
+`consume_partition` proves consumed plus remaining value equals prevalue and
+preserves every unselected identity/amount. `insertion_preserves` adds precisely
+the new value, preserves unique IDs and all old retained/economic lookups, and
+leaves history unchanged. `ordinary_step_preserves` extends history by exactly
+the checked new keys and preserves every untouched old economic row.
+`checked_ordinary_flow` composes these facts from prestate checks alone, deriving
+`I = O + F`, `I ≤ U`, the fee bound and the finite ordinary-output update. No Rust
+poststate is an input or expected answer. `ordinary_step_correspondence` also
+preserves the named unspent/history relation under `IdentityExtension`.
+
+**Separate production obligations:** `ContextDomainAgreement` says the abstract
+retained identity domain covers the output and context tables with consistent
+amounts; `StoredContextFrame` says successful commits preserve every old stored
+row and derivation context and create exactly the validated outputs;
+`CommitCorrespondence` connects a successful real commit to the selected model
+checks and economic update. These are named external obligations, not Lean
+axioms or consequences of the arithmetic. The #1893 oracle below tests complete
+old-row/context frames, exact new output sets and its fixture's complete **known**
+key history, plus independently known real-input amounts. Those bounded
+observations do not prove CLSAG binding, arbitrary hidden history completeness,
+or universal production/model equivalence.
+
+The five kernel-checked boundary claims cover exact-u64 success, two individually
+valid arithmetic transactions whose aggregate input/output totals exceed u64,
+empty folds (including an out-of-range starting accumulator), each of the three
+arithmetic overflows, equality failure, aggregate-fee overflow, duplicate/missing
+sources, amount mismatch, duplicate/already-spent keys, duplicate created IDs,
+retained spent-decoy reuse, and an attempted same-block created-output spend.
+They include a valid finite update with untouched rows/history and a fresh-key
+countermodel without the correspondence premise. Zero-fee arithmetic examples
+are intentional; none asserts signatures, fee-floor compliance, full consensus
+validity, or a reachable exploit. They use kernel `decide`, not native execution.
+
+The exact public declaration records land separately before the proof source.
+This layer is **proven (model) under named assumptions**; no production DRT leg,
+random campaign, extraction result or whole-block theorem is added. #1895 owns
+emission, payout and genesis composition; #1896 owns model/production campaign
+evidence. #1890 and #1839 retain those obligations. The existing oracle evidence
+below remains independent and unchanged.
 
 ## Validation
 

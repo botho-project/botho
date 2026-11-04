@@ -71,6 +71,22 @@ import Botho
 #print axioms Botho.Supply.issuance_step_fits
 #print axioms Botho.Supply.arbitrary_pool_saturates
 
+-- Botho.Supply.Transactions (#1894; checked finite model, named correspondence premises)
+#print axioms Botho.Supply.Transactions.checked_sum_exact
+#print axioms Botho.Supply.Transactions.transaction_balance
+#print axioms Botho.Supply.Transactions.batch_balance
+#print axioms Botho.Supply.Transactions.consume_partition
+#print axioms Botho.Supply.Transactions.checked_keys_sources
+#print axioms Botho.Supply.Transactions.insertion_preserves
+#print axioms Botho.Supply.Transactions.ordinary_step_preserves
+#print axioms Botho.Supply.Transactions.ordinary_step_correspondence
+#print axioms Botho.Supply.Transactions.checked_ordinary_flow
+#print axioms Botho.Supply.Transactions.arithmetic_success_boundaries
+#print axioms Botho.Supply.Transactions.arithmetic_rejection_boundaries
+#print axioms Botho.Supply.Transactions.identity_rejection_boundaries
+#print axioms Botho.Supply.Transactions.fresh_key_needs_correspondence
+#print axioms Botho.Supply.Transactions.valid_update_boundary
+
 -- Botho.Lottery.Conservation (#1849; proven (model), including saturation loss).
 #print axioms Botho.Lottery.splitFees_conserves
 #print axioms Botho.Lottery.splitFees_canonical_conserves
