@@ -120,7 +120,9 @@ def dispatch (fn : String) (a : Json) : Option (Dec Json) :=
     let env : FeeEnv :=
       { wealth := fun c => ((table.find? (·.1 == c)).map (·.2)).getD 0,
         isImport := fun _ => false, curve := id, implied := fun _ => 0 }
-    pure (encNat (effectiveWealth env outs))
+    -- Protocol 9.0.0 (#1876): the exact claimed wealth. The pre-fix
+    -- saturating `effectiveWealth` stays in the model as the historical record.
+    pure (encNat (effectiveWealthExact env outs))
   | "import_floor_factor" => some do
     let outs ← (← arr a "outputs").mapM decCoin
     let imports ← (← arr a "imports").mapM asNat

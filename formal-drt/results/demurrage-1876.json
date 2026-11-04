@@ -1,0 +1,91 @@
+{
+  "issue": 1876,
+  "date": "2026-11-04",
+  "status": "proven (model) + tested; exact centroid and claimed wealth (protocol 9.0.0)",
+  "rust_source": "feature/issue-1876 (PR for #1876); file SHAs below",
+  "toolchains": {
+    "lean": "leanprover/lean4:v4.35.0",
+    "rust": "rustc 1.98.0-nightly (cb46fbb8c 2026-06-08)"
+  },
+  "command": "botho-formal-drt --cases 100000 --seed 1876 --legs demurrage_charge,default_cluster_factor,ring_centroid_factor,effective_cluster_wealth --no-write-regressions --json /tmp/demurrage-1876.json",
+  "sha256": {
+    "formal/Botho/Demurrage/Exact.lean": "fc24ad5f5f4082e2f0c89ba43dcabc7fc2041e363b6aafd737c4519fa2eb143d",
+    "formal/Botho/Tags/EffectiveExact.lean": "2301db5779bdaa1e1e6919f48c072aaa227546d3db999e6f8d61265beacd81f8",
+    "formal-drt/src/demurrage.rs": "ec780aa73239b19665ec3236a31abc7cfa591ec25979b0cdaca9f8992fa6f62b",
+    "formal-drt/lean/Drt/Codec.lean": "8f34a9fa76ff0ad1c6707b9911effbd4a42c4112fd486d6840ccdc39caffbea4",
+    "formal-drt/lean/Drt/Tags.lean": "003dcb3fe3dced7a94a4f947c536a2a45b8a8ace55f3f37f47ccf353e5406d44",
+    "cluster-tax/src/demurrage.rs": "6f3456eff52dd58ff307c944c6d48545d92fe93a99807bc8fff95dd4ae5e5b30",
+    "cluster-tax/src/wide.rs": "5df8490308ef0ca76016711409184fd32580257a8c36d267fd4b9fb7d792b0a2",
+    "cluster-tax/src/fee_curve.rs": "d8b649fac7999cb175a23e13b10f167c742b00584452e844ee25452d492591b8",
+    "botho/src/ledger/store/validation.rs": "515b8b5b4b66ee1ae44d3b9493e1e40fcac7c97a53e6243625590763011274f7",
+    "formal-drt/regressions/demurrage_charge.jsonl": "83d55c531ea3b5f02c7c41fac15ca13720a6583d194cf9742c81b0b2e67d7daf",
+    "formal-drt/regressions/default_cluster_factor.jsonl": "76e37ff9e10d60b2a6e79f39311a33e48977aa634a86e12f225ed41448407925",
+    "formal-drt/regressions/ring_centroid_factor.jsonl": "21fb679263bdecdf66f51a1b91bb18beb2fd9a4633b0b6344e7db70d6fa3e103",
+    "formal-drt/regressions/effective_cluster_wealth.jsonl": "f66bf297722ea075c16d1cbd72e275a64e5b6aa6bf7555b6a05d644d21adc9d7"
+  },
+  "report": {
+    "cases_per_leg": 100000,
+    "legs": [
+      {
+        "cases": 100000,
+        "classes": {
+          "clamped to u64 max": 13689,
+          "positive": 20944,
+          "positive inputs, six-block dead zone": 4658,
+          "zero": 60709
+        },
+        "leg": "demurrage_charge",
+        "mismatches": [],
+        "replayed": 3,
+        "rust": "bth_cluster_tax::demurrage_charge",
+        "seconds": 3.099400166
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "interior": 43185,
+          "maximum": 52199,
+          "minimum": 4616
+        },
+        "leg": "default_cluster_factor",
+        "mismatches": [],
+        "replayed": 6,
+        "rust": "bth_cluster_tax::ClusterFactorCurve::default_params().factor",
+        "seconds": 1.381553292
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "empty": 1309,
+          "weighted numerator exceeds u128 (pre-#1876 saturated)": 74554,
+          "weighted numerator fits u128": 24137
+        },
+        "leg": "ring_centroid_factor",
+        "mismatches": [],
+        "replayed": 8,
+        "rust": "bth_cluster_tax::ring_centroid_implied_factor",
+        "seconds": 12.922844334
+      },
+      {
+        "cases": 100000,
+        "classes": {
+          "positive": 35760,
+          "saturated": 12518,
+          "zero": 51722
+        },
+        "leg": "effective_cluster_wealth",
+        "mismatches": [],
+        "replayed": 3,
+        "rust": "botho::ledger::store::validation::ValidationReads::effective_cluster_wealth_from_outputs",
+        "seconds": 7.033201584
+      }
+    ],
+    "seed": "1876"
+  },
+  "pre_fix_check": "With the unchanged pre-fix model (ringFactor) the fixed Rust ring_centroid_implied_factor mismatched on the second pinned ring (Lean 5841, Rust 5949) and on 4 generated cases in the first batch; effective_cluster_wealth against the pre-fix effectiveWealth mismatched on 5 cases in the first 256-case batch.",
+  "limits": [
+    "Handwritten model correspondence is tested, not proved.",
+    "The new Exact.lean / EffectiveExact.lean theorems are not yet listed in Theorems.lean or bound in statements.txt (records-only PR first).",
+    "Default curve only. ring_centroid_floored_factor's per-member wealth is tested in Rust, not modelled."
+  ]
+}

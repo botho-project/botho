@@ -30,9 +30,14 @@ ring-age selection, transaction fees, principal changes and accepted-state
 reachability still matter. A class downgrade has a separate capitalized
 charge, which is outside this counterexample.
 
-## Numerator saturation lowers the ring factor
+## Numerator saturation lowers the ring factor (pre-9.0.0; fixed by #1876)
 
-`ring_centroid_implied_factor` saturates its weighted numerator, then divides
+This section describes the 8.x code. Protocol 9.0.0 fixes it; see
+[the next section](#fixed-in-protocol-900-exact-centroid-1876). The theorems
+below still hold: they are statements about the pre-fix model `centroid` /
+`ringFactor`, which is kept unchanged as the historical witness.
+
+Before 9.0.0, `ring_centroid_implied_factor` saturated its weighted numerator, then divided
 by the total value. Its comment says overflow pins the centroid to `u128::MAX`
 and the factor to `6000`. Division after saturation makes that claim false.
 
@@ -58,6 +63,46 @@ but we have not constructed a ledger history producing these values and
 effective wealths. A larger claimed/import factor could mask the lower ring
 floor in the final fee composition.
 
+## Fixed in protocol 9.0.0: exact centroid (#1876)
+
+The operator ruled to fix all three fee-floor weighted means with exact wide
+arithmetic: `ring_centroid_implied_factor`, and `ring_centroid_floored_factor`
+and `effective_cluster_wealth_from_outputs` in
+`botho/src/ledger/store/validation.rs`. They now compute the exact floor of
+`Σ value·wealth / Σ value` over a 256-bit numerator
+(`cluster-tax/src/wide.rs`). The result is clamped at `u128::MAX` only at the
+end. For the ring centroid that clamp cannot be reached, because a weighted
+mean never exceeds its largest member wealth.
+
+`Botho/Demurrage/Exact.lean` models the fixed kernel as `exactCentroid` /
+`ringFactorExact`:
+
+- `exactCentroid_homogeneous`: for every member count `n > 0`, value `v > 0`
+  and wealth `w ≤ u128::MAX`, a homogeneous ring's centroid is `w`. This is
+  scale invariance.
+- `homogeneous_ring_scale_exact`: both counterexample rings now give 5949.
+- `homogeneous_centroid_exact`: the 10^18 ring's centroid is `10^20`.
+- `exact_versus_saturating_boundary`: the pre-fix and fixed models agree on
+  the largest homogeneous 20-member ring at `W = 10^20` whose numerator fits
+  u128, and they diverge at the next value.
+
+These theorems are proven (model) but **not yet bound**. They are not listed
+in `Theorems.lean` and have no `statements.txt` blocks. Binding them needs a
+records-only pull request first (see `README.md`, "Statement binding").
+
+The `ring_centroid_factor` DRT leg now compares the Rust function against
+`ringFactorExact`. Run against the old `ringFactor`, the fixed Rust function
+mismatches immediately, starting with the second pinned ring (Lean 5841, Rust
+5949). The `effective_cluster_wealth` leg likewise now compares against
+`Botho.Tags.effectiveWealthExact` (`Botho/Tags/EffectiveExact.lean`, theorem
+`whale_claimed_wealth_exact`, also not yet bound). Seed 1876 ran 100,000
+generated cases on each of `demurrage_charge`, `default_cluster_factor`,
+`ring_centroid_factor` and `effective_cluster_wealth`, plus 20 pinned
+fixtures. There were zero mismatches; see
+`formal-drt/results/demurrage-1876.json`. The pinned
+`ring_centroid_factor.jsonl` fixtures keep both original rings and add the
+#1876 boundary and extreme rings.
+
 ## Charge is not always bounded by principal
 
 `charge_exceeds_value` gives `1_020_000` charged on a `1_000_000` principal
@@ -71,14 +116,16 @@ specification issue; transaction balance validation remains a separate gate.
 | --- | --- | --- |
 | `charge` | `demurrage.rs::demurrage_charge` | `demurrage_charge` |
 | `defaultFactor` | `fee_curve.rs::ClusterFactorCurve::default_params().factor` | `default_cluster_factor` |
-| `ringFactor` / `centroid` | `demurrage.rs::ring_centroid_implied_factor` | `ring_centroid_factor` |
+| `ringFactorExact` / `exactCentroid` | `demurrage.rs::ring_centroid_implied_factor` (protocol 9.0.0) | `ring_centroid_factor` |
+| `ringFactor` / `centroid` | `demurrage.rs::ring_centroid_implied_factor` before 9.0.0 (historical) | none since #1876 |
 
 The model uses natural numbers with explicit saturation and return clamps.
 For Rust-width inputs, the first charge product is below `2^109`; elapsed
 times the time scale is below `2^84`. The curve model covers only the default
 parameters, preserves signed division toward zero and uses the production
-seven-knot lookup table. The ring model retains input order and saturates both
-accumulators exactly where Rust does.
+seven-knot lookup table. The pre-fix ring model retains input order and
+saturates both accumulators exactly where the 8.x Rust did. The exact model
+keeps both accumulators unbounded and clamps the result once.
 
 Pinned DRT fixtures include both rings, the six/twelve-block calls, the
 51-year call and curve boundaries. Generated cases cover the Rust integer

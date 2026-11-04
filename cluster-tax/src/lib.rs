@@ -60,6 +60,7 @@ pub mod signing;
 #[cfg(any(feature = "cli", test))]
 pub mod simulation;
 pub mod validate;
+pub mod wide;
 
 mod age_decay;
 mod block_decay;

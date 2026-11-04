@@ -2,6 +2,12 @@
 Counterexample search for #1711. Models the current demurrage kernel and
 default ring factor; no proposed consensus change. Status: proven (model).
 Rust correspondence is tested separately by the DRT legs.
+
+#1876 (protocol 9.0.0): `centroid` / `ringFactor` below model the PRE-FIX
+(8.x) saturating ring centroid and are kept unchanged, with their theorems, as
+historical witnesses of the bug. The fixed exact centroid is `exactCentroid` /
+`ringFactorExact` in `Exact.lean`, which the `ring_centroid_factor` DRT leg now
+compares against the Rust function.
 -/
 import Botho.Lottery.Arith
 

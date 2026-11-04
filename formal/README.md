@@ -400,7 +400,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
 | `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
 | `cluster_tag_inheritance` | 8.0.0 (#1870): `first_malformed_output_tags` (Rule 1), then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2, C6) over the in-memory double `botho::ledger::formal_drt_tags`; fixtures include #1870's `rules_golden_vectors` | `Botho.Tags.inheritOk₈`, the import cluster derived from the height in the DRT driver (and the failing rule's numbers) |
-| `effective_cluster_wealth` | `ValidationReads::effective_cluster_wealth_from_outputs` over the same double | `Botho.Tags.effectiveWealth` |
+| `effective_cluster_wealth` | 9.0.0 (#1876): `ValidationReads::effective_cluster_wealth_from_outputs` over the same double (exact 256-bit numerator) | `Botho.Tags.effectiveWealthExact` (`effectiveWealth` is the pre-9.0.0 saturating model, kept as the record) |
 | `import_floor_factor` | `ValidationReads::import_floor_factor_from_outputs` over the same double | `Botho.Tags.importFloor` |
 | `difficulty_step` | `EmissionController::compute_time_adjusted_difficulty` (through `botho::formal_drt_difficulty`) | `Botho.Difficulty.step` |
 | `difficulty_run` | `EmissionController::record_block`, one `Some(gap)` per block (half the runs with gaps floored at 3 s, as `observed_block_time` feeds them since 8.0.0) | `Botho.Difficulty.run` |

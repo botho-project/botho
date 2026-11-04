@@ -112,8 +112,11 @@ floor. Plus:
   (decoy-resistant, #596/#582). `consensus_fee_floor` uses
   `ring_elapsed_quantile` for age, while the factor path still uses
   `ring_centroid_floored_factor`; distinguish those from proposed CT economics.
-- u64→u128 cluster-wealth widening: fail-closed on-disk decoding, saturating
-  math pinned to the conservative consensus direction (#626).
+- u64→u128 cluster-wealth widening: fail-closed on-disk decoding (#626).
+  The fee-floor weighted means (ring centroid, ring-member wealth and
+  claimed output wealth) are exact over a 256-bit numerator with a final
+  clamp at `u128::MAX` since protocol 9.0.0 (#1876). The earlier
+  saturate-then-divide lowered the floor instead of pinning it high.
 - Emission schedule (5yr/2%/~611M, #351) and crash-atomicity: block +
   emission + difficulty state in a single LMDB write txn.
 

@@ -158,7 +158,9 @@ def dispatch (fn : String) (a : Json) : Dec Json := do
   | "ring_centroid_factor" =>
     let members ← (← arr a "members").mapM fun m => do
       pure (← nat m "value", ← nat m "wealth")
-    pure (encNat (Botho.Demurrage.ringFactor members))
+    -- Protocol 9.0.0 (#1876): the exact centroid. The pre-fix saturating
+    -- `ringFactor` stays in the model as the historical witness only.
+    pure (encNat (Botho.Demurrage.ringFactorExact members))
   | "lottery_seed_v2" =>
     pure (encBytes (lotterySeedV2 shaOnly (← bytes a "pow_hash") (← bytes a "prev_hash")
       (← nat a "height")))

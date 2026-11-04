@@ -24,7 +24,7 @@ wallet need not run.
 | `inheritOk`, `inputMass`, `outputMass`, `inputClusters` | the C6 mass check of `check_cluster_tag_inheritance` (`botho/src/ledger/store.rs:256`); in 7.x the whole tag rule | tested, as the last step of `inheritOk₈` |
 | `inheritOk₈`, `tagsValid`, `ruleTwoOk` | 8.0.0: `first_malformed_output_tags` (Rule 1, `store.rs:346`) then `check_cluster_tag_inheritance` (Rule 2 via `check_output_clusters_on_ring`, `store.rs:367`, then C6), reached through `validate_ordinary_body` and `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (`store/validation.rs:103`) | tested (DRT leg `cluster_tag_inheritance`); no recorded theorems yet |
 | `wealthCredit` | `update_cluster_wealth_for_output`, `botho/src/ledger/store/writer.rs:482` | tested (end to end, `cluster_tag_invariant_tests.rs`) |
-| `effectiveWealth` | `ValidationReads::effective_cluster_wealth_from_outputs`, `store/validation.rs:280` | tested (DRT leg `effective_cluster_wealth`) |
+| `effectiveWealth` | `ValidationReads::effective_cluster_wealth_from_outputs`, `store/validation.rs:280`, protocol ≤ 8.x (saturating; #1876) | model; historical since 9.0.0. The DRT leg `effective_cluster_wealth` now compares against `effectiveWealthExact` (`EffectiveExact.lean`) |
 | `importFloor` | `ValidationReads::import_floor_factor_from_outputs`, `store/validation.rs:313` | tested (DRT leg `import_floor_factor`) |
 | `demurrageFactor` | the factor composition in `ValidationReads::consensus_fee_floor`, `store/validation.rs:169` (`claimed.max(implied)` in `ring_centroid_floored_factor`, then `.max(import_floor)`) | model; the curve and the ring-centroid factor are parameters |
 

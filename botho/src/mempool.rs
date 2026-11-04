@@ -111,52 +111,37 @@ fn check_output_rule2_for_relay(
 /// otherwise a wealthy cluster could split funds into small transactions and
 /// pay the minimum rate (Sybil/split evasion).
 ///
-/// effective_wealth = Σ_outputs Σ_tags (value × weight / SCALE × W_global) /
-/// Σ_outputs value
+/// effective_wealth = floor(Σ_outputs Σ_tags (floor(value × weight / SCALE) ×
+/// W_global) / Σ_outputs value)
 ///
-/// Background (untagged) value contributes zero, matching
-/// `bth_transaction_core::validation::compute_effective_cluster_wealth`.
+/// Background (untagged) value contributes zero.
+///
+/// This delegates to [`Ledger::effective_cluster_wealth_from_outputs`], the
+/// same function `Ledger::consensus_fee_floor` uses, so relay admission and
+/// block validation compute the identical claimed wealth (and therefore the
+/// identical progressive base-fee factor and `claimed_factor`). Before #1876
+/// this was a private copy that saturated `value_fraction × W_global` and the
+/// running sum at u128::MAX and then divided by the unsaturated total value.
+/// That did NOT pin whale outputs to factor 6000: it LOWERED the claimed
+/// wealth (a 10M BTH output in a 1e21 cluster came out as ~3.4e19), so relay
+/// admitted whale txs below the consensus floor, breaking the
+/// relay-only-tightening invariant (M1-B5). The shared function computes the
+/// mean exactly with a 256-bit numerator
+/// (`bth_cluster_tax::wide::WeightedMean`) and clamps at u128::MAX only at the
+/// end.
+///
+/// DB errors propagate instead of `unwrap_or(0)`. Defaulting a DB failure to
+/// zero wealth would lower the progressive fee (fail-open, audit cycle 6, M7),
+/// letting a wealthy cluster underpay on a transient read error. Surfacing the
+/// error fails CLOSED: the tx is rejected from the mempool with a LedgerError
+/// rather than admitted at a fee computed from bogus zero wealth.
 fn effective_cluster_wealth_from_outputs(
     outputs: &[TxOutput],
     ledger: &Ledger,
 ) -> Result<u128, String> {
-    let mut total_weighted_wealth: u128 = 0;
-    let mut total_value: u128 = 0;
-
-    for output in outputs {
-        total_value = total_value.saturating_add(output.amount as u128);
-        for entry in &output.cluster_tags.entries {
-            let value_fraction =
-                (output.amount as u128 * entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
-            // Propagate DB errors instead of `unwrap_or(0)`. Defaulting a DB
-            // failure to zero wealth would lower the progressive fee (fail-open,
-            // audit cycle 6, M7), letting a wealthy cluster underpay on a
-            // transient read error. Surfacing the error fails CLOSED: the tx is
-            // rejected from the mempool with a LedgerError rather than admitted
-            // at a fee computed from bogus zero wealth. The happy path is
-            // unchanged.
-            // `get_cluster_wealth` is u128 (16-byte accumulator, #626 PR2); the
-            // fee API now takes u128 end-to-end (#626 PR3), so the u64 clamp PR2
-            // added here is gone — full-width wealth flows straight into
-            // `FeeConfig::cluster_factor`. `value_fraction` (≤ output.amount ≤
-            // u64::MAX) × `global_wealth` (u128) and the running sum can in
-            // principle exceed u128 only at astronomically-distant cumulative
-            // wealth (tens of millions of BTH per member × full-supply values);
-            // saturating arithmetic pins that to u128::MAX → factor 6000 (max),
-            // the conservative relay direction. Deterministic; relay policy only.
-            let global_wealth = ledger
-                .get_cluster_wealth(entry.cluster_id.0)
-                .map_err(|e| format!("get_cluster_wealth({}): {}", entry.cluster_id.0, e))?;
-            total_weighted_wealth =
-                total_weighted_wealth.saturating_add(value_fraction.saturating_mul(global_wealth));
-        }
-    }
-
-    if total_value == 0 {
-        return Ok(0);
-    }
-
-    Ok(total_weighted_wealth / total_value)
+    ledger
+        .effective_cluster_wealth_from_outputs(outputs)
+        .map_err(|e| format!("effective_cluster_wealth_from_outputs: {}", e))
 }
 
 /// The bridge-import factor floor implied by a tx's OUTPUT tags (ADR 0007,
@@ -2959,5 +2944,128 @@ mod tests {
                 .is_err(),
             "a tx below the consensus floor must be rejected at block validation"
         );
+    }
+
+    /// #1876 (Judge review on PR #1910): mempool claimed wealth must be the
+    /// exact consensus value for whale outputs. A 10M BTH output fully tagged
+    /// to a 1e21 (1B BTH) cluster overflows u128 in `value_fraction ×
+    /// W_global` (1e19 × 1e21). The pre-fix private mempool copy saturated and
+    /// then divided, returning u128::MAX / 1e19 (~3.4e19, factor below 6000);
+    /// it must now equal the ledger/consensus value, exactly 1e21.
+    #[test]
+    fn bug_1876_mempool_claimed_wealth_is_exact_for_whale_outputs() {
+        use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let cluster = 12u64;
+        let wealth: u128 = 1_000_000_000_000_000_000_000; // 1B BTH cumulative
+        let big = 10_000_000_000_000_000_000u64; // 10M BTH
+        seed_ring_via_snapshot(&ledger, &[], 1, &[(cluster, wealth)]);
+
+        let output = TxOutput {
+            amount: big,
+            target_key: [0x71; 32],
+            public_key: [0x72; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)]),
+            kem_ciphertext: None,
+        };
+        assert!(
+            (big as u128).checked_mul(wealth).is_none(),
+            "the case must overflow a u128 numerator"
+        );
+
+        let mempool_claimed =
+            effective_cluster_wealth_from_outputs(std::slice::from_ref(&output), &ledger).unwrap();
+        let consensus_claimed = ledger
+            .effective_cluster_wealth_from_outputs(std::slice::from_ref(&output))
+            .unwrap();
+        assert_eq!(consensus_claimed, wealth);
+        assert_eq!(
+            mempool_claimed, wealth,
+            "mempool claimed wealth must be exact"
+        );
+        assert_ne!(
+            mempool_claimed,
+            u128::MAX / big as u128,
+            "pre-fix saturate-then-divide value"
+        );
+        assert_eq!(FeeConfig::default().cluster_factor(mempool_claimed), 6000);
+    }
+
+    /// #1876 + M1-B5: for a whale ring (10M BTH members and output in a 1e21
+    /// cluster) the uncongested relay `minimum_fee` must still be >= the
+    /// consensus fee floor. With the pre-fix mempool claimed wealth the relay
+    /// base fee fell below the consensus base fee, so relay admitted txs that
+    /// block validation rejects.
+    #[test]
+    fn bug_1876_relay_minimum_never_below_consensus_floor_for_whale_ring() {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+        use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let tip_height = 8_000_000u64;
+        let cluster = 12u64;
+        let wealth: u128 = 1_000_000_000_000_000_000_000;
+        let big = 10_000_000_000_000_000_000u64;
+        let ring = seed_ring_via_snapshot(
+            &ledger,
+            &[(big, 0, cluster, 90), (big, 10, cluster, 91)],
+            tip_height,
+            &[(cluster, wealth)],
+        );
+
+        let tx = Transaction {
+            inputs: TxInputs::new(vec![ClsagRingInput {
+                ring,
+                key_image: [0u8; 32],
+                commitment_key_image: [0u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount: 0,
+            }]),
+            outputs: vec![TxOutput {
+                amount: big,
+                target_key: [140; 32],
+                public_key: [141; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::from_pairs(&[(
+                    ClusterId(cluster),
+                    TAG_WEIGHT_SCALE,
+                )]),
+                kem_ciphertext: None,
+            }],
+            fee: 0,
+            created_at_height: 0,
+            settlement: None,
+        };
+
+        let fee_config = FeeConfig::default();
+        let consensus_floor = ledger.consensus_fee_floor(&tx, tip_height).unwrap();
+        let cold = DynamicFeeBase::default();
+        let relay_cold = relay_minimum_fee(&tx, &ledger, &fee_config, &cold, false);
+        assert!(
+            relay_cold >= consensus_floor,
+            "relay minimum {relay_cold} fell below consensus floor {consensus_floor}"
+        );
+        assert_eq!(
+            relay_cold, consensus_floor,
+            "uncongested relay minimum must equal the consensus floor"
+        );
+
+        // The pre-fix claimed wealth would have produced a strictly lower
+        // relay base fee than consensus requires.
+        let base_at = |cw: u128| {
+            fee_config.minimum_fee_dynamic_with_outputs(
+                FeeTransactionType::Hidden,
+                tx.estimate_size(),
+                cw,
+                tx.outputs.len(),
+                0,
+                cold.compute_base(false),
+            )
+        };
+        assert!(base_at(u128::MAX / big as u128) < base_at(wealth));
     }
 }
