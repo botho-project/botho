@@ -102,13 +102,13 @@ def demurrage.capitalized_reset_charge
     ok (core.num.U64.saturating_sub at_floor at_output)
 
 /-- [bth_cluster_tax::lottery::LOTTERY_BASE_FEE_PICO]
-    Source: 'cluster-tax/src/lottery.rs', lines 51:0-51:55
+    Source: 'cluster-tax/src/lottery.rs', lines 55:0-55:55
     Visibility: public -/
 @[global_simps, irreducible]
 def lottery.LOTTERY_BASE_FEE_PICO : Std.U64 := 250000000000#u64
 
 /-- [bth_cluster_tax::lottery::is_eligible_at]:
-    Source: 'cluster-tax/src/lottery.rs', lines 281:0-291:1
+    Source: 'cluster-tax/src/lottery.rs', lines 285:0-295:1
     Visibility: public -/
 def lottery.is_eligible_at
   (creation_block : Std.U64) (value : Std.U64) (current_block : Std.U64)
@@ -125,14 +125,14 @@ def lottery.is_eligible_at
   else ok false
 
 /-- Trait declaration: [bth_cluster_tax::lottery::EligibilityView]
-    Source: 'cluster-tax/src/lottery.rs', lines 298:0-303:1
+    Source: 'cluster-tax/src/lottery.rs', lines 302:0-307:1
     Visibility: public -/
 structure lottery.EligibilityView (Self : Type _) where
   creation_block : Self → Result Std.U64
   value : Self → Result Std.U64
 
 /-- [bth_cluster_tax::lottery::count_eligible_in]: loop body 0:
-    Source: 'cluster-tax/src/lottery.rs', lines 331:4-344:5
+    Source: 'cluster-tax/src/lottery.rs', lines 335:4-348:5
     Visibility: public -/
 @[rust_loop_body]
 def lottery.count_eligible_in_loop.body
@@ -159,7 +159,7 @@ def lottery.count_eligible_in_loop.body
   else ok (done n)
 
 /-- [bth_cluster_tax::lottery::count_eligible_in]: loop 0:
-    Source: 'cluster-tax/src/lottery.rs', lines 331:4-344:5
+    Source: 'cluster-tax/src/lottery.rs', lines 335:4-348:5
     Visibility: public -/
 @[rust_loop]
 def lottery.count_eligible_in_loop
@@ -175,7 +175,7 @@ def lottery.count_eligible_in_loop
     (n, i)
 
 /-- [bth_cluster_tax::lottery::count_eligible_in]:
-    Source: 'cluster-tax/src/lottery.rs', lines 322:0-346:1
+    Source: 'cluster-tax/src/lottery.rs', lines 326:0-350:1
     Visibility: public -/
 @[reducible]
 def lottery.count_eligible_in
@@ -188,7 +188,7 @@ def lottery.count_eligible_in
     min_utxo_age circulation_window min_utxo_value 0#usize 0#usize
 
 /-- [bth_cluster_tax::lottery::sybil_reward_cap]:
-    Source: 'cluster-tax/src/lottery.rs', lines 369:0-373:1
+    Source: 'cluster-tax/src/lottery.rs', lines 378:0-382:1
     Visibility: public -/
 def lottery.sybil_reward_cap
   (eligible_count : Std.Usize) : Result Std.U128 := do
