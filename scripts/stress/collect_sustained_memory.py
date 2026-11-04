@@ -43,6 +43,12 @@ the completeness rule: a 4-12 s late start, one 9 s stall or an 8 s restart
 (two files) each misses at least one tick and is ``incomplete`` even though
 no gap exceeds 15 s.
 
+The terminal record is unauthenticated. It catches incomplete runs and
+operator error, not deliberate fabrication: anyone who can write the file can
+forge it. Integrity comes from archiving the file's ``out_sha256`` (printed in
+the stdout summary) together with the collector's log and exit status at
+collection time.
+
 The collector never launches, pauses, signals or reconfigures a node.
 """
 

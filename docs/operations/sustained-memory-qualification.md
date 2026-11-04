@@ -159,16 +159,14 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
     --node n1=n1-identity.json ... --node n5=n5-identity.json
   ```
 
-  `MIN_BLOCKS` is a floor on the block-height increase in **every** fixed
-  300 s sustained window on every node, so derive it from the reviewed block
-  cadence of the same topology, never from a target. Use the smallest
-  per-300 s height increase seen in the reviewed cadence evidence (at least
-  1), not its mean. For example, the 2026-09-27 run went from about height
-  4 to height 47 in about 1.5 h, a mean of about 2.5 blocks per window. On
-  that cadence a floor of 3 or more fails most windows, and a quiet window
-  can fall below even 2. The old example value `10` would always end
-  `incomplete` there. A floor that the cadence cannot meet does not test
-  memory. Record the cadence evidence you used with the manifest.
+  `MIN_BLOCKS` is a floor on the block-height increase in **every** one of
+  the 48 fixed 300 s sustained windows, on every node. A single window below
+  the floor makes the run `incomplete`. Derive it from a cadence soak
+  measured on this fleet just before the manifest is built (see
+  [choosing `MIN_BLOCKS`](#choosing-min_blocks)), never from a target, a
+  mean, or an older run. The floor only proves the workload is active. It is
+  not the memory test, so raising it gains nothing. `validate_manifest`
+  requires at least 1.
 
   It refuses a t0 in the past (a readiness delay may never shorten warmup),
   a t0 more than an hour ahead, differing artifact hashes, shared cgroups, an
@@ -243,6 +241,20 @@ Every manifest node must be covered by exactly one such record. Each node's
 observation count must equal the written ticks. Nothing may follow the
 record in its file. The record is the collector's own account of its run,
 so this rule is separate from the evidence checks below and adds to them.
+
+**Threat model.** The terminal record is unauthenticated: it has no MAC or
+signature, and anyone who can write the file can forge or edit it. It
+detects incomplete collection and operator error, such as a late start, a
+skipped tick, a restart, an interrupted run, a truncated, missing,
+duplicated or extra file, or a stale manifest. It does not detect deliberate
+fabrication. A hand-built record over clean rows, or one edited row
+timestamp with the count unchanged, still passes. Integrity rests on what
+is captured at collection time and archived: each raw file's SHA256, the
+collector's stdout summary (which carries `out_sha256`) and stderr log, its
+exit status, and the manifest (see step 7 and
+[qualifying an x2 candidate](#qualifying-an-x2-candidate), step 5). Treat a
+raw file whose hash differs from the one recorded at collection time as
+untrusted.
 It closes a gap: a 15 s gap tolerance alone admits a 4 s or 12 s late start,
 one 9 s stall, or a collector restart with an 8 s gap (two files), although
 the collector already knew each of those runs was incomplete (#1902).
@@ -420,19 +432,66 @@ cohort** before the x2 fleet is provisioned:
    With `mint_until`, the producer gets `--testnet-mint-until mint_until` and
    every node still runs until the `node_end` stop timer. Without it, the
    producer mints until `node_end`, as before.
-3. Before t0, start the five units. Verify quorum, peers and genesis, then
-   on each host run `sample_sustained_memory.py --identity $(systemctl show
-   -p MainPID --value botho-RUN.service)`. Build the manifest once with
-   `collect_sustained_memory.py manifest --started-at T0`. Derive
-   `--min-blocks` from the reviewed block cadence as described under
-   `manifest` above (about 2.5 blocks per window on the 2026-09-27 run, so
-   at most 2). Then start one
+3. Before t0, start the five units. Verify quorum, peers and genesis.
+4. With the producer minting, run the cadence soak and choose `MIN_BLOCKS`
+   ([choosing `MIN_BLOCKS`](#choosing-min_blocks)). Do not continue if the
+   soak fails its start condition. Then on each host run
+   `sample_sustained_memory.py --identity $(systemctl show -p MainPID
+   --value botho-RUN.service)`. Build the manifest once with
+   `collect_sustained_memory.py manifest --started-at T0 --min-blocks
+   MIN_BLOCKS`, and archive the soak data with it. Then start one
    `collect` per host against `http://127.0.0.1:19090/rpc` (the
-   `fleet_provision.RPC_PORT`), in a transient unit or `nohup`.
-4. After the profile end, copy each host's `n*.jsonl`, collector log and
-   exit status, run `sustained_memory.py manifest.json n1.jsonl ...
-   n5.jsonl`, and archive everything with hashes. Then let the stop timers
-   and host deadline run out.
+   `fleet_provision.RPC_PORT`), in a transient unit or `nohup`. Record each
+   collector's stdout summary and stderr log as it runs.
+   **Early abort:** if any 300 s window during warmup shows 0 blocks on any
+   node, stop. Remeasure instead of spending the remaining ~5 h on a run that
+   cannot pass, and use a new t0 and a new manifest.
+5. After the profile end, copy each host's `n*.jsonl`, collector log, stdout
+   summary and exit status, run `sustained_memory.py manifest.json n1.jsonl
+   ... n5.jsonl`, and archive everything with hashes. Check each file's
+   SHA256 against the `out_sha256` its collector printed. Then let the stop
+   timers and host deadline run out.
+
+#### Choosing `MIN_BLOCKS`
+
+The manifest is hashed before t0, so warmup data cannot set its floor.
+Measure the cadence first.
+
+1. **Soak.** After quorum is verified and before building the manifest, let
+   the producer mint for at least 30-60 min. Poll `node_getStatus`
+   `chainHeight` every 5 s on every node. Compute the height delta over
+   consecutive fixed 300 s windows. Archive the raw polls and the deltas
+   alongside the manifest.
+2. **Start condition.** Do not start the qualification if any soak window on
+   any node shows 0 blocks, or if the mean is below about 7 blocks per
+   window.
+3. **Choose** `MIN_BLOCKS = max(1, floor(min_window / 2))`, where
+   `min_window` is the smallest soak delta on any node. Then lower it, but
+   not below 1, until the chance that all 48 sustained windows meet it is
+   at least 95% at the measured mean `λ`, assuming random (Poisson) arrival:
+   `(1 - P(X < MIN_BLOCKS; λ))^48 >= 0.95`.
+
+| mean blocks / window | floor 1 | floor 2 | floor 3 |
+|---|---|---|---|
+| 2.5 | 1.6% | ~0% | ~0% |
+| 5 | 72% | 14% | 0.2% |
+| 7 | 96% | 70% | 24% |
+| 7.5 | 97% | 80% | 37% |
+| 10 | 99.8% | 98% | 88% |
+| 15 | ~100% | ~100% | 99.8% |
+
+Blocks are paced by the consensus slot, not by PoW: the default slot is 20 s
+and the idle tier is 40 s. A continuously minting producer with no wallet
+traffic should therefore make about 7.5-15 blocks per window, more regularly
+than random arrival would. Expect `MIN_BLOCKS = 1`. Use 2 only if the
+soak's minimum window is at least 4 and its mean is at least 10. A fleet
+below the start condition cannot be memory-qualified by this gate at any
+allowed floor. Diagnose the cadence instead of starting.
+
+The 2026-09-27 run (height about 4 to 47 in about 1.5 h, about 2.5 blocks
+per window) is **not** a valid reference. It came from a near-genesis chain
+with older consensus issues. At that cadence even `MIN_BLOCKS = 1` passes
+about 1.6% of the time.
 
 Treat x2 as memory-qualified only if this assessment is `passed` with scope
 `limited_minting` for the same node SHA256 that x2 deploys. `passed` already

@@ -23,6 +23,14 @@ missed tick, a missing or extra terminal record, a terminal record for another
 manifest, or rows appended after it, yields ``incomplete``. Observation
 failures (growth, resource limits, identity changes) still take precedence
 over ``incomplete`` and are never hidden by it.
+
+Threat model: the terminal record is an unauthenticated self-attestation, with
+no MAC or signature. It detects incomplete collection and operator error, such
+as wrong, missing, extra, truncated or concatenated files or a stale manifest.
+It does not detect deliberate fabrication: a hand-built record over clean rows,
+or one edited row timestamp with the count unchanged, still passes. Integrity
+rests on the raw-file SHA256s, the collector's stdout summary and log, and the
+manifest, all archived at collection time.
 """
 
 import argparse
