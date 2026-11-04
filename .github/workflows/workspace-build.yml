@@ -81,6 +81,13 @@ jobs:
           cargo test --locked -p botho-wallet --lib --no-default-features storage::tests::
           cargo test --locked -p botho-wallet --lib --no-default-features transaction::tests::test_output_is_detectable_by_recipient -- --exact
 
+      # The mobile rust-bridge unit tests (send planning, ring decoy selection
+      # #1861, lottery payouts). mobile-ci.yml covers only mobile/app, so this
+      # is the only job that runs them. Package-only, like the wallet steps.
+      - name: Run mobile rust-bridge unit tests
+        timeout-minutes: 15
+        run: cargo test --locked -p botho-mobile --lib
+
       # Compile the ordinary desktop feature set in its own invocation; another
       # workspace package must not supply the PQ features its wallet requires.
       - name: Check standalone desktop hybrid wallet

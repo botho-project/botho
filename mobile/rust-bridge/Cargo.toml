@@ -25,6 +25,9 @@ bth-crypto-keys = { path = "../../crypto/keys" }
 # exposes an `rlib` for native (non-wasm) consumers like this one.
 bth-wasm-signer = { path = "../../web/packages/wasm-signer" }
 bth-transaction-clsag = { path = "../../transaction/clsag" }
+# OS CSPRNG for ring decoy selection (#1861), the same source botho-wallet's
+# pickers use.
+bth-util-from-random = { path = "../../util/from-random" }
 
 # Base58 address encoding (tbotho://1/<base58(view||spend)>)
 bs58 = "0.4"
