@@ -11,6 +11,7 @@ use crate::{
     block::Block,
     transaction::{Utxo, UtxoId},
 };
+use bth_transaction_clsag::lottery_v2 as v2;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Instant};
@@ -58,6 +59,7 @@ pub struct Output {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
+    pub genesis: [u8; 32],
     pub state: ChainState,
     pub pool: u128,
     /// All stored rows, including spent decoys. This is NOT economic U.
@@ -100,6 +102,7 @@ pub fn snapshot(ledger: &Ledger, watched: &[[u8; 32]]) -> Result<Snapshot, Ledge
         .map(|key| ledger.is_key_image_spent(&key).map(|height| (key, height)))
         .collect::<Result<_, _>>()?;
     Ok(Snapshot {
+        genesis: ledger.get_block(0)?.hash(),
         state,
         pool,
         outputs,
@@ -242,6 +245,199 @@ pub struct RealInput {
     pub amount: u64,
 }
 
+/// Fixture-known history, including keys observed absent after a rejection.
+/// This is not an enumeration of the production key-image database.
+pub type KeyHistory = Vec<([u8; 32], Option<u64>)>;
+
+fn same<T: Serialize>(a: &T, b: &T) -> Result<bool, String> {
+    Ok(bincode::serialize(a).map_err(|e| e.to_string())?
+        == bincode::serialize(b).map_err(|e| e.to_string())?)
+}
+
+fn unique<K: Ord, V>(rows: impl IntoIterator<Item = (K, V)>) -> Result<BTreeMap<K, V>, String> {
+    let mut result = BTreeMap::new();
+    for (key, value) in rows {
+        if result.insert(key, value).is_some() {
+            return Err("duplicate observed or candidate identity".into());
+        }
+    }
+    Ok(result)
+}
+
+/// Bind an accepted observation to the complete old-row frame, candidate
+/// output conversion and fixture-known key history. Payouts inherit their
+/// source's ORIGINAL base index and cumulative tweak via the public V2
+/// derivation contract. This does not re-prove winner selection or CLSAG's
+/// real-input binding, and does not observe secondary indexes/other tables.
+pub fn check_accepted_frame(o: &Observation, history: &KeyHistory) -> Result<(), String> {
+    if o.outcome != Outcome::Accepted {
+        return Err("frame requires an accepted production commit".into());
+    }
+    let before = unique(o.before.outputs.iter().map(|r| (r.row.id.to_bytes(), r)))?;
+    let after = unique(o.after.outputs.iter().map(|r| (r.row.id.to_bytes(), r)))?;
+    for (id, old) in &before {
+        if !after
+            .get(id)
+            .map(|new| same(*old, *new))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            return Err("old persisted row/context changed or disappeared".into());
+        }
+    }
+    let block = &o.block;
+    let height = block.height();
+    if o.after.genesis != o.before.genesis
+        || o.before.state.height.checked_add(1) != Some(height)
+        || o.after.state.height != height
+        || o.after.state.tip_hash != block.hash()
+    {
+        return Err("accepted chain identity mismatch".into());
+    }
+    let direct = |id: UtxoId, output, kind| CreatedOutput {
+        kind,
+        output: Output {
+            row: Utxo {
+                id,
+                output,
+                created_at: height,
+            },
+            context: Context::Direct {
+                height,
+                base_index: id.output_index,
+            },
+        },
+    };
+    let mut expected = vec![direct(
+        UtxoId::new(block.hash(), 0),
+        block.minting_tx.to_tx_output(),
+        OutputKind::Coinbase,
+    )];
+    for tx in &block.transactions {
+        for (i, output) in tx.outputs.iter().enumerate() {
+            let index = u32::try_from(i).map_err(|_| "ordinary ordinal overflow")?;
+            expected.push(direct(
+                UtxoId::new(tx.hash(), index),
+                output.clone(),
+                OutputKind::Ordinary {
+                    transaction: tx.hash(),
+                },
+            ));
+        }
+    }
+    let awards: Vec<_> = block
+        .lottery_outputs
+        .iter()
+        .map(|p| v2::Award {
+            winner: v2::Outpoint {
+                hash: p.winner_tx_hash,
+                index: p.winner_output_index,
+            },
+            amount: p.payout,
+        })
+        .collect();
+    let manifest = v2::manifest(&awards).map_err(|e| format!("payout manifest: {e:?}"))?;
+    for (i, wire) in block.lottery_outputs.iter().enumerate() {
+        let source = before
+            .get(&wire.winner_utxo_id())
+            .ok_or("payout source absent")?;
+        let (base_index, tweak) = match source.context {
+            Context::Direct { base_index, .. } => (base_index, [0; 32]),
+            Context::Lottery {
+                base_index, tweak, ..
+            } => (base_index, tweak),
+        };
+        let derived = v2::derive(
+            &v2::Source {
+                outpoint: awards[i].winner.clone(),
+                target: source.row.output.target_key,
+                context: v2::Context { base_index, tweak },
+            },
+            &lottery_v2::domain_for(o.before.genesis, block, manifest, i, wire.payout),
+        )
+        .map_err(|e| format!("payout derivation: {e:?}"))?;
+        if wire.target_key != derived.target
+            || wire.public_key != source.row.output.public_key
+            || wire.kem_ciphertext != source.row.output.kem_ciphertext
+        {
+            return Err("payout source envelope mismatch".into());
+        }
+        let ordinal = u32::try_from(i).map_err(|_| "payout ordinal overflow")?;
+        expected.push(CreatedOutput {
+            kind: OutputKind::Lottery { ordinal },
+            output: Output {
+                row: Utxo {
+                    id: UtxoId::new(
+                        block.hash(),
+                        ordinal.checked_add(1).ok_or("payout index overflow")?,
+                    ),
+                    output: wire.to_tx_output(source.row.output.cluster_tags.clone()),
+                    created_at: height,
+                },
+                context: Context::Lottery {
+                    height,
+                    ordinal,
+                    base_index: derived.context.base_index,
+                    tweak: derived.context.tweak,
+                },
+            },
+        });
+    }
+    let expected = unique(
+        expected
+            .into_iter()
+            .map(|r| (r.output.row.id.to_bytes(), r)),
+    )?;
+    let reported = unique(
+        o.new_outputs
+            .iter()
+            .map(|r| (r.output.row.id.to_bytes(), r)),
+    )?;
+    if expected.keys().any(|id| before.contains_key(id))
+        || after.len()
+            != before
+                .len()
+                .checked_add(expected.len())
+                .ok_or("row count overflow")?
+        || expected.len() != reported.len()
+    {
+        return Err("created-ID set/collision mismatch".into());
+    }
+    for (id, row) in &expected {
+        if !after
+            .get(id)
+            .map(|r| same(&row.output, *r))
+            .transpose()?
+            .unwrap_or(false)
+            || !reported
+                .get(id)
+                .map(|r| same(row, *r))
+                .transpose()?
+                .unwrap_or(false)
+        {
+            return Err("candidate/persisted/new_outputs correspondence mismatch".into());
+        }
+    }
+    let old_keys = unique(o.before.key_images.iter().copied())?;
+    let new_keys = unique(o.after.key_images.iter().copied())?;
+    let mut expected_keys = unique(history.iter().copied())?;
+    if old_keys != expected_keys {
+        return Err("known key-image prehistory mismatch".into());
+    }
+    for key in block.transactions.iter().flat_map(|tx| tx.key_images()) {
+        let value = expected_keys
+            .get_mut(&key)
+            .ok_or("candidate key image not watched")?;
+        if value.replace(height).is_some() {
+            return Err("accepted key image already spent/duplicated".into());
+        }
+    }
+    if new_keys != expected_keys {
+        return Err("known key-image posthistory mismatch".into());
+    }
+    Ok(())
+}
+
 /// Independent economic unspent map. Spent LMDB rows remain as decoys;
 /// consuming known real sources is the fixture's explicit ghost premise.
 #[derive(Clone, Default)]
@@ -250,6 +446,24 @@ pub struct Ghost {
 }
 
 impl Ghost {
+    pub fn sources(&self) -> Vec<RealInput> {
+        self.unspent
+            .iter()
+            .map(|(id, amount)| RealInput {
+                outpoint: UtxoId::new(
+                    id[..32].try_into().unwrap(),
+                    u32::from_le_bytes(id[32..].try_into().unwrap()),
+                ),
+                amount: *amount,
+            })
+            .collect()
+    }
+
+    pub fn from_sources(sources: &[RealInput]) -> Result<Self, String> {
+        Ok(Self {
+            unspent: unique(sources.iter().map(|s| (s.outpoint.to_bytes(), s.amount)))?,
+        })
+    }
     pub fn value(&self) -> Result<u128, String> {
         checked_sum(self.unspent.values().map(|v| *v as u128))
     }
@@ -263,11 +477,42 @@ impl Ghost {
         Ok(())
     }
 
-    pub fn check(&self, observation: &Observation, inputs: &[RealInput]) -> Result<(), String> {
+    pub fn check(
+        &self,
+        observation: &Observation,
+        inputs: &[RealInput],
+        history: &KeyHistory,
+    ) -> Result<(), String> {
+        check_accepted_frame(observation, history)?;
+        let persisted: BTreeMap<_, _> = observation
+            .before
+            .outputs
+            .iter()
+            .map(|o| (o.row.id.to_bytes(), o.row.output.amount))
+            .collect();
+        if self
+            .unspent
+            .iter()
+            .any(|(id, amount)| persisted.get(id) != Some(amount))
+        {
+            return Err("known-source map differs from persisted amounts".into());
+        }
         if observation.outcome != Outcome::Accepted {
             return Err("value flow requires an accepted production commit".into());
         }
         let mut distinct = BTreeMap::new();
+        if inputs.len()
+            != observation
+                .block
+                .transactions
+                .iter()
+                .map(|t| t.inputs.clsag().len())
+                .sum::<usize>()
+        {
+            return Err(
+                "fixture real-input count mismatch (binding remains a CLSAG premise)".into(),
+            );
+        }
         for input in inputs {
             if distinct
                 .insert(input.outpoint.to_bytes(), input.amount)
@@ -311,8 +556,13 @@ impl Ghost {
         Ok(())
     }
 
-    pub fn apply(&mut self, observation: &Observation, inputs: &[RealInput]) -> Result<(), String> {
-        self.check(observation, inputs)?;
+    pub fn apply(
+        &mut self,
+        observation: &Observation,
+        inputs: &[RealInput],
+        history: &KeyHistory,
+    ) -> Result<(), String> {
+        self.check(observation, inputs, history)?;
         let mut next = self.clone();
         for input in inputs {
             next.unspent.remove(&input.outpoint.to_bytes());
@@ -350,6 +600,8 @@ pub fn source_hash() -> String {
         include_bytes!("store/v2.rs"),
         include_bytes!("lottery_v2.rs"),
         include_bytes!("../block.rs"),
+        include_bytes!("../transaction.rs"),
+        include_bytes!("../../../transaction/clsag/src/lottery_v2.rs"),
         include_bytes!("../../../transaction/clsag/src/lib.rs"),
     ] {
         hash.update((source.len() as u64).to_le_bytes());

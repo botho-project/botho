@@ -23,6 +23,8 @@ mod legs_tags;
 mod model;
 mod runner;
 #[cfg(test)]
+mod supply;
+#[cfg(test)]
 mod supply_oracle_tests;
 mod wire;
 

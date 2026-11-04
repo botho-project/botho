@@ -1,0 +1,1298 @@
+{
+  "schema": 1,
+  "issue": 1893,
+  "scope": "bounded actual-commit accepted-frame and closed-store replay; no DRT leg/campaign",
+  "platform": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu": "Apple M3 Ultra"
+  },
+  "profile": "genesis_origin_easy_difficulty_u64_max_real_pow_maturity_720",
+  "profile_hash": "27ddd149cf12d8370e650773b0fa1c61af1bef791d61d8dc067053160b2d047e",
+  "source_revision": "af96100292170be8306b881b933b645619a7d197",
+  "source_worktree_dirty": true,
+  "source_hash": "b67633f27fb9229051c1abcc55013cf83914ef3b2753afe3c0697348a073bcc7",
+  "source_hash_files": [
+    "botho/src/ledger/formal_drt_supply.rs",
+    "botho/src/ledger/store.rs",
+    "botho/src/ledger/store/validation.rs",
+    "botho/src/ledger/store/writer.rs",
+    "botho/src/ledger/store/v2.rs",
+    "botho/src/ledger/lottery_v2.rs",
+    "botho/src/block.rs",
+    "botho/src/transaction.rs",
+    "transaction/clsag/src/lottery_v2.rs",
+    "transaction/clsag/src/lib.rs"
+  ],
+  "fixture_source_hash": "e466d0937994d45199a6c51937007b958678b9da648828d565a52b53efb584c4",
+  "fixture_source_hash_files": [
+    "formal-drt/src/supply.rs",
+    "formal-drt/src/supply_oracle_tests.rs",
+    "formal-drt/Cargo.toml",
+    "formal-drt/Cargo.lock",
+    "rust-toolchain"
+  ],
+  "source_hash_encoding": "SHA256 of each listed file: u64 little-endian byte length followed by exact bytes; file list order as shown. Selected source scope, not all transitive dependencies. Exact-head Linux receipt pins the full checkout.",
+  "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/Volumes/Stripe/cargo-target SUPPLY_ORACLE_DIR=<fresh-directory> cargo test --release supply_oracle -- --nocapture (from formal-drt)",
+  "bound_seconds": {
+    "external_command": 420,
+    "fixture": 360
+  },
+  "focused_tests": {
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "test_seconds": 45.04,
+    "command_seconds_including_incremental_build": 79.056
+  },
+  "primary_scenarios": {
+    "accepted": 7,
+    "rejected": 4,
+    "infrastructure_failures": 0,
+    "retained_committed_blocks": 743
+  },
+  "prefix_setup_us": 39758495,
+  "wallet_setup_us": 8307,
+  "fixture_total_ms": 44997,
+  "frame_controls": [
+    {
+      "control": "wrong ghost amount",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "old amount",
+      "error": "old persisted row/context changed or disappeared",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "old context",
+      "error": "old persisted row/context changed or disappeared",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "old removal",
+      "error": "old persisted row/context changed or disappeared",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "missing new persisted row",
+      "error": "created-ID set/collision mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "extra persisted row",
+      "error": "created-ID set/collision mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "missing redundant new_outputs",
+      "error": "created-ID set/collision mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong redundant new_outputs",
+      "error": "candidate/persisted/new_outputs correspondence mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate before ID",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate after ID",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate reported ID",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong existing key marker",
+      "error": "known key-image posthistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong known prehistory",
+      "error": "known key-image prehistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "missing known key observation",
+      "error": "known key-image posthistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate known key observation",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong new key height",
+      "error": "known key-image posthistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong ghost amount",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "old amount",
+      "error": "old persisted row/context changed or disappeared",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "old context",
+      "error": "old persisted row/context changed or disappeared",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "old removal",
+      "error": "old persisted row/context changed or disappeared",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "missing new persisted row",
+      "error": "created-ID set/collision mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "extra persisted row",
+      "error": "created-ID set/collision mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "missing redundant new_outputs",
+      "error": "created-ID set/collision mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong redundant new_outputs",
+      "error": "candidate/persisted/new_outputs correspondence mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate before ID",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate after ID",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate reported ID",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong existing key marker",
+      "error": "known key-image posthistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong known prehistory",
+      "error": "known key-image prehistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "missing known key observation",
+      "error": "known key-image posthistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "duplicate known key observation",
+      "error": "duplicate observed or candidate identity",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong new key height",
+      "error": "known key-image posthistory mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    },
+    {
+      "control": "wrong payout cumulative tweak",
+      "error": "candidate/persisted/new_outputs correspondence mismatch",
+      "ghost_unchanged": true,
+      "restored": true
+    }
+  ],
+  "repeated_attempts": {
+    "accepted": 18,
+    "rejected": 6,
+    "infrastructure_failures": 0,
+    "fresh_signatures": 12,
+    "saved_signed_replays": 12
+  },
+  "cases": [
+    {
+      "artifact_controls": [
+        "wrong manifest hash",
+        "missing artifact",
+        "wrong schema",
+        "wrong profile",
+        "wrong source",
+        "corrupt store",
+        "unreadable manifest",
+        "restoration passes"
+      ],
+      "capture_us": 6570,
+      "closed_data_bytes": 737280,
+      "closed_data_sha256": "4e2872c297ff790e3458742d993a93b8b8fe978e7ffd7842acef38764cd2f77d",
+      "directory": "replay-signed_transfer_0",
+      "fresh_signed_samples": 3,
+      "known_keys": 1,
+      "manifest_sha256": "aa06a64918801107066456200a5c00d9e95a323db68d4faa95c96be3a6c8bfa0",
+      "measurement_elapsed_us": 529487,
+      "pre_height": 64,
+      "pre_rows": 64,
+      "prestate_identity": "e6117c01b65d16c13db9c5e9cf4155285e1d7c30f494933273370057a59b0c28",
+      "saved_signed_replays": 3,
+      "scenario": "signed_transfer_0",
+      "wallet_setup_us": 8014,
+      "measurements": [
+        {
+          "fresh": false,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 442,
+              "median": 463,
+              "max": 514,
+              "sum": 1419
+            },
+            "commit_us": {
+              "min": 12716,
+              "median": 12766,
+              "max": 64405,
+              "sum": 89887
+            },
+            "elapsed_us": {
+              "min": 29695,
+              "median": 30420,
+              "max": 83082,
+              "sum": 143197
+            },
+            "frame_us": {
+              "min": 109,
+              "median": 111,
+              "max": 264,
+              "sum": 484
+            },
+            "load_us": {
+              "min": 5305,
+              "median": 5491,
+              "max": 5652,
+              "sum": 16448
+            },
+            "observation_us": {
+              "min": 396,
+              "median": 403,
+              "max": 558,
+              "sum": 1357
+            },
+            "other_us": {
+              "min": 2027,
+              "median": 2153,
+              "max": 2566,
+              "sum": 6746
+            },
+            "precheck_us": {
+              "min": 1249,
+              "median": 1259,
+              "max": 1263,
+              "sum": 3771
+            },
+            "reset_us": {
+              "min": 4506,
+              "median": 4661,
+              "max": 4885,
+              "sum": 14052
+            },
+            "serialization_write_us": {
+              "min": 2447,
+              "median": 2989,
+              "max": 3597,
+              "sum": 9033
+            },
+            "signing_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            },
+            "template_seal_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            }
+          }
+        },
+        {
+          "fresh": true,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 392,
+              "median": 393,
+              "max": 445,
+              "sum": 1230
+            },
+            "commit_us": {
+              "min": 21743,
+              "median": 23102,
+              "max": 29200,
+              "sum": 74045
+            },
+            "elapsed_us": {
+              "min": 61368,
+              "median": 119709,
+              "max": 122692,
+              "sum": 303769
+            },
+            "frame_us": {
+              "min": 108,
+              "median": 109,
+              "max": 109,
+              "sum": 326
+            },
+            "load_us": {
+              "min": 5373,
+              "median": 5517,
+              "max": 7577,
+              "sum": 18467
+            },
+            "observation_us": {
+              "min": 392,
+              "median": 396,
+              "max": 402,
+              "sum": 1190
+            },
+            "other_us": {
+              "min": 2023,
+              "median": 2114,
+              "max": 4001,
+              "sum": 8138
+            },
+            "precheck_us": {
+              "min": 1247,
+              "median": 1249,
+              "max": 1254,
+              "sum": 3750
+            },
+            "reset_us": {
+              "min": 4584,
+              "median": 14257,
+              "max": 70058,
+              "sum": 88899
+            },
+            "serialization_write_us": {
+              "min": 2515,
+              "median": 2581,
+              "max": 5103,
+              "sum": 10199
+            },
+            "signing_us": {
+              "min": 7436,
+              "median": 8179,
+              "max": 80836,
+              "sum": 96451
+            },
+            "template_seal_us": {
+              "min": 340,
+              "median": 364,
+              "max": 370,
+              "sum": 1074
+            }
+          }
+        }
+      ],
+      "samples": [
+        {
+          "repetition": 0,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-0-saved.json",
+          "artifact_bytes": 621058,
+          "sha256": "1d9aac063b8e4c46eaadf48c9b0b0388d9de61f969a940b74673d7832b13458b"
+        },
+        {
+          "repetition": 0,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-0-fresh.json",
+          "artifact_bytes": 620945,
+          "sha256": "34e4dcae23398c529bdb8ad1b86923ac4349f3721440f18aa3d1f9ec518a925c"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-1-saved.json",
+          "artifact_bytes": 621058,
+          "sha256": "c0f461580ccea1dff0298fd55521ba108e28203bbe4f82a72bf58164422d932b"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-1-fresh.json",
+          "artifact_bytes": 621099,
+          "sha256": "e8259ced872033dd2719bf2d37018d31b72b448daf9817806ecc03091dcd87a0"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-2-saved.json",
+          "artifact_bytes": 621058,
+          "sha256": "1fbd96c42a1592a94b49284e299c328b65102de8c6c879ba51538f60fab73387"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-2-fresh.json",
+          "artifact_bytes": 621007,
+          "sha256": "7b1ea3aa918cc441ab03369bc287c0704690e3c055a9bcea76450747050425e0"
+        }
+      ]
+    },
+    {
+      "artifact_controls": [
+        "wrong manifest hash",
+        "missing artifact"
+      ],
+      "capture_us": 7098,
+      "closed_data_bytes": 917504,
+      "closed_data_sha256": "195e74aa303c2c67be8b70752d0bb5d220d6e189f62185afafb59a094a70dd2f",
+      "directory": "replay-late_invalid_signature_balance",
+      "fresh_signed_samples": 3,
+      "known_keys": 4,
+      "manifest_sha256": "7f89a3f3f3096d7b85f20eb2138563e083fbe4a94a6ef071a9f3f35a5c5b0a8d",
+      "measurement_elapsed_us": 513758,
+      "pre_height": 68,
+      "pre_rows": 71,
+      "prestate_identity": "d57803647138e7647b4ca6d1da1a9c1b4bbd30aafc9c4f9c33c578bdaeb794fb",
+      "saved_signed_replays": 3,
+      "scenario": "late_invalid_signature_balance",
+      "wallet_setup_us": 3762,
+      "measurements": [
+        {
+          "fresh": false,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 375,
+              "median": 375,
+              "max": 417,
+              "sum": 1167
+            },
+            "commit_us": {
+              "min": 6917,
+              "median": 11003,
+              "max": 25141,
+              "sum": 43061
+            },
+            "elapsed_us": {
+              "min": 74138,
+              "median": 91822,
+              "max": 92932,
+              "sum": 258892
+            },
+            "frame_us": {
+              "min": 464,
+              "median": 465,
+              "max": 465,
+              "sum": 1394
+            },
+            "load_us": {
+              "min": 6031,
+              "median": 6040,
+              "max": 15084,
+              "sum": 27155
+            },
+            "observation_us": {
+              "min": 374,
+              "median": 400,
+              "max": 409,
+              "sum": 1183
+            },
+            "other_us": {
+              "min": 2274,
+              "median": 2303,
+              "max": 2321,
+              "sum": 6898
+            },
+            "precheck_us": {
+              "min": 1269,
+              "median": 1269,
+              "max": 1274,
+              "sum": 3812
+            },
+            "reset_us": {
+              "min": 44027,
+              "median": 49778,
+              "max": 71951,
+              "sum": 165756
+            },
+            "serialization_write_us": {
+              "min": 2463,
+              "median": 2731,
+              "max": 3272,
+              "sum": 8466
+            },
+            "signing_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            },
+            "template_seal_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            }
+          }
+        },
+        {
+          "fresh": true,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 347,
+              "median": 404,
+              "max": 497,
+              "sum": 1248
+            },
+            "commit_us": {
+              "min": 6919,
+              "median": 12711,
+              "max": 15690,
+              "sum": 35320
+            },
+            "elapsed_us": {
+              "min": 75069,
+              "median": 79053,
+              "max": 83160,
+              "sum": 237282
+            },
+            "frame_us": {
+              "min": 465,
+              "median": 465,
+              "max": 465,
+              "sum": 1395
+            },
+            "load_us": {
+              "min": 6009,
+              "median": 6040,
+              "max": 7558,
+              "sum": 19607
+            },
+            "observation_us": {
+              "min": 383,
+              "median": 396,
+              "max": 408,
+              "sum": 1187
+            },
+            "other_us": {
+              "min": 2252,
+              "median": 2261,
+              "max": 2283,
+              "sum": 6796
+            },
+            "precheck_us": {
+              "min": 1252,
+              "median": 1262,
+              "max": 1262,
+              "sum": 3776
+            },
+            "reset_us": {
+              "min": 5428,
+              "median": 5436,
+              "max": 37809,
+              "sum": 48673
+            },
+            "serialization_write_us": {
+              "min": 2747,
+              "median": 2756,
+              "max": 3776,
+              "sum": 9279
+            },
+            "signing_us": {
+              "min": 7535,
+              "median": 44449,
+              "max": 56912,
+              "sum": 108896
+            },
+            "template_seal_us": {
+              "min": 346,
+              "median": 379,
+              "max": 380,
+              "sum": 1105
+            }
+          }
+        }
+      ],
+      "samples": [
+        {
+          "repetition": 0,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": {
+            "Rejected": {
+              "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+            }
+          },
+          "artifact": "sample-0-saved.json",
+          "artifact_bytes": 667276,
+          "sha256": "e15db0a00b3f58370582e9f3f57225b980711818e1d61d863526180d9067d299"
+        },
+        {
+          "repetition": 0,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": {
+            "Rejected": {
+              "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+            }
+          },
+          "artifact": "sample-0-fresh.json",
+          "artifact_bytes": 667288,
+          "sha256": "3f276c202ecb41fc56df6eb3f731bf85a79dbfe898e524bc3fc69e431470eb41"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": {
+            "Rejected": {
+              "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+            }
+          },
+          "artifact": "sample-1-saved.json",
+          "artifact_bytes": 667276,
+          "sha256": "bd6367a136feafdf5aaee2649cf1ce0e90ed2a6894262be2c957e539b1d752f7"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": {
+            "Rejected": {
+              "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+            }
+          },
+          "artifact": "sample-1-fresh.json",
+          "artifact_bytes": 667213,
+          "sha256": "c5405f79e798b8bca919a7935e5fbf91557450d7f2ace79dd6a8b575dff906ec"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": {
+            "Rejected": {
+              "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+            }
+          },
+          "artifact": "sample-2-saved.json",
+          "artifact_bytes": 667275,
+          "sha256": "1a5e262234ddaed58c99bdbcb9fe0a936af056999d63cc3cc76ffcf659da3b6d"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": {
+            "Rejected": {
+              "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+            }
+          },
+          "artifact": "sample-2-fresh.json",
+          "artifact_bytes": 667281,
+          "sha256": "487976b9835931d5da67f6ad8ef4ca736aacf63df19893ea30c82818ffedc8ac"
+        }
+      ]
+    },
+    {
+      "artifact_controls": [
+        "wrong manifest hash",
+        "missing artifact"
+      ],
+      "capture_us": 34931,
+      "closed_data_bytes": 4014080,
+      "closed_data_sha256": "021abd2dc780cd06649838192eb8cb0ce08aee9417d65ff44289a74f67de2b9c",
+      "directory": "replay-real_maturity_payout",
+      "fresh_signed_samples": 3,
+      "known_keys": 5,
+      "manifest_sha256": "773b02d9e9b5c157fb1be76044dd89e6a75f2d1128bb85e842cca2f96ea2da23",
+      "measurement_elapsed_us": 929240,
+      "pre_height": 720,
+      "pre_rows": 723,
+      "prestate_identity": "1c68bd0755b9aeb121032474759cbbb798e6cef8abc1aba05bad95a9309360b4",
+      "saved_signed_replays": 3,
+      "scenario": "real_maturity_payout",
+      "wallet_setup_us": 3583,
+      "measurements": [
+        {
+          "fresh": false,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 647,
+              "median": 679,
+              "max": 734,
+              "sum": 2060
+            },
+            "commit_us": {
+              "min": 14608,
+              "median": 17132,
+              "max": 17527,
+              "sum": 49267
+            },
+            "elapsed_us": {
+              "min": 128305,
+              "median": 128769,
+              "max": 128834,
+              "sum": 385908
+            },
+            "frame_us": {
+              "min": 1000,
+              "median": 1032,
+              "max": 1067,
+              "sum": 3099
+            },
+            "load_us": {
+              "min": 29336,
+              "median": 29624,
+              "max": 29796,
+              "sum": 88756
+            },
+            "observation_us": {
+              "min": 3759,
+              "median": 3813,
+              "max": 3858,
+              "sum": 11430
+            },
+            "other_us": {
+              "min": 23288,
+              "median": 24048,
+              "max": 24475,
+              "sum": 71811
+            },
+            "precheck_us": {
+              "min": 2173,
+              "median": 2245,
+              "max": 2276,
+              "sum": 6694
+            },
+            "reset_us": {
+              "min": 25794,
+              "median": 26404,
+              "max": 28721,
+              "sum": 80919
+            },
+            "serialization_write_us": {
+              "min": 23449,
+              "median": 23552,
+              "max": 24871,
+              "sum": 71872
+            },
+            "signing_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            },
+            "template_seal_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            }
+          }
+        },
+        {
+          "fresh": true,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 636,
+              "median": 662,
+              "max": 698,
+              "sum": 1996
+            },
+            "commit_us": {
+              "min": 15595,
+              "median": 16328,
+              "max": 16840,
+              "sum": 48763
+            },
+            "elapsed_us": {
+              "min": 136600,
+              "median": 138142,
+              "max": 138992,
+              "sum": 413734
+            },
+            "frame_us": {
+              "min": 1030,
+              "median": 1104,
+              "max": 1109,
+              "sum": 3243
+            },
+            "load_us": {
+              "min": 28938,
+              "median": 29472,
+              "max": 29545,
+              "sum": 87955
+            },
+            "observation_us": {
+              "min": 3843,
+              "median": 3904,
+              "max": 4121,
+              "sum": 11868
+            },
+            "other_us": {
+              "min": 23555,
+              "median": 23746,
+              "max": 23786,
+              "sum": 71087
+            },
+            "precheck_us": {
+              "min": 2247,
+              "median": 2249,
+              "max": 2257,
+              "sum": 6753
+            },
+            "reset_us": {
+              "min": 25919,
+              "median": 26579,
+              "max": 26630,
+              "sum": 79128
+            },
+            "serialization_write_us": {
+              "min": 24240,
+              "median": 24291,
+              "max": 25579,
+              "sum": 74110
+            },
+            "signing_us": {
+              "min": 8056,
+              "median": 8362,
+              "max": 8475,
+              "sum": 24893
+            },
+            "template_seal_us": {
+              "min": 1287,
+              "median": 1316,
+              "max": 1335,
+              "sum": 3938
+            }
+          }
+        }
+      ],
+      "samples": [
+        {
+          "repetition": 0,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-0-saved.json",
+          "artifact_bytes": 6617805,
+          "sha256": "705c310f120e8c390cb7b13c4120be0cfaa53069f75120b68dd14dfebf18c23d"
+        },
+        {
+          "repetition": 0,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-0-fresh.json",
+          "artifact_bytes": 6617707,
+          "sha256": "01fae35dc09920acf89cd86a23883c7d20c096c65b680e73010115fa684f2af5"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-1-saved.json",
+          "artifact_bytes": 6617805,
+          "sha256": "f792881c6c7a8b93ab8aac911fae56f513a379fba0bad1f8c0e00fcf4f02513e"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-1-fresh.json",
+          "artifact_bytes": 6618025,
+          "sha256": "5f0e5b7d93ef0173b15c5004333c025bde8e970bc9d64c0b0f626223cbeae187"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-2-saved.json",
+          "artifact_bytes": 6617805,
+          "sha256": "9efc93539cb3a8fd58f0d8033c49fef768ce132010be5e07b17197cef2d764d8"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-2-fresh.json",
+          "artifact_bytes": 6617869,
+          "sha256": "f982f3d5614c0e342e019b86a57485a8b046d614f28ff8b0571d55b63a4f1f40"
+        }
+      ]
+    },
+    {
+      "artifact_controls": [
+        "wrong manifest hash",
+        "missing artifact"
+      ],
+      "capture_us": 38070,
+      "closed_data_bytes": 4308992,
+      "closed_data_sha256": "a386758f69cb25f480fc5f0ff90307fb6c4478ff1b041894cb7b962eed04c597",
+      "directory": "replay-real_payout_signed_spend",
+      "fresh_signed_samples": 3,
+      "known_keys": 6,
+      "manifest_sha256": "0e1744636a66fecb0ed32731e0bb914b156cfe851573c315a9f30ca47fbfeaef",
+      "measurement_elapsed_us": 1032051,
+      "pre_height": 742,
+      "pre_rows": 776,
+      "prestate_identity": "f3794f1c658375bf190cbcab98c5a71c26fcb418a33f562a1602bc3228e1c2fc",
+      "saved_signed_replays": 3,
+      "scenario": "real_payout_signed_spend",
+      "wallet_setup_us": 3766,
+      "measurements": [
+        {
+          "fresh": false,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 680,
+              "median": 696,
+              "max": 892,
+              "sum": 2268
+            },
+            "commit_us": {
+              "min": 16752,
+              "median": 16856,
+              "max": 17950,
+              "sum": 51558
+            },
+            "elapsed_us": {
+              "min": 141336,
+              "median": 141502,
+              "max": 145511,
+              "sum": 428349
+            },
+            "frame_us": {
+              "min": 1286,
+              "median": 1294,
+              "max": 1297,
+              "sum": 3877
+            },
+            "load_us": {
+              "min": 31889,
+              "median": 31904,
+              "max": 32449,
+              "sum": 96242
+            },
+            "observation_us": {
+              "min": 4224,
+              "median": 4244,
+              "max": 4256,
+              "sum": 12724
+            },
+            "other_us": {
+              "min": 25783,
+              "median": 25816,
+              "max": 25952,
+              "sum": 77551
+            },
+            "precheck_us": {
+              "min": 2892,
+              "median": 2903,
+              "max": 2922,
+              "sum": 8717
+            },
+            "reset_us": {
+              "min": 29680,
+              "median": 30055,
+              "max": 32786,
+              "sum": 92521
+            },
+            "serialization_write_us": {
+              "min": 27330,
+              "median": 27766,
+              "max": 27795,
+              "sum": 82891
+            },
+            "signing_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            },
+            "template_seal_us": {
+              "min": 0,
+              "median": 0,
+              "max": 0,
+              "sum": 0
+            }
+          }
+        },
+        {
+          "fresh": true,
+          "count": 3,
+          "microseconds": {
+            "cleanup_us": {
+              "min": 633,
+              "median": 770,
+              "max": 830,
+              "sum": 2233
+            },
+            "commit_us": {
+              "min": 16725,
+              "median": 17629,
+              "max": 19105,
+              "sum": 53459
+            },
+            "elapsed_us": {
+              "min": 155315,
+              "median": 155692,
+              "max": 155954,
+              "sum": 466961
+            },
+            "frame_us": {
+              "min": 1275,
+              "median": 1290,
+              "max": 1327,
+              "sum": 3892
+            },
+            "load_us": {
+              "min": 31566,
+              "median": 31750,
+              "max": 32090,
+              "sum": 95406
+            },
+            "observation_us": {
+              "min": 4087,
+              "median": 4216,
+              "max": 4258,
+              "sum": 12561
+            },
+            "other_us": {
+              "min": 25186,
+              "median": 25390,
+              "max": 25918,
+              "sum": 76494
+            },
+            "precheck_us": {
+              "min": 2733,
+              "median": 2819,
+              "max": 2934,
+              "sum": 8486
+            },
+            "reset_us": {
+              "min": 32065,
+              "median": 32343,
+              "max": 32350,
+              "sum": 96758
+            },
+            "serialization_write_us": {
+              "min": 28395,
+              "median": 29241,
+              "max": 29748,
+              "sum": 87384
+            },
+            "signing_us": {
+              "min": 8457,
+              "median": 8465,
+              "max": 8629,
+              "sum": 25551
+            },
+            "template_seal_us": {
+              "min": 1556,
+              "median": 1564,
+              "max": 1617,
+              "sum": 4737
+            }
+          }
+        }
+      ],
+      "samples": [
+        {
+          "repetition": 0,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-0-saved.json",
+          "artifact_bytes": 7147678,
+          "sha256": "ca2c337206900e2fd9a9aefe81c319bf7571faa0cbf2deb8c7b3d04629e402cb"
+        },
+        {
+          "repetition": 0,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-0-fresh.json",
+          "artifact_bytes": 7147739,
+          "sha256": "94ec0b5c381e406709f5e5ecc2bc2c120b66af49f47d20a6ccd1652bfcaf3856"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-1-saved.json",
+          "artifact_bytes": 7147678,
+          "sha256": "2130b44fc88d83d05a85118b2aa0e16fe745c5644279e1ab8d46b145453e5b49"
+        },
+        {
+          "repetition": 1,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-1-fresh.json",
+          "artifact_bytes": 7147859,
+          "sha256": "ccc7d34888b9f0dde17c9055b4bdecacdaf617e233597ea87504dd4344920e1f"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": true,
+          "fresh_signatures": 0,
+          "outcome": "Accepted",
+          "artifact": "sample-2-saved.json",
+          "artifact_bytes": 7147678,
+          "sha256": "4bdbef818c398d137b047a5c90a6a5a912333eb55b4d38bbb50ad2f5aeae26ce"
+        },
+        {
+          "repetition": 2,
+          "signed_bytes_reused": false,
+          "fresh_signatures": 1,
+          "outcome": "Accepted",
+          "artifact": "sample-2-fresh.json",
+          "artifact_bytes": 7147441,
+          "sha256": "cdb213aa138f37f653cb3d271d16e0e6693529a9af1720f3ec14e137c9beb929"
+        }
+      ]
+    }
+  ],
+  "saved_artifact_cli": [
+    {
+      "scenario": "signed_transfer_0",
+      "seconds": 21.593,
+      "exit": 0,
+      "log": "/tmp/botho-1893-cli-signed_transfer_0.log",
+      "result": {
+        "commit_us": 14166,
+        "elapsed_us": 443317,
+        "frame_us": 108,
+        "fresh_signatures": 0,
+        "identity": "e6117c01b65d16c13db9c5e9cf4155285e1d7c30f494933273370057a59b0c28",
+        "load_us": 7323,
+        "observation_us": 401,
+        "outcome": "Accepted",
+        "precheck_us": 413842,
+        "reset_us": 5176,
+        "saved_manifest_sha256": "aa06a64918801107066456200a5c00d9e95a323db68d4faa95c96be3a6c8bfa0",
+        "signed_bytes_reused": true
+      },
+      "log_sha256": "d2c975c79228673158c75d979b42bb72fde9b3ff3603eca013d5eafea7811edd",
+      "scope": "cargo seconds include incremental compilation; helper elapsed_us excludes returning serialization/drop, unlike repeated end-to-end measurements"
+    },
+    {
+      "scenario": "late_invalid_signature_balance",
+      "seconds": 18.565,
+      "exit": 0,
+      "log": "/tmp/botho-1893-cli-late_invalid_signature_balance.log",
+      "result": {
+        "commit_us": 6966,
+        "elapsed_us": 437728,
+        "frame_us": 464,
+        "fresh_signatures": 0,
+        "identity": "d57803647138e7647b4ca6d1da1a9c1b4bbd30aafc9c4f9c33c578bdaeb794fb",
+        "load_us": 7756,
+        "observation_us": 423,
+        "outcome": {
+          "Rejected": {
+            "error": "Invalid block: Invalid ring signature: Invalid CLSAG signature"
+          }
+        },
+        "precheck_us": 413476,
+        "reset_us": 6102,
+        "saved_manifest_sha256": "7f89a3f3f3096d7b85f20eb2138563e083fbe4a94a6ef071a9f3f35a5c5b0a8d",
+        "signed_bytes_reused": true
+      },
+      "log_sha256": "410cde93d4493c07c3cd263fee0a2a0b04cc69a1ba5d67c862f90248052d0dd8",
+      "scope": "cargo seconds include incremental compilation; helper elapsed_us excludes returning serialization/drop, unlike repeated end-to-end measurements"
+    }
+  ],
+  "artifacts": {
+    "local_directory": "/tmp/botho-1893-final-5ir803wj",
+    "frame_receipt_sha256": "153eb46a2854b8d8855ae8794a824223c7a191ad1d44311ee6df71db0235e9bf",
+    "primary_receipt_sha256": "3e6d46a66d37e45e73196d46f29cf1e74a99462b0bea6baa8531a81eefd35981",
+    "test_log_sha256": "11f0c878dc53a3bc7d093bf7c91404d8dbc214e2e9572474d4367309c90d7b2b",
+    "CI": "existing supply-oracle-evidence upload; Linux exact-head run and artifact hashes pending root/Judge"
+  },
+  "feasibility": {
+    "per_leg_allowance_us": 3600,
+    "startup_and_all_overhead_included_in_allowance": true,
+    "measurement_scope": "warm process after building each prefix once; separate CLI cold-process measurements retained; filesystem caches not flushed; resets and complete observation serialization included",
+    "lean_codec_model_cost": "unmeasured additional positive cost; no budget allocated from nonexistent remaining margin",
+    "other_PR_tier_cost": "additional shared budget; unmeasured here",
+    "registration": "blocked pending faithful complete-budget design/evidence",
+    "campaigns_run": 0,
+    "warning": "Three repetitions per provenance/history group are bounded cost observations, not a throughput or million-case guarantee."
+  },
+  "canonical_schedule_reachable": false
+}
