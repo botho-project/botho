@@ -2,8 +2,8 @@
 
 `Botho/Supply/Accounting.lean` proves the scalar accounting step using the
 existing lottery models. It does **not** close #1839 or prove that every
-accepted Rust block satisfies the step's premises. Source references below
-were checked at `2c8d5cd2`.
+accepted Rust block satisfies the step's premises. The scalar source references
+were checked at `2c8d5cd2`; each later layer names its own audited source below.
 
 ## Fee truncation result
 
@@ -71,10 +71,10 @@ lottery fee-burn share in the cumulative burn counter.
 | `I = O + F` | `Transactions.batch_balance` derives exact Nat aggregation from the checked arithmetic model. `checked_ordinary_flow` connects those amounts to available stored sources under the named binding predicates below. Production correspondence remains trusted/tested, not proved. |
 | `I ≤ U` | `Transactions.checked_keys_sources` constructs distinct prestate consumption under `CLSAGBinding`, `KeyAssociation` and `UnspentCorrespondence`; `consume_partition` derives its value bound. This is a finite model theorem under explicit cryptographic/ledger assumptions. |
 | `F ≤ u64::MAX` | `Transactions.checked_sum_exact` and `batch_balance` prove the existing `sumFeesChecked` fold returns the exact Nat fee sum within u64 on success. Rust/model correspondence remains a separate obligation. |
-| `E ≤ R` | `cluster-tax/src/monetary.rs::lottery_emission_bps` caps the rate at 5000/10000; the exact schedule/model bridge remains #1710. |
-| `D ≤ available`, payout outputs sum to `D` | Connect `Draw`, V2 payout validation and no-winner behavior; #1849 covers the lottery conservation proofs. |
-| Genesis and issuance induction | Bind the zero genesis state, checked successor and reward width to the state transition. `issuance_step_fits` supplies the arithmetic induction step. |
-| The stored transition equals `apply` | Audit/DRT of the complete accepted-block writer, including transaction atomicity and identity/collision assumptions, remains open. |
+| `E ≤ R` | `Block.emission_exact` proves the exact small emission-share path, including casts and saturation. The complete production reward schedule remains #1710. |
+| `D ≤ available`, payout outputs sum to `D` | `Block.prepared_payouts` derives the created payout total and bounds from the canonical draw and ordered structural checks, reusing #1849. Cryptographic/source/encoding correspondence remains named below. |
+| Genesis and issuance induction | `Block.genesis_invariant`, `step_invariant` and `reachable_invariants` derive the empty genesis, issuance, conservation and width invariants of the structured model. Full production reachability remains separate. |
+| The stored transition equals `apply` | `Block.step_projects` derives this equality for the checked finite model. Universal correspondence to the accepted Rust writer, including atomicity and cryptographic identity assumptions, remains open. |
 
 **Trusted (ledger/cryptography):** these premises must be named when citing
 `apply_conserves` as evidence about Rust. In particular, `U` is not the sum
@@ -170,9 +170,85 @@ validity, or a reachable exploit. They use kernel `decide`, not native execution
 The exact public declaration records land separately before the proof source.
 This layer is **proven (model) under named assumptions**; no production DRT leg,
 random campaign, extraction result or whole-block theorem is added. #1895 owns
-emission, payout and genesis composition; #1896 owns model/production campaign
-evidence. #1890 and #1839 retain those obligations. The existing oracle evidence
+the emission, payout and genesis composition described next; #1896 owns
+model/production campaign evidence. #1890 and #1839 retain those obligations. The existing oracle evidence
 below remains independent and unchanged.
+
+## Structured block composition (#1895)
+
+**Proven (model):** `Botho/Supply/Block.lean` computes a successful block step
+from independent prestate, block data and authenticated source/derivation
+witnesses. It accepts neither a Rust poststate nor an expected monetary answer.
+`State.store` reuses the economic unspent map, retained domain and known spent
+history from #1894. Its full `rows` view includes spent decoys, in database key
+order. `candidateAgreement` checks exact retained-domain/amount agreement,
+unique identities and ordering. Dynamic cluster factors are separate per-draw
+read witnesses; they are not incorrectly preserved as immutable row fields.
+
+The production source mapping was checked at
+`58be9e9ebd6182b1c7143d78a1d3904a3a5212b8`:
+
+| Model / public result | Production source and precise boundary |
+|---|---|
+| `emission_exact` | `cluster-tax/src/monetary.rs::lottery_emission_bps`: zero interval, epoch clamp before u32 cast, saturated u32 multiplication by 1000, then a 5000-bps cap. This source spells saturation as `checked_mul(...).unwrap_or(u32::MAX)`. The u128 reward product and final u64 quotient cast are proved exact for typed inputs. |
+| `checkPrefix`, `drawBlock`, `coinbaseRow` | `MintingTx::lottery_emission_share`, `miner_payout`, `to_tx_output` and ordinary header/body validation: minting/header height agrees, the interval is `mainnet_policy().halving_interval = 6307200`, and the same reward determines emission, miner payout, draw cap and issuance. `C + E = R` is derived. The full `calculate_block_reward(height, pre.total_mined)` schedule remains a named predicate, not a theorem here. |
+| `prepare`, `checkSummary`, `checkAwards`, `prepared_payouts` | `lottery_v2::drawing`, `validate_drawn` and `bind_outputs`: recompute the canonical draw using the same tip, pool, fees and computed emission. Check all four summary fields, exact ordered counts (at most four), ordinals, winner outpoints, amounts and record/wire fields. Existing `drawing_paid`, conservation and width proofs supply payout/carryover facts. |
+| `checkAward`, `awardDomain` | V2 record validation: authenticate the full source row/context and check the domain's genesis, parent, height, ordinary transaction root, ordered award manifest, ordinal and amount. Check derived target/context and inherited public key/ciphertext; payout tags come from that source. Hash/curve/encoding implementations remain explicit trusted boundaries. |
+| `Outpoint`, `created`, `finiteStep`, `step_frame` | `store/writer.rs::block_effects` and `Representation::check_new`: one shared identity is the little-endian natural encoding of 32 hash bytes followed by the u32 output index. Coinbase uses `(block hash, 0)`, ordinary rows use `(transaction hash, index)`, and payouts use `(block hash, 1 + ordinal)`. All classes share freshness checks against retained rows and each other, with writer order coinbase → ordinary → payouts. Direct/Lottery contexts and full nonmonetary fields are carried explicitly. |
+| `step_projects`, `step_cross_addition`, `step_invariant` | Reuse checked transaction balance and finite bookkeeping, then the existing `Supply.apply`, issuance and counter/pool lemmas. Arbitrary successful model steps retain an explicit saturation-loss term; the reachable invariant discharges it. These are derived model equalities, not assumed successful-commit equivalence. |
+| `genesis`, `genesis_invariant`, `reachable_invariants` | `init_genesis` writes genesis and zero metadata directly, creating no output row. Missing pool means zero only at height zero. Successful seed derivation checks the u64 successor and parent. Reachability constructors carry successful checks and named trust/identity extension, never assumed conservation or width bounds. |
+
+The two new `Transactions.consume_insert_preserves` and
+`consume_insert_correspondence` wrappers expose the existing finite bookkeeping
+for an arbitrary combined created batch. This avoids copying its private
+consumption/correspondence proof chain into the block module. All prior
+transaction definitions and public statements remain unchanged.
+
+`prepared_widths` proves emission, coinbase, fee, pool and award widths.
+`step_invariant` derives `mined ≤ height * u64::MAX`, cumulative mined/burned
+and pool bounds, and lossless conservation from the previous invariant.
+**Counter additions in the model are Nat additions.** Their correspondence to
+the writer's u128 additions follows on this reachable invariant domain; a
+successful arbitrary model state with overflowing counters is not asserted to
+be an exact Rust execution. The checked successor theorem also does not assert
+that the earlier Rust header expression `state.height + 1` is panic-free on
+arbitrary max-height storage.
+
+**Trusted (production correspondence):** `Correspondences` and `TrustedInputs`
+separate hash implementations, fixed-width outpoint encoding, visible ordinary
+and minting encodings, header/body commitment, authenticated stored source
+rows, dynamic candidate reads, complete derivation-domain/curve correspondence,
+record encoding, context-domain agreement and the reward schedule. The hidden
+real-source witness is separate from visible transaction decoding.
+`CLSAGBinding`, stable/injective `KeyAssociation`, `UnspentCorrespondence` and
+new-identity `IdentityExtension` retain their meanings from #1894.
+`StoredContextFrame` and `CommitCorrespondence` remain external obligations:
+`step_frame` proves the model preserves old full rows/contexts, untouched
+economic entries and old history, but does not prove that every LMDB commit
+implements it. These are parameters/obligations, not new Lean axioms.
+Confidential transactions still need their different commitment-balance bridge.
+Demurrage, settlement and downgrade charges remain inside fees and are not
+subtracted a second time.
+
+**Kernel controls:** emission zero/epoch/clamp/saturation boundaries; minting
+height/policy mismatches; empty genesis and a finite successor; one through
+four awards, underfill and remainder-to-last; mutations of every summary and
+bound wire field, record fields and the full derivation domain; shared
+coinbase/ordinary and ordinary/payout IDs, retained spent-row reuse and an
+attempted same-block source. `canonical_no_winner_error` proves the positive
+payout/no-winners error unreachable for the canonical uniform configuration,
+rather than hiding that guard. Synthetic max-height and arbitrary saturated-pool
+controls demonstrate the checked successor and explicit loss; they are not
+production-valid or genesis-origin chains. Toy hash functions and amounts in
+all controls make no signature, fee-floor, cryptographic or canonical schedule
+claim. The separate real-commit oracle evidence below retains its original
+altered test-profile provenance.
+
+This layer adds no codec, extraction, production DRT leg or campaign. #1896
+retains those runtime/comparison obligations, including the 3.6-ms per-case
+nightly feasibility gap. #1710 retains the full reward schedule, and #1890 and
+#1839 remain open. Exact records are reviewed in a prerequisite PR; the proof
+PR follows only after those records land and the final default-record gates pass.
 
 ## Validation
 

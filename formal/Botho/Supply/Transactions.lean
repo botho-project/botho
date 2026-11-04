@@ -781,4 +781,45 @@ theorem valid_update_boundary :
     value boundaryStore.unspent = 30 ∧ value after.unspent = 27 ∧
     fees [boundaryTx] = 3 := by decide
 
+/-- Generic checked consumption followed by a fresh created batch. Block
+composition uses this existing bookkeeping for coinbase, ordinary and lottery
+rows in one shared insertion domain, rather than duplicating the private map
+lemmas or reordering the writer's insertions. -/
+theorem consume_insert_preserves (s after : Store) (selected newRows remaining : List Entry)
+    (history : List Nat) (hw : WellFormed s)
+    (hr : consume s.unspent selected = some remaining)
+    (hi : insertFresh { s with unspent := remaining, history := history } newRows = some after) :
+    WellFormed after ∧ value after.unspent + value selected = value s.unspent + value newRows ∧
+    value selected ≤ value s.unspent ∧
+    after.retained = newRows.reverse ++ s.retained ∧ after.history = history ∧
+    (∀ id, id ∈ s.retained.map Entry.id →
+      lookup id after.retained = lookup id s.retained ∧
+      (id ∉ selected.map Entry.id → lookup id after.unspent = lookup id s.unspent)) := by
+  have hp := consume_partition _ _ _ hw.unspent_unique hr
+  have hins := insertion_preserves _ after newRows (remaining_wf s _ _ hw hr history) hi
+  refine ⟨hins.1, ?_, by omega, hins.2.2.1, hins.2.2.2.1, ?_⟩
+  · have hv := hins.2.2.2.2.1
+    dsimp at hv
+    omega
+  · intro id hm
+    have hf := hins.2.2.2.2.2 id hm
+    exact ⟨hf.1, fun hn => hf.2.trans (hp.2.2 id hn)⟩
+
+/-- The same named correspondence bridge for an arbitrary fresh created
+batch, including block-created coinbase and payout identities. Parameters
+expose actual checked results; `checked_keys_sources` separately constructs
+source availability from binding and fresh-key checks, without assuming it. -/
+theorem consume_insert_correspondence (s after : Store) (cs : List Input)
+    (newRows remaining : List Entry) (history : List Nat) (keyOf : Nat → Nat)
+    (hw : WellFormed s) (hb : CLSAGBinding s keyOf cs) (ha : KeyAssociation s keyOf)
+    (hc : UnspentCorrespondence s keyOf)
+    (hk : checkKeys s.history (cs.map Input.key) = some history)
+    (hr : consume s.unspent (cs.map Input.source) = some remaining)
+    (hi : insertFresh { s with unspent := remaining, history := history } newRows = some after)
+    (he : IdentityExtension after newRows keyOf) :
+    UnspentCorrespondence after keyOf ∧ KeyAssociation after keyOf := by
+  have hmid := consumption_correspondence s cs remaining history keyOf hb ha hc hk hr
+  exact ⟨insertion_correspondence _ after newRows keyOf
+    (remaining_wf s _ _ hw hr history) hmid hi he, he.1⟩
+
 end Botho.Supply.Transactions

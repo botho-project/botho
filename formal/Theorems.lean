@@ -87,6 +87,29 @@ import Botho
 #print axioms Botho.Supply.Transactions.fresh_key_needs_correspondence
 #print axioms Botho.Supply.Transactions.valid_update_boundary
 
+#print axioms Botho.Supply.Transactions.consume_insert_preserves
+#print axioms Botho.Supply.Transactions.consume_insert_correspondence
+
+-- Botho.Supply.Block (#1895; structured model composition, explicit production boundaries)
+#print axioms Botho.Supply.Block.emission_exact
+#print axioms Botho.Supply.Block.prepared_payouts
+#print axioms Botho.Supply.Block.step_projects
+#print axioms Botho.Supply.Block.step_cross_addition
+#print axioms Botho.Supply.Block.step_frame
+#print axioms Botho.Supply.Block.prepared_widths
+#print axioms Botho.Supply.Block.step_invariant
+#print axioms Botho.Supply.Block.genesis_invariant
+#print axioms Botho.Supply.Block.reachable_invariants
+#print axioms Botho.Supply.Block.canonical_no_winner_error
+#print axioms Botho.Supply.Block.emission_boundaries
+#print axioms Botho.Supply.Block.first_successor_boundary
+#print axioms Botho.Supply.Block.award_count_boundaries
+#print axioms Botho.Supply.Block.payout_rejection_boundaries
+#print axioms Botho.Supply.Block.domain_rejection_boundaries
+#print axioms Botho.Supply.Block.shared_identity_boundaries
+#print axioms Botho.Supply.Block.height_and_loss_boundaries
+#print axioms Botho.Supply.Block.summary_and_wire_rejection_boundaries
+
 -- Botho.Lottery.Conservation (#1849; proven (model), including saturation loss).
 #print axioms Botho.Lottery.splitFees_conserves
 #print axioms Botho.Lottery.splitFees_canonical_conserves
