@@ -5771,7 +5771,6 @@ mod tests {
     /// nineteen 1-BTH decoys, all tagged to `cluster` and created at
     /// `created_at`; returns the tx (fee 0). Used by the #1875/#1876
     /// reproductions below.
-    #[cfg(test)]
     fn mk_whale_ring_tx(
         ledger: &Ledger,
         cluster: u64,

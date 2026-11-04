@@ -1235,7 +1235,7 @@ mod tests {
         assert_eq!(curve.factor(w_big), 6000);
         let ring_with = |coin: u64| {
             let mut r = vec![(coin, w_big)];
-            r.extend(std::iter::repeat((1_000_000_000_000u64, w_big)).take(19));
+            r.extend(std::iter::repeat_n((1_000_000_000_000u64, w_big), 19));
             r
         };
         let one_m = 1_000_000_000_000_000_000u64;
