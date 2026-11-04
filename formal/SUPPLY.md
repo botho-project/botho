@@ -186,9 +186,127 @@ The mature payout spend took 7.97 ms in `add_block`, plus 7.90 ms signing,
 3.28 ms precheck and 4.85 ms observation. Reopening, artifact writing and
 setup are additional costs, not hidden in the commit timing.
 
-A million cases in 60 minutes on four ideally scaling workers allows only
-14.4 ms per case. Even the measured ordinary signing/sealing/precheck/
-commit/observation totals exceed that budget. This is arithmetic on a small
-measurement, not a parallel-throughput benchmark. Stage #1890 must measure
-its fixture and observation strategy; it cannot assume the nightly budget
-fits, omit real verification or count cached acceptance as fresh cases.
+The nightly workers run four **different legs**. Each leg's million cases
+in 3600 seconds allow **3.6 ms per case**, including startup and every
+per-case cost. The earlier 14.4 ms figure assumed four workers dedicated to
+one leg and does not describe this workflow. Even the original partial
+ordinary-case measurements exceed 3.6 ms. This is a feasibility gap, not a
+proof that every faithful design is impossible.
+
+## Accepted frame and saved replay (#1893)
+
+`formal_drt_supply::check_accepted_frame(observation, history)` validates
+unique IDs before constructing maps. It retains every old full output row
+and derivation context, derives the exact candidate-created ID set, and
+requires both the after snapshot and the redundant `new_outputs` vector to
+match it, including kind and ordinal. Coinbase and ordinary rows use their
+production conversion/index rules. Payout checking uses the pre-state
+winner, the public V2 manifest/domain/derivation contract, the inherited
+envelope/tags, and the **original** base index and cumulative tweak. It does
+not substitute a zero index/tweak for a lottery source.
+
+`KeyHistory` is the fixture's complete known prefix: every key from accepted
+blocks and attempted candidates, including previously spent markers and
+keys still absent after rejection. Before observations must match that
+history exactly; after observations must retain old markers and add each
+accepted input at the candidate height. Missing/duplicate observations
+fail. This does not enumerate unknown key images in the database. The
+fixture supplies known real outpoints separately: CLSAG real-input binding
+remains a named trust premise, never an inference from ring members.
+
+`Ghost::check/apply` runs the frame check before accounting; `apply` commits
+its economic map only after every check passes. Executable controls mutate
+observations (not stored ledgers) to test old-row amounts/contexts/removal,
+missing/extra/duplicate new rows, inconsistencies in `new_outputs`, key
+history, and payout tweaks. Each must fail for the expected reason, retain
+the ghost map, and pass after restoration. These are checker controls, not
+claims that production accepted corrupt blocks. Secondary indexes, other
+tables' accepted transitions, winner-selection correctness and general
+cryptographic soundness remain outside this frame comparison.
+
+The callable test-only contract in `formal-drt/src/supply.rs` is
+`Saved::load(directory, expected_manifest_sha256)`, `Saved::reset`, and
+`execute(saved, reset, candidate)`. Saving drops **all** fixture ledger
+handles, then copies the closed `data.mdb` into a fresh directory using
+independent files. Its byte hash covers the entire persisted store: every
+table, full block history, timestamp window, difficulty and snapshot-base
+metadata, plus LMDB's own data-file metadata. `lock.mdb` is process
+synchronization and is deliberately recreated. Unexpected directory
+entries fail. This is a full store copy, not the narrower production
+snapshot import and never the unvalidated fixture seeder.
+
+Every reset copies that closed image again, checks its bytes, opens a new
+ledger, checks that opening did not change the image, checks the runtime
+network, and compares the observed snapshot. The saved identity also binds
+the economic known-source map and the complete watched history. The
+manifest pins schema, profile, selected production/checker source bytes,
+fixture/replay source bytes, toolchain and lockfile. Its expected SHA-256
+comes from the receipt. Missing/unreadable files, mismatched hashes, schemas
+or profiles fail; executable corruption/restoration controls exercise the
+loader. The observed-snapshot hash alone is never called a full-store hash.
+
+The default bounded test saves four prefixes: ordinary signed spending at
+short history, late signature rejection at short history, a mature payout,
+and a mature payout spend. Each gets three exact signed-byte replays and
+three freshly signed candidates, alternating from independently reset
+pre-states. A different fresh candidate therefore intervenes between saved
+replays. Every sample performs actual precheck and `add_block`; no cached
+verdict counts. The 720 maturity, real PoW and protocol-8 checks remain.
+
+To replay an artifact from a receipt with the **matching source checkout**:
+
+```sh
+cd formal-drt
+SUPPLY_ORACLE_REPLAY_DIR=/path/to/artifact/replay-signed_transfer_0 \
+SUPPLY_ORACLE_REPLAY_SHA256=<manifest_sha256-from-receipt> \
+cargo test --release supply_oracle_real_commits_rollback_and_reopen -- --nocapture
+```
+
+This loads the retained store, signed candidate, real-input map and watched
+history and executes production validation/commit again. It does not
+regenerate a chain from a seed. The output explicitly marks reused signed
+bytes and zero fresh signatures. Reusing a store requires quiescent handles
+and an isolated destination; the source image is checked unchanged afterward.
+
+`frame-replay-receipt.json` retains every measured sample, min/median/max
+and totals, pre-state/manifest/image/artifact hashes, history/row counts and
+storage sizes. Timings separate prefix capture, wallet setup, artifact
+load/validation, reset/open/pre-state check, fresh signing, template/PoW/
+seal, precheck, actual commit/rejection, observation, frame/accounting,
+serialization/write, cleanup and remaining overhead. End-to-end totals are
+measured independently; the disjoint per-case parts sum to those totals.
+Saved replays have zero signing/sealing cost and are not newly signed
+samples. Full fixture wall time includes its control checks and prefix
+construction; it is not added again to per-case timings.
+
+The existing 360-second fixture guard and 420-second unfiltered release CI
+step remain. Optimized Linux results must be tied to the exact PR head and
+retained artifact hashes in the review receipt. Lean codec/model execution
+is **unmeasured additional cost**, as are the rest of the shared PR tier and
+large-campaign history growth. No leg is registered here. #1896 still owes
+faithful complete-budget evidence before registration; #1890 and #1839 keep
+their remaining obligations. A bounded receipt does not establish a 10k or
+million-case campaign.
+
+The [bounded local receipt](../formal-drt/results/frame-replay-1893.json)
+records 2 passing focused tests in 45.04 seconds, the original 743 committed
+blocks/7 accepted/4 rejected scenarios, 33 frame corruption/restoration
+checks, and 24 additional actual attempts (18 accepted, 6 late rejections;
+12 fresh signatures and 12 saved-byte replays). Artifact-loading CLI runs
+also reproduced an accepted commit and a late rejection in fresh processes.
+The receipt pins final implementation source hashes; Linux exact-head
+measurements remain a separate review requirement.
+
+On this Darwin arm64 machine, median complete repeated-case times were:
+
+| Pre-state | Rows / closed image bytes | Saved bytes | Fresh signature |
+| --- | ---: | ---: | ---: |
+| Ordinary, height 64 | 64 / 737,280 | 30.420 ms | 119.709 ms |
+| Late rejection, height 68 | 71 / 917,504 | 91.822 ms | 79.053 ms |
+| Mature payout, height 720 | 723 / 4,014,080 | 128.769 ms | 138.142 ms |
+| Payout spend, height 742 | 776 / 4,308,992 | 141.502 ms | 155.692 ms |
+
+Each cell has only three samples; the receipt includes extrema and totals
+without discarding outliers. Both prefix size and reset/observation costs
+grow with retained history. These measurements leave no 3.6 ms margin for
+the forthcoming Lean work and establish no Linux throughput guarantee.

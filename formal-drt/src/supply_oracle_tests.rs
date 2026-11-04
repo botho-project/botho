@@ -1,11 +1,12 @@
 //! Bounded actual-commit evidence for #1889. One fresh-genesis chain under
 //! an explicitly altered difficulty profile, reused across all scenarios.
 //! No snapshot seeding, maturity override, fake verifier or DRT double.
+use crate::supply::{self, fixture_source_hash, Saved, PROFILE};
 use botho::{
     block::{calculate_block_reward, Block},
     ledger::{
         formal_drt_supply::{
-            self as oracle, Context, Ghost, Observation, Outcome, OutputKind, RealInput,
+            self as oracle, Context, Ghost, KeyHistory, Observation, Outcome, OutputKind, RealInput,
         },
         Ledger, LedgerError,
     },
@@ -15,6 +16,7 @@ use botho::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -23,7 +25,6 @@ use std::{
 const WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 const RECEIVER: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-const PROFILE: &str = "genesis_origin_easy_difficulty_u64_max_real_pow_maturity_720";
 const MATURITY: u64 = 720;
 
 fn template(ledger: &Ledger, owner: &Wallet, txs: Vec<Transaction>) -> Block {
@@ -90,6 +91,8 @@ struct Fixture {
     cases: Vec<Value>,
     began: Instant,
     setup_us: u128,
+    replay_cases: Vec<Value>,
+    frame_controls: Vec<Value>,
 }
 
 impl Fixture {
@@ -115,11 +118,66 @@ impl Fixture {
             cases: vec![],
             began: Instant::now(),
             setup_us: 0,
+            replay_cases: vec![],
+            frame_controls: vec![],
         }
     }
 
     fn ledger(&self) -> &Ledger {
         self.ledger.as_ref().unwrap()
+    }
+
+    fn history(&self) -> KeyHistory {
+        let mut keys: BTreeMap<_, _> = self.watched.iter().map(|k| (*k, None)).collect();
+        for block in &self.blocks {
+            for key in block.transactions.iter().flat_map(Transaction::key_images) {
+                assert!(keys.insert(key, Some(block.height())).flatten().is_none());
+            }
+        }
+        keys.into_iter().collect()
+    }
+
+    fn save_case(
+        &mut self,
+        name: &str,
+        candidate: &Block,
+        inputs: &[RealInput],
+        rejection: Option<(bool, &str)>,
+    ) -> (PathBuf, String, Saved, u128) {
+        let start = Instant::now();
+        let pre = oracle::snapshot(self.ledger(), &self.watched).unwrap();
+        let network = format!("{:?}", self.ledger().network());
+        let directory = self.evidence.join(format!("replay-{name}"));
+        std::fs::create_dir(&directory).unwrap();
+        drop(self.ledger.take()); // All handles closed BEFORE copying.
+        let (data_sha256, data_bytes) =
+            supply::copy_closed(self.dir.path(), &directory.join("store")).unwrap();
+        let saved = Saved {
+            schema: 1,
+            profile: PROFILE.into(),
+            profile_hash: supply::profile_hash(),
+            source_hash: oracle::source_hash(),
+            fixture_source_hash: fixture_source_hash(),
+            network,
+            data_sha256,
+            data_bytes,
+            pre,
+            ghost: self.ghost.sources(),
+            history: self.history(),
+            candidate: candidate.clone(),
+            inputs: inputs.to_vec(),
+            rejection: rejection.map(|(stage, error)| (stage, error.into())),
+        };
+        let sha = saved.write(&directory).unwrap();
+        self.ledger = Some(Ledger::open(self.dir.path()).unwrap());
+        assert_eq!(
+            oracle::snapshot(self.ledger(), &self.watched)
+                .unwrap()
+                .fingerprint()
+                .unwrap(),
+            saved.pre.fingerprint().unwrap()
+        );
+        (directory, sha, saved, start.elapsed().as_micros())
     }
 
     fn bound(&self) {
@@ -204,6 +262,18 @@ impl Fixture {
         self.bound();
         self.watched
             .extend(block.transactions.iter().flat_map(Transaction::key_images));
+        let history = self.history();
+        let replay = if matches!(
+            name,
+            "signed_transfer_0"
+                | "late_invalid_signature_balance"
+                | "real_maturity_payout"
+                | "real_payout_signed_spend"
+        ) {
+            Some(self.save_case(name, &block, &inputs, rejection))
+        } else {
+            None
+        };
         // Save replay data before any assertion, including unexpected failures.
         std::fs::write(
             self.evidence.join("chain.json"),
@@ -257,20 +327,28 @@ impl Fixture {
                 corrupted.after.pool += 1;
                 assert!(self
                     .ghost
-                    .check(&corrupted, &inputs)
+                    .check(&corrupted, &inputs, &history)
                     .unwrap_err()
                     .contains("cross-addition"));
                 corrupted.after.pool -= 1;
-                self.ghost.check(&corrupted, &inputs).unwrap();
+                self.ghost.check(&corrupted, &inputs, &history).unwrap();
                 corrupted.after.pool = u128::MAX;
                 assert!(self
                     .ghost
-                    .check(&corrupted, &inputs)
+                    .check(&corrupted, &inputs, &history)
                     .unwrap_err()
                     .contains("arithmetic overflow"));
             }
+            if name == "signed_transfer_1" || name == "real_maturity_payout" {
+                self.frame_controls.extend(frame_controls(
+                    &self.ghost,
+                    &observation,
+                    &inputs,
+                    &history,
+                ));
+            }
             self.ghost
-                .apply(&observation, &inputs)
+                .apply(&observation, &inputs, &history)
                 .expect("actual persisted value flow");
             assert_eq!(
                 self.ledger()
@@ -303,13 +381,374 @@ impl Fixture {
             "artifact":file,"sha256":hex::encode(Sha256::digest(&bytes))});
         eprintln!("SUPPLY_ORACLE_CASE {entry}");
         self.cases.push(entry);
+        if let Some((directory, sha, saved, capture_us)) = replay {
+            self.replay_cases
+                .push(measure_replay(name, &directory, &sha, &saved, capture_us));
+        }
         observation
     }
+}
+
+fn frame_controls(
+    ghost: &Ghost,
+    observation: &Observation,
+    inputs: &[RealInput],
+    history: &KeyHistory,
+) -> Vec<Value> {
+    let mut results = vec![];
+    let mut sources = ghost.sources();
+    sources[0].amount += 1;
+    let mut wrong = Ghost::from_sources(&sources).unwrap();
+    let unchanged = serde_json::to_vec(&wrong.sources()).unwrap();
+    assert!(wrong
+        .apply(observation, inputs, history)
+        .unwrap_err()
+        .contains("known-source map"));
+    assert_eq!(serde_json::to_vec(&wrong.sources()).unwrap(), unchanged);
+    ghost.check(observation, inputs, history).unwrap();
+    results.push(json!({"control":"wrong ghost amount","restored":true,"ghost_unchanged":true}));
+    macro_rules! bad {
+        ($name:expr, $change:expr, $reason:expr) => {{
+            let mut changed = observation.clone();
+            $change(&mut changed);
+            let mut state = ghost.clone();
+            let before = serde_json::to_vec(&state.sources()).unwrap();
+            let error = state.apply(&changed, inputs, history).unwrap_err();
+            assert!(error.contains($reason), "{}: {error}", $name);
+            assert_eq!(serde_json::to_vec(&state.sources()).unwrap(), before, "failed comparison changed ghost");
+            state.check(observation, inputs, history).unwrap();
+            results.push(json!({"control":$name,"error":error,"restored":true,"ghost_unchanged":true}));
+        }};
+    }
+    let old_id = observation.before.outputs[0].row.id;
+    bad!(
+        "old amount",
+        |o: &mut Observation| o
+            .after
+            .outputs
+            .iter_mut()
+            .find(|r| r.row.id == old_id)
+            .unwrap()
+            .row
+            .output
+            .amount += 1,
+        "old persisted"
+    );
+    bad!(
+        "old context",
+        |o: &mut Observation| {
+            match &mut o
+                .after
+                .outputs
+                .iter_mut()
+                .find(|r| r.row.id == old_id)
+                .unwrap()
+                .context
+            {
+                Context::Direct { height, .. } | Context::Lottery { height, .. } => *height += 1,
+            }
+        },
+        "old persisted"
+    );
+    bad!(
+        "old removal",
+        |o: &mut Observation| {
+            o.after.outputs.retain(|r| r.row.id != old_id);
+        },
+        "old persisted"
+    );
+    let new_id = observation.new_outputs[0].output.row.id;
+    bad!(
+        "missing new persisted row",
+        |o: &mut Observation| {
+            o.after.outputs.retain(|r| r.row.id != new_id);
+        },
+        "created-ID"
+    );
+    bad!(
+        "extra persisted row",
+        |o: &mut Observation| {
+            let mut row = o.after.outputs[0].clone();
+            row.row.id.tx_hash = [0xab; 32];
+            o.after.outputs.push(row);
+        },
+        "created-ID"
+    );
+    bad!(
+        "missing redundant new_outputs",
+        |o: &mut Observation| {
+            o.new_outputs.pop();
+        },
+        "created-ID"
+    );
+    bad!(
+        "wrong redundant new_outputs",
+        |o: &mut Observation| {
+            o.new_outputs[0].output.row.output.amount += 1;
+        },
+        "correspondence"
+    );
+    bad!(
+        "duplicate before ID",
+        |o: &mut Observation| o.before.outputs.push(o.before.outputs[0].clone()),
+        "duplicate"
+    );
+    bad!(
+        "duplicate after ID",
+        |o: &mut Observation| o.after.outputs.push(o.after.outputs[0].clone()),
+        "duplicate"
+    );
+    bad!(
+        "duplicate reported ID",
+        |o: &mut Observation| o.new_outputs.push(o.new_outputs[0].clone()),
+        "duplicate"
+    );
+    let old_key = history
+        .iter()
+        .position(|(_, height)| height.is_some())
+        .unwrap();
+    bad!(
+        "wrong existing key marker",
+        |o: &mut Observation| o.after.key_images[old_key].1 = None,
+        "posthistory"
+    );
+    bad!(
+        "wrong known prehistory",
+        |o: &mut Observation| o.before.key_images[old_key].1 = None,
+        "prehistory"
+    );
+    bad!(
+        "missing known key observation",
+        |o: &mut Observation| {
+            o.after.key_images.pop();
+        },
+        "posthistory"
+    );
+    bad!(
+        "duplicate known key observation",
+        |o: &mut Observation| o.after.key_images.push(o.after.key_images[0]),
+        "duplicate"
+    );
+    let key = observation.block.transactions[0].key_images()[0];
+    bad!(
+        "wrong new key height",
+        |o: &mut Observation| {
+            o.after
+                .key_images
+                .iter_mut()
+                .find(|(k, _)| *k == key)
+                .unwrap()
+                .1 = Some(o.block.height() + 1);
+        },
+        "posthistory"
+    );
+    if let Some(payout) = observation
+        .new_outputs
+        .iter()
+        .find(|r| matches!(r.kind, OutputKind::Lottery { .. }))
+    {
+        let id = payout.output.row.id;
+        bad!(
+            "wrong payout cumulative tweak",
+            |o: &mut Observation| {
+                for row in o.after.outputs.iter_mut().filter(|r| r.row.id == id) {
+                    if let Context::Lottery { tweak, .. } = &mut row.context {
+                        tweak[0] ^= 1;
+                    }
+                }
+                for row in &mut o.new_outputs {
+                    if row.output.row.id == id {
+                        row.output = o
+                            .after
+                            .outputs
+                            .iter()
+                            .find(|r| r.row.id == id)
+                            .unwrap()
+                            .clone();
+                    }
+                }
+            },
+            "correspondence"
+        );
+    }
+    results
+}
+
+fn measure_replay(
+    name: &str,
+    directory: &std::path::Path,
+    sha: &str,
+    saved: &Saved,
+    capture_us: u128,
+) -> Value {
+    const REPEATS: usize = 3;
+    let began = Instant::now();
+    let owner = Wallet::from_mnemonic(WORDS).unwrap();
+    let receiver = Wallet::from_mnemonic(RECEIVER).unwrap();
+    let wallet_setup_us = began.elapsed().as_micros();
+    // Exercise the actual loader, not seed-only regeneration or cached verdicts.
+    assert!(Saved::load(directory, "bad hash")
+        .unwrap_err()
+        .contains("hash"));
+    assert!(Saved::load(&directory.join("missing"), sha).is_err());
+    let artifact_controls = if name == "signed_transfer_0" {
+        let scratch = tempfile::tempdir().unwrap();
+        supply::copy_closed(&directory.join("store"), &scratch.path().join("store")).unwrap();
+        for field in ["schema", "profile", "source"] {
+            let mut bad = saved.clone();
+            match field {
+                "schema" => bad.schema += 1,
+                "profile" => bad.profile_hash = "wrong".into(),
+                _ => bad.source_hash = "wrong".into(),
+            }
+            let bad_sha = bad.write(scratch.path()).unwrap();
+            assert!(Saved::load(scratch.path(), &bad_sha)
+                .unwrap_err()
+                .contains("schema/source/profile"));
+            let restored = saved.write(scratch.path()).unwrap();
+            Saved::load(scratch.path(), &restored).unwrap();
+        }
+        let image = scratch.path().join("store/data.mdb");
+        let bytes = std::fs::read(&image).unwrap();
+        let mut corrupt = bytes.clone();
+        corrupt[0] ^= 1;
+        std::fs::write(&image, corrupt).unwrap();
+        assert!(Saved::load(scratch.path(), sha)
+            .unwrap_err()
+            .contains("closed-store hash"));
+        std::fs::write(&image, bytes).unwrap();
+        Saved::load(scratch.path(), sha).unwrap();
+        let manifest = scratch.path().join("manifest.json");
+        std::fs::remove_file(&manifest).unwrap();
+        std::fs::create_dir(&manifest).unwrap();
+        assert!(Saved::load(scratch.path(), sha).is_err());
+        std::fs::remove_dir(&manifest).unwrap();
+        saved.write(scratch.path()).unwrap();
+        Saved::load(scratch.path(), sha).unwrap();
+        json!([
+            "wrong manifest hash",
+            "missing artifact",
+            "wrong schema",
+            "wrong profile",
+            "wrong source",
+            "corrupt store",
+            "unreadable manifest",
+            "restoration passes"
+        ])
+    } else {
+        json!(["wrong manifest hash", "missing artifact"])
+    };
+    let mut samples = vec![];
+    let identity = saved.identity().unwrap();
+    for repetition in 0..REPEATS {
+        // The fresh candidate between saved replays is deliberately different.
+        for fresh in [false, true] {
+            let start = Instant::now();
+            let loaded = Saved::load(directory, sha).unwrap();
+            let load_us = start.elapsed().as_micros();
+            assert_eq!(loaded.identity().unwrap(), identity);
+            let mut reset = loaded.reset(directory).unwrap();
+            let reset_us = reset.reset_us;
+            let usage = reset.ledger.storage_usage();
+            let (candidate, signing_us, seal_us) = if fresh {
+                let source = loaded
+                    .pre
+                    .outputs
+                    .iter()
+                    .find(|r| r.row.id == loaded.inputs[0].outpoint)
+                    .unwrap();
+                let to = if name == "real_maturity_payout" {
+                    &owner
+                } else {
+                    &receiver
+                };
+                let (mut tx, input, signing_us) = signed(
+                    &reset.ledger,
+                    &owner,
+                    to,
+                    &source.row,
+                    loaded.candidate.transactions[0].fee,
+                );
+                assert_eq!(input.outpoint, loaded.inputs[0].outpoint);
+                if loaded.rejection.is_some() {
+                    tx.outputs[0].amount += 1;
+                }
+                let seal_start = Instant::now();
+                let block = reset
+                    .ledger
+                    .seal_block(template(&reset.ledger, &owner, vec![tx]))
+                    .unwrap();
+                assert_ne!(block.hash(), loaded.candidate.hash());
+                (block, signing_us, seal_start.elapsed().as_micros())
+            } else {
+                (loaded.candidate.clone(), 0, 0)
+            };
+            let (observation, frame_us) = supply::execute(&loaded, &mut reset, candidate).unwrap();
+            let serialization = Instant::now();
+            let bytes = serde_json::to_vec(&json!({"saved_manifest_sha256":sha,"identity":identity,
+                "signed_bytes_reused":!fresh,"real_inputs":loaded.inputs,"observation":observation})).unwrap();
+            let artifact = format!(
+                "sample-{repetition}-{}.json",
+                if fresh { "fresh" } else { "saved" }
+            );
+            std::fs::write(directory.join(&artifact), &bytes).unwrap();
+            let serialization_us = serialization.elapsed().as_micros();
+            let cleanup = Instant::now();
+            drop(reset);
+            let cleanup_us = cleanup.elapsed().as_micros();
+            let elapsed_us = start.elapsed().as_micros();
+            let measured = load_us
+                + reset_us
+                + signing_us
+                + seal_us
+                + observation.precheck_us
+                + observation.add_block_us
+                + observation.observation_us
+                + frame_us
+                + serialization_us
+                + cleanup_us;
+            let sample = json!({"repetition":repetition,"fresh_signatures":usize::from(fresh),"signed_bytes_reused":!fresh,
+                "identity":identity,"load_us":load_us,"reset_us":reset_us,"signing_us":signing_us,"template_seal_us":seal_us,
+                "precheck_us":observation.precheck_us,"commit_us":observation.add_block_us,"observation_us":observation.observation_us,
+                "frame_us":frame_us,"serialization_write_us":serialization_us,"cleanup_us":cleanup_us,
+                "other_us":elapsed_us.checked_sub(measured).unwrap(),"elapsed_us":elapsed_us,
+                "storage_used_bytes":usage.used_bytes,"storage_map_bytes":usage.map_size_bytes,
+                "outcome":observation.outcome,"artifact":artifact,"artifact_bytes":bytes.len(),"sha256":supply::hash(&bytes)});
+            samples.push(sample);
+        }
+    }
+    assert_eq!(
+        supply::hash(&std::fs::read(directory.join("store/data.mdb")).unwrap()),
+        saved.data_sha256,
+        "replay wrote the canonical saved image"
+    );
+    let distribution: Vec<_> = [false, true].into_iter().map(|fresh| {
+        let mut times: Vec<_> = samples.iter().filter(|s| s["signed_bytes_reused"] == !fresh).map(|s| s["elapsed_us"].as_u64().unwrap()).collect();
+        times.sort();
+        json!({"fresh":fresh,"count":times.len(),"min_us":times[0],"median_us":times[times.len()/2],
+            "max_us":times[times.len()-1],"sum_us":times.iter().sum::<u64>()})
+    }).collect();
+    json!({"scenario":name,"directory":directory.file_name().unwrap().to_str().unwrap(),"manifest_sha256":sha,
+        "prestate_identity":identity,"closed_data_sha256":saved.data_sha256,"closed_data_bytes":saved.data_bytes,
+        "pre_height":saved.pre.state.height,"pre_rows":saved.pre.outputs.len(),"known_keys":saved.history.len(),
+        "capture_us":capture_us,"wallet_setup_us":wallet_setup_us,"measurement_elapsed_us":began.elapsed().as_micros(),
+        "fresh_signed_samples":REPEATS,"saved_signed_replays":REPEATS,"artifact_controls":artifact_controls,
+        "samples":samples,"distribution":distribution})
 }
 
 #[test]
 fn supply_oracle_real_commits_rollback_and_reopen() {
     assert_eq!(oracle::lottery_maturity(), MATURITY);
+    if let Some(path) = std::env::var_os("SUPPLY_ORACLE_REPLAY_DIR") {
+        let sha = std::env::var("SUPPLY_ORACLE_REPLAY_SHA256")
+            .expect("pin the manifest hash from the receipt");
+        eprintln!(
+            "SUPPLY_ORACLE_SAVED_REPLAY {}",
+            supply::replay(&PathBuf::from(path), &sha)
+                .expect("saved artifact replay must execute or fail")
+        );
+        return;
+    }
     let mut f = Fixture::new();
     let start = Instant::now();
     let owner = Wallet::from_mnemonic(WORDS).unwrap();
@@ -537,6 +976,19 @@ fn supply_oracle_real_commits_rollback_and_reopen() {
         "rejected_scenarios":f.cases.iter().filter(|c| c["accepted"]==false).count(),
         "infrastructure_failures":0,"negative_control":"pool_after+1 rejected; restored observation accepted",
         "chain_sha256":hex::encode(Sha256::digest(&chain)),"cases":f.cases});
+    let extension = json!({"schema":1,"profile":PROFILE,"profile_hash":supply::profile_hash(),
+        "source_hash":oracle::source_hash(),"fixture_source_hash":fixture_source_hash(),
+        "source_revision":receipt["source_revision"],"source_worktree_dirty":receipt["source_worktree_dirty"],
+        "platform":std::env::consts::OS,"arch":std::env::consts::ARCH,
+        "frame_controls":f.frame_controls,"replay_cases":f.replay_cases,"total_ms":f.began.elapsed().as_millis(),
+        "nightly_allowance_us":3600,"lean_codec_model_us":"unmeasured; positive additional reserve required",
+        "million_case_feasible":false,"registration":"blocked pending faithful complete-budget evidence"});
+    std::fs::write(
+        f.evidence.join("frame-replay-receipt.json"),
+        serde_json::to_vec_pretty(&extension).unwrap(),
+    )
+    .unwrap();
+    eprintln!("SUPPLY_ORACLE_FRAME_REPLAY_RECEIPT {extension}");
     std::fs::write(
         f.evidence.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt).unwrap(),
@@ -550,10 +1002,6 @@ fn supply_oracle_real_commits_rollback_and_reopen() {
     assert_eq!(receipt["accepted_scenarios"], 7);
     assert_eq!(receipt["rejected_scenarios"], 4);
     f.bound();
-}
-
-fn fixture_source_hash() -> String {
-    hex::encode(Sha256::digest(include_bytes!("supply_oracle_tests.rs")))
 }
 
 #[test]
