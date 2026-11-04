@@ -19,6 +19,7 @@ mod demurrage;
 mod fixtures;
 mod gen;
 mod legs;
+mod legs_tags;
 mod model;
 mod runner;
 mod wire;
@@ -56,6 +57,23 @@ const LEGS: &[(&str, LegFn)] = &[
     (legs::DrawSeeded::NAME, runner::run::<legs::DrawSeeded>),
     (legs::Window::NAME, runner::run::<legs::Window>),
     (legs::Drawing::NAME, runner::run::<legs::Drawing>),
+    // Cluster tags (#1840): src/legs_tags.rs.
+    (
+        legs_tags::MergeWeighted::NAME,
+        runner::run::<legs_tags::MergeWeighted>,
+    ),
+    (
+        legs_tags::Inheritance::NAME,
+        runner::run::<legs_tags::Inheritance>,
+    ),
+    (
+        legs_tags::EffectiveWealth::NAME,
+        runner::run::<legs_tags::EffectiveWealth>,
+    ),
+    (
+        legs_tags::ImportFloor::NAME,
+        runner::run::<legs_tags::ImportFloor>,
+    ),
 ];
 
 fn usage() -> ExitCode {

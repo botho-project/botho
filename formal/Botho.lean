@@ -21,3 +21,5 @@ import Botho.Lottery.Determinism
 import Botho.Quorum.Fbas
 import Botho.Demurrage.Counterexamples
 import Botho.Lottery.Sybil
+import Botho.Tags.Vector
+import Botho.Tags.Inherit
