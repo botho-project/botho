@@ -51,6 +51,11 @@ MIN_PEERS = 4
 MINT_THREADS = 1
 NODE_USER = 'botho'  # Created by fleet_provision.bootstrap(); observers share it.
 PROFILE_KEYS = {'run_id', 'producer_role', 'node_end', 'rpc_requests_per_minute'}
+# Optional: an earlier absolute producer mint deadline, so a sustained-memory
+# qualification cohort (#1452) can stop minting at its fixed deadline while
+# every node keeps running through settling and verified idle until node_end.
+# Absent, the producer mints until node_end exactly as before.
+OPTIONAL_PROFILE_KEYS = {'mint_until'}
 STAGING_RUN_ID = re.compile(r'[a-z][a-z0-9-]{7,63}')  # staging.prepare()'s run_id rule.
 PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 PEER_ID = re.compile(r'12D3KooW[1-9A-HJ-NP-Za-km-z]{44}')
@@ -100,8 +105,9 @@ def ports():
 
 
 def validate_profile(profile):
-    _need(isinstance(profile, dict) and set(profile) == PROFILE_KEYS,
-          'profile must have exactly: ' + ', '.join(sorted(PROFILE_KEYS)))
+    _need(isinstance(profile, dict) and PROFILE_KEYS <= set(profile) <= PROFILE_KEYS | OPTIONAL_PROFILE_KEYS,
+          'profile must have exactly: ' + ', '.join(sorted(PROFILE_KEYS))
+          + ' (optional: ' + ', '.join(sorted(OPTIONAL_PROFILE_KEYS)) + ')')
     run = profile['run_id']
     try:
         fp.validate_run_id(run)
@@ -110,6 +116,10 @@ def validate_profile(profile):
     _need(STAGING_RUN_ID.fullmatch(run), 'run_id rejected by staging.py')
     _need(profile['producer_role'] in VALIDATORS, 'producer_role must be one of n1..n5')
     _need(type(profile['node_end']) is int and profile['node_end'] > 0, 'node_end must be a positive integer epoch')
+    if 'mint_until' in profile:
+        until = profile['mint_until']
+        _need(type(until) is int and 0 < until < profile['node_end'],
+              'mint_until must be an integer epoch strictly before node_end')
     rpm = profile['rpc_requests_per_minute']
     _need(type(rpm) is int and 1 <= rpm <= 10000, 'rpc_requests_per_minute must be an integer in 1..10000')
     return profile
@@ -131,7 +141,15 @@ def check_node_end(profile, now=None):
     _need(end > now, 'node_end is not in the future')
     _need(end <= now + MAX_TESTNET_MINT_WINDOW_SECS,
           'node_end is more than %d h ahead (MAX_TESTNET_MINT_WINDOW_SECS)' % (MAX_TESTNET_MINT_WINDOW_SECS // 3600))
+    # A past mint_until would make the producer refuse to start.
+    _need(mint_until(profile) > now, 'mint_until is not in the future')
     return end
+
+
+def mint_until(profile):
+    """The producer's absolute `--testnet-mint-until`: `mint_until`, else node_end."""
+    profile = validate_profile(profile)
+    return profile.get('mint_until', profile['node_end'])
 
 
 def paths(run):
@@ -388,7 +406,7 @@ def render_node_unit(role, inventory, profile, now=None):
     ips = validate_inventory(inventory, run)
     p = paths(run)
     producer = role == profile['producer_role']
-    mint = ' --mint --mint-threads %d --testnet-mint-until %d' % (MINT_THREADS, profile['node_end']) if producer else ''
+    mint = ' --mint --mint-threads %d --testnet-mint-until %d' % (MINT_THREADS, mint_until(profile)) if producer else ''
     allow = ''.join('IPAddressAllow=%s/32\n' % ips[r] for r in fp.ROLES)
     text = f'''[Unit]
 Description=Isolated x-series qualification validator {role} ({run})
