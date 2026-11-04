@@ -32,6 +32,8 @@ pub mod decoy_flood_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod decoy_quantile_sweep;
 #[cfg(any(feature = "cli", test))]
+pub mod demurrage_quantization_sweep;
+#[cfg(any(feature = "cli", test))]
 pub mod downgrade_overcharge_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod emission_sweep;
