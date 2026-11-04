@@ -74,21 +74,18 @@ pub fn effective_cluster_wealth_from_outputs(
     outputs: &[FloorOutput<'_>],
     wealth: &dyn Fn(u64) -> u128,
 ) -> u128 {
-    let mut total_weighted_wealth: u128 = 0;
-    let mut total_value: u128 = 0;
+    // Exact 256-bit weighted mean, as the ledger computes it since protocol
+    // 9.0.0 (#1876); clamped only at the end (unreachable for well-formed tags).
+    let mut mean = crate::wide::WeightedMean::new();
     for output in outputs {
-        total_value = total_value.saturating_add(output.amount as u128);
+        mean.add_weight(output.amount as u128);
         for &(cluster, weight) in output.tags {
             let value_fraction =
                 (output.amount as u128 * weight as u128) / (TAG_WEIGHT_SCALE as u128);
-            total_weighted_wealth = total_weighted_wealth
-                .saturating_add(value_fraction.saturating_mul(wealth(cluster)));
+            mean.add_product(value_fraction, wealth(cluster));
         }
     }
-    if total_value == 0 {
-        return 0;
-    }
-    total_weighted_wealth / total_value
+    mean.floor()
 }
 
 /// `import_floor_factor_from_outputs` with an explicit floor `F` (FACTOR_SCALE
@@ -133,12 +130,16 @@ pub fn import_floor_factor_from_outputs(
 }
 
 /// One ring member's effective wealth, as `ring_centroid_floored_factor`
-/// resolves it: `Σ_tag weight·W[c]/SCALE` (saturating).
+/// resolves it: `Σ_tag floor(weight·W[c]/SCALE)`, each term exact in 256 bits
+/// (#1876, protocol 9.0.0); the sum is clamped at `u128::MAX` (unreachable for
+/// well-formed tags).
 pub fn ring_member_wealth(tags: &[TagPair], wealth: &dyn Fn(u64) -> u128) -> u128 {
     tags.iter().fold(0u128, |acc, &(cluster, weight)| {
-        acc.saturating_add(
-            (weight as u128).saturating_mul(wealth(cluster)) / TAG_WEIGHT_SCALE as u128,
-        )
+        acc.saturating_add(crate::wide::mul_div_floor(
+            weight as u128,
+            wealth(cluster),
+            TAG_WEIGHT_SCALE as u128,
+        ))
     })
 }
 
@@ -255,5 +256,29 @@ mod tests {
     fn writer_contributions_skip_zero() {
         let tags = [(1u64, 1u32), (2u64, 500_000u32)];
         assert_eq!(output_wealth_contributions(10, &tags), vec![(2, 5)]);
+    }
+
+    /// #1876: the mirrors are exact past u128 (protocol 9.0.0), matching the
+    /// ledger. Pre-9.0.0, `weight × W` saturated before the divide and
+    /// `value_fraction × W` before the mean.
+    #[test]
+    fn bug_1876_mirrors_are_exact_past_u128() {
+        let huge: u128 = u128::MAX / 3;
+        let w = |c: u64| if c == 1 { huge } else { 0 };
+        // Ring member: half weight on a cluster whose weight × W overflows.
+        let half = [(1u64, 500_000u32)];
+        assert!((500_000u128).checked_mul(huge).is_none());
+        assert_eq!(ring_member_wealth(&half, &w), huge / 2);
+        // Claimed wealth: a 10M BTH output fully tagged to a 1B BTH cluster.
+        let big_w: u128 = 1_000_000_000_000_000_000_000;
+        let full = [(2u64, TAG_WEIGHT_SCALE)];
+        let outs = [FloorOutput {
+            amount: 10_000_000_000_000_000_000,
+            tags: &full,
+        }];
+        assert_eq!(
+            effective_cluster_wealth_from_outputs(&outs, &|c| if c == 2 { big_w } else { 0 }),
+            big_w
+        );
     }
 }

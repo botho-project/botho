@@ -1769,17 +1769,20 @@ impl Ledger {
     /// Effective cluster wealth from a transaction's output tags, weighted
     /// against the committed global per-cluster wealth.
     ///
-    /// Mirrors the mempool's `effective_cluster_wealth_from_outputs`
-    /// (`mempool.rs:59`) but reads per-cluster wealth through the ledger's own
-    /// [`Ledger::get_cluster_wealth`], **fail-closed**: a DB read error
-    /// propagates as `LedgerError` rather than defaulting a cluster to zero
-    /// wealth (which would lower the progressive fee/factor — the M7 fail-open
-    /// bug). `effective_wealth = Σ_outputs Σ_tags (value·weight/SCALE·W_global)
-    /// / Σ_outputs value`; background (untagged) value contributes zero. Pure
-    /// integer u128 accumulation; no float, no HashMap iteration into the
-    /// result.
-    #[cfg(test)]
-    fn effective_cluster_wealth_from_outputs(
+    /// This is the single implementation shared by consensus
+    /// (`consensus_fee_floor`) and mempool admission (`mempool.rs`
+    /// `effective_cluster_wealth_from_outputs` delegates here, #1876), so relay
+    /// and consensus compute the identical claimed wealth. Per-cluster wealth
+    /// is read through [`Ledger::get_cluster_wealth`], **fail-closed**: a DB
+    /// read error propagates as `LedgerError` rather than defaulting a cluster
+    /// to zero wealth (which would lower the progressive fee/factor — the M7
+    /// fail-open bug). `effective_wealth = floor(Σ_outputs Σ_tags
+    /// (floor(value·weight/SCALE)·W_global) / Σ_outputs value)`, computed
+    /// exactly with a 256-bit numerator (`bth_cluster_tax::wide::WeightedMean`,
+    /// protocol 9.0.0) and clamped at u128::MAX only at the end; background
+    /// (untagged) value contributes zero. Pure integer arithmetic; no float, no
+    /// HashMap iteration into the result.
+    pub fn effective_cluster_wealth_from_outputs(
         &self,
         outputs: &[TxOutput],
     ) -> Result<u128, LedgerError> {
@@ -5843,17 +5846,18 @@ mod tests {
         assert_eq!(d12, d7, "7..=12 blocks all charge one TIME_SCALE unit");
     }
 
-    /// BUG #1876 (codex; Lean `saturation_lowers_charge`), reproduced through
-    /// the real consensus gate: a young 10M BTH coin in a cluster with 1B BTH
-    /// cumulative tagged wealth (true factor 6000), spent to a background
-    /// output, is priced by the #925 capitalized downgrade charge at the
-    /// ring-centroid floor. The `Σ value·wealth` sum saturates, the floor
-    /// drops to 5919, and the charge is 16,200 BTH (1.62%) lower than at the
-    /// true 6000. A 100k BTH coin in the same cluster is unaffected (ring
-    /// value below the ~830.8k BTH safe bound), so the lowering hits only
-    /// whale-scale rings, and in the wrong (regressive) direction.
+    /// FIXED #1876 (codex; Lean `saturation_lowers_charge`; reproduced in
+    /// #1899), through the real consensus gate: a young 10M BTH coin in a
+    /// cluster with 1B BTH cumulative tagged wealth (true factor 6000), spent
+    /// to a background output, is priced by the #925 capitalized downgrade
+    /// charge at the ring-centroid floor. Before protocol 9.0.0 the
+    /// `Σ value·wealth` sum saturated, the floor dropped to 5919 and the charge
+    /// was 983,800 BTH, 16,200 BTH (1.62%) below the true 1,000,000 BTH. The
+    /// centroid is now exact, so the whale pays the full 6x charge, the same
+    /// factor as a 100k BTH coin in the same cluster.
     ///
-    /// This asserts the CURRENT behaviour. A fix must flip this test.
+    /// Scale invariance through the gate: in a 100M BTH cluster (factor 5949)
+    /// a 100k BTH coin and a 10M BTH coin are both floored at 5949.
     #[test]
     fn bug_1876_consensus_floor_saturated_ring_lowers_downgrade_charge() {
         let policy = crate::monetary::mainnet_policy();
@@ -5863,7 +5867,7 @@ mod tests {
         let cluster = 11u64;
         let wealth: u128 = 1_000_000_000_000_000_000_000; // 1B BTH cumulative
 
-        let downgrade_demurrage = |coin: u64, out: u64| {
+        let downgrade_demurrage = |wealth: u128, coin: u64, out: u64| {
             let dir = tempdir().unwrap();
             let ledger = Ledger::open(dir.path()).unwrap();
             ledger.set_cluster_wealth_for_test(cluster, wealth).unwrap();
@@ -5889,19 +5893,180 @@ mod tests {
             )
         };
 
-        // Control: 100k BTH coin, ring value below the safe bound -> 6000.
+        // Control: 100k BTH coin, ring value below the old safe bound -> 6000.
         let small = 100_000_000_000_000_000u64;
-        assert_eq!(downgrade_demurrage(small, small), capitalized(small, 6000));
-
-        // Whale: 10M BTH coin -> floor saturates to 5919.
-        let big = 10_000_000_000_000_000_000u64;
-        let d = downgrade_demurrage(big, big);
-        assert_eq!(d, capitalized(big, 5919));
-        assert_eq!(d, 983_800_000_000_000_000);
         assert_eq!(
-            capitalized(big, 6000) - d,
+            downgrade_demurrage(wealth, small, small),
+            capitalized(small, 6000)
+        );
+
+        // Whale: 10M BTH coin -> exact floor 6000 (pre-9.0.0: 5919).
+        let big = 10_000_000_000_000_000_000u64;
+        let d = downgrade_demurrage(wealth, big, big);
+        assert_eq!(d, capitalized(big, 6000));
+        assert_eq!(d, 1_000_000_000_000_000_000, "1,000,000 BTH");
+        assert_eq!(
+            d - capitalized(big, 5919),
             16_200_000_000_000_000,
-            "16,200 BTH less"
+            "the 16,200 BTH the pre-9.0.0 floor under-charged is now collected"
+        );
+
+        // Scale invariance at an interior factor: W = 1e20 (100M BTH) -> 5949.
+        let w_interior: u128 = 100_000_000_000_000_000_000;
+        assert_eq!(
+            bth_cluster_tax::ClusterFactorCurve::default().factor(w_interior),
+            5949
+        );
+        assert_eq!(
+            downgrade_demurrage(w_interior, small, small),
+            capitalized(small, 5949)
+        );
+        assert_eq!(
+            downgrade_demurrage(w_interior, big, big),
+            capitalized(big, 5949)
+        );
+    }
+
+    /// #1876 composition with the CLAIMED factor: an in-class whale spend (a
+    /// 10M BTH output tagged 100% to a 1B BTH cluster) makes
+    /// `effective_cluster_wealth_from_outputs` overflow u128 (1e19 × 1e21).
+    /// Before protocol 9.0.0 the claimed wealth came out as
+    /// `u128::MAX / 1e19` (~3.4e19, factor below 6000) and lowered the
+    /// progressive base fee; it is now exactly the cluster wealth.
+    #[test]
+    fn bug_1876_claimed_wealth_is_exact_for_whale_outputs() {
+        use bth_cluster_tax::{FeeConfig, TransactionType};
+        use bth_transaction_types::ClusterId;
+        let block_height = 8_000_000u64;
+        let cluster = 12u64;
+        let wealth: u128 = 1_000_000_000_000_000_000_000; // 1B BTH cumulative
+        let big = 10_000_000_000_000_000_000u64; // 10M BTH
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger.set_cluster_wealth_for_test(cluster, wealth).unwrap();
+        let in_class = ClusterTagVector::from_pairs(&[(ClusterId(cluster), TAG_WEIGHT_SCALE)]);
+        let tx = mk_whale_ring_tx(&ledger, cluster, big, block_height, big, in_class);
+
+        let claimed = ledger
+            .effective_cluster_wealth_from_outputs(&tx.outputs)
+            .unwrap();
+        assert!(
+            (big as u128).checked_mul(wealth).is_none(),
+            "old path overflowed"
+        );
+        assert_eq!(claimed, wealth, "exact claimed wealth");
+        let old_claimed = u128::MAX / big as u128;
+        let fc = FeeConfig::default();
+        assert_eq!(fc.cluster_factor(claimed), 6000);
+        assert!(fc.cluster_factor(old_claimed) < 6000);
+
+        // In-class, elapsed 0: no downgrade and no accrued demurrage, so the
+        // floor is the base fee at the exact claimed wealth, strictly above
+        // the base fee the pre-9.0.0 claimed wealth produced.
+        let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        assert_eq!(floor, base_only_fee(&ledger, &tx));
+        let base_at = |cw: u128| {
+            fc.minimum_fee_dynamic_with_outputs(
+                TransactionType::Hidden,
+                tx.estimate_size(),
+                cw,
+                tx.outputs.len(),
+                0,
+                CONSENSUS_FEE_BASE,
+            )
+        };
+        assert_eq!(floor, base_at(wealth));
+        assert!(base_at(wealth) > base_at(old_claimed));
+    }
+
+    /// #1876 composition with the ADR-0007 bridge-import floor: a whale ring
+    /// (1B BTH cluster) spent to an output tagged 100% to a recorded import
+    /// cluster with no wealth. Claimed factor 1x, import floor F = 1.5x, exact
+    /// ring floor 6000; the composed demurrage factor is the single dominating
+    /// max (6000, pre-9.0.0: 5919), and the downgrade is priced from the 1x
+    /// claim.
+    #[test]
+    fn bug_1876_exact_ring_floor_composes_with_import_floor() {
+        use bth_transaction_types::ClusterId;
+        let policy = crate::monetary::mainnet_policy();
+        let block_height = policy.halving_interval + 10_000;
+        let rate = policy.demurrage_rate_bps(block_height);
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let cluster = 13u64;
+        let import = 14u64;
+        let wealth: u128 = 1_000_000_000_000_000_000_000;
+        let big = 10_000_000_000_000_000_000u64;
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger.set_cluster_wealth_for_test(cluster, wealth).unwrap();
+        ledger
+            .record_bridge_import_cluster_for_test(import)
+            .unwrap();
+        let import_tags = ClusterTagVector::from_pairs(&[(ClusterId(import), TAG_WEIGHT_SCALE)]);
+        let tx = mk_whale_ring_tx(&ledger, cluster, big, block_height, big, import_tags);
+
+        let import_floor = ledger
+            .import_floor_factor_from_outputs(&tx.outputs)
+            .unwrap();
+        assert_eq!(import_floor, bth_cluster_tax::BRIDGE_IMPORT_FACTOR_FLOOR);
+        assert_eq!(
+            ledger
+                .effective_cluster_wealth_from_outputs(&tx.outputs)
+                .unwrap(),
+            0,
+            "claimed 1x"
+        );
+
+        let d =
+            ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx);
+        let capitalized = |factor: u64| {
+            bth_cluster_tax::capitalized_reset_charge(
+                big,
+                factor,
+                bth_cluster_tax::demurrage::FACTOR_SCALE,
+                bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+                rate,
+                bpy,
+            )
+        };
+        assert_eq!(d, capitalized(6000.max(import_floor)));
+        assert_eq!(d, capitalized(6000));
+        assert!(d > capitalized(5919));
+    }
+
+    /// #1876 final-clamp policy: a true weighted mean above u128::MAX is
+    /// reachable only through malformed tags (weights summing past
+    /// TAG_WEIGHT_SCALE, rejected by Rule 1 before the floor sees them). It
+    /// is clamped at u128::MAX (factor 6000), the conservative direction,
+    /// rather than lowered.
+    #[test]
+    fn bug_1876_malformed_tags_clamp_claimed_wealth_at_max() {
+        use bth_transaction_types::{ClusterId, ClusterTagEntry};
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger.set_cluster_wealth_for_test(21, u128::MAX).unwrap();
+        ledger.set_cluster_wealth_for_test(22, u128::MAX).unwrap();
+        let mut tags = ClusterTagVector::empty();
+        tags.entries = vec![
+            ClusterTagEntry {
+                cluster_id: ClusterId(21),
+                weight: TAG_WEIGHT_SCALE,
+            },
+            ClusterTagEntry {
+                cluster_id: ClusterId(22),
+                weight: TAG_WEIGHT_SCALE,
+            },
+        ];
+        assert!(!tags.is_valid());
+        let outputs = vec![mk_tagged_output(u64::MAX, 90, tags)];
+        // True mean 2·u128::MAX; the old code returned floor(MAX / u64::MAX).
+        assert_eq!(
+            ledger
+                .effective_cluster_wealth_from_outputs(&outputs)
+                .unwrap(),
+            u128::MAX
         );
     }
 

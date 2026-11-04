@@ -172,7 +172,20 @@ use crate::{
 /// 2 h ahead that it rejects, so the two fork. #1848 adds a storage guard: a
 /// ledger store past genesis without the persisted timestamp window is
 /// refused at open.
-pub const PROTOCOL_VERSION: &str = "8.0.0";
+/// PROTOCOL 9.0.0 (#1876; #1875 lands in the same unreleased 9.0.0): fresh
+/// chains from genesis. #1876, exact fee-floor weighted means: the
+/// ring-centroid floor (`ring_centroid_implied_factor` and each member's
+/// tag-weighted wealth in `ring_centroid_floored_factor`) and the output-tag
+/// claimed wealth (`effective_cluster_wealth_from_outputs`) are now the exact
+/// rational floor of `Σ value·wealth / Σ value` over a 256-bit numerator. The
+/// 8.x code saturated the numerator at u128::MAX before dividing, which
+/// LOWERED the floor for whale-scale rings (a 10M BTH coin in a 1B BTH cluster
+/// was floored at 5919 instead of 6000). An 8.x peer accepts the under-charged
+/// fee the 9.0.0 chain rejects, so the two fork. MAJOR bump
+/// (`is_consensus_compatible` is major-only) with
+/// `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 9.0.0 in lockstep; no storage
+/// format change from #1876.
+pub const PROTOCOL_VERSION: &str = "9.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -207,7 +220,12 @@ pub const PROTOCOL_VERSION: &str = "8.0.0";
 /// outputs credit clusters absent from the ring, and enforce `timestamp >=
 /// parent` with a 2 h future bound, so they must be refused at the identify
 /// handshake rather than left to fork.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "8.0.0";
+///
+/// Raised to 9.0.0 for the exact fee-floor weighted means (#1876): 8.x peers
+/// saturate the ring-centroid and claimed-wealth numerators and accept
+/// whale-scale spends below the 9.0.0 fee floor, so they must be refused at
+/// the identify handshake rather than left to fork.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "9.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -3026,9 +3044,13 @@ mod tests {
         // Bumped to 8.0.0 (MAJOR) for the output cluster-tag rules (#1857)
         // and the median-time-past timestamp rules (#1848). MAJOR so 7.x
         // peers are disconnected rather than left forking.
-        assert_eq!(PROTOCOL_VERSION, "8.0.0");
+        //
+        // Bumped to 9.0.0 (MAJOR) for the exact fee-floor weighted means
+        // (#1876). MAJOR so 8.x (saturating) peers are disconnected rather
+        // than left forking.
+        assert_eq!(PROTOCOL_VERSION, "9.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 8);
+        assert_eq!(parsed.major, 9);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
@@ -3049,7 +3071,7 @@ mod tests {
                 Some(peer)
             );
         }
-        let current_peer = ProtocolVersion::parse("8.0.1").unwrap();
+        let current_peer = ProtocolVersion::parse("9.0.1").unwrap();
         assert_eq!(
             ProtocolVersion::consensus_incompatibility(&Some(current_peer), &local),
             None
@@ -3069,6 +3091,24 @@ mod tests {
         let min = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
         for unbounded_tag_peer in ["7.0.0", "7.9.9"] {
             let peer = ProtocolVersion::parse(unbounded_tag_peer).unwrap();
+            assert!(!peer.is_consensus_compatible(&local));
+            assert!(!peer.is_compatible_with(&min));
+            assert_eq!(
+                ProtocolVersion::consensus_incompatibility(&Some(peer.clone()), &local),
+                Some(peer)
+            );
+        }
+    }
+
+    /// #1876 is a consensus-breaking MAJOR bump (8.x → 9.0.0): 8.x peers
+    /// saturate the fee-floor weighted means and accept whale-scale spends
+    /// below the 9.0.0 floor, so they must be DISCONNECTED, not merely warned.
+    #[test]
+    fn test_v8_peers_are_consensus_incompatible_after_issue_1876() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let min = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
+        for saturating_floor_peer in ["8.0.0", "8.9.9"] {
+            let peer = ProtocolVersion::parse(saturating_floor_peer).unwrap();
             assert!(!peer.is_consensus_compatible(&local));
             assert!(!peer.is_compatible_with(&min));
             assert_eq!(
@@ -3109,9 +3149,9 @@ mod tests {
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "8.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "9.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 8);
+        assert_eq!(parsed.major, 9);
         assert_eq!(parsed.minor, 0);
     }
 

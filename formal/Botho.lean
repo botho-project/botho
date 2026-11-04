@@ -22,9 +22,11 @@ import Botho.Lottery.SeedIndependence
 import Botho.Lottery.Determinism
 import Botho.Quorum.Fbas
 import Botho.Demurrage.Counterexamples
+import Botho.Demurrage.Exact
 import Botho.Lottery.Sybil
 import Botho.Tags.Vector
 import Botho.Tags.Inherit
+import Botho.Tags.EffectiveExact
 import Botho.Difficulty.Step
 import Botho.Difficulty.Warp
 import Botho.Consensus.SlotDuration
