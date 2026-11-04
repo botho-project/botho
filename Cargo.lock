@@ -2493,7 +2493,6 @@ dependencies = [
 name = "bth-ct-demurrage-reference"
 version = "0.0.0"
 dependencies = [
- "bth-cluster-tax",
  "bth-crypto-keys",
  "bth-crypto-ring-signature",
  "bth-util-from-random",
