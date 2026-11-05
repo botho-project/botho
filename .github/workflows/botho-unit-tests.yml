@@ -1,0 +1,132 @@
+name: Botho unit tests
+
+on:
+  pull_request:
+    paths:
+      - 'botho/**'
+      - 'cluster-tax/**'
+      # A dependency-only edit can change the library's behavior or feature graph.
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'crypto/**'
+      - 'rust-toolchain*'
+      - '.cargo/**'
+      - 'vendor/**'
+      - '.github/workflows/botho-unit-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_CI_DEBUG_ASSERTIONS: 'true'
+  CARGO_PROFILE_CI_OVERFLOW_CHECKS: 'true'
+
+jobs:
+  botho-lib:
+    name: Full Botho library suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-09
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: botho-lib-checked-ci
+      - name: Record source and toolchain
+        run: |
+          mkdir -p "$RUNNER_TEMP/botho-unit-tests"
+          {
+            git rev-parse HEAD
+            rustc -vV
+            cargo --version
+            uname -a
+            sha256sum Cargo.toml Cargo.lock botho/Cargo.toml
+          } | tee "$RUNNER_TEMP/botho-unit-tests/provenance.txt"
+      - name: Compile the default-feature library suite
+        timeout-minutes: 30
+        run: |
+          /usr/bin/time -p cargo test --locked --profile ci -p botho --lib --no-run --message-format=json \
+            > "$RUNNER_TEMP/botho-unit-tests/build.jsonl" \
+            2> "$RUNNER_TEMP/botho-unit-tests/build.log"
+      - name: Verify checked profile and inventory every test
+        id: library
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+
+          evidence = Path(os.environ['RUNNER_TEMP'], 'botho-unit-tests')
+          messages = [json.loads(line) for line in (evidence / 'build.jsonl').read_text().splitlines()]
+          artifacts = [m for m in messages if m.get('reason') == 'compiler-artifact'
+                       and m.get('target', {}).get('name') == 'botho'
+                       and 'lib' in m.get('target', {}).get('kind', [])
+                       and m.get('profile', {}).get('test') and m.get('executable')]
+          assert len(artifacts) == 1, f'expected one Botho library test artifact, got {len(artifacts)}'
+          artifact = artifacts[0]
+          profile = artifact['profile']
+          assert profile['opt_level'] == '2', profile
+          assert profile['debug_assertions'] is True and profile['overflow_checks'] is True, profile
+          (evidence / 'artifact.json').write_text(json.dumps(artifact, indent=2) + '\n')
+          executable = artifact['executable']
+          inventory = subprocess.check_output([executable, '--list'], text=True)
+          ignored = subprocess.check_output([executable, '--ignored', '--list'], text=True)
+          (evidence / 'inventory.txt').write_text(inventory)
+          (evidence / 'ignored.txt').write_text(ignored)
+          tests = {line[:-6] for line in inventory.splitlines() if line.endswith(': test')}
+          ignored_tests = {line[:-6] for line in ignored.splitlines() if line.endswith(': test')}
+          assert tests and ignored_tests <= tests
+          counts = {'discovered': len(tests), 'ignored': len(ignored_tests),
+                    'non_ignored': len(tests - ignored_tests)}
+          (evidence / 'inventory.json').write_text(json.dumps(counts, indent=2) + '\n')
+          print(json.dumps({'profile': profile, 'tests': counts}, indent=2))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'executable={executable}\n')
+          PY
+      - name: Run the entire ordinary library suite
+        # Keep two minutes after the command deadline for evidence handling.
+        timeout-minutes: 22
+        env:
+          BOTHO_TEST_EXECUTABLE: ${{ steps.library.outputs.executable }}
+        run: |
+          set -o pipefail
+          started=$(date +%s)
+          set +e
+          timeout 1200s "$BOTHO_TEST_EXECUTABLE" --test-threads=2 2>&1 \
+            | tee "$RUNNER_TEMP/botho-unit-tests/execution.log"
+          result=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+          printf '{"exit_code":%s,"seconds":%s}\n' "$result" "$elapsed" \
+            > "$RUNNER_TEMP/botho-unit-tests/result.json"
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          evidence = Path(os.environ['RUNNER_TEMP'], 'botho-unit-tests')
+          counts = json.loads((evidence / 'inventory.json').read_text())
+          summary = re.search(r'test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; '
+                              r'(\d+) measured; (\d+) filtered out;',
+                              (evidence / 'execution.log').read_text())
+          assert summary, 'missing successful libtest summary'
+          passed, failed, ignored, measured, filtered = map(int, summary.groups())
+          assert failed == filtered == measured == 0, summary.group()
+          assert passed == counts['non_ignored'] and ignored == counts['ignored'], (summary.group(), counts)
+          print(summary.group())
+          PY
+      - name: Retain build, inventory and execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: botho-unit-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/botho-unit-tests/
+          retention-days: 14
+          if-no-files-found: error

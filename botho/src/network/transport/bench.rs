@@ -695,12 +695,18 @@ mod tests {
     #[test]
     fn test_throughput_measurer() {
         let mut measurer = ThroughputMeasurer::new();
+        assert_eq!(measurer.total_bytes(), 0);
+        assert_eq!(measurer.elapsed(), Duration::ZERO);
+        assert_eq!(measurer.throughput(), 0.0);
+
         measurer.start();
+        // Exercise an elapsed measurement without depending on clock resolution.
+        measurer.start_time = Some(std::time::Instant::now() - Duration::from_secs(1));
         measurer.record(1000);
         measurer.record(2000);
 
         assert_eq!(measurer.total_bytes(), 3000);
-        assert!(measurer.elapsed() > Duration::ZERO);
+        assert!(measurer.elapsed() >= Duration::from_secs(1));
         // Throughput depends on timing, just check it's positive
         assert!(measurer.throughput() > 0.0);
     }

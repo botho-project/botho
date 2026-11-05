@@ -50,6 +50,43 @@ cargo test -p botho mempool::tests::test_add_transaction
 cargo test -p botho --test network_integration
 ```
 
+### Full Botho library coverage in CI
+
+The **Botho unit tests** workflow runs every default-feature, non-ignored
+`botho` library test on matching pull requests. Reproduce its checked,
+optimized profile locally with the pinned toolchain:
+
+```bash
+CARGO_PROFILE_CI_DEBUG_ASSERTIONS=true CARGO_PROFILE_CI_OVERFLOW_CHECKS=true \
+  cargo +nightly-2026-06-09 test --locked --profile ci -p botho --lib -- --test-threads=2
+```
+
+CI separates compilation (30-minute step budget) from execution (20-minute
+command deadline, 22-minute step budget), with a 55-minute job limit. It checks
+Cargo's emitted library artifact for optimization level 2, debug assertions,
+and overflow checks, then runs that binary with two test threads and no name
+filter. A nonzero test result, timeout, logging failure, or inventory mismatch
+fails the job. The successful summary must have zero filtered-out tests.
+
+The path filters include `botho/**`, `cluster-tax/**`, Rust sources throughout
+the repository, Cargo manifests and lockfiles, `crypto/**`, the Rust toolchain,
+Cargo configuration, vendored dependencies, and the workflow itself. The wider
+dependency filters catch changes that affect Botho without editing its package.
+Manual dispatch runs the same job.
+
+Each run retains a `botho-unit-tests-<run-id>-<attempt>` artifact for 14 days,
+including on failure: the actual checkout commit and toolchain, Cargo build
+output and profile metadata, complete and ignored test inventories, execution
+output, and execution status/duration. Use that run's `inventory.json` and
+`execution.log` for counts; they change as tests are added. Compilation timing
+is in `build.log`; execution timing is in `result.json`.
+
+This gate complements the workspace job's existing full `ledger::` execution
+and focused WebRTC, emission, CT1, wallet, and RPC checks. Ordinary libtest
+ignored-test semantics remain in force: this job does not execute ignored
+long-running cases, integration targets, or doctests. Existing explicit
+ignored-test and integration jobs retain those responsibilities.
+
 ### Integration Tests
 
 ```bash
