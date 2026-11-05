@@ -73,7 +73,7 @@ usable for proofs as extracted.
 
 ### What is outside the supported subset
 
-Three things, and nothing else in these kernels:
+The initial spike and the #1820 follow-up found four unsupported patterns:
 
 1. **`saturating_mul`.** The Aeneas standard library models `saturating_add`
    and `saturating_sub` but not `saturating_mul` (see
@@ -112,9 +112,15 @@ Three things, and nothing else in these kernels:
    is_eligible(&cs[i], ..) { n += 1 } i += 1 }` extracts to an Aeneas `loop`
    with no axioms (prototyped). Proofs about it need a loop invariant and a
    termination measure (`cs.len() - i`).
+4. **`TryFrom<u128> for u64`.** `u64::try_from(value)` emits an axiom for
+   the conversion implementation. `Option::unwrap_or` and
+   `Result::unwrap_or` are modelled, but they do not supply a model for the
+   conversion they consume. The #1820 rewrite described above removes this
+   dependency from `demurrage_charge`; the #1855 probe below confirms it is
+   still unsupported by the pinned toolchain.
 
-u128 was not a problem: `U128` arithmetic, casts, `min`/`max`/`clamp` and
-`u64::try_from(u128)` with `unwrap_or` are all modelled.
+`U128` arithmetic, casts and `min`/`max`/`clamp` are modelled. This does not
+extend to the fallible `u64::try_from(u128)` conversion.
 
 `draw_eligible` (`cluster-tax/src/lottery.rs:361`, not in this list) is the
 kernel Aeneas is least suited to: `std::collections::HashSet`,
@@ -142,6 +148,73 @@ ratified parameters:
 - `lottery_emission_share` and `split_fees` both end in a truncating
   `as u64` that is lossless only because the bps or permille factor is at
   most 10000 or 1000 respectively. The model makes that obligation explicit.
+
+## Time-adjusted difficulty probe (#1855)
+
+Run on 2026-11-05 against unchanged Rust at commit
+`b6c946cb6ec3ba01d2c230bd96fb717b2407f02d`, after the botho extraction lane
+landed in #1838. The root was
+`botho::block::difficulty::EmissionController::compute_time_adjusted_difficulty`
+in `botho/src/block.rs:1351–1386`. Pins from `formal-aeneas/toolchain.env`:
+
+- Aeneas `nightly-2026.11.02-ab34bd2` (`ab34bd28458a08c150b7cbf1873e59af74588138`).
+- Bundled Charon `0.1.304` (`7b462d9159db2ed3015162352183906a30bfafc6`).
+- Rust `nightly-2026-09-17`.
+- Aeneas macOS arm64 release asset, whose pinned SHA-256 is
+  `1f6db91ae0ec8fe2174720b6b1a7a2dc9beda4f03c648a4765e7e0379294aa8f`.
+
+**Result: translation succeeds, but extraction is rejected by the generated
+source gate.** Charon and Aeneas each exit 0. The unchanged
+`gate_scan.py --generated` exits 1 and reports exactly two declarations:
+
+```lean
+axiom U64.Insts.CoreConvertTryFromU128TryFromIntError.try_from
+  :
+  Std.U128 → Result (core.result.Result Std.U64
+    core.num.error.TryFromIntError)
+axiom core.num.U64.saturating_mul : Std.U64 → Std.U64 → Result Std.U64
+```
+
+The first is reached through `u64::try_from(new_diff).unwrap_or(u64::MAX)`.
+The second is reached both through `target_secs.saturating_mul(12)` and
+through `MAX_DIFFICULTY`'s initializer. The initializer is also needed in
+the defensive `target_secs == 0` branch. `clamp` itself adds no axiom.
+
+Reproduce from that source commit, with the pinned release unpacked at
+`AENEAS_DIR` and its Rust toolchain installed (set `RUSTUP_HOME` if using a
+separate rustup installation). These are the `regen.sh` extraction flags;
+output and the Charon target remain outside the checked-in generated tree:
+
+```bash
+set -e
+repo=$(pwd) # repository root
+probe=$(mktemp -d)
+mkdir -p "$probe/out"
+export CHARON_TARGET_DIR="$probe/target"
+(
+  cd botho
+  CARGO_TARGET_DIR="$CHARON_TARGET_DIR" "$AENEAS_DIR/charon" cargo \
+    --preset aeneas \
+    --start-from botho::block::difficulty::EmissionController::compute_time_adjusted_difficulty \
+    --dest-file "$probe/time_adjusted.llbc" -- -p botho --lib
+)
+"$AENEAS_DIR/aeneas" -backend lean -no-progress-bar -warnings-as-errors \
+  -dest "$probe/out" "$probe/time_adjusted.llbc"
+scan_rc=0
+python3 -I "$repo/formal-aeneas/scripts/gate_scan.py" --generated "$probe/out" || scan_rc=$?
+# Expected: exit 1, two forbidden-token reports for the axioms above.
+test "$scan_rc" -eq 1
+formal-aeneas/regen.sh --check
+# Expected: exit 0 for the existing supported roots.
+```
+
+The supported-root regeneration check passed without a diff. This completes
+#1855's documented-rejection outcome. The unsupported root stays out of
+`botho_start_from`, and its axiom-bearing output is not checked in. No
+production rewrite, toolchain change, generated-file edit or new extracted
+theorem is included. Evidence for difficulty remains **proven (model) +
+tested**: `formal/Botho/Difficulty/Step.lean` and its production-function
+DRT comparison. This probe adds no **proven (extraction)** claim.
 
 ## Estimated proof-maintenance cost per kernel
 
