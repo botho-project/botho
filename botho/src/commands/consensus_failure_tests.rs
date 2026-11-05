@@ -1017,7 +1017,21 @@ fn deliver_and_assert_parked(harness: &Harness, block: &Block, hold: Duration) -
     let slot = samples[first].slot;
     let ticks_before = harness.ticks.load(Ordering::SeqCst);
     std::thread::sleep(hold);
-    let samples = harness.samples.lock().unwrap().clone();
+    // A sleep ending on a timer deadline does not order this thread after
+    // the node's callback. Observe two completed tick samples as well as the
+    // minimum hold; keep the wait bounded if the event loop really stops.
+    let tick_deadline = Instant::now() + Duration::from_secs(20);
+    let samples = loop {
+        let samples = harness.samples.lock().unwrap().clone();
+        if samples.len() as u64 >= ticks_before + 2 {
+            break samples;
+        }
+        assert!(
+            Instant::now() < tick_deadline,
+            "the node loop stopped ticking while a decision was parked: {samples:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert!(
         samples[first..]
             .iter()
