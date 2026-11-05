@@ -261,7 +261,13 @@ the positive-charge threshold, churn identity and conservative-overflow claim.
 Those theorems are about the pre-9.0.0 kernel (`charge`), kept as the record
 of #1875; the 9.0.0 exact kernel is modelled by `exactCharge`
 (`Botho/Demurrage/ExactCharge.lean`), which the `demurrage_charge` DRT leg now
-compares against (its theorems are a follow-up).
+compares against. Its four listed and statement-bound claims (#1916) prove
+the sharp positive-charge ceiling threshold, the split loss bound even with
+clipping, the two-sided split bound without aggregate clipping, and a typed
+clipping counterexample. The six existing exact-centroid/claimed-wealth
+claims are also listed and bound with their original statements. These are
+**proven (model)**; DRT is separate evidence of Rust correspondence. See
+[the theorem domains and checked examples](DEMURRAGE.md#exact-charge-threshold-and-splitting-1916).
 
 ## The cluster-tag model
 
