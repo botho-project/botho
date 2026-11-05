@@ -25,7 +25,10 @@ import re
 from runtime import Gate
 
 LOTTERY_RULES = 2
-PROTOCOL_VERSION = '7.0.0'
+# Must equal the node's PROTOCOL_VERSION (botho/src/network/discovery.rs);
+# test_lottery_preflight enforces it, so a protocol bump cannot strand the
+# harness (#1933).
+PROTOCOL_VERSION = '9.0.0'
 _HEX64 = re.compile(r'[0-9a-f]{64}')
 _OUTPOINT = re.compile(r'([0-9a-fA-F]{64}):(0|[1-9][0-9]{0,9})')
 
@@ -116,7 +119,7 @@ def lottery_rows(blocks):
 
 
 def check_lottery_rules(info, host):
-    """Preflight: refuse a node that does not report V2 lottery rules on 7.0.0."""
+    """Preflight: refuse a node that does not report V2 lottery rules on PROTOCOL_VERSION."""
     if not isinstance(info, dict):
         raise Gate('malformed chain info: ' + host)
     rules = info.get('lotteryRules')

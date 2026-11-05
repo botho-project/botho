@@ -1624,7 +1624,7 @@ class Controller:
         return v2_award_evidence(self.inventory, ids, rows, state)
 
     async def lottery_preflight(self):
-        """Refuse to start unless every node reports V2 lottery rules on 7.0.0 (#1643).
+        """Refuse to start unless every node reports V2 lottery rules on lottery.PROTOCOL_VERSION (#1643).
 
         Recorded once per campaign; afterwards ``check_identity`` pins the
         same binary on every status read, so the rules cannot change.

@@ -1,14 +1,16 @@
-"""Preflight refuses any node that does not report V2 lottery rules on 7.0.0 (#1643)."""
+"""Preflight refuses any node that does not report V2 lottery rules on PROTOCOL_VERSION (#1643)."""
 import asyncio
+import re
 from pathlib import Path
 import tempfile
 import unittest
 
 from controller import Controller
-from lottery import check_lottery_rules
+from lottery import PROTOCOL_VERSION, check_lottery_rules
 from runtime import Gate, HOSTS, Journal
 
-V2 = {'lotteryRules': 2, 'protocolVersion': '7.0.0', 'height': 5}
+V2 = {'lotteryRules': 2, 'protocolVersion': PROTOCOL_VERSION, 'height': 5}
+DISCOVERY_RS = Path(__file__).resolve().parents[2] / 'botho/src/network/discovery.rs'
 
 
 class FakeRpc:
@@ -22,9 +24,17 @@ class FakeRpc:
 
 
 class CheckLotteryRulesTests(unittest.TestCase):
-    def test_accepts_v2_on_7_0_0(self):
+    def test_accepts_v2_on_current_protocol(self):
         self.assertEqual(check_lottery_rules(dict(V2), 'h'),
-                         {'lotteryRules': 2, 'protocolVersion': '7.0.0'})
+                         {'lotteryRules': 2, 'protocolVersion': PROTOCOL_VERSION})
+
+    def test_pin_matches_node_protocol_version(self):
+        # #1933: 8.0.0 and 9.0.0 bumped the node without the harness, and
+        # every campaign then held at this preflight.
+        source = DISCOVERY_RS.read_text()
+        node = re.search(r'^pub const PROTOCOL_VERSION: &str = "([^"]+)";$', source, re.M)
+        self.assertIsNotNone(node, 'PROTOCOL_VERSION not found in ' + str(DISCOVERY_RS))
+        self.assertEqual(PROTOCOL_VERSION, node.group(1))
 
     def test_rejects_v1_and_malformed_rules(self):
         for rules in (1, None, '2', 2.0, True, 3):
@@ -38,9 +48,9 @@ class CheckLotteryRulesTests(unittest.TestCase):
             check_lottery_rules(info, 'h')
 
     def test_rejects_other_protocol_versions(self):
-        for version in ('6.0.0', '7.0.1', None, 7):
+        for version in ('6.0.0', '7.0.0', '8.0.0', '9.0.1', None, 9):
             with self.subTest(version=version):
-                with self.assertRaisesRegex(Gate, 'protocol is not 7.0.0'):
+                with self.assertRaisesRegex(Gate, 'protocol is not ' + re.escape(PROTOCOL_VERSION)):
                     check_lottery_rules(dict(V2, protocolVersion=version), 'h')
         with self.assertRaisesRegex(Gate, 'malformed chain info'):
             check_lottery_rules(None, 'h')
@@ -74,7 +84,7 @@ class ControllerPreflightTests(unittest.TestCase):
 
     def test_old_protocol_node_refuses_the_start(self):
         self.c.rpc = FakeRpc({HOSTS[0]: dict(V2, protocolVersion='6.0.0')})
-        with self.assertRaisesRegex(Gate, 'protocol is not 7.0.0'):
+        with self.assertRaisesRegex(Gate, 'protocol is not ' + re.escape(PROTOCOL_VERSION)):
             asyncio.run(self.c.run())
         self.assertIsNone(self.c.j.get('status'))
 
