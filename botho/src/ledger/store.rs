@@ -2403,7 +2403,7 @@ impl Ledger {
                 total_value = total_value.saturating_add(utxo.output.amount);
                 utxo_count += 1;
 
-                let mut weighted: u128 = 0;
+                let mut weighted = bth_cluster_tax::wide::WeightedMean::new();
                 for entry in &utxo.output.cluster_tags.entries {
                     let global = match global_wealths.entry(entry.cluster_id.0) {
                         std::collections::hash_map::Entry::Occupied(e) => *e.get(),
@@ -2411,11 +2411,12 @@ impl Ledger {
                             *e.insert(self.get_cluster_wealth(entry.cluster_id.0)?)
                         }
                     };
-                    weighted =
-                        weighted.saturating_add((entry.weight as u128).saturating_mul(global));
+                    weighted.add_product(u128::from(entry.weight), global);
                 }
-                // Divide by full scale: background weight dilutes toward zero
-                let effective = weighted / TAG_WEIGHT_SCALE as u128;
+                // Divide the exact wide sum by full scale: background weight
+                // dilutes toward zero, with only the final quotient clamped.
+                weighted.add_weight(u128::from(TAG_WEIGHT_SCALE));
+                let effective = weighted.floor();
                 max_effective_wealth = max_effective_wealth.max(effective);
             }
         }
@@ -3603,6 +3604,140 @@ mod tests {
             (whale_amount + small_amount) as u128
         );
         assert_eq!(info.dominant_cluster_id, Some(1));
+    }
+
+    /// Synthetic typed-domain wealth values: these are not claimed reachable
+    /// ledger states. The old wallet numerator saturated at SCALE * wealth.
+    #[test]
+    fn bug_1911_wallet_wealth_is_exact_at_u128_boundary() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        seed_ring_utxos(&ledger, &[(1_000, 1, 1, 7)]);
+        let boundary = u128::MAX / u128::from(TAG_WEIGHT_SCALE);
+
+        for wealth in [boundary, boundary + 1, u128::MAX] {
+            ledger.set_cluster_wealth_for_test(1, wealth).unwrap();
+            let info = ledger.compute_cluster_wealth_for_utxos(&[[7; 32]]).unwrap();
+            assert_eq!(info.max_cluster_wealth, wealth, "global wealth={wealth}");
+            assert_eq!(info.total_value, 1_000);
+            assert_eq!(info.utxo_count, 1);
+            assert_eq!(info.dominant_cluster_id, Some(1));
+            assert_eq!(info.cluster_breakdown, vec![(1, wealth)]);
+        }
+    }
+
+    /// Compare the actual wallet and consensus paths only where their
+    /// semantics coincide: homogeneous full tags, in-class outputs, age zero.
+    /// Wealth equality matters even when both fees reach the default 6x cap.
+    #[test]
+    fn bug_1911_wallet_wealth_matches_homogeneous_consensus_floor() {
+        use bth_cluster_tax::{FeeConfig, TransactionType};
+
+        let block_height = 8_000_000;
+        let fc = FeeConfig::default();
+        let boundary = u128::MAX / u128::from(TAG_WEIGHT_SCALE);
+        for wealth in [
+            100_000_000_000_000_000_000,
+            1_000_000_000_000_000_000_000,
+            boundary + 1, // Synthetic wallet-overflow witness, beyond #1876.
+        ] {
+            for coin in [100_000_000_000_000_000, 10_000_000_000_000_000_000] {
+                let dir = tempdir().unwrap();
+                let ledger = Ledger::open(dir.path()).unwrap();
+                ledger.set_cluster_wealth_for_test(12, wealth).unwrap();
+                let tx = mk_whale_ring_tx(&ledger, 12, coin, block_height, coin, full_tag(12));
+                let wallet = ledger
+                    .compute_cluster_wealth_for_utxos(&[[200; 32]])
+                    .unwrap();
+                let consensus_wealth = ledger
+                    .effective_cluster_wealth_from_outputs(&tx.outputs)
+                    .unwrap();
+                assert_eq!(consensus_wealth, wealth);
+                assert_eq!(wallet.max_cluster_wealth, consensus_wealth);
+                let wallet_fee = fc.minimum_fee_dynamic_with_outputs(
+                    TransactionType::Hidden,
+                    tx.estimate_size(),
+                    wallet.max_cluster_wealth,
+                    tx.outputs.len(),
+                    0,
+                    CONSENSUS_FEE_BASE,
+                );
+                assert_eq!(
+                    ledger.consensus_fee_floor(&tx, block_height).unwrap(),
+                    wallet_fee,
+                    "wealth={wealth}, coin={coin}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bug_1911_wallet_wealth_preserves_background_and_selection() {
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger.set_cluster_wealth_for_test(1, 40_003).unwrap();
+        ledger.set_cluster_wealth_for_test(2, 20_007).unwrap();
+        let partial = ClusterTagVector::from_pairs(&[
+            (ClusterId(1), TAG_WEIGHT_SCALE / 4),
+            (ClusterId(2), TAG_WEIGHT_SCALE / 8),
+        ]);
+        let outputs = [
+            mk_tagged_output(1_000, 7, partial),
+            mk_tagged_output(1, 8, full_tag(2)),
+            mk_tagged_output(10_000, 9, ClusterTagVector::empty()),
+        ];
+        let mut wtxn = ledger.env.write_txn().unwrap();
+        for output in outputs {
+            let utxo = Utxo {
+                id: UtxoId::new(output.target_key, 0),
+                output,
+                created_at: 1,
+            };
+            ledger
+                .utxo_db
+                .put(
+                    &mut wtxn,
+                    &utxo.id.to_bytes(),
+                    &bincode::serialize(&utxo).unwrap(),
+                )
+                .unwrap();
+            ledger.add_to_address_index(&mut wtxn, &utxo).unwrap();
+        }
+        wtxn.commit().unwrap();
+
+        // Full SCALE denominator and one final floor: 40003/4 + 20007/8.
+        let partial = ledger.compute_cluster_wealth_for_utxos(&[[7; 32]]).unwrap();
+        assert_eq!(partial.max_cluster_wealth, 12_501);
+        let background = ledger.compute_cluster_wealth_for_utxos(&[[9; 32]]).unwrap();
+        assert_eq!(background.max_cluster_wealth, 0);
+        assert_eq!(background.total_value, 10_000);
+        assert_eq!(background.utxo_count, 1);
+        assert_eq!(background.dominant_cluster_id, None);
+        assert!(background.cluster_breakdown.is_empty());
+
+        // Maximum across UTXOs, even though the highest-wealth coin is tiny.
+        for keys in [
+            vec![[7; 32], [8; 32], [9; 32], [99; 32]],
+            vec![[8; 32], [7; 32], [9; 32]],
+        ] {
+            let mut info = ledger.compute_cluster_wealth_for_utxos(&keys).unwrap();
+            assert_eq!(info.max_cluster_wealth, 20_007);
+            assert_eq!(info.total_value, 11_001);
+            assert_eq!(info.utxo_count, 3);
+            assert_eq!(info.dominant_cluster_id, Some(1));
+            info.cluster_breakdown.sort_unstable();
+            assert_eq!(info.cluster_breakdown, vec![(1, 40_003), (2, 20_007)]);
+        }
+        for keys in [vec![], vec![[99; 32]]] {
+            let info = ledger.compute_cluster_wealth_for_utxos(&keys).unwrap();
+            assert_eq!(info.max_cluster_wealth, 0);
+            assert_eq!(info.total_value, 0);
+            assert_eq!(info.utxo_count, 0);
+            assert_eq!(info.dominant_cluster_id, None);
+            assert!(info.cluster_breakdown.is_empty());
+        }
     }
 
     /// Full-weight tag => contribution == output.amount.
