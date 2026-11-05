@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import prefund
 from controller import SPENT_AUDIT_IMAGES
+from lottery import PROTOCOL_VERSION
 from prefund import Prefunder, SIGNER_FIELDS, latest_deadline, load_manifest
 from runtime import Gate, HOSTS, Quota, Rpc
 from test_targets import targets
@@ -81,7 +82,7 @@ class Fleet:
         params = params or {}
         self.requests.append((host, method))
         if method == 'getChainInfo':
-            return {'lotteryRules': 2, 'protocolVersion': '7.0.0', **self.chain_info_override.get(host, {})}
+            return {'lotteryRules': 2, 'protocolVersion': PROTOCOL_VERSION, **self.chain_info_override.get(host, {})}
         if method == 'node_getStatus':
             return {'network': self.plan['network'], 'gitCommit': self.plan['node_commit'], 'version': '0.6.0',
                     'synced': True, 'mintingActive': host == PRODUCER, 'chainHeight': self.height,
@@ -333,7 +334,7 @@ class OpeningTests(PrefundBase):
 
     def test_pre_7_protocol_node(self):
         self.fleet.chain_info_override[HOSTS[0]] = {'protocolVersion': '6.0.0'}
-        self.assertOpeningRefused('protocol is not 7.0.0')
+        self.assertOpeningRefused('protocol is not ' + re.escape(PROTOCOL_VERSION))
 
     def test_wrong_commit(self):
         self.fleet.status_override[HOSTS[1]] = {'gitCommit': 'f' * 40}

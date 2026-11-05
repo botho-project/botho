@@ -4,11 +4,15 @@ on:
     paths:
       - 'scripts/stress/**'
       - '.github/workflows/stress-controller.yml'
+      # lottery.PROTOCOL_VERSION must track the node constant (#1933).
+      - 'botho/src/network/discovery.rs'
   push:
     branches: [main]
     paths:
       - 'scripts/stress/**'
       - '.github/workflows/stress-controller.yml'
+      # lottery.PROTOCOL_VERSION must track the node constant (#1933).
+      - 'botho/src/network/discovery.rs'
 permissions:
   contents: read
 jobs:
