@@ -5028,14 +5028,14 @@ mod tests {
         );
     }
 
-    /// Run a 2-of-2 slot in which every message A sends after it externalizes
-    /// is lost for `outage_rounds` rounds (the w12 halt: the minter's Commit
-    /// and Externalize were dropped while its event loop was blocked).
-    /// Returns whether B externalized within `max_rounds`.
+    /// Run a single-minter 2-of-2 slot, dropping A's post-externalization
+    /// messages for `outage_rounds`, then allowing `recovery_rounds` to
+    /// recover. Nomination has its own deadline: it must not consume the
+    /// recovery budget.
     fn peer_externalizes_after_lost_externalize(
         rebroadcast_interval: Duration,
         outage_rounds: usize,
-        max_rounds: usize,
+        recovery_rounds: usize,
     ) -> bool {
         let mut cfg = ConsensusConfig::fixed_timing(0);
         cfg.rebroadcast_interval = rebroadcast_interval;
@@ -5044,15 +5044,44 @@ mod tests {
         let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
         submit_and_register(&mut a, &mut b, &intrinsic_valid_minting_tx(1, [0u8; 32], 1));
 
+        let setup_started = Instant::now();
         let mut a_externalized_at: Option<usize> = None;
+        let mut a_values = None;
+        let mut dropped_externalizes = 0;
         let mut to_a: Vec<ScpMessage> = Vec::new();
         let mut to_b: Vec<ScpMessage> = Vec::new();
-        for round in 0..max_rounds {
+        for round in 0.. {
+            if let Some(at) = a_externalized_at {
+                if round >= at + outage_rounds + recovery_rounds {
+                    break;
+                }
+                if round == at + outage_rounds {
+                    assert!(dropped_externalizes > 0, "outage must drop an Externalize");
+                    assert_eq!(
+                        b.scp_node.get_current_slot_metrics().phase,
+                        ScpPhase::Commit
+                    );
+                }
+                // Drive only the service rebroadcast clock after setup. Each
+                // round has an elapsed 100ms check; 3600s remains disabled.
+                // Preserve the recorded slot so the production check still
+                // distinguishes advancement from a subsequent stalled check.
+                let checked_at = Instant::now() - Duration::from_millis(100);
+                a.last_rebroadcast_check.0 = checked_at;
+                b.last_rebroadcast_check.0 = checked_at;
+            } else {
+                assert!(
+                    setup_started.elapsed() < Duration::from_secs(10),
+                    "proposer must externalize before testing message loss: A={:?}, B={:?}",
+                    a.scp_node.get_current_slot_metrics().phase,
+                    b.scp_node.get_current_slot_metrics().phase,
+                );
+            }
             for m in to_a.drain(..) {
-                let _ = a.handle_message(m);
+                a.handle_message(m).expect("A accepts peer message");
             }
             for m in to_b.drain(..) {
-                let _ = b.handle_message(m);
+                b.handle_message(m).expect("B accepts peer message");
             }
             a.tick();
             b.tick();
@@ -5060,31 +5089,56 @@ mod tests {
             while let Some(ev) = a.next_event() {
                 match ev {
                     ConsensusEvent::BroadcastMessage(msg) => from_a.push(msg),
-                    ConsensusEvent::SlotExternalized { .. } => {
+                    ConsensusEvent::SlotExternalized { values, .. } => {
                         a_externalized_at.get_or_insert(round);
+                        a_values = Some(values);
                     }
                     _ => {}
                 }
             }
             let in_outage = a_externalized_at.is_some_and(|at| round < at + outage_rounds);
-            if !in_outage {
+            if in_outage {
+                for msg in from_a {
+                    let msg: ScpMsg<ConsensusValue> =
+                        bincode::deserialize(&msg.payload).expect("decode dropped message");
+                    if matches!(msg.topic, Topic::Externalize(_)) {
+                        dropped_externalizes += 1;
+                    }
+                }
+            } else {
                 to_b.extend(from_a);
             }
             while let Some(ev) = b.next_event() {
                 match ev {
                     ConsensusEvent::BroadcastMessage(msg) => to_a.push(msg),
-                    ConsensusEvent::SlotExternalized { .. } => {
-                        assert!(
-                            a_externalized_at.is_some(),
-                            "test assumes A, the proposer, externalizes first"
-                        );
+                    ConsensusEvent::SlotExternalized { values, .. } => {
+                        let at = a_externalized_at.expect("proposer must externalize first");
+                        assert!(round >= at + outage_rounds, "B must wait out the outage");
+                        assert!(dropped_externalizes > 0, "must recover a lost Externalize");
+                        assert_eq!(Some(values), a_values, "peers must agree on the value");
                         return true;
                     }
                     _ => {}
                 }
             }
-            std::thread::sleep(Duration::from_millis(20));
+            if a_externalized_at.is_none() {
+                // The single minter needs real SCP nomination timeouts during
+                // setup. Outage/recovery rounds use the controlled clock above.
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
+        assert!(
+            a_externalized_at.is_some(),
+            "negative control needs a proposer"
+        );
+        assert!(
+            dropped_externalizes > 0,
+            "negative control needs message loss"
+        );
+        assert_eq!(
+            b.scp_node.get_current_slot_metrics().phase,
+            ScpPhase::Commit
+        );
         false
     }
 
@@ -5094,11 +5148,11 @@ mod tests {
     #[test]
     fn lost_externalize_is_recovered_by_stalled_slot_rebroadcast() {
         assert!(
-            !peer_externalizes_after_lost_externalize(Duration::from_secs(3600), 10, 120),
+            !peer_externalizes_after_lost_externalize(Duration::from_secs(3600), 10, 20),
             "without rebroadcast the peer must stay stuck (reproduces #1544)"
         );
         assert!(
-            peer_externalizes_after_lost_externalize(Duration::from_millis(100), 10, 120),
+            peer_externalizes_after_lost_externalize(Duration::from_millis(100), 10, 20),
             "rebroadcast must deliver the lost Externalize"
         );
     }
