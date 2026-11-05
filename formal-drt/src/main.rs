@@ -20,6 +20,7 @@ mod fixtures;
 mod gen;
 mod legs;
 mod legs_difficulty;
+mod legs_monetary;
 mod legs_tags;
 mod model;
 mod runner;
@@ -38,6 +39,10 @@ type LegFn = fn(&fixtures::Fixtures, &mut model::Model, &Options) -> Report;
 /// Every leg: `(name, runner)`. To add a leg, implement `legs::Leg` and list
 /// it here.
 const LEGS: &[(&str, LegFn)] = &[
+    (
+        legs_monetary::Monetary::NAME,
+        runner::run::<legs_monetary::Monetary>,
+    ),
     (demurrage::Charge::NAME, runner::run::<demurrage::Charge>),
     (demurrage::Factor::NAME, runner::run::<demurrage::Factor>),
     (

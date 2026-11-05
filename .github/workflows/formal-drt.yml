@@ -14,13 +14,16 @@ name: Formal DRT (Lean model vs Rust)
 # path from formal-drt/lean/.
 #
 # The nightly tier is in formal-drt-nightly.yml. The cluster-tax simulation
-# leg remains a follow-up of #1706.
+# coverage includes bounded actual-entrypoint monetary vectors (#1922).
 
 on:
   pull_request:
     paths:
       - 'formal/**'
       - 'formal-drt/**'
+      - 'cluster-tax/src/monetary.rs'
+      - 'botho/src/monetary.rs'
+      - 'cluster-tax/src/simulation/emission_sweep.rs'
       - 'cluster-tax/src/lottery.rs'
       - 'cluster-tax/src/demurrage.rs'
       - 'cluster-tax/src/fee_curve.rs'
@@ -47,6 +50,9 @@ on:
     paths:
       - 'formal/**'
       - 'formal-drt/**'
+      - 'cluster-tax/src/monetary.rs'
+      - 'botho/src/monetary.rs'
+      - 'cluster-tax/src/simulation/emission_sweep.rs'
       - 'cluster-tax/src/lottery.rs'
       - 'cluster-tax/src/demurrage.rs'
       - 'cluster-tax/src/fee_curve.rs'
@@ -161,6 +167,12 @@ jobs:
             ${{ runner.temp }}/supply-oracle-unit-tests.log
           if-no-files-found: ignore
           retention-days: 14
+      - name: Bounded monetary simulation vectors
+        timeout-minutes: 5
+        env:
+          CARGO_BUILD_JOBS: '2'
+          CARGO_TARGET_DIR: ${{ github.workspace }}/formal-drt/target
+        run: cargo test --release -p bth-cluster-tax --lib monetary_drt_simulation_vectors -- --nocapture
       - name: Build the runner
         working-directory: formal-drt
         run: cargo build --release
@@ -175,6 +187,14 @@ jobs:
         run: |
           target/release/botho-formal-drt --cases "$CASES" --seed "$SEED" \
             --json "$RUNNER_TEMP/drt-report.json"
+      - name: Upload clean or failing DRT report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: formal-drt-report
+          path: ${{ runner.temp }}/drt-report.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload shrunk fixtures and report
         if: failure()
         uses: actions/upload-artifact@v7
