@@ -27,9 +27,8 @@ clamped to `u64::MAX`, with no intermediate time fraction.
 - `exactCharge` (`ExactCharge.lean`) is the 9.0.0 kernel, written as the
   specification itself on `Nat` (it does not mirror the Rust u128
   decomposition, so the DRT checks that the decomposition is exact). The
-  `demurrage_charge` DRT leg now runs `exactCharge`. Theorems about it
-  (no dead zone, split loss below n pico) are a follow-up: new statements
-  need their records on the base branch first.
+  `demurrage_charge` DRT leg now runs `exactCharge`. Its four claims below
+  are listed in `Theorems.lean` and bound in `statements.txt` (#1916).
 - With the DRT dispatch temporarily pointed back at the legacy `charge`, the
   committed regression lines produce mismatches against the 9.0.0 Rust
   kernel, so the leg distinguishes the two kernels.
@@ -40,6 +39,46 @@ clamped to `u64::MAX`, with no intermediate time fraction.
   production kernel splits `elapsed` at 2^32, so it is exact for every input;
   `cluster-tax` tests compare it with a 256-bit oracle on both sides of that
   limit, and the regression file pins two inputs beyond it.
+
+### Exact-charge threshold and splitting (#1916)
+
+Write `p = clamp(factor, 1000, 6000) - 1000`, `K = rate * p * elapsed`,
+`D = 10000 * 5000 * year`, `M = u64::MAX`, and
+`C(v) = min(floor(v*K/D), M)`. The following are **proven (model)** in
+`Botho/Demurrage/ExactCharge.lean`; the existing DRT leg provides separate
+evidence of correspondence with Rust.
+
+- `exactCharge_positive_iff`: if year, rate and elapsed are positive and
+  factor is greater than 1000, then `C(v) > 0` exactly when
+  `v >= (D + K - 1) / K`. This is the sharp ceiling threshold, including
+  zero below it. If factor is at most 1000, or year, rate or elapsed is zero,
+  the charge is zero; checked examples cover all four guards. A threshold
+  above `u64::MAX` cannot be met by a Rust-width input.
+- At factor 6000, rate 200, year 6,307,200 and elapsed 1, the threshold is
+  **315,360,000 pico**. Kernel-checked examples give zero at 315,359,999 and
+  one at 315,360,000. The exact kernel therefore has a value threshold even
+  at one block, unlike the legacy six-block dead zone.
+- `exactCharge_split_loss_bound`: for any nonempty list `xs` of natural
+  values with common parameters and positive year, write `whole = C(sum xs)`,
+  `parts = sum(map C xs)` and `n = length xs`. Then `whole < parts + n`,
+  including when charges are capped. Zero-valued pieces are allowed. The
+  empty list is excluded because its strict inequality would be false.
+- `exactCharge_split_rounding`: with the additional aggregate no-cap
+  condition `floor((sum xs)*K/D) <= M`, also `parts <= whole`. Together the
+  bounds limit pure rounding loss to at most `n - 1` pico. The checked split
+  `[315359999, 1]` at the threshold parameters charges zero in parts and one
+  as a whole, without clipping.
+- `exactCharge_split_clipping_counterexample`: with values
+  `[9223372036854775807, 9223372036854775808]`, factor 6000, rate 10000,
+  elapsed 2 and year 1, the total value and whole charge are
+  `M = 18446744073709551615`, while the parts charge **36893488147419103229**
+  (`2*M - 1`). Both values and the parameters fit their Rust widths. This
+  synthetic helper-domain witness explains why `parts <= whole` requires
+  the no-cap condition; it does not construct a reachable ledger history.
+
+These statements preserve the existing `exactCharge` definition. They prove
+arithmetic properties of the model, not Rust-to-Lean equivalence or general
+fee-floor, churn, monotonicity or ledger-reachability claims.
 
 ## Time quantization defeats a positive-value threshold (pre-9.0.0)
 
@@ -116,22 +155,37 @@ mean never exceeds its largest member wealth.
   the largest homogeneous 20-member ring at `W = 10^20` whose numerator fits
   u128, and they diverge at the next value.
 
-These theorems are proven (model) but **not yet bound**. They are not listed
-in `Theorems.lean` and have no `statements.txt` blocks. Binding them needs a
-records-only pull request first (see `README.md`, "Statement binding").
+These theorems and the supporting `foldl_replicate_exact` theorem are
+**proven (model)**, listed in `Theorems.lean` and bound in `statements.txt`
+(#1916), with their original types and definition closures unchanged.
 
 The `ring_centroid_factor` DRT leg now compares the Rust function against
 `ringFactorExact`. Run against the old `ringFactor`, the fixed Rust function
 mismatches immediately, starting with the second pinned ring (Lean 5841, Rust
 5949). The `effective_cluster_wealth` leg likewise now compares against
 `Botho.Tags.effectiveWealthExact` (`Botho/Tags/EffectiveExact.lean`, theorem
-`whale_claimed_wealth_exact`, also not yet bound). Seed 1876 ran 100,000
+`whale_claimed_wealth_exact`, likewise listed and bound by #1916). Seed 1876 ran 100,000
 generated cases on each of `demurrage_charge`, `default_cluster_factor`,
 `ring_centroid_factor` and `effective_cluster_wealth`, plus 20 pinned
 fixtures. There were zero mismatches; see
 `formal-drt/results/demurrage-1876.json`. The pinned
 `ring_centroid_factor.jsonl` fixtures keep both original rings and add the
 #1876 boundary and extreme rings.
+
+For #1916, seed 1916 ran 10,000 generated cases on each of
+`demurrage_charge`, `ring_centroid_factor` and `effective_cluster_wealth`,
+plus 8, 8 and 3 committed replays respectively: **30,019 Lean calls, zero
+mismatches**. The Rust functions, fixtures and generators were unchanged;
+the harness retained release overflow checks. After building
+`formal-drt/lean` with Lean 4.35.0, reproduce this bounded run from the repo root:
+
+```sh
+CARGO_BUILD_JOBS=2 cargo +nightly-2026-06-09 run --release \
+  --manifest-path formal-drt/Cargo.toml -- --cases 10000 --seed 1916 \
+  --legs demurrage_charge,ring_centroid_factor,effective_cluster_wealth \
+  --model formal-drt/lean/.lake/build/bin/botho-model \
+  --regressions formal-drt/regressions --no-write-regressions
+```
 
 ## Charge is not always bounded by principal
 

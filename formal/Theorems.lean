@@ -23,6 +23,18 @@ import Botho
 #print axioms Botho.Demurrage.homogeneous_centroid_counterexample
 #print axioms Botho.Demurrage.saturation_lowers_charge
 
+-- Protocol 9.0.0 exact semantics (#1916; proven model, separately DRT-tested).
+#print axioms Botho.Demurrage.foldl_replicate_exact
+#print axioms Botho.Demurrage.exactCentroid_homogeneous
+#print axioms Botho.Demurrage.homogeneous_ring_scale_exact
+#print axioms Botho.Demurrage.homogeneous_centroid_exact
+#print axioms Botho.Demurrage.exact_versus_saturating_boundary
+#print axioms Botho.Tags.whale_claimed_wealth_exact
+#print axioms Botho.Demurrage.exactCharge_positive_iff
+#print axioms Botho.Demurrage.exactCharge_split_loss_bound
+#print axioms Botho.Demurrage.exactCharge_split_rounding
+#print axioms Botho.Demurrage.exactCharge_split_clipping_counterexample
+
 -- Botho.Basic (scaffold toy; status: proven)
 #print axioms Botho.transfer_conserves
 #print axioms Botho.transfer_isSome_iff
