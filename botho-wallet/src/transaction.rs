@@ -253,7 +253,7 @@ fn stored_tags_to_cluster_vector(tags: &StoredTags) -> ClusterTagVector {
 /// transaction that spends `selected`. Mirrors the node's
 /// `Wallet::compute_inherited_tags` (amount-weighted merge at
 /// [`DEFAULT_CLUSTER_DECAY_RATE`]).
-fn inherited_cluster_tags(selected: &[OwnedUtxo]) -> ClusterTagVector {
+pub(crate) fn inherited_cluster_tags(selected: &[OwnedUtxo]) -> ClusterTagVector {
     let inputs: Vec<(ClusterTagVector, u64)> = selected
         .iter()
         .map(|u| (stored_tags_to_cluster_vector(&u.tags()), u.amount))

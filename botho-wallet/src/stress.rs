@@ -113,6 +113,37 @@ pub enum Request {
     Inspect {
         artifact: String,
     },
+    /// Prefund only (#1937): one transaction paying up to
+    /// [`MAX_GRANT_OUTPUTS`] allowlisted grants plus change. Campaign
+    /// transfers keep using `Prepare`, which this does not touch.
+    PrepareGrants {
+        wallet: String,
+        blocks: Vec<BlockOutputs>,
+        height: u64,
+        selected: Vec<String>,
+        spent: Vec<Spent>,
+        reserved: Vec<String>,
+        outputs: Vec<GrantOutput>,
+        allowed_recipients: Vec<String>,
+        base_rate: u64,
+        artifact: String,
+    },
+    /// `Inspect` for a `PrepareGrants` artifact: up to `MAX_OUTPUTS` outputs.
+    InspectGrants {
+        artifact: String,
+    },
+}
+
+/// Most grant outputs in one prefund transaction: consensus `MAX_OUTPUTS`
+/// (16) less one change output (#1937).
+pub const MAX_GRANT_OUTPUTS: usize = bth_transaction_types::MAX_OUTPUTS as usize - 1;
+
+/// One grant output of a `PrepareGrants` request, in output-index order.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantOutput {
+    pub recipient: String,
+    pub amount: u64,
 }
 
 #[derive(Deserialize)]
@@ -319,8 +350,327 @@ pub fn inspect(bytes: &[u8]) -> Result<Value> {
     )
 }
 
+/// [`inspect`] for a prefund grant artifact (#1937): the same checks, but up
+/// to `MAX_OUTPUTS` outputs. Kept separate so the campaign `inspect` still
+/// refuses anything but a one- or two-output transfer.
+pub fn inspect_grants(bytes: &[u8]) -> Result<Value> {
+    ensure!(bytes.len() <= MAX_TX, "transaction byte budget exceeded");
+    let tx: Transaction = bincode::deserialize(bytes)?;
+    ensure!(
+        bincode::serialize(&tx)? == bytes,
+        "noncanonical transaction encoding"
+    );
+    tx.verify_ring_signatures().map_err(|e| anyhow!(e))?;
+    ensure!(!tx.is_settlement(), "settlement is outside this program");
+    ensure!(
+        (MIN_TX_FEE..=MAX_FEE).contains(&tx.fee),
+        "fee outside program bounds"
+    );
+    ensure!(
+        (1..=4).contains(&tx.inputs.len()),
+        "unsupported input shape"
+    );
+    ensure!(
+        (1..=MAX_GRANT_OUTPUTS + 1).contains(&tx.outputs.len()),
+        "unsupported output shape"
+    );
+    ensure!(
+        tx.outputs
+            .iter()
+            .all(|o| o.amount >= DUST_THRESHOLD && o.kem_ciphertext.is_some()),
+        "unexpected output type"
+    );
+    Ok(
+        json!({"hash":hex::encode(tx.hash()), "bytes":bytes.len(), "fee":tx.fee,
+        "height":tx.created_at_height, "input_count":tx.inputs.len(),
+        "key_images":tx.key_images().iter().map(hex::encode).collect::<Vec<_>>(),
+        "outputs":tx.outputs.iter().enumerate().map(|(i,o)| json!({"index":i,
+            "amount":o.amount,"target_key":hex::encode(o.target_key),
+            "public_key":hex::encode(o.public_key)})).collect::<Vec<_>>() }),
+    )
+}
+
+/// Assemble and sign a grant batch: `payments[i]` is output `i`, change (if
+/// above dust) is output `payments.len()`, otherwise it joins the fee.
+///
+/// This mirrors `TransactionBuilder::build_signed_transaction` output for
+/// output (hybrid PQ outputs, the inputs' inherited cluster tags on every
+/// output, a randomized real index per ring, one CLSAG message over every
+/// output). It is a separate function so the campaign transfer path stays
+/// byte-for-byte unchanged (#1937).
+fn sign_grant_batch(
+    keys: &WalletKeys,
+    height: u64,
+    selected: &[OwnedUtxo],
+    decoy_rings: Vec<Vec<bth_transaction_clsag::RingMember>>,
+    payments: &[(bth_account_keys::PublicAddress, u64)],
+    fee: u64,
+    total: u64,
+) -> Result<(Transaction, u64)> {
+    use bth_transaction_clsag::{ClsagRingInput, RingMember, TxOutput};
+    use bth_transaction_types::ClusterTagVector;
+    use rand::seq::SliceRandom;
+
+    ensure!(decoy_rings.len() == selected.len(), "one ring per input");
+    let principal = payments
+        .iter()
+        .try_fold(0u64, |sum, (_, amount)| sum.checked_add(*amount))
+        .context("grant sum overflow")?;
+    let change = principal
+        .checked_add(fee)
+        .and_then(|need| total.checked_sub(need))
+        .context("insufficient funds")?;
+    let inherited_tags = crate::transaction::inherited_cluster_tags(selected);
+    let mut outputs = Vec::with_capacity(payments.len() + 1);
+    for (index, (recipient, amount)) in payments.iter().enumerate() {
+        outputs.push(
+            TxOutput::new_hybrid_to_address(
+                *amount,
+                recipient,
+                index as u32,
+                None,
+                inherited_tags.clone(),
+            )
+            .map_err(|e| anyhow!("recipient address is not post-quantum: {}", e))?,
+        );
+    }
+    let actual_fee = if change >= DUST_THRESHOLD {
+        outputs.push(
+            TxOutput::new_hybrid_to_address(
+                change,
+                &keys.public_address(),
+                payments.len() as u32,
+                None,
+                inherited_tags,
+            )
+            .map_err(|e| anyhow!("wallet address is not post-quantum: {}", e))?,
+        );
+        fee
+    } else {
+        fee + change
+    };
+    let signing_hash =
+        Transaction::new_clsag(Vec::new(), outputs.clone(), actual_fee, height).signing_hash();
+    let mut rng = OsRng;
+    let mut ring_inputs = Vec::with_capacity(selected.len());
+    for (utxo, decoys) in selected.iter().zip(decoy_rings) {
+        ensure!(
+            decoys.len() >= MIN_RING_SIZE - 1,
+            "insufficient decoys for ring"
+        );
+        let onetime_private = utxo
+            .recover_spend_key(keys)
+            .context("owned output key recovery failed")?;
+        let real = RingMember::from_output(&TxOutput {
+            amount: utxo.amount,
+            target_key: utxo.target_key,
+            public_key: utxo.public_key,
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
+        });
+        let mut ring = Vec::with_capacity(MIN_RING_SIZE);
+        ring.push(real);
+        ring.extend(decoys.into_iter().take(MIN_RING_SIZE - 1));
+        ring.shuffle(&mut rng);
+        let real_index = ring
+            .iter()
+            .position(|m| m.target_key == utxo.target_key)
+            .context("real input missing from ring")?;
+        ring_inputs.push(
+            ClsagRingInput::new(
+                ring,
+                real_index,
+                &onetime_private,
+                utxo.amount,
+                &signing_hash,
+                &mut rng,
+            )
+            .map_err(|e| anyhow!("Failed to create ring signature: {}", e))?,
+        );
+    }
+    Ok((
+        Transaction::new_clsag(ring_inputs, outputs, actual_fee, height),
+        actual_fee,
+    ))
+}
+
+/// `PrepareGrants` (#1937). Input checks are `Prepare`'s, in the same order;
+/// the fee is `Prepare`'s rule at multiplier 1 for `outputs + 1` outputs.
+#[allow(clippy::too_many_arguments)]
+fn prepare_grants(
+    wallet: String,
+    blocks: Vec<BlockOutputs>,
+    height: u64,
+    selected: Vec<String>,
+    spent: Vec<Spent>,
+    reserved: Vec<String>,
+    grants: Vec<GrantOutput>,
+    allowed_recipients: Vec<String>,
+    base_rate: u64,
+    artifact: String,
+) -> Result<Value> {
+    ensure!(
+        (1..=MAX_GRANT_OUTPUTS).contains(&grants.len()),
+        "select one to fifteen grant outputs"
+    );
+    ensure!(
+        (1..=4).contains(&selected.len()),
+        "select one to four inputs"
+    );
+    ensure!(
+        selected.iter().collect::<HashSet<_>>().len() == selected.len(),
+        "duplicate input"
+    );
+    let mut payments = Vec::with_capacity(grants.len());
+    for grant in &grants {
+        ensure!(grant.amount >= DUST_THRESHOLD, "amount is below dust");
+        ensure!(
+            allowed_recipients.contains(&grant.recipient),
+            "recipient is outside allowlist"
+        );
+        let (recipient_key, network) = decode_address(&grant.recipient)?;
+        ensure!(
+            network == Network::Testnet,
+            "only testnet recipients are permitted"
+        );
+        payments.push((recipient_key, grant.amount));
+    }
+    let principal = grants
+        .iter()
+        .try_fold(0u64, |sum, g| sum.checked_add(g.amount))
+        .context("grant sum overflow")?;
+    ensure!(
+        blocks.iter().all(|b| b.height <= height),
+        "scan exceeds pinned height"
+    );
+    ensure!(base_rate > 0, "missing network fee rate");
+    let keys = read_keys(Path::new(&wallet))?;
+    let (owned, canonical) = selected_ownership(&keys, &blocks, &selected)?;
+    let mut input_keys = HashSet::new();
+    let mut inputs = Vec::new();
+    let mut input_metadata = Vec::new();
+    for id in &selected {
+        let output = owned
+            .iter()
+            .find(|o| &o.id == id)
+            .context("selected input is not owned")?;
+        ensure!(!reserved.contains(id), "input already reserved");
+        ensure!(canonical.contains(id), "input is not canonical");
+        ensure!(
+            input_keys.insert(output.utxo.target_key),
+            "duplicate input target"
+        );
+        let matches: Vec<_> = spent
+            .iter()
+            .filter(|s| s.key_image == output.key_image)
+            .collect();
+        ensure!(
+            matches.len() == 1
+                && !matches[0].spent
+                && !matches[0].pending
+                && matches[0].spent_height.is_none(),
+            "missing, spent or pending key image"
+        );
+        ensure!(
+            height.saturating_sub(output.utxo.created_at) >= MIN_DECOY_AGE_BLOCKS,
+            "immature input"
+        );
+        ensure!(
+            !output.utxo.is_legacy_lottery(),
+            "Legacy lottery payouts cannot be spent independently yet"
+        );
+        inputs.push(output.utxo.clone());
+        input_metadata
+            .push(json!({"id":id,"key_image":output.key_image,"amount":output.utxo.amount}));
+    }
+    let total = inputs
+        .iter()
+        .try_fold(0u64, |sum, u| sum.checked_add(u.amount))
+        .context("input sum overflow")?;
+    let fee_inputs: Vec<_> = inputs.iter().map(|u| (u.amount, u.tags())).collect();
+    let fee_refs: Vec<_> = fee_inputs.iter().map(|(v, t)| (*v, t)).collect();
+    let estimate = FeeEstimator::with_base_rate(base_rate)
+        .estimate_fee(&fee_refs, grants.len() + 1)
+        .total_fee;
+    let (baseline_fee, fee) = bounded_fee(estimate, 1)?;
+    ensure!(
+        principal.checked_add(fee).is_some_and(|need| need <= total),
+        "insufficient funds"
+    );
+    let excluded: Vec<_> = inputs.iter().map(|u| u.target_key).collect();
+    let mut rings = Vec::new();
+    for input in &inputs {
+        rings.push(select_rpc_decoys_from_history(
+            &blocks,
+            height,
+            height - input.created_at,
+            &excluded,
+            MIN_RING_SIZE - 1,
+            &mut OsRng,
+        )?);
+    }
+    let (tx, actual_fee) = sign_grant_batch(&keys, height, &inputs, rings, &payments, fee, total)?;
+    let bytes = bincode::serialize(&tx)?;
+    let mut info = inspect_grants(&bytes)?;
+    let output_sum = tx
+        .outputs
+        .iter()
+        .try_fold(0u64, |sum, o| sum.checked_add(o.amount))
+        .context("output sum overflow")?;
+    ensure!(
+        output_sum.checked_add(actual_fee) == Some(total),
+        "input/output accounting mismatch"
+    );
+    ensure!(
+        (grants.len()..=grants.len() + 1).contains(&tx.outputs.len())
+            && grants
+                .iter()
+                .zip(&tx.outputs)
+                .all(|(g, o)| g.amount == o.amount),
+        "grant amounts differ"
+    );
+    publish(Path::new(&artifact), &bytes)?;
+    info["baseline_fee"] = json!(baseline_fee);
+    info["fee_multiplier"] = json!(1);
+    info["grants"] = json!(grants.len());
+    info["selected"] = json!(input_metadata);
+    info["artifact"] = json!(artifact);
+    Ok(info)
+}
+
 pub fn execute(request: Request) -> Result<Value> {
     match request {
+        Request::PrepareGrants {
+            wallet,
+            blocks,
+            height,
+            selected,
+            spent,
+            reserved,
+            outputs,
+            allowed_recipients,
+            base_rate,
+            artifact,
+        } => prepare_grants(
+            wallet,
+            blocks,
+            height,
+            selected,
+            spent,
+            reserved,
+            outputs,
+            allowed_recipients,
+            base_rate,
+            artifact,
+        ),
+        Request::InspectGrants { artifact } => {
+            let mut bytes = Vec::new();
+            File::open(artifact)?
+                .take(MAX_TX as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            inspect_grants(&bytes)
+        }
         Request::Generate { wallet } => {
             let keys = WalletKeys::generate()?;
             publish(Path::new(&wallet), keys.mnemonic_phrase().as_bytes())?;
@@ -558,6 +908,178 @@ mod tests {
             "spent":owned.iter().map(|o| json!({"keyImage":o.key_image,"spent":false,"pending":false,"spentHeight":null})).collect::<Vec<_>>(),
             "reserved":[], "recipient":recipient, "allowed_recipients":[recipient],
             "amount":10_000_000_000u64,"base_rate":1,"artifact":dir.join("signed.bin")})
+    }
+
+    /// A `prepare_grants` request over `prepare_shape_fixture`'s history:
+    /// `grants` outputs of 1e9 each, cycling over three allowlisted wallets.
+    fn grants_fixture(dir: &Path, input_count: usize, grants: usize) -> Value {
+        let mut value = prepare_shape_fixture(dir, input_count);
+        let mut allowed = vec![value["recipient"].clone()];
+        for _ in 0..2 {
+            let keys = WalletKeys::generate().unwrap();
+            allowed.push(json!(keys.public_address_string(Network::Testnet).unwrap()));
+        }
+        let object = value.as_object_mut().unwrap();
+        for field in ["recipient", "amount"] {
+            object.remove(field);
+        }
+        object.insert("operation".into(), json!("prepare_grants"));
+        object.insert(
+            "outputs".into(),
+            json!((0..grants)
+                .map(|i| json!({"recipient": allowed[i % 3], "amount": 1_000_000_000u64}))
+                .collect::<Vec<_>>()),
+        );
+        object.insert("allowed_recipients".into(), json!(allowed));
+        object.insert("artifact".into(), json!(dir.join("grants.bin")));
+        value
+    }
+
+    #[test]
+    fn prepare_grants_signs_fifteen_grants_plus_change() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = grants_fixture(dir.path(), 1, MAX_GRANT_OUTPUTS);
+        let prepared = execute(serde_json::from_value(request.clone()).unwrap()).unwrap();
+        let outputs = prepared["outputs"].as_array().unwrap();
+        assert_eq!(outputs.len(), MAX_GRANT_OUTPUTS + 1);
+        assert_eq!(
+            outputs.len() as u64,
+            bth_transaction_types::MAX_OUTPUTS,
+            "15 grants plus change is exactly the consensus output cap"
+        );
+        for (index, output) in outputs.iter().enumerate() {
+            assert_eq!(output["index"], index);
+            if index < MAX_GRANT_OUTPUTS {
+                assert_eq!(output["amount"], 1_000_000_000u64);
+            }
+        }
+        assert_eq!(prepared["grants"], MAX_GRANT_OUTPUTS);
+        assert_eq!(prepared["fee_multiplier"], 1);
+        let fee = prepared["fee"].as_u64().unwrap();
+        assert!((MIN_TX_FEE..=MAX_FEE).contains(&fee));
+        let sum: u64 = outputs.iter().map(|o| o["amount"].as_u64().unwrap()).sum();
+        assert_eq!(sum + fee, 20_000_000_000);
+        // The grant inspection agrees; the campaign inspection refuses the
+        // shape, so a batch artifact can never pass as a campaign transfer.
+        let bytes = fs::read(dir.path().join("grants.bin")).unwrap();
+        let inspected = execute(
+            serde_json::from_value(
+                json!({"operation":"inspect_grants","artifact":dir.path().join("grants.bin")}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for key in ["hash", "fee", "bytes", "outputs", "key_images"] {
+            assert_eq!(inspected[key], prepared[key], "{key}");
+        }
+        assert!(inspect(&bytes)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported output shape"));
+        let tx: Transaction = bincode::deserialize(&bytes).unwrap();
+        assert!(tx.verify_ring_signatures().is_ok());
+        // The outputs scan back to their owners: grants to the allowlisted
+        // recipients, change to the funding wallet.
+        let keys = read_keys(Path::new(request["wallet"].as_str().unwrap())).unwrap();
+        let tx_hash = hex::encode(tx.hash());
+        let block = json!([{"height":121,"outputs":tx.outputs.iter().enumerate().map(|(i,o)| json!({
+            "txHash": tx_hash, "outputIndex": i, "targetKey": hex::encode(o.target_key),
+            "publicKey": hex::encode(o.public_key),
+            "amountCommitment": hex::encode(o.amount.to_le_bytes()),
+            "clusterTags": [], "kemCiphertext": o.kem_ciphertext.as_ref().map(hex::encode),
+        })).collect::<Vec<_>>()}]);
+        let owned = scan(
+            &keys,
+            &serde_json::from_value::<Vec<BlockOutputs>>(block).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].utxo.output_index, MAX_GRANT_OUTPUTS as u32);
+    }
+
+    #[test]
+    fn prepare_grants_absorbs_dust_change_and_spends_several_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut request = grants_fixture(dir.path(), 2, 2);
+        // 2 x 20e9 in; grants take everything but the fee and sub-dust.
+        let fee = MIN_TX_FEE;
+        let first = 20_000_000_000u64;
+        let second = 20_000_000_000u64 - fee - (DUST_THRESHOLD - 1);
+        request["outputs"][0]["amount"] = json!(first);
+        request["outputs"][1]["amount"] = json!(second);
+        let prepared = execute(serde_json::from_value(request).unwrap()).unwrap();
+        assert_eq!(prepared["outputs"].as_array().unwrap().len(), 2);
+        assert_eq!(prepared["fee"], fee + DUST_THRESHOLD - 1);
+        assert_eq!(prepared["input_count"], 2);
+        assert_eq!(prepared["selected"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prepare_grants_refusals_never_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = grants_fixture(dir.path(), 1, 3);
+        let mut empty = request.clone();
+        empty["outputs"] = json!([]);
+        assert!(prepare_error(empty).contains("one to fifteen grant outputs"));
+        let mut sixteen = request.clone();
+        let grant = request["outputs"][0].clone();
+        sixteen["outputs"] = json!(vec![grant; MAX_GRANT_OUTPUTS + 1]);
+        assert!(prepare_error(sixteen).contains("one to fifteen grant outputs"));
+        let mut outside = request.clone();
+        outside["allowed_recipients"] = json!([request["outputs"][0]["recipient"]]);
+        assert!(prepare_error(outside).contains("outside allowlist"));
+        let mut dust = request.clone();
+        dust["outputs"][2]["amount"] = json!(DUST_THRESHOLD - 1);
+        assert!(prepare_error(dust).contains("below dust"));
+        let mut insufficient = request.clone();
+        insufficient["outputs"][0]["amount"] = json!(19_000_000_000u64);
+        assert!(prepare_error(insufficient).contains("insufficient funds"));
+        let mut overflow = request.clone();
+        overflow["outputs"][0]["amount"] = json!(u64::MAX);
+        assert!(prepare_error(overflow).contains("overflow"));
+        let mut reserved = request.clone();
+        reserved["reserved"] = reserved["selected"].clone();
+        assert!(prepare_error(reserved).contains("already reserved"));
+        let mut spent = request.clone();
+        spent["spent"][0]["spent"] = json!(true);
+        assert!(prepare_error(spent).contains("missing, spent or pending"));
+        let mut immature = request.clone();
+        immature["height"] = json!(101);
+        assert!(prepare_error(immature).contains("immature input"));
+        assert!(!dir.path().join("grants.bin").exists());
+        assert!(!dir.path().join("grants.partial").exists());
+        // The campaign request shape is not accepted for a batch, and a batch
+        // field is not accepted by the campaign `prepare` (deny_unknown_fields).
+        let mut campaign_fields = request.clone();
+        campaign_fields["amount"] = json!(1_000_000_000u64);
+        assert!(serde_json::from_value::<Request>(campaign_fields).is_err());
+        let mut campaign = request.clone();
+        campaign["operation"] = json!("prepare");
+        campaign["recipient"] = request["outputs"][0]["recipient"].clone();
+        campaign["amount"] = json!(1_000_000_000u64);
+        assert!(serde_json::from_value::<Request>(campaign).is_err());
+    }
+
+    /// The fee cap holds for the largest batch at the dynamic base's ceiling
+    /// and the largest cluster factor (#1937): estimated size x rate x
+    /// (cluster factor + capped quadratic output penalty - 1).
+    #[test]
+    fn largest_batch_fee_estimate_stays_under_signed_fee_caps() {
+        let estimator = FeeEstimator::with_base_rate(100);
+        let size = estimator.estimate_tx_size(4, MAX_GRANT_OUTPUTS + 1) as u64;
+        let worst = size * 100 * (6 + 99);
+        assert!(worst <= MAX_FEE, "{worst}");
+        // x-series max_single_signed_fee_picocredits.
+        assert!(worst <= 1_000_000_000, "{worst}");
+        let tags = crate::fee_estimation::StoredTags::default();
+        let inputs = [(20_000_000_000u64, &tags); 4];
+        let estimate = estimator
+            .estimate_fee(&inputs, MAX_GRANT_OUTPUTS + 1)
+            .total_fee;
+        assert!(estimate <= worst, "{estimate}");
     }
 
     #[test]
@@ -1021,6 +1543,90 @@ mod tests {
             let tx: Transaction =
                 bincode::deserialize(&fs::read(dir.path().join("signed.bin")).unwrap()).unwrap();
             ledger.verify_transaction(&tx).unwrap();
+        }
+    }
+
+    /// #1937: a full 16-output grant batch (15 grants plus change) passes the
+    /// node's relay admission (`Mempool::add_tx`: structure incl. the
+    /// `MAX_OUTPUTS` cap, tag shape, ring members, fee), the ledger's
+    /// key-image and CLSAG checks, and the consensus fee floor.
+    #[cfg(feature = "pq")]
+    #[test]
+    #[cfg_attr(
+        not(feature = "test-fixtures"),
+        ignore = "needs `--features test-fixtures` (botho ledger fixture seeding)"
+    )]
+    fn prepare_grants_sixteen_outputs_pass_node_validation() {
+        #[cfg(feature = "test-fixtures")]
+        {
+            use botho::{
+                ledger::{ChainState, Ledger, UtxoSnapshot},
+                transaction::{TxOutput, Utxo, UtxoId},
+            };
+            for inputs in [1, 2] {
+                let dir = tempfile::tempdir().unwrap();
+                fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+                let value = grants_fixture(dir.path(), inputs, MAX_GRANT_OUTPUTS);
+                let blocks: Vec<BlockOutputs> =
+                    serde_json::from_value(value["blocks"].clone()).unwrap();
+                let key = |h: &str| -> [u8; 32] { hex::decode(h).unwrap().try_into().unwrap() };
+                let utxos = blocks
+                    .iter()
+                    .flat_map(|block| {
+                        block.outputs.iter().map(|o| Utxo {
+                            id: UtxoId::new(key(&o.tx_hash), o.output_index),
+                            output: TxOutput {
+                                amount: u64::from_le_bytes(
+                                    hex::decode(&o.amount_commitment)
+                                        .unwrap()
+                                        .try_into()
+                                        .unwrap(),
+                                ),
+                                target_key: key(&o.target_key),
+                                public_key: key(&o.public_key),
+                                e_memo: None,
+                                cluster_tags: Default::default(),
+                                kem_ciphertext: o
+                                    .kem_ciphertext
+                                    .as_ref()
+                                    .map(|k| hex::decode(k).unwrap()),
+                            },
+                            created_at: block.height,
+                        })
+                    })
+                    .collect();
+                let ledger = Ledger::open(&dir.path().join("ledger")).unwrap();
+                let snapshot = UtxoSnapshot::new(
+                    120,
+                    [0; 32],
+                    ChainState {
+                        height: 120,
+                        ..Default::default()
+                    },
+                    utxos,
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
+                let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+                let bytes = fs::read(dir.path().join("grants.bin")).unwrap();
+                let tx: Transaction = bincode::deserialize(&bytes).unwrap();
+                assert_eq!(tx.outputs.len() as u64, bth_transaction_types::MAX_OUTPUTS);
+                assert_eq!(tx.inputs.len(), inputs);
+                tx.is_valid_structure().unwrap();
+                botho::mempool::Mempool::new()
+                    .add_tx(tx.clone(), &ledger)
+                    .unwrap();
+                ledger.verify_transaction(&tx).unwrap();
+                let floor = ledger.consensus_fee_floor(&tx, 121).unwrap();
+                assert!(tx.fee >= floor, "fee {} below floor {floor}", tx.fee);
+                assert_eq!(prepared["fee"], tx.fee);
+                assert_eq!(
+                    tx.outputs.iter().map(|o| o.amount).sum::<u64>() + tx.fee,
+                    inputs as u64 * 20_000_000_000
+                );
+            }
         }
     }
 

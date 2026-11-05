@@ -17,6 +17,7 @@ from controller import SPENT_AUDIT_IMAGES
 from lottery import PROTOCOL_VERSION
 from prefund import Prefunder, SIGNER_FIELDS, latest_deadline, load_manifest
 from runtime import Gate, HOSTS, Quota, Rpc
+from selection import choose
 from test_targets import targets
 
 PRODUCER = HOSTS[2]  # n3 is the sole producer (#1576 decision 4).
@@ -45,6 +46,10 @@ class Fleet:
         self.submits, self.requests, self.submit_hook = [], [], None
         self.counter = 0
         self.coinbase_to = None
+        # Decoy density: unrelated outputs per block, and the funding wallet's
+        # coinbase cadence and value.
+        self.fillers, self.coinbase_every, self.coinbase_amount = FILLERS, 25, 5 * 10**9
+        self.batch_fees = []
 
     def output(self, height, owner, amount, tx=None, index=0, coinbase=False, lottery=False, target=None):
         self.counter += 1
@@ -62,10 +67,10 @@ class Fleet:
         for _ in range(count):
             self.height += 1
             self.blocks.setdefault(self.height, [])
-            for _ in range(FILLERS):
+            for _ in range(self.fillers):
                 self.output(self.height, None, 1)
-            if self.coinbase_to and self.height % 25 == 0:
-                self.output(self.height, self.coinbase_to, 5 * 10**9, coinbase=True)
+            if self.coinbase_to and self.height % self.coinbase_every == 0:
+                self.output(self.height, self.coinbase_to, self.coinbase_amount, coinbase=True)
             for tx_hash, tx in list(self.mempool.items()):
                 for image in tx['key_images']:
                     self.spent[image] = self.height
@@ -144,9 +149,13 @@ class Fleet:
             if operation == 'restore_check':
                 assert address == request['expected_address']
             return {'address': address, 'owned': owned}
-        if operation == 'inspect':
+        if operation in ('inspect', 'inspect_grants'):
             tx = json.loads(Path(request['artifact']).read_bytes())
+            # Main's campaign `inspect` refuses more than two outputs.
+            assert operation == 'inspect_grants' or len(tx['outputs']) <= 2
             return {k: tx[k] for k in ('hash', 'fee', 'bytes', 'outputs', 'key_images')}
+        if operation == 'prepare_grants':
+            return self.prepare_grants(request)
         assert operation == 'prepare'
         _, owned = self.scan(request['wallet'], request['blocks'])
         owned = {o['id']: o for o in owned}
@@ -183,13 +192,54 @@ class Fleet:
                              for o in selected]}
 
 
+    def prepare_grants(self, request):
+        """Main's `prepare_grants` (#1937): grant i is output i, change follows."""
+        _, owned = self.scan(request['wallet'], request['blocks'])
+        owned = {o['id']: o for o in owned}
+        spent = {s['keyImage']: s for s in request['spent']}
+        grants = request['outputs']
+        assert 1 <= len(grants) <= 15 and 1 <= len(request['selected']) <= 4
+        assert all(g['recipient'] in request['allowed_recipients'] for g in grants)
+        selected = []
+        for identifier in request['selected']:
+            output = owned[identifier]
+            assert identifier not in request['reserved']
+            state = spent[output['key_image']]
+            assert not state['spent'] and not state['pending'] and state['spentHeight'] is None
+            assert request['height'] - output['utxo']['created_at'] >= 10
+            selected.append(output)
+        fee = 10**6 * (len(selected) + len(grants))
+        self.batch_fees.append(fee)
+        total = sum(o['utxo']['amount'] for o in selected)
+        principal = sum(g['amount'] for g in grants)
+        assert total >= principal + fee
+        self.counter += 1
+        outputs = [{'index': i, 'amount': g['amount'], 'target_key': key('target', 'r', self.counter, i),
+                    'public_key': '00'} for i, g in enumerate(grants)]
+        owners = [g['recipient'] for g in grants]
+        if total - principal - fee:
+            outputs.append({'index': len(grants), 'amount': total - principal - fee,
+                            'target_key': key('target', 'c', self.counter), 'public_key': '00'})
+            owners.append(self.addresses[request['wallet']])
+        tx = {'hash': key('grant', self.counter), 'fee': fee, 'bytes': 4000 + 1200 * len(outputs),
+              'outputs': outputs, 'key_images': [o['key_image'] for o in selected], 'owners': owners}
+        Path(request['artifact']).write_bytes(json.dumps(tx).encode())
+        return {**{k: tx[k] for k in ('hash', 'fee', 'bytes', 'outputs', 'key_images')},
+                'height': request['height'], 'input_count': len(selected), 'baseline_fee': fee,
+                'fee_multiplier': 1, 'grants': len(grants), 'artifact': request['artifact'],
+                'selected': [{'id': o['id'], 'key_image': o['key_image'], 'amount': o['utxo']['amount']}
+                             for o in selected]}
+
+
 class PrefundBase(unittest.TestCase):
+    PLAN = 'testnet-discovery-v2.json'
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.now = 1_000_000.0
-        plan = json.loads(Path(__file__).with_name('testnet-discovery-v2.json').read_text())
+        plan = json.loads(Path(__file__).with_name(self.PLAN).read_text())
         plan['endpoints'] = [t['rpc_url'] for t in targets()]
         self.plan = plan
         def private(name, data):
@@ -213,9 +263,10 @@ class PrefundBase(unittest.TestCase):
                   'deadline': latest_deadline(plan, end), 'infrastructure_end': end}
         self.fleet = Fleet(plan, {w['key']: w['address'] for w in [*wallets, funding]})
         self.fleet.coinbase_to = funding['address']
-        # 64 large producer outputs: enough for 512 grants plus worst-case fees.
-        for _ in range(64):
-            self.fleet.output(1, funding['address'], 9 * 10**11, coinbase=True)
+        # 36 large producer outputs: enough for 512 grants plus worst-case fees,
+        # each covering one full 15-grant batch (#1937).
+        for _ in range(36):
+            self.fleet.output(1, funding['address'], 16 * 10**11, coinbase=True)
         self.fleet.mine(11)
 
     def manifest_file(self, m=None):
@@ -261,6 +312,17 @@ class SignerContractTests(unittest.TestCase):
             snake = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
             found[snake] = set(re.findall(r'^\s*(\w+):', fields, re.M))
         self.assertEqual(found, SIGNER_FIELDS)
+
+    def test_campaign_transfers_keep_the_single_recipient_signer_path(self):
+        # #1937 batches are prefund-only: the controller still signs every
+        # campaign transfer with main's one-recipient `prepare` and `inspect`.
+        source = (ROOT / 'scripts/stress/controller.py').read_text()
+        self.assertNotIn('_grants', ''.join(re.findall(r"'operation':'(\w+)'", source)))
+        self.assertIn("'operation':'prepare'", source)
+        self.assertIn("'operation':'inspect'", source)
+        self.assertEqual(SIGNER_FIELDS['prepare'] - SIGNER_FIELDS['prepare_grants'],
+                         {'recipient', 'amount', 'fee_multiplier'})
+        self.assertEqual(prefund.GRANTS_PER_BATCH, 15)
 
     def test_imports_only_tracked_harness_modules(self):
         source = Path(prefund.__file__).read_text()
@@ -479,6 +541,9 @@ class EndToEndTests(PrefundBase):
         self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [16] * 32)
 
     def test_prefund_writes_exact_opening_balances(self):
+        # Batches finish in a few blocks: mint often enough that coinbase
+        # inflow lands mid-prefund and is accounted for.
+        self.fleet.coinbase_every = 3
         p = self.prefunder()
         done = False
         for _ in range(400):
@@ -494,9 +559,21 @@ class EndToEndTests(PrefundBase):
         state = Path(self.m['state_dir'])
         balances = json.loads((state / 'opening_balances.json').read_text())
         self.assertEqual(balances, [16 * GRANT] * 32)
-        # Every grant was submitted exactly once, to the producer only.
-        self.assertEqual(len(self.fleet.submits), 512)
-        self.assertEqual(len(set(self.fleet.submits)), 512)
+        # Every grant batch was submitted exactly once, to the producer only:
+        # 34 full batches of 15 and one of 2 (#1937).
+        self.assertEqual(len(self.fleet.submits), 35)
+        self.assertEqual(len(set(self.fleet.submits)), 35)
+        self.assertEqual([len(r['grants']) for r in p.records], [15] * 34 + [2])
+        self.assertEqual([g['index'] for r in p.records for g in r['grants']], list(range(512)))
+        for row in p.records:
+            # Grant i of a batch is output i; change (if any) is the next one.
+            self.assertEqual([g['output_index'] for g in row['grants']], list(range(len(row['grants']))))
+            self.assertIn(len(row['outputs']), (len(row['grants']), len(row['grants']) + 1))
+        # The prefunder only ever signs batches; main's campaign `prepare` and
+        # `inspect` are left to the controller, unchanged.
+        operations = {r[1] for r in self.fleet.requests if r[0] == 'signer'}
+        self.assertLessEqual({'prepare_grants', 'inspect_grants'}, operations)
+        self.assertFalse({'prepare', 'inspect'} & operations)
         # Equals the scanned per-wallet unspent sums.
         scanned = []
         for wallet in self.m['wallets']:
@@ -507,12 +584,14 @@ class EndToEndTests(PrefundBase):
         health = json.loads((state / 'funding-health.json').read_text())
         self.assertEqual(health['accounting']['difference'], 0)
         self.assertEqual(health['grants'], 512)
+        self.assertEqual(health['batches'], 35)
+        self.assertEqual(health['fees'], sum(self.fleet.batch_fees))
         self.assertGreater(health['accounting']['coinbase_lottery_inflow'], 0)
         self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [16] * 32)
         # The tracked controller and staging accept the output as launch opening_balances.
         self.assertDiscoveryAccepts(balances)
         self.assertTrue(self.tick(p))  # a finished run stays finished
-        self.assertEqual(len(self.fleet.submits), 512)
+        self.assertEqual(len(self.fleet.submits), 35)
 
     def assertDiscoveryAccepts(self, balances):
         import discovery
@@ -544,14 +623,14 @@ class ResumeTests(PrefundBase):
         with self.assertRaises(Crash):
             self.tick(p)
         state = Path(self.m['state_dir'])
-        self.assertTrue((state / 'grants/grant-0000.json').exists())
-        self.assertFalse((state / 'grants/grant-0000.submit').exists())
+        self.assertTrue((state / 'grants/batch-0000.json').exists())
+        self.assertFalse((state / 'grants/batch-0000.submit').exists())
         self.assertFalse(self.fleet.submits)
         p = self.prefunder()
         self.tick(p)
         self.assertEqual(self.fleet.submits[0], p.records[0]['hash'])
         self.assertEqual(self.fleet.submits.count(p.records[0]['hash']), 1)
-        self.assertTrue((state / 'grants/grant-0000.submit').exists())
+        self.assertTrue((state / 'grants/batch-0000.submit').exists())
         self.assertEqual(self.prefunder().records[0]['state'], 'accepted')
 
     def test_record_without_marker_holds_when_any_node_knows_hash(self):
@@ -577,7 +656,7 @@ class ResumeTests(PrefundBase):
             self.tick(p)
         self.fleet.submit_hook = None
         state = Path(self.m['state_dir'])
-        self.assertTrue((state / 'grants/grant-0000.submit').exists())
+        self.assertTrue((state / 'grants/batch-0000.submit').exists())
         return p.records[0]['hash']
 
     def test_crash_after_marker_never_resubmits(self):
@@ -619,7 +698,7 @@ class ResumeTests(PrefundBase):
     def test_orphan_artifact_holds(self):
         p = self.prefunder()
         self.offer_one(p)
-        (Path(self.m['state_dir']) / 'artifacts/grant-0001.bin').write_bytes(b'signed, never recorded')
+        (Path(self.m['state_dir']) / 'artifacts/batch-0001.bin').write_bytes(b'signed, never recorded')
         with self.assertRaisesRegex(Gate, 'orphan signed artifact'):
             self.prefunder()
 
@@ -643,6 +722,159 @@ class ResumeTests(PrefundBase):
         self.assertIn(('signer', 'restore_check'), self.fleet.requests)
         self.assertNotIn('forged', [o['id'] for owned in p.inventory for o in owned])
         self.assertTrue(p.inventory[p.funding])
+
+
+class BatchTests(PrefundBase):
+    """Grant batches (#1937): exact-once per batch and fixed grant coverage."""
+
+    def test_uncertain_batch_submit_never_resubmits_and_confirms_every_grant(self):
+        def hook(tx):
+            self.fleet.mempool[tx['hash']] = tx  # It reached the producer...
+            raise OSError('connection reset')    # ...but the reply was lost.
+        self.fleet.submit_hook = hook
+        p = self.prefunder()
+        with self.assertRaisesRegex(Gate, 'uncertain; never resubmitted'):
+            self.tick(p)
+        self.fleet.submit_hook = None
+        row = p.records[0]
+        self.assertEqual((row['state'], len(row['grants'])), ('unknown', 15))
+        h = row['hash']
+        # A restart re-signs nothing and sends nothing until the batch resolves.
+        p = self.prefunder()
+        self.tick(p)
+        self.assertEqual((len(p.records), self.fleet.submits), (1, [h]))
+        self.advance()
+        self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        # Every one of the batch's grants reached its wallet as output i.
+        for grant in p.records[0]['grants']:
+            found = [o for o in p.inventory[grant['recipient']] if o['id'] == '%s:%d' % (h, grant['output_index'])]
+            self.assertEqual([o['utxo']['amount'] for o in found], [GRANT])
+        self.assertEqual(self.fleet.submits.count(h), 1)
+        self.assertEqual(p.j.get('accounting')['difference'], 0)
+
+    def test_restart_mid_run_continues_coverage_exactly_once(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.offer_one(p)
+        q = self.prefunder()
+        self.assertEqual([g['index'] for r in q.records for g in r['grants']], list(range(30)))
+        self.offer_one(q)
+        self.assertEqual(q.records[2]['grants'][0]['index'], 30)
+        self.assertEqual(q.records[2]['grants'][0]['recipient'], 30 % 32)
+        self.assertEqual(len(set(self.fleet.submits)), 3)
+
+    def test_altered_batch_coverage_holds(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        path = p.record_path(0)
+        for change in ({'recipient': 5}, {'amount': GRANT + 1}, {'output_index': 3}, {'index': 1}):
+            row = json.loads(path.read_text())
+            row['grants'][0] = {**row['grants'][0], **change}
+            path.write_text(json.dumps(row))
+            with self.subTest(change=change), self.assertRaisesRegex(Gate, 'grant batch coverage changed'):
+                self.prefunder()
+        row['grants'] = p.records[0]['grants'][:14]
+        path.write_text(json.dumps(row))
+        with self.assertRaisesRegex(Gate, 'grant batch coverage changed'):
+            self.prefunder()
+
+    def test_per_grant_state_dir_from_before_batching_holds(self):
+        state = Path(self.m['state_dir'])
+        (state / 'grants').mkdir(mode=0o700, parents=True)
+        state.chmod(0o700)
+        (state / 'grants' / 'grant-0000.json').write_text('{}')
+        with self.assertRaisesRegex(Gate, 'pre-batch prefunder'):
+            self.prefunder()
+
+
+class DeadlineFitTests(PrefundBase):
+    """x-series on a fresh protocol-9.0.0 chain (#1937).
+
+    One coinbase per 40 s block is the only other decoy source, so a funding
+    input is spendable only about 220 blocks after the chain starts (the
+    #1809 random-offset window needs 19 decoys in its thinnest window, and
+    the rehearsal saw the first grant at height 221). One input per grant
+    then needs 2048 eligible inputs, about 24 h at one per block; batches
+    need 137.
+    """
+    PLAN = 'x-series-plan.json'
+    BLOCK_SECONDS = 40
+    X2_GRANT = 5 * 10**10
+
+    def run_fresh_chain(self, tick_seconds):
+        """Prefund 2048 grants from height 0; returns the prefunder and first/last batch heights."""
+        self.fleet = Fleet(self.plan, self.fleet.addresses)
+        self.fleet.coinbase_to = self.m['funding_wallet']['address']
+        self.fleet.fillers, self.fleet.coinbase_every, self.fleet.coinbase_amount = 0, 1, 5 * 10**13
+        self.m.update(grants_per_wallet=32, grant_picocredits=self.X2_GRANT, deadline=self.now + 6 * 3600)
+        p = self.prefunder()
+        self.assertEqual(self.plan['wallets']['count'] * self.m['grants_per_wallet'], 2048)
+        done = False
+        with contextlib.redirect_stdout(io.StringIO()):  # funding-wait lines
+            while not done:
+                self.fleet.mine(1)
+                for _ in range(self.BLOCK_SECONDS // tick_seconds):
+                    self.now += tick_seconds
+                    try:
+                        done = self.tick(p)
+                    except Quota:
+                        continue
+                    if done:
+                        break
+        self.assertLess(self.now, self.m['deadline'])
+        heights = [r['block_height'] for r in p.records]
+        return p, heights[0], heights[-1]
+
+    def test_x_series_fits_its_window_at_one_batch_per_block(self):
+        # One tick per block: at most one new batch per block, the issue's
+        # "one eligible input per block" pace, and the sparsest decoys.
+        p, first, last = self.run_fresh_chain(self.BLOCK_SECONDS)
+        count = self.plan['wallets']['count']
+        self.assertGreater(first, 200)  # Decoy-starved until then (#1809).
+        self.assertEqual((p.granted(), len(p.records)), (2048, 137))  # ceil(2048 / 15)
+        self.assertEqual(len(set(self.fleet.submits)), 137)
+        self.assertLessEqual(last - first, 137)
+        # 6 h is 540 blocks; one grant per transaction would need ~2048 more.
+        self.assertLess(last * self.BLOCK_SECONDS, 6 * 3600)
+        self.assertLessEqual(max(r['fee'] for r in p.records),
+                             int(self.plan['limits']['max_single_signed_fee_picocredits']))
+        state = Path(self.m['state_dir'])
+        self.assertEqual(json.loads((state / 'opening_balances.json').read_text()), [32 * self.X2_GRANT] * count)
+        health = json.loads((state / 'funding-health.json').read_text())
+        self.assertEqual(health['accounting']['difference'], 0)
+        self.assertEqual(health['grants'], 2048)
+        self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [32] * count)
+        # Activation. latest_deadline() reserves MATURITY_SECONDS for output
+        # maturity, staging and activation. At the earliest activation, one
+        # such slack after completion with the chain back to one coinbase per
+        # block, DiscoveryController.inventory_ready()'s exact probe holds for
+        # every wallet: min_mature_utxos_per_wallet eligible with
+        # decoy_headroom, and a four-input largest-transfer selection. A
+        # batch's 16 outputs are decoys for each other, so every grant output
+        # sits in a block of at least 17 decoy-eligible outputs.
+        completed = self.fleet.height
+        self.fleet.mine(prefund.MATURITY_SECONDS // self.BLOCK_SECONDS)
+        self.now += prefund.MATURITY_SECONDS
+        asyncio.run(p.health(force=True))
+        height = asyncio.run(p.sync(full=True))
+        self.assertEqual(height, completed + 90)
+        wallets = self.plan['wallets']
+        largest = max(map(int, wallets['transfer_amounts_picocredits']))
+        for w in range(count):
+            ready, evidence = choose(p, w, height, headroom=wallets['decoy_headroom'])
+            probe, _ = choose(p, w, height, largest, 4, wallets['decoy_headroom'])
+            self.assertGreaterEqual(len(ready), wallets['min_mature_utxos_per_wallet'], evidence)
+            self.assertTrue(probe, w)
+
+    def test_x_series_change_recycling_finishes_sooner(self):
+        # Ticking every 4 s, a batch's change (in a 16-output block) is
+        # itself spendable ~20 blocks later, so several batches land per block.
+        p, first, last = self.run_fresh_chain(4)
+        self.assertEqual((p.granted(), len(p.records)), (2048, 137))
+        self.assertLess(last - first, 137)
+        self.assertEqual(json.loads((Path(self.m['state_dir']) / 'funding-health.json').read_text())
+                         ['accounting']['difference'], 0)
 
 
 class ReconcileTests(PrefundBase):
@@ -793,7 +1025,7 @@ class QuotaDeferralTests(PrefundBase):
 
         async def signer(request):
             result = await original(request)
-            if request['operation'] == 'inspect' and not p.records:
+            if request['operation'] == 'inspect_grants' and not p.records:
                 self.fill(p)  # A burst between signing and submission.
             return result
         p.signer = signer
@@ -846,7 +1078,7 @@ class QuotaDeferralTests(PrefundBase):
                 self.assertLessEqual(self.used(p), self.limit(p))
         self.assertIn('producer request budget before signing', deferrals)
         self.assertIn('shared endpoint request budget', deferrals)
-        self.assertGreaterEqual(sum(r['state'] == 'confirmed' for r in p.records), 50)
+        self.assertGreaterEqual(p.granted([r for r in p.records if r['state'] == 'confirmed']), 50)
         self.assertSubmittedOnce(p)
         self.assertFalse(p.unsent())
 
@@ -869,7 +1101,7 @@ class StateDirTests(PrefundBase):
     def test_interrupted_record_update_has_its_own_hold(self):
         p = self.prefunder()
         self.offer_one(p)
-        (Path(self.m['state_dir']) / 'grants/grant-0000.json.tmp').write_text('{')
+        (Path(self.m['state_dir']) / 'grants/batch-0000.json.tmp').write_text('{')
         with self.assertRaisesRegex(Gate, 'interrupted grant record update'):
             self.prefunder()
 
