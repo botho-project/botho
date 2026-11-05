@@ -1,7 +1,7 @@
 # Demurrage counterexamples (#1711)
 
 `Botho/Demurrage/Counterexamples.lean` refutes three proposed properties of
-the current integer kernels. It does not change consensus behavior.
+the pre-9.0.0 integer kernels. It does not change consensus behavior.
 The six theorems are **proven (model)**; the three DRT legs call the actual
 Rust functions to test correspondence. DRT is evidence, not a proof of
 Rust-to-Lean equivalence.
@@ -11,7 +11,37 @@ Tracked findings: [#1875](https://github.com/botho-project/botho/issues/1875)
 (ring saturation). Statement-record review precedes proofs in
 [#1877](https://github.com/botho-project/botho/pull/1877).
 
-## Time quantization defeats a positive-value threshold
+## Status since protocol 9.0.0 (#1875 fixed)
+
+The time-quantization finding below is **fixed** in protocol 9.0.0: the
+operator chose exact arithmetic after the simulation study (PR #1908,
+`docs/research/demurrage-quantization-study.md`). `demurrage_charge` now takes
+one floor of the full rational
+`value × rate × (factor − 1000) × elapsed / (10_000 × 5_000 × blocks_per_year)`,
+clamped to `u64::MAX`, with no intermediate time fraction.
+
+- `charge` (`Counterexamples.lean`) is the **legacy** pre-9.0.0 kernel. Its
+  theorems (`six_block_dead_zone`, `churn_counterexample`,
+  `charge_exceeds_value`, `saturation_lowers_charge`) and their statement
+  records are unchanged: they are the machine-checked record of the finding.
+- `exactCharge` (`ExactCharge.lean`) is the 9.0.0 kernel, written as the
+  specification itself on `Nat` (it does not mirror the Rust u128
+  decomposition, so the DRT checks that the decomposition is exact). The
+  `demurrage_charge` DRT leg now runs `exactCharge`. Theorems about it
+  (no dead zone, split loss below n pico) are a follow-up: new statements
+  need their records on the base branch first.
+- With the DRT dispatch temporarily pointed back at the legacy `charge`, the
+  committed regression lines produce mismatches against the 9.0.0 Rust
+  kernel, so the leg distinguishes the two kernels.
+- `charge_exceeds_value` still holds for the exact kernel (51 years at 2%
+  and 6x is 102% of principal): the clamp is to `u64::MAX`, not principal.
+- The #1908 study's u128 candidate was exact only for
+  `blocks_per_year <= 368_934_881_474` and saturated upward beyond. The
+  production kernel splits `elapsed` at 2^32, so it is exact for every input;
+  `cluster-tax` tests compare it with a 256-bit oracle on both sides of that
+  limit, and the regression file pins two inputs beyond it.
+
+## Time quantization defeats a positive-value threshold (pre-9.0.0)
 
 `cluster-tax/src/demurrage.rs::demurrage_charge` computes
 `time_fraction = elapsed * 1_000_000 / blocks_per_year` before multiplying by
@@ -114,7 +144,8 @@ specification issue; transaction balance validation remains a separate gate.
 
 | Lean definition | Rust source | DRT leg |
 | --- | --- | --- |
-| `charge` | `demurrage.rs::demurrage_charge` | `demurrage_charge` |
+| `exactCharge` | `demurrage.rs::demurrage_charge` (protocol 9.0.0) | `demurrage_charge` |
+| `charge` (legacy) | `demurrage.rs::demurrage_charge` before 9.0.0 (kept in its tests as `legacy_quantized_charge`) | none since #1875 (receipt `demurrage-1711.json`) |
 | `defaultFactor` | `fee_curve.rs::ClusterFactorCurve::default_params().factor` | `default_cluster_factor` |
 | `ringFactorExact` / `exactCentroid` | `demurrage.rs::ring_centroid_implied_factor` (protocol 9.0.0) | `ring_centroid_factor` |
 | `ringFactor` / `centroid` | `demurrage.rs::ring_centroid_implied_factor` before 9.0.0 (historical) | none since #1876 |
@@ -132,7 +163,10 @@ Pinned DRT fixtures include both rings, the six/twelve-block calls, the
 widths, near-zero elapsed times, saturation and homogeneous rings.
 See `formal-drt/results/demurrage-1711.json` for the run receipt.
 The seed-1711 run compared 100,000 generated cases per leg and all 11 pinned
-fixtures, with zero mismatches (300,011 comparisons).
+fixtures, with zero mismatches (300,011 comparisons), against the legacy
+kernel. The #1875 receipt, `formal-drt/results/demurrage-1875.json`, is the
+same three legs with seed 1875 against the exact kernel (`exactCharge`),
+including the five new `demurrage_charge` regression lines.
 
 Reproduce after building `formal-drt/lean` and `formal-drt`:
 
@@ -141,6 +175,7 @@ cd formal-drt
 target/release/botho-formal-drt --cases 100000 --seed 1711 \
   --legs demurrage_charge,default_cluster_factor,ring_centroid_factor \
   --no-write-regressions --json /tmp/demurrage-1711.json
+# 9.0.0 exact kernel (#1875): the same command with --seed 1875
 ```
 
 This is a partial #1711 contribution. Settlement/reset/spend composition,

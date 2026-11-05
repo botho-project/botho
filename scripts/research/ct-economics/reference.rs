@@ -98,9 +98,13 @@ impl Origins {
 
 #[test]
 fn ct1_pure_bounds_and_origin_rollback_model() {
+    // Protocol 9.0.0 exact kernel (#1875): floor(49 x 0.1) = 4 and
+    // floor(51 x 0.1) - floor(51 x 0.05) = 5 - 2 = 3. Before 9.0.0 the
+    // quantized kernel gave 0 and 5 (scripts/research/ct_demurrage_integer_audit.py
+    // keeps that legacy arithmetic as its "current_charge").
     assert_eq!(
         demurrage_charge(49, 6000, SETTLEMENT_HORIZON_BLOCKS, 200, BLOCKS_PER_YEAR_5S),
-        0
+        4
     );
     assert_eq!(
         capitalized_reset_charge(
@@ -111,7 +115,7 @@ fn ct1_pure_bounds_and_origin_rollback_model() {
             200,
             BLOCKS_PER_YEAR_5S
         ),
-        5
+        3
     );
     assert_eq!(
         capitalized_reset_charge(u64::MAX, 6000, 5999, SETTLEMENT_HORIZON_BLOCKS, u32::MAX, 1),

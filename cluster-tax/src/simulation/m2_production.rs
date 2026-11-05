@@ -1680,7 +1680,11 @@ mod tests {
     /// rule) is bit-for-bit the #1790 harness. The goldens were captured from
     /// `m2_production.rs` at 5bb7969e, before the redesign switches existed:
     /// 30 days from the start of epoch 1, seed 1696, honest whale, mechanism
-    /// on and off, both mining models, 1x and 100x density.
+    /// on and off, both mining models, 1x and 100x density. The mechanism-on
+    /// rows were re-captured for #1875 (protocol 9.0.0 exact
+    /// `demurrage_charge`): their demurrage, lottery and gini bits move in
+    /// the last digits only (the old kernel's short-hold under-charge); the
+    /// mechanism-off rows, outputs and transaction counts are unchanged.
     #[test]
     fn baseline_reproduces_1790_bit_for_bit() {
         // (mining, tx_scale, mechanism, gini bits, outputs, txs, lottery
@@ -1691,11 +1695,11 @@ mod tests {
                 MiningModel::WealthProportional,
                 1.0,
                 true,
-                0x3fedcfcf94f35788,
+                0x3fedcfcf95090481,
                 2_591_292,
                 1_086,
-                4698378751907483686,
-                4670662219687873389,
+                4698378752640392255,
+                4670662278320559516,
             ),
             (
                 MiningModel::WealthProportional,
@@ -1715,7 +1719,7 @@ mod tests {
                 2_792_294,
                 101_587,
                 4702284146422142341,
-                4698367302383781520,
+                4698367302383781523,
             ),
             (
                 MiningModel::WealthProportional,
@@ -1731,11 +1735,11 @@ mod tests {
                 MiningModel::Egalitarian,
                 1.0,
                 true,
-                0x3fe37befffc100bb,
+                0x3fe37beffdf26a72,
                 2_591_292,
                 1_086,
-                4698421317636198927,
-                4674067477979002697,
+                4698421318239812900,
+                4674067526268120923,
             ),
             (
                 MiningModel::Egalitarian,
@@ -1751,11 +1755,11 @@ mod tests {
                 MiningModel::Egalitarian,
                 100.0,
                 true,
-                0x3fe456c2a719ce56,
+                0x3fe456c2a719ce57,
                 2_792_294,
                 101_587,
                 4702626505183157684,
-                4699223199281203697,
+                4699223199281203707,
             ),
             (
                 MiningModel::Egalitarian,

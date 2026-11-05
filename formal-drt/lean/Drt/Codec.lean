@@ -151,7 +151,9 @@ def shaOnly : Prims := prims []
 def dispatch (fn : String) (a : Json) : Dec Json := do
   match fn with
   | "demurrage_charge" =>
-    pure (encNat (Botho.Demurrage.charge (← nat a "value") (← nat a "factor")
+    -- Protocol 9.0.0 exact kernel (#1875); `Botho.Demurrage.charge` is the
+    -- legacy pre-9.0.0 model its counterexample theorems are about.
+    pure (encNat (Botho.Demurrage.exactCharge (← nat a "value") (← nat a "factor")
       (← nat a "elapsed") (← nat a "rate") (← nat a "year")))
   | "default_cluster_factor" =>
     pure (encNat (Botho.Demurrage.defaultFactor (← nat a "wealth")))

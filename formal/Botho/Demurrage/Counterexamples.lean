@@ -14,7 +14,10 @@ import Botho.Lottery.Arith
 namespace Botho.Demurrage
 open Botho.Lottery
 
-/-- `cluster-tax/src/demurrage.rs::demurrage_charge`. Inputs have Rust widths
+/-- LEGACY: `cluster-tax/src/demurrage.rs::demurrage_charge` before protocol
+9.0.0 (#1875 replaced the time quantization with exact arithmetic, modelled by
+`exactCharge` in `Botho/Demurrage/ExactCharge.lean`). The theorems below about this
+kernel are the record of the #1875 finding. Inputs have Rust widths
 u64/u64/u64/u32/u64. The first product fits u128 (< 2^109); the time-scaled
 product saturates before division. The return conversion clamps to u64. -/
 def charge (value factor elapsed rate year : Nat) : Nat :=

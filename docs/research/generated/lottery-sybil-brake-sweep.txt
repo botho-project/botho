@@ -47,8 +47,8 @@ Blocks a coin must age before its public fee clears floor F (at the whale factor
 | floor F (BTH) | 100 BTH coin | 1k | 10k | 100k |
 |---:|---:|---:|---:|---:|
 | 0.25 | 0 | 0 | 0 | 0 |
-| 0.50 | 830772 | 83079 | 8313 | 833 |
-| 1.00 | 2492310 | 249236 | 24927 | 2498 |
+| 0.50 | 830770 | 83077 | 8308 | 831 |
+| 1.00 | 2492308 | 249231 | 24924 | 2493 |
 
 **Reading it:** a floor set high enough to force the whale into large pieces (fewer eligible tickets) *also* pushes the aging-to-clear beyond a short window — excluding the very poor (100-BTH) coins the lottery is meant to reach, since they can never clear the floor inside the window. The floor is regressive under a recency window: it disenfranchises the poor faster than it caps the whale.
 
@@ -59,7 +59,7 @@ The one regime where the attack pays (quiet chain), now with a floor added. The 
 | floor F (BTH) | K\* | piece (BTH) | realized capture | cost/captured | net/blk (BTH) |
 |---:|---:|---:|---:|---:|---:|
 | 0.00 | 33733 | 3 | 62.78% | 0.35× | +1.5423 |
-| 0.50 | 11 | 9091 | 8.60% | 0.01× | +0.3237 |
+| 0.50 | 11 | 9091 | 8.60% | 0.01× | +0.3236 |
 | 1.00 | 1 | 100000 | 100.00% | 0.00× | +3.8000 |
 
 **Reading it:** the floor is not merely weak, it is *non-monotone and counterproductive*. At F=0.50 it caps the whale (large pieces ⇒ few tickets) but only by excluding every organic tier that cannot clear the floor inside the window. Pushed to F=1.00 it excludes the organic poor *and* the honest wealthy — no in-window coin clears it except the whale's own large, aged, consolidated position, which then wins **100%** of a pool nobody else can enter. A fee floor under a recency window inverts into a whale subsidy.

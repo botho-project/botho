@@ -200,8 +200,8 @@ A fee-denominated floor (`eligible only if public fee ≥ F`) is the CT analogue
 | floor F (BTH) | 100-BTH coin | 1k | 10k | 100k |
 |---:|---:|---:|---:|---:|
 | 0.25 (≈base) | 0 | 0 | 0 | 0 |
-| 0.50 | 830,772 | 83,079 | 8,313 | 833 |
-| 1.00 | 2,492,310 | 249,236 | 24,927 | 2,498 |
+| 0.50 | 830,770 | 83,077 | 8,308 | 831 |
+| 1.00 | 2,492,308 | 249,231 | 24,924 | 2,493 |
 
 At a 10k-block window (~14 h), a 100-BTH coin needs **830k blocks** to clear a 0.50-BTH floor — it can *never* be both fresh-enough and fee-heavy-enough. So the floor excludes the organic poor first. Worse, it is non-monotone (quiet regime, N=10k):
 

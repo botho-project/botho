@@ -298,11 +298,11 @@ Whale optimum per grid point (4 epochs x 2 backlogs x 3 organic rates x 2 fee mo
 | variant | profitable (node) | profitable (reveal) | max net*/blk, node (BTH) | max net*/day, node (BTH) | reference net*/blk, node (BTH) | reference whale share, node |
 |---|---:|---:|---:|---:|---:|---:|
 | R0 baseline | 192/192 | 192/192 | +49.9975 | +863957 | +2.4660 | 98.7% |
-| R1 value-age | 192/192 | 0/192 | +49.9993 | +863988 | +2.4978 | 99.9% |
-| R2 inverse-factor | 192/192 | 0/192 | +49.9993 | +863988 | +2.4934 | 99.9% |
+| R1 value-age | 192/192 | 0/192 | +49.9993 | +863988 | +2.4970 | 99.9% |
+| R2 inverse-factor | 192/192 | 0/192 | +49.9993 | +863988 | +2.4915 | 99.8% |
 | R3 ticket-price | 0/192 | 0/192 | +0.0000 | +0 | +0.0000 | 0.0% |
 | R4 time-decay | 192/192 | 192/192 | +49.9975 | +863957 | +2.4660 | 98.7% |
-| R5 inverse-factor+time-decay | 192/192 | 0/192 | +49.9993 | +863988 | +2.4934 | 99.9% |
+| R5 inverse-factor+time-decay | 192/192 | 0/192 | +49.9993 | +863988 | +2.4915 | 99.8% |
 
 ### Value-linear churn: sensitivity (node candidate rule)
 
@@ -326,17 +326,17 @@ Profitable points out of 192 when the whale re-spends at most its capital per bl
 | 0 | 200 | 1x | 5000000 | 100.0% | +0.0080 | +138 |
 | 0 | 200 | 6x | 5000000 | 100.0% | +0.0080 | +138 |
 | 1 | 20 | 1x | 5000000 | 100.0% | +2.5007 | +43212 |
-| 1 | 20 | 6x | 334096 | 99.9% | +2.4978 | +43162 |
+| 1 | 20 | 6x | 267276 | 99.9% | +2.4970 | +43148 |
 | 1 | 200 | 1x | 5000000 | 100.0% | +2.5070 | +43320 |
-| 1 | 200 | 6x | 1019579 | 99.8% | +2.4989 | +43181 |
+| 1 | 200 | 6x | 815663 | 99.8% | +2.4966 | +43141 |
 | 3 | 20 | 1x | 5000000 | 100.0% | +1.8757 | +32412 |
-| 3 | 20 | 6x | 334096 | 99.9% | +1.8733 | +32371 |
+| 3 | 20 | 6x | 267276 | 99.9% | +1.8727 | +32360 |
 | 3 | 200 | 1x | 5000000 | 100.0% | +1.8822 | +32525 |
-| 3 | 200 | 6x | 1019579 | 99.8% | +1.8752 | +32403 |
+| 3 | 200 | 6x | 815663 | 99.8% | +1.8732 | +32368 |
 | tail | 20 | 1x | 5000000 | 100.0% | +1.2117 | +20938 |
-| tail | 20 | 6x | 267276 | 99.9% | +1.2098 | +20905 |
+| tail | 20 | 6x | 213821 | 99.9% | +1.2092 | +20896 |
 | tail | 200 | 1x | 5000000 | 100.0% | +1.2184 | +21054 |
-| tail | 200 | 6x | 815663 | 99.8% | +1.2127 | +20955 |
+| tail | 200 | 6x | 652530 | 99.7% | +1.2110 | +20926 |
 
 **Reading it.** Value-linear weight closes the splitting hole only if spent value stops counting, and on the node it never does. Churn beats splitting by a wide margin, because one transaction re-mints the whole position's weight. 1,000 BTH of capital is enough at 180–192 of the 192 points. R3 closes the hole by construction, and it is the only candidate here that does so without a reveal.
 

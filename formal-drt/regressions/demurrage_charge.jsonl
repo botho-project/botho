@@ -1,3 +1,8 @@
 {"input": {"value": 1000000000000000000, "factor": 6000, "elapsed": 6, "rate": 200, "year": 6307200}, "note": "Quantization counterexample: elapsed=6"}
 {"input": {"value": 1000000000000000000, "factor": 6000, "elapsed": 12, "rate": 200, "year": 6307200}, "note": "Quantization counterexample: elapsed=12"}
 {"input": {"value": 1000000, "factor": 6000, "elapsed": 321667200, "rate": 200, "year": 6307200}, "note": "Charge exceeds principal after 51 years"}
+{"input": {"value": 1000000000000000000, "factor": 6000, "elapsed": 1, "rate": 200, "year": 6307200}, "note": "#1875 exact kernel: one-block hold of 1M BTH at 6x charges 3170979198"}
+{"input": {"value": 18446744073709551615, "factor": 6000, "elapsed": 6, "rate": 200, "year": 6307200}, "note": "#1875 exact kernel: u64::MAX at 6x, six blocks (legacy dead zone) charges 350965450413"}
+{"input": {"value": 900000000000000000, "factor": 5745, "elapsed": 7, "rate": 200, "year": 6307200}, "note": "#1875 exact kernel: the consensus-floor reproduction at seven blocks"}
+{"input": {"value": 18446744073709551615, "factor": 6000, "elapsed": 18446744073709551615, "rate": 4294967295, "year": 368934881475}, "note": "#1875 exact kernel: just above the #1908 study kernel's exactness limit, where it saturated upward"}
+{"input": {"value": 18446744073709551615, "factor": 6000, "elapsed": 18446744073709551615, "rate": 4294967295, "year": 18446744073709551615}, "note": "#1875 exact kernel: remainder product exceeds u128 without the elapsed split"}
