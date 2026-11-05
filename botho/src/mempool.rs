@@ -1324,15 +1324,40 @@ impl Mempool {
     ///   nominated and skipped; evicting it frees its key images so the sender
     ///   can resubmit with a higher fee.
     ///
-    /// Both checks fail closed: a ledger read error evicts (M7). That includes
-    /// a failure to read the chain state the fee floor is priced from: with no
-    /// tip there is no inclusion height, so no tx can be shown to cover the
-    /// next block's floor, and every pending tx is evicted.
+    /// The fee floor is enforced at SCP validity and at seal time
+    /// (`BlockBuilder::finalize_for_apply`); this eviction is mempool hygiene
+    /// only, never what keeps an under-floor tx out of a block.
+    ///
+    /// The key-image check fails closed: a ledger read error evicts (M7),
+    /// because keeping a possible double-spend risks re-proposing it. The fee
+    /// floor check does not need that: if the chain state the floor is priced
+    /// from cannot be read, fee-floor eviction is skipped for this call (with
+    /// a warning) and no tx is evicted for its fee, so a transient read error
+    /// never empties the mempool. A per-tx error computing the floor still
+    /// evicts that tx.
     pub fn remove_invalid(&mut self, ledger: &Ledger) {
-        let mut to_remove = Vec::new();
         let inclusion_height = ledger
             .get_chain_state()
-            .map(|state| state.height.saturating_add(1));
+            .map(|state| state.height.saturating_add(1))
+            .map_err(|e| e.to_string());
+        self.remove_invalid_at(ledger, inclusion_height);
+    }
+
+    /// [`Self::remove_invalid`] with the inclusion height already read, or
+    /// the error reading it (the seam the unreadable-chain-state test uses).
+    fn remove_invalid_at(&mut self, ledger: &Ledger, inclusion_height: Result<u64, String>) {
+        let mut to_remove = Vec::new();
+        let inclusion_height = match inclusion_height {
+            Ok(height) => Some(height),
+            Err(e) => {
+                warn!(
+                    "Chain state unreadable; skipping fee-floor eviction of the mempool this \
+                     tick (key-image eviction still runs): {}",
+                    e
+                );
+                None
+            }
+        };
 
         for (tx_hash, pending) in &self.txs {
             // Check if any key image was spent in ledger.
@@ -1367,18 +1392,10 @@ impl Mempool {
             // #1920: the consensus fee floor of the next block. Same function
             // and height block validation uses (`verify_consensus_fee_floor`
             // at `block.height()` == tip + 1), so a tx kept here pays at least
-            // what the next block requires of it.
-            let inclusion_height = match &inclusion_height {
-                Ok(height) => *height,
-                Err(e) => {
-                    warn!(
-                        "Chain state unreadable; evicting mempool tx {} (fail closed): {}",
-                        hex::encode(&tx_hash[0..8]),
-                        e
-                    );
-                    to_remove.push(*tx_hash);
-                    continue;
-                }
+            // what the next block requires of it. Skipped when the chain
+            // state could not be read (see above).
+            let Some(inclusion_height) = inclusion_height else {
+                continue;
             };
             match ledger.consensus_fee_floor(&pending.tx, inclusion_height) {
                 Ok(floor) if pending.tx.fee >= floor => {}
@@ -2126,6 +2143,34 @@ mod tests {
         assert!(
             mempool.is_empty(),
             "eviction must fail closed (evict on DB error), tx still present"
+        );
+    }
+
+    /// #1920 review: on the real ledger, a chain-state read error (the LMDB
+    /// reader table exhausted) skips fee-floor eviction instead of evicting
+    /// every pending tx. The tx has no CLSAG inputs, so the key-image check
+    /// (which still fails closed, see above) reads nothing; only the fee-floor
+    /// path depends on the chain state.
+    #[test]
+    fn test_remove_invalid_keeps_txs_when_chain_state_unreadable() {
+        use crate::{ledger::Ledger, transaction::TxInputs};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_single_reader(dir.path()).unwrap();
+        let _held = ledger.read_txn_for_test().unwrap();
+        assert!(ledger.get_chain_state().is_err(), "the read error is real");
+
+        let mut mempool = Mempool::new();
+        let tx = Transaction {
+            inputs: TxInputs::new(Vec::new()),
+            ..test_tx(MIN_TX_FEE, 1)
+        };
+        mempool.txs.insert(tx.hash(), PendingTx::new(tx));
+        mempool.remove_invalid(&ledger);
+        assert_eq!(
+            mempool.len(),
+            1,
+            "a chain-state read error must not empty the mempool"
         );
     }
 
@@ -3336,6 +3381,14 @@ mod tests {
         assert!(ledger
             .verify_consensus_fee_floor_for_test(&tx, tip + 2)
             .is_err());
+        // #1920 review: an unreadable chain state skips fee-floor eviction for
+        // the tick instead of evicting every pending tx.
+        mempool.remove_invalid_at(&ledger, Err("injected chain-state read error".into()));
+        assert_eq!(
+            mempool.len(),
+            1,
+            "an unreadable chain state must not evict a tx for its fee"
+        );
         mempool.remove_invalid(&ledger);
         assert!(
             mempool.is_empty(),

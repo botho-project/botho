@@ -511,6 +511,60 @@ fn mark_slot_parent_accepted(
     }
 }
 
+/// Whether `slot`, whose recorded parent is `parent`, is already closed on
+/// this node's ledger (#1920 review): the record is `Decided` and the ledger
+/// holds the block built on `parent` (the tip is above `parent.height` and the
+/// block at `parent.height` is still `parent`, so the block at
+/// `parent.height + 1` is the child of `parent`).
+///
+/// Then the slot has been decided by a quorum. A `Decided` record means every
+/// earlier decision has been applied and produced exactly the chain up to
+/// `parent` (a lost race carries the parent forward, adding no block). So the
+/// block on `parent` came from the decision of this slot or of a later one,
+/// and later slots externalize only after this one. Every honest node that
+/// externalizes this slot externalizes that same decided value, so this
+/// node's vote can no longer change what the slot commits.
+///
+/// The validity function then accepts a transfer on its intrinsic checks
+/// alone (main's behaviour) instead of returning "unavailable" forever: a node
+/// that built ballot state from transfer-free messages, and whose ledger then
+/// received the slot's block by gossip or sync, could otherwise never accept
+/// the peers' EXTERNALIZE (SCP drops a message carrying a value it cannot
+/// validate), never advance, and never be recovered by
+/// `sync_scp_slot_to_chain` or the peer anchor, which both refuse while the
+/// slot holds ballot state. This does not reopen the original #1920 halt: the
+/// decided block is already on the ledger, so applying this node's copy of the
+/// decision is the duplicate-height skip, and the seal-time filter
+/// (`BlockBuilder::finalize_for_apply`) still keeps any under-floor transfer
+/// out of every block a node applies. The answer is the same on every honest
+/// node that reaches it (all have the same decided chain), and a cached `Ok`
+/// contradicts no verdict that matters, because the slot is closed.
+///
+/// An `Opened` record is never closed: its parent follows the tip, and a
+/// ledger read error gives `false` (the caller stays "unavailable").
+fn decided_slot_closed_on_ledger(
+    ledger: &dyn SlotLedger,
+    record: &std::sync::Mutex<Option<SlotParentRecord>>,
+    slot: SlotIndex,
+    parent: SlotParent,
+) -> bool {
+    let decided = record.lock().ok().is_some_and(|guard| {
+        guard.as_ref().is_some_and(|rec| {
+            rec.slot == slot && rec.source == ParentSource::Decided && rec.parent == Some(parent)
+        })
+    });
+    if !decided {
+        return false;
+    }
+    let Ok(tip) = ledger.tip() else {
+        return false;
+    };
+    if tip.height <= parent.height {
+        return false;
+    }
+    matches!(ledger.block_at(parent.height), Ok(Some((block, _))) if block == parent)
+}
+
 /// The consensus service manages SCP participation
 pub struct ConsensusService {
     /// Our node ID
@@ -695,6 +749,11 @@ impl ConsensusService {
         // - The check gives a verdict only when the ledger tip IS that parent, and
         //   `Unavailable` otherwise (no parent recorded yet, the parent's apply still
         //   in flight, or the tip already past it).
+        // - One exception: a `Decided` slot whose own block is already on the ledger
+        //   (the tip is past the parent along the parent's chain) is closed, decided by
+        //   a quorum, and its transfers get the intrinsic checks only, so a node with
+        //   ballot state can still accept the peers' EXTERNALIZE and advance. See
+        //   `decided_slot_closed_on_ledger`.
         // So every honest node that reaches a verdict for (value, slot)
         // reaches the same one, and honest nodes never hold votes for a value
         // another honest node rejects. `Unavailable` is an error, which SCP
@@ -770,6 +829,19 @@ impl ConsensusService {
                         "Transfer invalid in a block at slot {slot_index} (height {}): {reason}",
                         parent.child_height()
                     )),
+                    TransferSlotVerdict::Unavailable(_)
+                        if decided_slot_closed_on_ledger(
+                            check.as_ref(),
+                            &validity_parent,
+                            slot_index,
+                            parent,
+                        ) =>
+                    {
+                        // The slot's own block is already on the ledger: the
+                        // slot is decided, so only the intrinsic checks apply
+                        // (see `decided_slot_closed_on_ledger`).
+                        Ok(())
+                    }
                     TransferSlotVerdict::Unavailable(reason) => Err(format!(
                         "Transfer not yet checkable for slot {slot_index}: {reason}"
                     )),
@@ -2882,9 +2954,13 @@ mod tests {
 
     /// #1920 review: once the ledger has moved past a slot's decided parent
     /// (the slot's block arrived by gossip or sync before this node finished
-    /// the slot), every transfer of the slot is Unavailable, never Invalid,
-    /// even one that is invalid on the parent. Checked on the new tip it
-    /// would be judged against the wrong pre-state.
+    /// the slot), no transfer of the slot is ever Invalid, even one that is
+    /// invalid on the parent: checked on the new tip it would be judged
+    /// against the wrong pre-state. If the ledger holds the block built on the
+    /// decided parent the slot is closed (decided by a quorum) and transfers
+    /// get the intrinsic checks only, so the node can still accept the peers'
+    /// EXTERNALIZE; if the ledger no longer holds the parent at its height it
+    /// is Unavailable. Own proposals are held back either way.
     #[test]
     fn ledger_past_decided_parent_gives_unavailable_not_invalid() {
         let bad = transfer_with(2, MIN_TX_FEE, 1);
@@ -2904,12 +2980,12 @@ mod tests {
             "{err}"
         );
 
-        // Block 2 lands without this node's slot-2 decision.
+        // Block 2 lands on the decided parent without this node's slot-2
+        // decision: the slot is closed, intrinsic checks only.
         assert!(ledger.apply(&intrinsic_valid_minting_tx(3, first.hash(), 2)));
         for tx in [&bad, &good] {
-            let err = svc.validate_value_for_slot(2, &value(tx)).unwrap_err();
-            assert!(err.contains("not yet checkable for slot 2"), "{err}");
-            assert!(!err.contains("invalid"), "{err}");
+            svc.validate_value_for_slot(2, &value(tx))
+                .expect("a closed decided slot accepts on intrinsic checks");
         }
         assert_eq!(svc.slot_parent_for_test(2), Some(block_of(&first)));
         // Own proposals hold both back; neither is dropped.
@@ -2918,6 +2994,114 @@ mod tests {
             .iter()
             .all(|v| v.is_minting_tx));
         assert!(svc.pending_values.iter().any(|v| v.tx_hash == bad.hash()));
+
+        // The ledger no longer holds the decided parent at its height: not
+        // provably this slot's block, so no verdict at all.
+        ledger.blocks.lock().unwrap()[1].0.hash = [0xEE; 32];
+        for tx in [&bad, &good] {
+            let err = svc.validate_value_for_slot(2, &value(tx)).unwrap_err();
+            assert!(err.contains("not yet checkable for slot 2"), "{err}");
+            assert!(!err.contains("invalid"), "{err}");
+        }
+    }
+
+    /// #1920 review (the Judge's second-review wedge): a node holds ballot
+    /// state for slot S (built from transfer-free messages), the slot's block
+    /// lands on its ledger by gossip or sync, and only then do the peers'
+    /// EXTERNALIZE messages arrive, for a value with a transfer the node has
+    /// not validated. The slot is closed on its decided parent, so the node
+    /// accepts the transfer on its intrinsic checks, externalizes S and
+    /// advances to S+1 on the block S produced. Without the closed-slot
+    /// fallback every such EXTERNALIZE is dropped ("not yet checkable"), and
+    /// neither the sync fast-forward nor the peer anchor may move a slot with
+    /// ballot state: the node is wedged for good.
+    #[test]
+    fn ballot_state_node_externalizes_after_its_slot_block_lands_first() {
+        use bth_consensus_scp::msg::ExternalizePayload;
+        let ids = [1, 2, 3, 4];
+        let qs = recommended_quorum(&ids);
+        let mut svc = ConsensusService::new(
+            node(1),
+            qs.clone(),
+            ConsensusConfig::fixed_timing(0),
+            genesis_chain_state(),
+        );
+        let ledger = StubLedger::new(&[]);
+        svc.set_transfer_slot_check(ledger.clone());
+        let deliver =
+            |svc: &mut ConsensusService, slot: SlotIndex, topic: Topic<ConsensusValue>| {
+                for peer in &ids[1..] {
+                    let msg = Msg::new(node(*peer), qs.clone(), slot, topic.clone());
+                    assert!(msg.validate().is_ok(), "well-formed peer message");
+                    let _ = svc.handle_message(wire(&node(*peer), &msg));
+                }
+            };
+        let mint_value =
+            |m: &MintingTx| ConsensusValue::from_minting_tx(m.hash(), m.pow_priority());
+
+        // Slot 1: the peers' quorum externalizes block 1; the node applies it
+        // and records block 1 as slot 2's decided parent.
+        let m1 = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        svc.register_minting_tx(m1.hash(), bincode::serialize(&m1).unwrap());
+        deliver(
+            &mut svc,
+            1,
+            Topic::Externalize(ExternalizePayload {
+                C: Ballot::new(1, &[mint_value(&m1)]),
+                HN: 1,
+            }),
+        );
+        assert!(svc.externalized.is_some(), "slot 1 externalizes");
+        assert!(ledger.apply(&m1));
+        svc.advance_slot();
+        assert_eq!(svc.current_slot(), 2);
+        assert_eq!(svc.slot_parent_for_test(2), Some(block_of(&m1)));
+
+        // Slot 2: ballot state from transfer-free peer messages.
+        let m2 = intrinsic_valid_minting_tx(2, m1.hash(), 2);
+        svc.register_minting_tx(m2.hash(), bincode::serialize(&m2).unwrap());
+        for peer in &ids[1..] {
+            let msg = peer_nominate_prepare(node(*peer), qs.clone(), 2, mint_value(&m2));
+            svc.handle_message(wire(&node(*peer), &msg)).unwrap();
+        }
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(
+                &svc.scp_node.get_current_slot_metrics()
+            ),
+            "the node holds ballot state for slot 2"
+        );
+        assert!(svc.externalized.is_none());
+
+        // The peers decide block 2 with a transfer; the block reaches the
+        // node's ledger before their EXTERNALIZE does.
+        let transfer = transfer_with(9, MIN_TX_FEE, 1);
+        svc.register_transfer_tx(transfer.hash(), bincode::serialize(&transfer).unwrap());
+        let transfer_value = ConsensusValue::from_transaction(transfer.hash(), transfer.fee);
+        assert!(ledger.apply(&m2));
+        assert_eq!(ledger.current_tip(), block_of(&m2));
+        let mut decided = vec![mint_value(&m2), transfer_value];
+        decided.sort();
+        deliver(
+            &mut svc,
+            2,
+            Topic::Externalize(ExternalizePayload {
+                C: Ballot::new(2, &decided),
+                HN: 2,
+            }),
+        );
+        let values = svc
+            .externalized
+            .clone()
+            .expect("slot 2 externalizes after its block landed first");
+        assert!(values.iter().any(|v| v.tx_hash == transfer.hash()));
+        assert!(values.iter().any(|v| v.tx_hash == m2.hash()));
+
+        // The node's own apply is the duplicate-height skip; it advances onto
+        // block 2 as slot 3's decided parent.
+        assert!(!ledger.apply(&m2), "duplicate height");
+        svc.advance_slot();
+        assert_eq!(svc.current_slot(), 3);
+        assert_eq!(svc.slot_parent_for_test(3), Some(block_of(&m2)));
     }
 
     /// #1920 review: a slot opened without a decision behind it (startup, or a

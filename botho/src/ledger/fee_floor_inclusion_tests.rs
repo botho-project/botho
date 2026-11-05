@@ -383,8 +383,11 @@ fn real_ledger_transfer_included_under_slot_height_drift() {
 
 /// #1920 review, on a real ledger: once the ledger moves past the slot's
 /// decided parent (here a block applied directly, as gossip or sync would),
-/// a transfer of that slot is Unavailable, not Invalid, both the one that is
-/// under the floor on the parent and the one the new block just spent.
+/// no transfer of that slot is Invalid, neither the one that is under the
+/// floor on the parent nor the one the new block just spent. The ledger holds
+/// the block built on the decided parent, so the slot is closed (decided by
+/// a quorum) and its transfers get the intrinsic checks only; the seal-time
+/// filter and the duplicate-height skip keep the apply safe.
 #[test]
 fn real_ledger_past_parent_gives_unavailable_not_invalid() {
     let (_dir, ledger, wallet, blocks) = chain(30);
@@ -424,8 +427,12 @@ fn real_ledger_past_parent_gives_unavailable_not_invalid() {
     )
     .unwrap();
     for tx in [&under, &adequate, &under_floor] {
-        let err = svc.validate_value_for_slot(slot, &value(tx)).unwrap_err();
-        assert!(err.contains("not yet checkable"), "{err}");
-        assert!(!err.contains("invalid in a block"), "{err}");
+        svc.validate_value_for_slot(slot, &value(tx))
+            .expect("a closed decided slot accepts on intrinsic checks, never Invalid");
     }
+    // The slot's parent is unchanged: the closed-slot answer never moves it.
+    assert_eq!(
+        svc.slot_parent_for_test(slot).map(|p| p.hash),
+        Some(applied.hash())
+    );
 }
