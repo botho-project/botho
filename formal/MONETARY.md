@@ -3,8 +3,9 @@
 `Botho/Monetary/Emission.lean` models the production policy and proves its
 bounded arithmetic properties in Lean 4.35.0 core. It also refutes the
 unrestricted typed-supply safety and positive-floor claims. This is a manual,
-source-mapped model, not extraction, a full controller/ledger proof or a
-completed production DRT campaign. #1922 owns the subsequent comparison leg.
+source-mapped model, not extraction or a full controller/ledger proof.
+The `monetary` DRT leg (#1922) compares its executable functions with actual
+production methods over the domain below; this is finite tested correspondence.
 
 The source baseline is `ae6655e5d6a6e6c5dd2e4cdb580856303624b4eb`.
 The node constructor is `botho/src/monetary.rs::mainnet_policy`; the mirrored
@@ -21,7 +22,7 @@ Production parameters are 50,000,000,000,000 pico (50 BTH) initial reward,
 | 1. No overflow or panic | `phase_safe` proves the production threshold, nonzero divisors and safe shifts for every u64 height. `tail_safe_domain`, `block_reward_safe` and `successor_safe` derive one-call tail/step safety from the stated supply domain. `unrestricted_tail_claims_refuted` disproves all-typed-supply safety. | Actual release tests call the real tail helper and catch its u128 multiplication panic. They also expose the legacy simulator's narrow-counter and max-height panics. No universal reachable-chain or full-controller safety is proved. |
 | 2. Monotonicity / floor | `halving_nonincreasing` applies only within Phase 1. Tail reward is at least one and narrows losslessly on S≤B. A typed, arithmetic-safe supply outside B returns zero after casting. | Actual-source boundary calls include zero, one, u64::MAX, B−1/B/B+1, the zero-cast input and u128::MAX. No cross-phase monotonicity or unrestricted floor is claimed. |
 | 3. Phase-1 total | `phase1_exact_sum` partitions the actual per-height reward sum into five epochs, excluding genesis. It proves 611,009,950 BTH, exactly 50 BTH below the nominal inclusive-height-zero total. `first_tail_value` computes the first tail reward from the accepted total. | Tests invoke `cumulative_issuance_at` and `block_reward_at`, including genesis and the first tail block. This is an arithmetic schedule result, not evidence that a particular chain or wall-clock horizon has been reached. |
-| 4. Lottery share bound | `lottery_emission_bound` takes the actual successful `blockRewardAt` result on the safe domain, derives its width, binds minting/header height and production interval, and reuses `Supply.Block.emission_exact` for the clamp, casts, bps/product bound, share bound and exact coinbase split. The existing theorem also covers any independently typed reward. | The source path is `MintingTx::lottery_emission_share` / `miner_payout` / `to_tx_output`. No emission model/proof is duplicated. Production-function DRT belongs to #1922. |
+| 4. Lottery share bound | `lottery_emission_bound` takes the actual successful `blockRewardAt` result on the safe domain, derives its width, binds minting/header height and production interval, and reuses `Supply.Block.emission_exact` for the clamp, casts, bps/product bound, share bound and exact coinbase split. The existing theorem also covers any independently typed reward. | The source path is `MintingTx::lottery_emission_share` / `miner_payout` / `to_tx_output`. No emission model/proof is duplicated. The monetary leg compares actual policy lottery bps/share for independent u64 rewards. |
 | 5. Epoch-0 holiday | `demurrage_current` proves zero for h<H and 200 bps thereafter under the current production policy. | Actual-source tests pin epoch boundaries. #1685 remains an unresolved policy decision; this task does not decide it. |
 
 ## Exact executable source map
@@ -146,7 +147,119 @@ the proof stage repeats the checks against actual landed default records.
 `formal/SUPPLY.md`, its real-commit oracle receipts and the existing
 CLSAG/identity/context/storage/commit boundaries remain unchanged. This module
 does not prove signatures, cryptographic soundness, LMDB atomicity or all
-accepted-block behavior. No DRT leg, codec, scheduler, case count or budget is
-changed. #1922 owns model/production DRT and bounded simulator parity; #1896
-retains its distinct accepted-block runtime gap. #1710, #1704 and #1839 remain
+accepted-block behavior. #1922 adds model/production DRT and bounded simulator
+parity without changing the scheduler, case counts or budgets; #1896 retains
+its distinct accepted-block runtime gap. #1710, #1704 and #1839 remain
 open until their remaining obligations are independently reconciled.
+
+
+## Monetary DRT domain and replay (#1922)
+
+The combined `monetary` leg calls the canonical `mainnet_policy_mirror`
+methods and separately calls `botho::block::calculate_block_reward`. The Lean
+codec calls the landed `Botho.Monetary` and `Botho.Supply.Block` functions;
+it contains no second reward formula. The library and node rewards have
+separate output fields compared against the same Lean reward. Inputs are
+independent u64 height, lottery reward and wrapper supply, plus u128 supply S.
+Every fixture integer is decimal text, including u64 fields. Malformed,
+over-width and out-of-domain fixtures fail explicitly, without normalization.
+
+The normal arithmetic-safe domain is:
+
+```text
+A = floor(u128::MAX / 200) = 1701411834604692317316873037158841057
+0 <= S <= A
+Z = 2^64 * H * 40 = 4653892168868035358097408000
+```
+
+For S≤A both products S×200 and S×50 fit u128. Each divided annual term is
+at most floor(u128::MAX/10000), so their sum fits too. These are exactly the
+checks of `tail_success_iff`; expected rewards come from `tailRewardU128`,
+not a Rust reference formula. The domain includes wide supplies above B and
+both zero and nonzero modulo results. A+1 and u128::MAX are excluded from
+this agreement leg; the #1921 real-overflow negative tests remain separate.
+An unexpected Rust panic inside the advertised domain is a mismatch.
+
+B is sufficient, not the exact cast boundary: B+1 still narrows losslessly.
+At Z−1, `annualGross = 2^64 * H - 2`; at Z it is `2^64 * H`. Monotonicity of
+the annual floors therefore makes Z the first pre-cast value at least 2^64.
+Coverage classes distinguish `lossless_floor`, `lossless_within_B`,
+`lossless_above_B` (B<S<Z), `cast_loss_zero` and `cast_loss_nonzero` (S≥Z),
+subdivided by halving/tail and boundary/interior. Zero after modulo is a
+correct agreement, not a universal-floor success. Histograms count generated
+cases; replay counts are separate. Full-width random samples are mixed with
+epoch and u32-clamp boundaries, A/B/Z neighbors, zero/one/max widths, annual
+division remainders and block-division/floor transitions. Shrinking remains
+inside the same domain and preserves the independent wrapper input.
+
+```sh
+(cd formal-drt/lean && lake build)
+cp Cargo.lock formal-drt/Cargo.lock
+cargo build --release --manifest-path formal-drt/Cargo.toml
+formal-drt/target/release/botho-formal-drt --list
+formal-drt/target/release/botho-formal-drt --legs monetary --cases 10000 \
+  --seed 1710 --json /tmp/monetary.json
+```
+
+Saved fixtures include genesis, every halving edge, the sufficient bound,
+actual zero-cast threshold and arithmetic endpoints. The validation receipt
+for #1922 includes a temporary Lean-value mutation, real runner shrinking,
+fixture append/replay failure, byte-for-byte restoration and clean replay.
+Only restored source is used in published campaigns. Exact-head PR evidence
+links the whole optimized Linux 10k-per-leg run and a separate real monetary
+1M run, with reports, class counts, replay counts, elapsed time and hashes.
+Those measurements include model IPC; they are not extrapolated cached calls.
+The whole PR step remains five minutes. Nightly discovery, seed handling,
+1M/leg, four workers, 3600s/leg and 9600s collection remain unchanged.
+
+## Bounded actual simulator vectors
+
+`simulation::emission_sweep::tests::monetary_drt_simulation_vectors` calls
+`cumulative_supply_at` at genesis, kH−1/kH/kH+1 (k=1..5), and 3/8/16/64
+accepted tail blocks. Its 21 expected integers were evaluated independently
+from the landed Lean model at `0b8328b6`, not computed using the Rust delegate.
+The largest expected value is 611010105000006668934 pico after 64 tail blocks.
+Each vector costs at most 64 tail iterations; no random full-height cumulative
+sweep is part of the monetary leg. CI executes the filtered unit test in its
+own bounded step, outside the five-minute DRT step:
+
+```sh
+cargo test --release -p bth-cluster-tax --lib \
+  monetary_drt_simulation_vectors -- --nocapture
+```
+
+To regenerate the independent integers, run this Lean code with `lake env lean`
+from `formal-drt/lean` (model source, not an added theorem):
+
+```lean
+import Botho
+open Botho.Monetary
+-- A finite partition of accepted halving heights, evaluated from the landed
+-- halvingReward. Tail prefixes call blockRewardAt from acceptedPhase1.
+def phasePrefix (height : Nat) : Nat :=
+  ((List.range 5).map fun k =>
+    let lo := max 1 (k * halvingInterval)
+    let hi := min height ((k + 1) * halvingInterval - 1)
+    (if hi < lo then 0 else hi - lo + 1) * (halvingReward (k * halvingInterval)).getD 0).sum
+
+def tailPrefix (n : Nat) : Nat :=
+  ((List.range n).foldl (fun supply i =>
+    match blockRewardAt (tailEmissionStartHeight + i) supply with
+    | .ok reward => supply + reward
+    | .error _ => 0) acceptedPhase1)
+#eval do
+  for h in [0, 1] ++ ((List.range 5).flatMap fun k =>
+      let edge := (k + 1) * halvingInterval
+      [edge - 1, edge, edge + 1]) do
+    let s := if h < tailEmissionStartHeight then phasePrefix h
+      else tailPrefix (h - tailEmissionStartHeight + 1)
+    IO.println s!"({h}, {s}u128),"
+  for n in [3, 8, 16, 64] do
+    IO.println s!"({tailEmissionStartHeight + n - 1}, {tailPrefix n}u128),"
+```
+
+The existing node/mirror and 20-policy-year parity guards remain independent
+evidence, not fresh samples counted by this leg. The nominal height-zero
+sum, fixed-tail comparison baseline, calendar/load pacing and legacy u64
+controller shadows remain declared differences. The whole simulator,
+difficulty engine and accepted ledger transition are outside this test claim.

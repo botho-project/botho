@@ -403,6 +403,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `lottery_candidates` | `Ledger::get_lottery_validation_candidates` over a real LMDB ledger | `lotteryCandidates` |
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
 | `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
+| `monetary` | Actual mainnet policy phase/halving, both tail wrappers, library and node block reward, lottery bps/share and demurrage | `Botho.Monetary` and `Botho.Supply.Block`; independent u64 inputs and arithmetic-safe wide supply 0..A, including modulo cast loss; see [domain/coverage](MONETARY.md#monetary-drt-domain-and-replay-1922) |
 | `cluster_tag_inheritance` | 8.0.0 (#1870): `first_malformed_output_tags` (Rule 1), then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2, C6) over the in-memory double `botho::ledger::formal_drt_tags`; fixtures include #1870's `rules_golden_vectors` | `Botho.Tags.inheritOk₈`, the import cluster derived from the height in the DRT driver (and the failing rule's numbers) |
 | `effective_cluster_wealth` | 9.0.0 (#1876): `ValidationReads::effective_cluster_wealth_from_outputs` over the same double (exact 256-bit numerator) | `Botho.Tags.effectiveWealthExact` (`effectiveWealth` is the pre-9.0.0 saturating model, kept as the record) |
 | `import_floor_factor` | `ValidationReads::import_floor_factor_from_outputs` over the same double | `Botho.Tags.importFloor` |
@@ -448,7 +449,9 @@ processes with `--legs`.
 CI (`.github/workflows/formal-drt.yml`) retains the per-PR tier: seed 1707,
 10,000 cases per leg and a five-minute run budget. Lightweight nightly-helper
 tests run alongside it; PRs do not run the million-case tier or receive an
-issue-writing token. Simulation parity remains tracked in #1709.
+issue-writing token. The monetary leg and bounded actual-simulator vectors are described in
+[MONETARY.md](MONETARY.md#monetary-drt-domain-and-replay-1922); they do not
+claim whole-simulator equivalence.
 
 ### Nightly tier and reproduction (#1817)
 

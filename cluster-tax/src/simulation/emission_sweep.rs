@@ -1364,6 +1364,45 @@ mod tests {
         assert!(mm.compounded_gross_pct > 2.53 && mm.compounded_gross_pct < 2.54);
     }
 
+    /// #1922: independent integers evaluated from the landed Lean
+    /// Botho.Monetary model at source 0b8328b6 (reproduction in MONETARY.md).
+    /// Uses the actual simulation entrypoint, never its delegate as expected.
+    /// Genesis and all epoch edges, then at most 64 tail blocks per vector.
+    #[test]
+    fn monetary_drt_simulation_vectors() {
+        let p = mainnet_policy_mirror();
+        let vectors: &[(u64, u128)] = &[
+            (0, 0u128),
+            (1, 50000000000000u128),
+            (6307199, 315359950000000000000u128),
+            (6307200, 315359975000000000000u128),
+            (6307201, 315360000000000000000u128),
+            (12614399, 473039950000000000000u128),
+            (12614400, 473039962500000000000u128),
+            (12614401, 473039975000000000000u128),
+            (18921599, 551879950000000000000u128),
+            (18921600, 551879956250000000000u128),
+            (18921601, 551879962500000000000u128),
+            (25228799, 591299950000000000000u128),
+            (25228800, 591299953125000000000u128),
+            (25228801, 591299956250000000000u128),
+            (31535999, 611009950000000000000u128),
+            (31536000, 611009952421874801813u128),
+            (31536001, 611009954843749613226u128),
+            (31536002, 611009957265624434239u128),
+            (31536007, 611009969374998683297u128),
+            (31536015, 611009988749997980970u128),
+            (31536063, 611010105000006668934u128),
+        ];
+        for &(height, expected) in vectors {
+            assert_eq!(
+                cumulative_supply_at(&p, height),
+                expected,
+                "height {height}"
+            );
+        }
+    }
+
     #[test]
     fn cumulative_supply_uses_node_height_convention() {
         let p = mainnet_policy_mirror();

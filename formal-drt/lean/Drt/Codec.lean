@@ -148,8 +148,35 @@ def prims (powHash : Bytes) : Prims :=
 /-- Primitives for functions that never call RandomX. -/
 def shaOnly : Prims := prims []
 
+/-- Thin checked decoding into the landed monetary model; no alternate reward formula. -/
+def monetaryResult (r : Except Botho.Monetary.Error Nat) : Dec Json :=
+  match r with
+  | .ok n => .ok (encNat n)
+  | .error e => .error s!"monetary model error: {reprStr e}"
+
+def monetary (a : Json) : Dec Json := do
+  let height ← nat a "height"
+  let reward ← nat a "reward"
+  let wrapperSupply ← nat a "wrapper_supply"
+  let supply ← nat a "supply"
+  if height > U64_MAX ∨ reward > U64_MAX ∨ wrapperSupply > U64_MAX then
+    throw "monetary input exceeds u64"
+  if supply > U128_MAX / 200 then throw "monetary supply exceeds arithmetic-safe domain A"
+  let blockReward ← monetaryResult (Botho.Monetary.blockRewardAt height supply)
+  pure (Json.mkObj [
+    ("halving_phase", Json.bool (Botho.Monetary.isHalvingPhase height)),
+    ("halving_reward", match Botho.Monetary.halvingReward height with
+      | some r => encNat r | none => Json.null),
+    ("tail_u128", ← monetaryResult (Botho.Monetary.tailRewardU128 supply)),
+    ("tail_u64", ← monetaryResult (Botho.Monetary.tailRewardU64 wrapperSupply)),
+    ("library_reward", blockReward), ("node_reward", blockReward),
+    ("lottery_bps", encNat (Botho.Supply.Block.emissionBps height Botho.Monetary.halvingInterval)),
+    ("lottery_share", encNat (Botho.Supply.Block.emission height reward Botho.Monetary.halvingInterval)),
+    ("demurrage_bps", encNat (Botho.Monetary.demurrageRateBps height))])
+
 def dispatch (fn : String) (a : Json) : Dec Json := do
   match fn with
+  | "monetary" => monetary a
   | "demurrage_charge" =>
     -- Protocol 9.0.0 exact kernel (#1875); `Botho.Demurrage.charge` is the
     -- legacy pre-9.0.0 model its counterexample theorems are about.
