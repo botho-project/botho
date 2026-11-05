@@ -1154,8 +1154,9 @@ async fn run_async_with_shutdown(
     let consensus_config = consensus_config_from_env();
     let mut consensus =
         ConsensusService::new(node_id, scp_quorum_set, consensus_config, chain_state);
-    // #1920: a transfer is a valid SCP value for slot N only if a block at
-    // height N on the slot's parent accepts it (fee floor at N included).
+    // #1920: a transfer is a valid SCP value for a slot only if the block
+    // built on the slot's recorded parent (height parent + 1, not the slot
+    // index) accepts it, fee floor at that height included.
     consensus.set_transfer_slot_check(crate::consensus::ledger_transfer_slot_check(
         node.shared_ledger(),
     ));

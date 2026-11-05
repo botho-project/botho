@@ -1324,10 +1324,15 @@ impl Mempool {
     ///   nominated and skipped; evicting it frees its key images so the sender
     ///   can resubmit with a higher fee.
     ///
-    /// Both checks fail closed: a ledger read error evicts (M7).
+    /// Both checks fail closed: a ledger read error evicts (M7). That includes
+    /// a failure to read the chain state the fee floor is priced from: with no
+    /// tip there is no inclusion height, so no tx can be shown to cover the
+    /// next block's floor, and every pending tx is evicted.
     pub fn remove_invalid(&mut self, ledger: &Ledger) {
         let mut to_remove = Vec::new();
-        let inclusion_height = relay_inclusion_height(ledger);
+        let inclusion_height = ledger
+            .get_chain_state()
+            .map(|state| state.height.saturating_add(1));
 
         for (tx_hash, pending) in &self.txs {
             // Check if any key image was spent in ledger.
@@ -1363,6 +1368,18 @@ impl Mempool {
             // and height block validation uses (`verify_consensus_fee_floor`
             // at `block.height()` == tip + 1), so a tx kept here pays at least
             // what the next block requires of it.
+            let inclusion_height = match &inclusion_height {
+                Ok(height) => *height,
+                Err(e) => {
+                    warn!(
+                        "Chain state unreadable; evicting mempool tx {} (fail closed): {}",
+                        hex::encode(&tx_hash[0..8]),
+                        e
+                    );
+                    to_remove.push(*tx_hash);
+                    continue;
+                }
+            };
             match ledger.consensus_fee_floor(&pending.tx, inclusion_height) {
                 Ok(floor) if pending.tx.fee >= floor => {}
                 Ok(floor) => {

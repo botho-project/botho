@@ -25,8 +25,8 @@ pub use lottery::{
 };
 pub use service::{
     ledger_transfer_slot_check, ConsensusConfig, ConsensusEvent, ConsensusService,
-    QuorumGateSnapshot, ScpMessage, ScpSlotSnapshot, TransferSlotCheck, TransferSlotVerdict,
-    SLOT_STALL_THRESHOLD_MULTIPLIER,
+    QuorumGateSnapshot, ScpMessage, ScpSlotSnapshot, SlotLedger, SlotParent, TransferSlotCheck,
+    TransferSlotVerdict, SLOT_STALL_THRESHOLD_MULTIPLIER,
 };
 pub(crate) use validation::{check_kem_ciphertext, MAX_FUTURE_TIMESTAMP_SECS};
 pub use validation::{BatchValidationResult, TransactionValidator, ValidationError};

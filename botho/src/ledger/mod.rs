@@ -61,7 +61,10 @@ pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;
 // validation (Rule 1) and mempool admission (Rule 2).
 pub(crate) use store::{check_output_clusters_on_ring, first_malformed_output_tags};
 pub use store::{
-    v2::{DerivationContext, DroppedTransfer, TransferBlockCheck, LOTTERY_RULES_VERSION},
+    v2::{
+        BlockIdentity, DerivationContext, DroppedTransfer, TransferBlockCheck,
+        LOTTERY_RULES_VERSION,
+    },
     ClusterWealthInfo, EmissionStateUpdate, Ledger, LedgerStorageUsage, TxLocation,
 };
 

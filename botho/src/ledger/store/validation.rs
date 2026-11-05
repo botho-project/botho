@@ -157,12 +157,17 @@ pub(in crate::ledger) trait ValidationReads {
     ///
     /// This is the per-transaction part of [`Self::validate_ordinary_body`]
     /// plus the writer's [`Self::verify_transaction`] (key images unspent,
-    /// CLSAG signatures), calling the same functions in the same order:
-    /// ML-KEM ciphertext shape, C5 staleness, C3 ring members, Rule 1 tag shape
-    /// and C6 tag inheritance, C7 fee floor, C8 settlement structure, then key
-    /// images and signatures. It omits only the checks that span transactions
-    /// (the fee-sum overflow guard and key-image uniqueness within the block),
-    /// which the caller applies across its candidate set.
+    /// CLSAG signatures) and its key-image recording: first the uniqueness of
+    /// the transaction's own key images (`add_block` records each input's key
+    /// image through its write transaction, so a repeat within one transaction
+    /// is a collision there), then the same functions in the same order as the
+    /// block validator: ML-KEM ciphertext shape, C5 staleness, C3 ring
+    /// members, Rule 1 tag shape and C6 tag inheritance, C7 fee floor, C8
+    /// settlement structure, then key images and signatures. Every one of
+    /// these is a reason `add_block` rejects the block, so their order only
+    /// picks which reason is reported. It omits only the checks that span
+    /// transactions (the fee-sum overflow guard and key-image uniqueness
+    /// across the block), which the caller applies across its candidate set.
     ///
     /// Every rule here reads only the transaction, `block_height` and the
     /// committed pre-state, so a transaction that passes here is accepted by
@@ -180,6 +185,15 @@ pub(in crate::ledger) trait ValidationReads {
         tx: &BothoTransaction,
         block_height: u64,
     ) -> Result<(), LedgerError> {
+        let mut own_key_images = std::collections::BTreeSet::new();
+        for (i, input) in tx.inputs.clsag().iter().enumerate() {
+            if !own_key_images.insert(input.key_image) {
+                return Err(LedgerError::InvalidBlock(format!(
+                    "Input {} repeats a key image of an earlier input of the same transaction",
+                    i
+                )));
+            }
+        }
         for (out_idx, output) in tx.outputs.iter().enumerate() {
             crate::consensus::check_kem_ciphertext(&output.kem_ciphertext).map_err(|e| {
                 LedgerError::InvalidBlock(format!("output {} ML-KEM ciphertext: {}", out_idx, e))

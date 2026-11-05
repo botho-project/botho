@@ -304,47 +304,211 @@ struct SharedValidationState {
 /// The ledger's verdict on a transfer value for a slot (#1920).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransferSlotVerdict {
-    /// A block at the slot's height, on the slot's parent, accepts the
-    /// transfer.
+    /// The block built on the slot's parent accepts the transfer.
     Valid,
-    /// A block at the slot's height would be rejected for containing the
-    /// transfer.
+    /// The block built on the slot's parent would be rejected for containing
+    /// the transfer.
     Invalid(String),
-    /// No verdict now: this node's ledger is not at the slot's parent (an
-    /// apply still in flight, or behind/ahead of the slot), or the ledger
-    /// could not be read. Treated as "not valid yet" and never cached.
+    /// No verdict now: the slot's parent is not known yet, this node's ledger
+    /// is not at it (an apply still in flight, or the tip is behind or past
+    /// it), or the ledger could not be read. Treated as "not valid yet" and
+    /// never cached.
     Unavailable(String),
 }
 
-/// Checks a transfer against the block rules for a slot, on that slot's
-/// parent (#1920). Installed by the node with
-/// [`ConsensusService::set_transfer_slot_check`]; it wraps
-/// `Ledger::check_transfer_for_block`.
-pub type TransferSlotCheck =
-    Arc<dyn Fn(&crate::transaction::Transaction, SlotIndex) -> TransferSlotVerdict + Send + Sync>;
+/// The block a slot's block will be built on (#1920): its height and hash.
+///
+/// The slot's block has height `height + 1` and `prev_block_hash == hash`;
+/// that is the only block `add_block` accepts on this parent, and the height
+/// the seal-time filter (`BlockBuilder::finalize_for_apply`) checks at. It is
+/// NOT derived from the SCP slot index, which runs ahead of the block height
+/// under the #421 drift (a lost-race decision advances the slot but adds no
+/// block).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SlotParent {
+    /// Height of the parent block.
+    pub height: u64,
+    /// Hash of the parent block.
+    pub hash: [u8; 32],
+}
 
-/// The production [`TransferSlotCheck`]: `Ledger::check_transfer_for_block`
-/// on the node's shared ledger (#1920).
+impl SlotParent {
+    /// Height of the block built on this parent.
+    pub fn child_height(&self) -> u64 {
+        self.height.saturating_add(1)
+    }
+}
+
+/// The ledger reads behind the SCP transfer check (#1920). Installed by the
+/// node with [`ConsensusService::set_transfer_slot_check`];
+/// [`ledger_transfer_slot_check`] is the production implementation.
+pub trait SlotLedger: Send + Sync {
+    /// The current ledger tip.
+    fn tip(&self) -> Result<SlotParent, String>;
+
+    /// The committed block at `height` and the hash of its minting tx, or
+    /// `None` above the tip.
+    fn block_at(&self, height: u64) -> Result<Option<(SlotParent, [u8; 32])>, String>;
+
+    /// Check `tx` against every per-transaction block rule for the block built
+    /// on `parent`. Must give [`TransferSlotVerdict::Unavailable`], never a
+    /// verdict, unless the ledger tip is exactly `parent`.
+    fn check(
+        &self,
+        tx: &crate::transaction::Transaction,
+        parent: SlotParent,
+    ) -> TransferSlotVerdict;
+}
+
+/// The installed transfer check (#1920).
+pub type TransferSlotCheck = Arc<dyn SlotLedger>;
+
+/// The production [`SlotLedger`]: the node's shared ledger (#1920).
+struct SharedLedgerSlotCheck(Arc<RwLock<crate::ledger::Ledger>>);
+
+impl SlotLedger for SharedLedgerSlotCheck {
+    fn tip(&self) -> Result<SlotParent, String> {
+        let ledger = self
+            .0
+            .try_read()
+            .map_err(|_| "ledger lock unavailable".to_string())?;
+        let state = ledger
+            .get_chain_state()
+            .map_err(|e| format!("ledger read failed: {e}"))?;
+        Ok(SlotParent {
+            height: state.height,
+            hash: state.tip_hash,
+        })
+    }
+
+    fn block_at(&self, height: u64) -> Result<Option<(SlotParent, [u8; 32])>, String> {
+        let ledger = self
+            .0
+            .try_read()
+            .map_err(|_| "ledger lock unavailable".to_string())?;
+        let block = ledger
+            .block_identity_at(height)
+            .map_err(|e| format!("ledger read failed: {e}"))?;
+        Ok(block.map(|b| {
+            (
+                SlotParent {
+                    height: b.height,
+                    hash: b.hash,
+                },
+                b.minting_tx_hash,
+            )
+        }))
+    }
+
+    fn check(
+        &self,
+        tx: &crate::transaction::Transaction,
+        parent: SlotParent,
+    ) -> TransferSlotVerdict {
+        use crate::ledger::TransferBlockCheck;
+        let Ok(ledger) = self.0.try_read() else {
+            return TransferSlotVerdict::Unavailable("ledger lock unavailable".into());
+        };
+        match ledger.check_transfer_for_block(tx, parent.height, parent.hash) {
+            Ok(TransferBlockCheck::Valid) => TransferSlotVerdict::Valid,
+            Ok(TransferBlockCheck::Invalid(reason)) => TransferSlotVerdict::Invalid(reason),
+            Ok(TransferBlockCheck::NotAtParent { tip_height, .. }) => {
+                TransferSlotVerdict::Unavailable(format!(
+                    "ledger tip (height {tip_height}) is not the slot's parent (height {})",
+                    parent.height
+                ))
+            }
+            Err(e) => TransferSlotVerdict::Unavailable(format!("ledger read failed: {e}")),
+        }
+    }
+}
+
+/// The production [`TransferSlotCheck`] on the node's shared ledger (#1920).
 ///
 /// A tip that is not the slot's parent, a busy ledger lock and a ledger read
 /// error all give [`TransferSlotVerdict::Unavailable`], never a verdict. The
 /// lock is only tried, never waited on, because SCP validity runs on the node
 /// loop.
 pub fn ledger_transfer_slot_check(ledger: Arc<RwLock<crate::ledger::Ledger>>) -> TransferSlotCheck {
-    use crate::ledger::TransferBlockCheck;
-    Arc::new(move |tx, slot_index| {
-        let Ok(ledger) = ledger.try_read() else {
-            return TransferSlotVerdict::Unavailable("ledger lock unavailable".into());
-        };
-        match ledger.check_transfer_for_block(tx, slot_index) {
-            Ok(TransferBlockCheck::Valid) => TransferSlotVerdict::Valid,
-            Ok(TransferBlockCheck::Invalid(reason)) => TransferSlotVerdict::Invalid(reason),
-            Ok(TransferBlockCheck::NotAtParent { tip_height }) => TransferSlotVerdict::Unavailable(
-                format!("ledger tip {tip_height} is not the parent of slot {slot_index}"),
-            ),
-            Err(e) => TransferSlotVerdict::Unavailable(format!("ledger read failed: {e}")),
+    Arc::new(SharedLedgerSlotCheck(ledger))
+}
+
+/// Where a slot's recorded parent came from (#1920).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParentSource {
+    /// Derived from the externalized decision sequence: the block the
+    /// previous slot's decision produced, or (if that decision added no
+    /// block, a lost race) the previous slot's own decided parent. Every
+    /// honest node that applied the same decisions records the same parent.
+    Decided,
+    /// The slot was opened without a decision behind it (startup, a sync or
+    /// peer-anchor fast-forward, or a decision whose block could not be
+    /// identified): the ledger tip is the best available parent. It follows
+    /// the tip until a transfer is first accepted under it; see
+    /// [`resolve_slot_parent`].
+    Opened,
+}
+
+/// The recorded parent of one SCP slot (#1920).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SlotParentRecord {
+    slot: SlotIndex,
+    /// `None` only for an `Opened` slot whose tip could not be read yet.
+    parent: Option<SlotParent>,
+    source: ParentSource,
+    /// The SCP validity function accepted a transfer under `parent`. SCP
+    /// caches that `Ok` for the slot, so from then on `parent` is fixed.
+    accepted: bool,
+}
+
+/// The parent to check a transfer of `slot` against (#1920), or why there is
+/// none.
+///
+/// Only the current slot's record is kept. A slot without one (SCP has moved
+/// on to it while the previous decision is still being applied) has no parent
+/// yet. A `Decided` parent is fixed. An `Opened` parent is re-read from the
+/// ledger tip until the first accepted transfer: it was only ever the tip, and
+/// re-reading it lets a node that opened the slot while still catching up
+/// check against the state it caught up to, instead of refusing every
+/// transfer of the slot (which, with an n-of-n quorum, would stall it). This
+/// cannot contradict an earlier verdict that matters: SCP caches only `Ok`
+/// (`Slot::validate`), and after the first `Ok` the parent no longer moves.
+/// Our own proposal verdicts are cached per parent.
+fn resolve_slot_parent(
+    ledger: &dyn SlotLedger,
+    record: &std::sync::Mutex<Option<SlotParentRecord>>,
+    slot: SlotIndex,
+) -> Result<SlotParent, String> {
+    let mut guard = record
+        .lock()
+        .map_err(|_| "slot parent record lock poisoned".to_string())?;
+    let Some(rec) = guard.as_mut().filter(|rec| rec.slot == slot) else {
+        return Err(format!(
+            "no parent recorded for slot {slot} yet (the previous decision is not applied)"
+        ));
+    };
+    if rec.source == ParentSource::Opened && !rec.accepted {
+        if let Ok(tip) = ledger.tip() {
+            rec.parent = Some(tip);
         }
-    })
+    }
+    rec.parent
+        .ok_or_else(|| format!("the parent of slot {slot} is not known yet"))
+}
+
+/// Record that SCP accepted a transfer of `slot` under `parent` (#1920).
+fn mark_slot_parent_accepted(
+    record: &std::sync::Mutex<Option<SlotParentRecord>>,
+    slot: SlotIndex,
+    parent: SlotParent,
+) {
+    if let Ok(mut guard) = record.lock() {
+        if let Some(rec) = guard.as_mut() {
+            if rec.slot == slot && rec.parent == Some(parent) {
+                rec.accepted = true;
+            }
+        }
+    }
 }
 
 /// The consensus service manages SCP participation
@@ -375,10 +539,14 @@ pub struct ConsensusService {
     /// the intrinsic-only validity of a transfer.
     transfer_check: Arc<RwLock<Option<TransferSlotCheck>>>,
 
-    /// Per-slot cache of the ledger verdicts on our own pending transfers
-    /// (#1920): the slot it belongs to, and tx hash -> valid. A slot's parent
-    /// is fixed, so a verdict holds for the whole slot.
-    proposal_verdicts: (SlotIndex, HashMap<[u8; 32], bool>),
+    /// The recorded parent of the current slot (#1920), shared with the SCP
+    /// validity function. See [`ConsensusService::advance_slot`] and
+    /// [`resolve_slot_parent`].
+    slot_parent: Arc<std::sync::Mutex<Option<SlotParentRecord>>>,
+
+    /// Cache of the ledger verdicts on our own pending transfers (#1920): the
+    /// slot and parent they were reached for, and tx hash -> valid.
+    proposal_verdicts: (SlotIndex, Option<SlotParent>, HashMap<[u8; 32], bool>),
 
     /// The SCP validity function, kept so tests can call it directly.
     #[cfg(test)]
@@ -512,28 +680,36 @@ impl ConsensusService {
         //
         // Transfers (#1920) are checked intrinsically and then, when the node
         // has installed a ledger check (`set_transfer_slot_check`), against
-        // every per-transaction block rule for a block at THIS SLOT's height
-        // on this slot's parent. That is not tip-dependent in the #419 sense:
-        // - The height is the slot's own index, bound into this function by the SCP
-        //   node when it creates the slot (`Node::new_slot_aware`), never the node's
-        //   current slot or tip.
-        // - The pre-state is the slot's parent, block `slot - 1`, which SCP agreed on
-        //   and every honest node applied identically. The check refuses to give a
-        //   verdict on any other pre-state (`Unavailable`).
+        // every per-transaction block rule for the block THIS SLOT builds, on
+        // this slot's recorded parent. That is not tip-dependent in the #419
+        // sense:
+        // - The slot is bound into this function by the SCP node when it creates the
+        //   slot (`Node::new_slot_aware`), never the node's current slot.
+        // - The parent is recorded per slot from the externalized decision sequence
+        //   (`advance_slot`): the block the previous slot's decision produced, or the
+        //   previous slot's parent if that decision added no block (#421 lost race).
+        //   Every honest node applies the same decisions, so it records the same
+        //   parent, even when the slot index has drifted ahead of the block height. The
+        //   block height checked is `parent.height + 1`, the height the block built on
+        //   that parent has (`add_block` requires it), never the slot index.
+        // - The check gives a verdict only when the ledger tip IS that parent, and
+        //   `Unavailable` otherwise (no parent recorded yet, the parent's apply still
+        //   in flight, or the tip already past it).
         // So every honest node that reaches a verdict for (value, slot)
         // reaches the same one, and honest nodes never hold votes for a value
-        // another honest node rejects. `Unavailable` (ledger not at the
-        // slot's parent, e.g. the parent's apply is still in flight) is an
-        // error, which SCP does NOT cache (`Slot::validate` caches only
-        // `Ok`): the message is set aside like a "not in cache" value and
-        // is processed when it arrives again (the peer's next message, or the
-        // stalled-slot rebroadcast) once the parent is committed. Accepting
-        // such a value unchecked instead would be cached for the slot and
-        // could leave this node voting for a value its peers reject, a
-        // liveness trap.
+        // another honest node rejects. `Unavailable` is an error, which SCP
+        // does NOT cache (`Slot::validate` caches only `Ok`): the message is
+        // set aside like a "not in cache" value and is processed when it
+        // arrives again (the peer's next message, or the stalled-slot
+        // rebroadcast) once the parent is committed. Accepting such a value
+        // unchecked instead would be cached for the slot and could leave
+        // this node voting for a value its peers reject, a liveness trap.
         let validation_state = shared_state.clone();
         let transfer_check: Arc<RwLock<Option<TransferSlotCheck>>> = Arc::new(RwLock::new(None));
         let validity_check = transfer_check.clone();
+        let slot_parent: Arc<std::sync::Mutex<Option<SlotParentRecord>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let validity_parent = slot_parent.clone();
         let validity_fn: SlotValidityFn<ConsensusValue, String> =
             Arc::new(move |slot_index: SlotIndex, value: &ConsensusValue| {
                 let transfer_bytes = {
@@ -581,10 +757,18 @@ impl ConsensusService {
                 };
                 let tx: crate::transaction::Transaction = bincode::deserialize(&transfer_bytes)
                     .map_err(|e| format!("Failed to decode transfer: {e}"))?;
-                match check(&tx, slot_index) {
-                    TransferSlotVerdict::Valid => Ok(()),
+                let parent = resolve_slot_parent(check.as_ref(), &validity_parent, slot_index)
+                    .map_err(|reason| {
+                        format!("Transfer not yet checkable for slot {slot_index}: {reason}")
+                    })?;
+                match check.check(&tx, parent) {
+                    TransferSlotVerdict::Valid => {
+                        mark_slot_parent_accepted(&validity_parent, slot_index, parent);
+                        Ok(())
+                    }
                     TransferSlotVerdict::Invalid(reason) => Err(format!(
-                        "Transfer invalid in a block at slot {slot_index}: {reason}"
+                        "Transfer invalid in a block at slot {slot_index} (height {}): {reason}",
+                        parent.child_height()
                     )),
                     TransferSlotVerdict::Unavailable(reason) => Err(format!(
                         "Transfer not yet checkable for slot {slot_index}: {reason}"
@@ -686,7 +870,8 @@ impl ConsensusService {
             proposed_values: BTreeSet::new(),
             shared_state,
             transfer_check,
-            proposal_verdicts: (initial_slot, HashMap::new()),
+            slot_parent,
+            proposal_verdicts: (initial_slot, None, HashMap::new()),
             #[cfg(test)]
             validity_fn: test_validity_fn,
             validator,
@@ -713,15 +898,118 @@ impl ConsensusService {
 
     /// Install the ledger check for transfer values (#1920).
     ///
-    /// From then on a transfer is a valid SCP value for slot `N` only if a
-    /// block at height `N` on the slot's parent would accept it (see the
-    /// validity function in [`Self::new`]), and this node proposes only such
+    /// From then on a transfer is a valid SCP value for a slot only if the
+    /// block built on that slot's parent would accept it (see the validity
+    /// function in [`Self::new`]), and this node proposes only such
     /// transfers. Without it a transfer value is checked intrinsically only.
+    /// The current slot is opened on the ledger tip ([`ParentSource::Opened`]).
     pub fn set_transfer_slot_check(&mut self, check: TransferSlotCheck) {
         if let Ok(mut slot) = self.transfer_check.write() {
             *slot = Some(check);
         }
-        self.proposal_verdicts.1.clear();
+        self.proposal_verdicts.2.clear();
+        self.open_slot_parent(self.scp_node.current_slot_index());
+    }
+
+    /// The installed ledger check, if any (#1920).
+    fn slot_ledger(&self) -> Option<TransferSlotCheck> {
+        self.transfer_check.read().ok()?.clone()
+    }
+
+    /// Record `parent` as the parent of `slot` (#1920), replacing the record
+    /// of the previous slot.
+    fn record_slot_parent(
+        &self,
+        slot: SlotIndex,
+        parent: Option<SlotParent>,
+        source: ParentSource,
+    ) {
+        if let Ok(mut guard) = self.slot_parent.lock() {
+            *guard = Some(SlotParentRecord {
+                slot,
+                parent,
+                source,
+                accepted: false,
+            });
+        }
+        debug!(
+            slot,
+            parent_height = parent.map(|p| p.height),
+            ?source,
+            "Recorded the parent of the SCP slot (#1920)"
+        );
+    }
+
+    /// Open `slot` on the current ledger tip (#1920): a slot entered without
+    /// a decision behind it (startup, a sync or peer-anchor fast-forward).
+    fn open_slot_parent(&self, slot: SlotIndex) {
+        let Some(ledger) = self.slot_ledger() else {
+            return;
+        };
+        self.record_slot_parent(slot, ledger.tip().ok(), ParentSource::Opened);
+    }
+
+    /// The recorded parent of `slot`, if it has one (tests).
+    #[cfg(test)]
+    pub(crate) fn slot_parent_for_test(&self, slot: SlotIndex) -> Option<SlotParent> {
+        let guard = self.slot_parent.lock().ok()?;
+        guard
+            .as_ref()
+            .filter(|rec| rec.slot == slot)
+            .and_then(|rec| rec.parent)
+    }
+
+    /// Record the parent of the slot after `completed_slot`, whose decision
+    /// `completed` has just been applied (or skipped as a duplicate height)
+    /// (#1920).
+    ///
+    /// The parent follows the decision sequence, not the slot index:
+    /// - If the ledger holds, at the decided mint's height, the block of that
+    ///   very mint, the decision produced that block: it is the parent. This
+    ///   also covers a node whose copy of the block arrived by gossip before
+    ///   its own consensus apply (which then skipped it as a duplicate).
+    /// - If that height holds a block of a DIFFERENT mint, the decision added
+    ///   no block (the #421 lost race: its mint was for a height an earlier
+    ///   decision already filled). The parent is unchanged: the completed
+    ///   slot's own decided parent carries forward. This is the case that makes
+    ///   the slot index run ahead of the block height.
+    /// - Otherwise (the mint or block cannot be read, or the completed slot had
+    ///   no decided parent) the slot is opened on the tip.
+    ///
+    /// Every honest node applies the same decisions to the same chain, so in
+    /// the first two cases every one of them records the same parent.
+    fn record_parent_after_decision(
+        &self,
+        completed_slot: SlotIndex,
+        completed: &[ConsensusValue],
+    ) {
+        let Some(ledger) = self.slot_ledger() else {
+            return;
+        };
+        let next_slot = completed_slot.saturating_add(1);
+        let decided_block = completed
+            .iter()
+            .find(|value| value.is_minting_tx)
+            .and_then(|mint| {
+                let bytes = self.get_tx_data(&mint.tx_hash)?;
+                let minting_tx: crate::block::MintingTx = bincode::deserialize(&bytes).ok()?;
+                let at_height = ledger.block_at(minting_tx.block_height).ok()??;
+                Some((at_height, mint.tx_hash))
+            });
+        let parent = match decided_block {
+            Some(((block, block_mint), decided_mint)) if block_mint == decided_mint => Some(block),
+            Some(_) => self.slot_parent.lock().ok().and_then(|guard| {
+                guard
+                    .as_ref()
+                    .filter(|rec| rec.slot == completed_slot && rec.source == ParentSource::Decided)
+                    .and_then(|rec| rec.parent)
+            }),
+            None => None,
+        };
+        match parent {
+            Some(parent) => self.record_slot_parent(next_slot, Some(parent), ParentSource::Decided),
+            None => self.record_slot_parent(next_slot, ledger.tip().ok(), ParentSource::Opened),
+        }
     }
 
     /// TEST ONLY: the SCP validity verdict on `value` for `slot`.
@@ -736,17 +1024,21 @@ impl ConsensusService {
 
     /// The ledger verdict on our pending transfer `value` for `slot`, or
     /// `None` when no ledger check is installed (#1920). Valid and Invalid
-    /// verdicts are cached for the slot; `Unavailable` is not.
+    /// verdicts are cached for the slot and parent; `Unavailable` is not.
     fn pending_transfer_verdict(
         &mut self,
         value: &ConsensusValue,
         slot: SlotIndex,
     ) -> Option<TransferSlotVerdict> {
-        let check = self.transfer_check.read().ok()?.clone()?;
-        if self.proposal_verdicts.0 != slot {
-            self.proposal_verdicts = (slot, HashMap::new());
+        let check = self.slot_ledger()?;
+        let parent = match resolve_slot_parent(check.as_ref(), &self.slot_parent, slot) {
+            Ok(parent) => parent,
+            Err(reason) => return Some(TransferSlotVerdict::Unavailable(reason)),
+        };
+        if self.proposal_verdicts.0 != slot || self.proposal_verdicts.1 != Some(parent) {
+            self.proposal_verdicts = (slot, Some(parent), HashMap::new());
         }
-        if let Some(valid) = self.proposal_verdicts.1.get(&value.tx_hash) {
+        if let Some(valid) = self.proposal_verdicts.2.get(&value.tx_hash) {
             return Some(if *valid {
                 TransferSlotVerdict::Valid
             } else {
@@ -759,15 +1051,15 @@ impl ConsensusService {
             ));
         };
         let verdict = match bincode::deserialize::<crate::transaction::Transaction>(&bytes) {
-            Ok(tx) => check(&tx, slot),
+            Ok(tx) => check.check(&tx, parent),
             Err(e) => TransferSlotVerdict::Invalid(format!("undecodable transfer: {e}")),
         };
         match &verdict {
             TransferSlotVerdict::Valid => {
-                self.proposal_verdicts.1.insert(value.tx_hash, true);
+                self.proposal_verdicts.2.insert(value.tx_hash, true);
             }
             TransferSlotVerdict::Invalid(_) => {
-                self.proposal_verdicts.1.insert(value.tx_hash, false);
+                self.proposal_verdicts.2.insert(value.tx_hash, false);
             }
             TransferSlotVerdict::Unavailable(_) => {}
         }
@@ -776,13 +1068,14 @@ impl ConsensusService {
 
     /// Our pending values that may be proposed for `slot` (#1920).
     ///
-    /// With a ledger check installed, a pending transfer that a block at
-    /// `slot` would reject is dropped from `pending_values` (it will not
-    /// become valid later: the fee floor only rises with height, spent key
-    /// images stay spent and a stale tx only gets staler; the sender can
-    /// resubmit with a higher fee), and one that cannot be checked yet is held
-    /// back for this attempt. This is also the only ledger check on the solo
-    /// path, which externalizes without SCP validation.
+    /// With a ledger check installed, a pending transfer that the block built
+    /// on `slot`'s parent would reject is dropped from `pending_values` (it
+    /// will not become valid later: the fee floor only rises with height,
+    /// spent key images stay spent and a stale tx only gets staler; the
+    /// sender can resubmit with a higher fee), and one that cannot be
+    /// checked yet is held back for this attempt. This is also the only
+    /// ledger check on the solo path, which externalizes without SCP
+    /// validation.
     fn proposable_pending_values(&mut self, slot: SlotIndex) -> BTreeSet<ConsensusValue> {
         let transfers: Vec<ConsensusValue> = self
             .pending_values
@@ -1543,7 +1836,8 @@ impl ConsensusService {
         // priority (raw fee) before applying the slot cap, rather than taking
         // the first `remaining_slots` in `pending_values` (hash) order.
         //
-        // #1920: only transfers a block at this slot would accept count.
+        // #1920: only transfers the block built on this slot's parent would
+        // accept count.
         let slot = self.scp_node.current_slot_index();
         let proposable = self.proposable_pending_values(slot);
         let transfer_txs = select_transfers_by_priority(&proposable, remaining_slots);
@@ -1756,6 +2050,16 @@ impl ConsensusService {
         // Application succeeded (or proved the height already committed). On a
         // terminal build/apply failure the caller never reaches this boundary.
         let completed = self.externalized.take().unwrap_or_default();
+        // The slot whose decision this completes (#1920): the solo path
+        // externalizes the current slot directly; SCP has already moved past
+        // the slot it surfaced in `check_externalized`.
+        let completed_slot = if completed.is_empty() {
+            None
+        } else if self.is_solo_mode() {
+            Some(self.scp_node.current_slot_index())
+        } else {
+            self.last_externalized_slot
+        };
         // A miner tick may have re-submitted an externalized transfer from the
         // mempool before ledger application removed it. Retire that local work
         // by transaction identity, preserving unrelated transfers queued in the
@@ -1786,6 +2090,12 @@ impl ConsensusService {
             if self.quorum_set != pending {
                 self.apply_quorum_set(pending);
             }
+        }
+        // #1920: the next slot's parent, from this decision. Before the cache
+        // prune, which may drop the decided mint's payload.
+        match completed_slot {
+            Some(slot) => self.record_parent_after_decision(slot, &completed),
+            None => self.open_slot_parent(self.scp_node.current_slot_index()),
         }
         self.prune_tx_cache(&completed);
     }
@@ -1959,6 +2269,8 @@ impl ConsensusService {
             "Fast-forwarding SCP slot to match block-synced chain height (issue #419 Finding 3)"
         );
         self.scp_node.reset_slot_index(target_slot);
+        // #1920: no decision behind the new slot; open it on the synced tip.
+        self.open_slot_parent(target_slot);
 
         // A fresh slot has nothing proposed/externalized locally yet.
         self.proposed_values.clear();
@@ -2246,6 +2558,9 @@ impl ConsensusService {
         // FORWARD-ONLY: target_slot > current was checked above, so the
         // `reset_slot_index` strictly-increasing assert is satisfied.
         self.scp_node.reset_slot_index(target_slot);
+        // #1920: no decision behind the anchored slot; open it on the tip
+        // (re-read until the first accepted transfer, `resolve_slot_parent`).
+        self.open_slot_parent(target_slot);
 
         // A fresh slot has nothing proposed/externalized locally yet.
         self.proposed_values.clear();
@@ -2346,22 +2661,104 @@ mod tests {
 
     // ---- Issue #1920: transfers checked for the slot's block ----
 
-    /// A stub ledger check: `bad` is invalid at slot 1, every other transfer
-    /// valid at slot 1, and no verdict for any other slot.
-    fn stub_check(bad: [u8; 32]) -> TransferSlotCheck {
-        Arc::new(move |tx, slot| {
-            if slot != 1 {
-                TransferSlotVerdict::Unavailable("not the parent".into())
-            } else if tx.hash() == bad {
+    /// An in-memory chain with the production check semantics (#1920): a
+    /// verdict only when the tip is exactly the asked-about parent; then
+    /// `bad` transfers are invalid and every other one valid. A block's hash
+    /// is its mint's hash.
+    struct StubLedger {
+        blocks: std::sync::Mutex<Vec<(SlotParent, [u8; 32])>>,
+        bad: std::collections::HashSet<[u8; 32]>,
+        unavailable: bool,
+    }
+
+    impl StubLedger {
+        fn new(bad: &[[u8; 32]]) -> Arc<Self> {
+            Arc::new(Self {
+                blocks: std::sync::Mutex::new(vec![(
+                    SlotParent {
+                        height: 0,
+                        hash: [0; 32],
+                    },
+                    [0; 32],
+                )]),
+                bad: bad.iter().copied().collect(),
+                unavailable: false,
+            })
+        }
+
+        fn current_tip(&self) -> SlotParent {
+            self.blocks.lock().unwrap().last().unwrap().0
+        }
+
+        /// Apply the block of `mint` if it extends the tip, as `add_block`
+        /// would; a mint for a filled height is the #421 benign skip.
+        fn apply(&self, mint: &MintingTx) -> bool {
+            let mut blocks = self.blocks.lock().unwrap();
+            let tip = blocks.last().unwrap().0;
+            if mint.block_height != tip.height + 1 || mint.prev_block_hash != tip.hash {
+                return false;
+            }
+            let block = SlotParent {
+                height: mint.block_height,
+                hash: mint.hash(),
+            };
+            blocks.push((block, mint.hash()));
+            true
+        }
+    }
+
+    impl SlotLedger for StubLedger {
+        fn tip(&self) -> Result<SlotParent, String> {
+            Ok(self.current_tip())
+        }
+
+        fn block_at(&self, height: u64) -> Result<Option<(SlotParent, [u8; 32])>, String> {
+            Ok(self.blocks.lock().unwrap().get(height as usize).copied())
+        }
+
+        fn check(&self, tx: &Transaction, parent: SlotParent) -> TransferSlotVerdict {
+            if self.unavailable {
+                TransferSlotVerdict::Unavailable("parent apply in flight".into())
+            } else if self.current_tip() != parent {
+                TransferSlotVerdict::Unavailable("tip is not the parent".into())
+            } else if self.bad.contains(&tx.hash()) {
                 TransferSlotVerdict::Invalid("fee below the consensus fee floor".into())
             } else {
                 TransferSlotVerdict::Valid
             }
-        })
+        }
     }
 
-    /// #1920: the SCP validity function applies the installed ledger check at
-    /// the slot it is asked about; minting values are not passed to it.
+    /// One solo slot (#1920): submit `mint`, externalize with whatever
+    /// transfers are pending, apply the decision to `ledger` (or skip it as a
+    /// duplicate height, #421), then advance. Returns the decided values.
+    fn solo_round(
+        svc: &mut ConsensusService,
+        ledger: &StubLedger,
+        mint: &MintingTx,
+    ) -> Vec<ConsensusValue> {
+        svc.submit_minting_tx(
+            mint.hash(),
+            mint.pow_priority(),
+            bincode::serialize(mint).unwrap(),
+        );
+        svc.propose_pending_values();
+        let values = svc.externalized.clone().expect("solo externalizes");
+        ledger.apply(mint);
+        svc.advance_slot();
+        values
+    }
+
+    fn block_of(mint: &MintingTx) -> SlotParent {
+        SlotParent {
+            height: mint.block_height,
+            hash: mint.hash(),
+        }
+    }
+
+    /// #1920: the SCP validity function checks a transfer against the slot's
+    /// recorded parent; a slot with no recorded parent gets no verdict;
+    /// minting values are not passed to the ledger check.
     #[test]
     fn validity_applies_transfer_check_at_slot() {
         let mut svc = solo_service();
@@ -2378,13 +2775,17 @@ mod tests {
             .unwrap();
         let value = |tx: &Transaction| ConsensusValue::from_transaction(tx.hash(), tx.fee);
 
-        svc.set_transfer_slot_check(stub_check(bad.hash()));
+        svc.set_transfer_slot_check(StubLedger::new(&[bad.hash()]));
         assert!(svc.validate_value_for_slot(1, &value(&good)).is_ok());
         let err = svc.validate_value_for_slot(1, &value(&bad)).unwrap_err();
-        assert!(err.contains("invalid in a block at slot 1"), "{err}");
+        assert!(
+            err.contains("invalid in a block at slot 1 (height 1)"),
+            "{err}"
+        );
         let err = svc.validate_value_for_slot(2, &value(&good)).unwrap_err();
         assert!(err.contains("not yet checkable for slot 2"), "{err}");
-        // Mints are never sent to the ledger check (it says Unavailable at 2).
+        assert!(err.contains("no parent recorded"), "{err}");
+        // Mints are never sent to the ledger check.
         assert!(svc.validate_value_for_slot(2, &mint).is_ok());
     }
 
@@ -2399,7 +2800,7 @@ mod tests {
         submit_tx(&mut svc, &good);
         submit_tx(&mut svc, &bad);
         submit_mint(&mut svc);
-        svc.set_transfer_slot_check(stub_check(bad.hash()));
+        svc.set_transfer_slot_check(StubLedger::new(&[bad.hash()]));
         svc.propose_pending_values();
         let values = svc.externalized.as_ref().unwrap();
         assert!(values.iter().any(|v| v.tx_hash == good.hash()));
@@ -2418,14 +2819,134 @@ mod tests {
         let good = transfer_with(1, MIN_TX_FEE, 1);
         submit_tx(&mut svc, &good);
         submit_mint(&mut svc);
-        svc.set_transfer_slot_check(Arc::new(|_, _| {
-            TransferSlotVerdict::Unavailable("parent apply in flight".into())
-        }));
+        let mut ledger = StubLedger::new(&[]);
+        Arc::get_mut(&mut ledger).unwrap().unavailable = true;
+        svc.set_transfer_slot_check(ledger);
         svc.propose_pending_values();
         let values = svc.externalized.as_ref().unwrap();
         assert_eq!(values.len(), 1, "mint only");
         assert!(values[0].is_minting_tx);
         assert!(svc.pending_values.iter().any(|v| v.tx_hash == good.hash()));
+    }
+
+    /// #1920 review (the Judge's drift probe, committed): a lost-race decision
+    /// leaves the SCP slot one ahead of the block height (#421). The slot's
+    /// parent follows the decisions, not the slot index, so an adequately
+    /// paid transfer is still included in the very next block. Under the
+    /// first #1927 revision (verdict only when `tip + 1 == slot`) it was
+    /// excluded from every block.
+    #[test]
+    fn transfer_included_under_slot_height_drift() {
+        let ledger = StubLedger::new(&[]);
+        let mut svc = solo_service();
+        svc.set_transfer_slot_check(ledger.clone());
+
+        // Slot 1 decides block 1.
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        solo_round(&mut svc, &ledger, &first);
+        assert_eq!(svc.slot_parent_for_test(2), Some(block_of(&first)));
+
+        // Slot 2 decides a second mint for height 1: the lost race. No block.
+        let rival = intrinsic_valid_minting_tx(2, [0; 32], 1);
+        solo_round(&mut svc, &ledger, &rival);
+        assert_eq!(ledger.current_tip(), block_of(&first));
+        assert_eq!(svc.current_slot(), 3, "slot 3 at height 1: a +1 drift");
+        assert_eq!(
+            svc.slot_parent_for_test(3),
+            Some(block_of(&first)),
+            "the lost race carries the decided parent forward"
+        );
+
+        let transfer = transfer_with(7, MIN_TX_FEE, 1);
+        submit_tx(&mut svc, &transfer);
+        let mut tip = first.hash();
+        let mut included_at = None;
+        for height in 2..=6u64 {
+            let mint = intrinsic_valid_minting_tx(10 + height as u8, tip, height);
+            let values = solo_round(&mut svc, &ledger, &mint);
+            assert_eq!(ledger.current_tip(), block_of(&mint));
+            if values.iter().any(|v| v.tx_hash == transfer.hash()) {
+                included_at = Some(height);
+                break;
+            }
+            tip = mint.hash();
+        }
+        assert_eq!(
+            included_at,
+            Some(2),
+            "the paid transfer is in the first block after the drift"
+        );
+        assert_eq!(svc.current_slot(), 4);
+        assert_eq!(svc.slot_parent_for_test(4).map(|p| p.height), Some(2));
+    }
+
+    /// #1920 review: once the ledger has moved past a slot's decided parent
+    /// (the slot's block arrived by gossip or sync before this node finished
+    /// the slot), every transfer of the slot is Unavailable, never Invalid,
+    /// even one that is invalid on the parent. Checked on the new tip it
+    /// would be judged against the wrong pre-state.
+    #[test]
+    fn ledger_past_decided_parent_gives_unavailable_not_invalid() {
+        let bad = transfer_with(2, MIN_TX_FEE, 1);
+        let good = transfer_with(1, MIN_TX_FEE, 1);
+        let ledger = StubLedger::new(&[bad.hash()]);
+        let mut svc = solo_service();
+        svc.set_transfer_slot_check(ledger.clone());
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        solo_round(&mut svc, &ledger, &first);
+        submit_tx(&mut svc, &bad);
+        submit_tx(&mut svc, &good);
+        let value = |tx: &Transaction| ConsensusValue::from_transaction(tx.hash(), tx.fee);
+
+        let err = svc.validate_value_for_slot(2, &value(&bad)).unwrap_err();
+        assert!(
+            err.contains("invalid in a block at slot 2 (height 2)"),
+            "{err}"
+        );
+
+        // Block 2 lands without this node's slot-2 decision.
+        assert!(ledger.apply(&intrinsic_valid_minting_tx(3, first.hash(), 2)));
+        for tx in [&bad, &good] {
+            let err = svc.validate_value_for_slot(2, &value(tx)).unwrap_err();
+            assert!(err.contains("not yet checkable for slot 2"), "{err}");
+            assert!(!err.contains("invalid"), "{err}");
+        }
+        assert_eq!(svc.slot_parent_for_test(2), Some(block_of(&first)));
+        // Own proposals hold both back; neither is dropped.
+        assert!(svc
+            .proposable_pending_values(2)
+            .iter()
+            .all(|v| v.is_minting_tx));
+        assert!(svc.pending_values.iter().any(|v| v.tx_hash == bad.hash()));
+    }
+
+    /// #1920 review: a slot opened without a decision behind it (startup, or a
+    /// sync/anchor fast-forward) follows the ledger tip until SCP first
+    /// accepts a transfer under it, so a node that opened it while catching
+    /// up checks against the state it caught up to. After that acceptance
+    /// (which SCP caches) the parent is fixed.
+    #[test]
+    fn opened_slot_parent_follows_tip_until_first_accept() {
+        let ledger = StubLedger::new(&[]);
+        let mut svc = solo_service();
+        svc.set_transfer_slot_check(ledger.clone());
+        let genesis = ledger.current_tip();
+        assert_eq!(svc.slot_parent_for_test(1), Some(genesis));
+        let value = |tx: &Transaction| ConsensusValue::from_transaction(tx.hash(), tx.fee);
+        let a = transfer_with(1, MIN_TX_FEE, 1);
+        let b = transfer_with(2, MIN_TX_FEE, 1);
+        submit_tx(&mut svc, &a);
+        submit_tx(&mut svc, &b);
+
+        let caught_up = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        assert!(ledger.apply(&caught_up));
+        svc.validate_value_for_slot(1, &value(&a)).unwrap();
+        assert_eq!(svc.slot_parent_for_test(1), Some(block_of(&caught_up)));
+
+        assert!(ledger.apply(&intrinsic_valid_minting_tx(2, caught_up.hash(), 2)));
+        let err = svc.validate_value_for_slot(1, &value(&b)).unwrap_err();
+        assert!(err.contains("not yet checkable"), "{err}");
+        assert_eq!(svc.slot_parent_for_test(1), Some(block_of(&caught_up)));
     }
 
     // ---- Issue #1498: fee preference at slot capacity ----
@@ -3668,6 +4189,70 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// #1920 review: the federated version of the drift regression. Two
+    /// validators decide block 1, then a lost-race decision (a second mint
+    /// for height 1) moves SCP to slot 3 while both ledgers stay at height 1.
+    /// The transfer A proposes in slot 3 must validate on B (peer-message
+    /// validity, not just A's own proposal filter) and be externalized by
+    /// both. Under the first #1927 revision both nodes found it "not yet
+    /// checkable" in every later slot.
+    #[test]
+    fn federated_transfer_included_under_slot_height_drift() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let ledgers = [StubLedger::new(&[]), StubLedger::new(&[])];
+        a.set_transfer_slot_check(ledgers[0].clone());
+        b.set_transfer_slot_check(ledgers[1].clone());
+
+        let decide = |a: &mut ConsensusService,
+                      b: &mut ConsensusService,
+                      tags: (u8, u8),
+                      prev: [u8; 32],
+                      height: u64|
+         -> Vec<ConsensusValue> {
+            let a_tx = intrinsic_valid_minting_tx(tags.0, prev, height);
+            let b_tx = intrinsic_valid_minting_tx(tags.1, prev, height);
+            submit_and_register(a, b, &a_tx);
+            submit_and_register(b, a, &b_tx);
+            let (a_values, b_values) = run_two_services(a, b, 4000);
+            let values = a_values.expect("A externalizes");
+            assert_eq!(Some(values.clone()), b_values);
+            let mint_hash = values.iter().find(|v| v.is_minting_tx).unwrap().tx_hash;
+            let mint = [a_tx, b_tx]
+                .into_iter()
+                .find(|m| m.hash() == mint_hash)
+                .unwrap();
+            for (svc, ledger) in [(&mut *a, &ledgers[0]), (&mut *b, &ledgers[1])] {
+                ledger.apply(&mint);
+                svc.advance_slot();
+            }
+            values
+        };
+
+        let first = decide(&mut a, &mut b, (1, 50), [0; 32], 1);
+        let block1 = first.iter().find(|v| v.is_minting_tx).unwrap().tx_hash;
+        // The lost race: both nodes decide another mint for height 1.
+        decide(&mut a, &mut b, (2, 51), [0; 32], 1);
+        for (svc, ledger) in [(&a, &ledgers[0]), (&b, &ledgers[1])] {
+            assert_eq!(svc.current_slot(), 3);
+            assert_eq!(ledger.current_tip().height, 1, "+1 slot/height drift");
+            assert_eq!(svc.slot_parent_for_test(3), Some(ledger.current_tip()));
+        }
+
+        let transfer = transfer_with(9, MIN_TX_FEE, 1);
+        let bytes = bincode::serialize(&transfer).unwrap();
+        a.submit_transaction(transfer.hash(), transfer.fee, bytes.clone());
+        b.register_transfer_tx(transfer.hash(), bytes);
+        let values = decide(&mut a, &mut b, (3, 52), block1, 2);
+        assert!(
+            values.iter().any(|v| v.tx_hash == transfer.hash()),
+            "the paid transfer is decided in the first slot after the drift"
+        );
+        assert_eq!(ledgers[0].current_tip().height, 2);
     }
 
     /// The network handler can externalize a slot before the run loop drains
