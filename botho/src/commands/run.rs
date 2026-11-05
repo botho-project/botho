@@ -1154,6 +1154,11 @@ async fn run_async_with_shutdown(
     let consensus_config = consensus_config_from_env();
     let mut consensus =
         ConsensusService::new(node_id, scp_quorum_set, consensus_config, chain_state);
+    // #1920: a transfer is a valid SCP value for slot N only if a block at
+    // height N on the slot's parent accepts it (fee floor at N included).
+    consensus.set_transfer_slot_check(crate::consensus::ledger_transfer_slot_check(
+        node.shared_ledger(),
+    ));
 
     // Participation gate (issue #428): tell the consensus service how many
     // connected peers this node expects before it may produce a block, and the
@@ -4501,7 +4506,10 @@ fn apply_lottery_to_block(
             return Err((block, error));
         }
     };
-    match BlockBuilder::apply_lottery(block.clone(), &ledger) {
+    // #1920: skip any transfer that fails block validation at this height
+    // (e.g. under the consensus fee floor), then seal. The apply mutex is held,
+    // so the tip is the block's parent on every node.
+    match BlockBuilder::finalize_for_apply(block.clone(), &ledger) {
         Ok(sealed) => {
             if !sealed.lottery_outputs.is_empty() {
                 info!(

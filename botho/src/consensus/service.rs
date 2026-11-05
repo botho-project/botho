@@ -10,7 +10,7 @@ use bth_consensus_scp::{
     create_null_logger,
     msg::{Msg as ScpMsg, Topic},
     node::Node,
-    slot::{Phase as ScpPhase, SlotMetrics},
+    slot::{Phase as ScpPhase, SlotMetrics, SlotValidityFn},
     QuorumSet, ScpNode, SlotIndex,
 };
 use serde::{Deserialize, Serialize};
@@ -301,6 +301,52 @@ struct SharedValidationState {
     recent_blocks: VecDeque<RecentBlockInfo>,
 }
 
+/// The ledger's verdict on a transfer value for a slot (#1920).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferSlotVerdict {
+    /// A block at the slot's height, on the slot's parent, accepts the
+    /// transfer.
+    Valid,
+    /// A block at the slot's height would be rejected for containing the
+    /// transfer.
+    Invalid(String),
+    /// No verdict now: this node's ledger is not at the slot's parent (an
+    /// apply still in flight, or behind/ahead of the slot), or the ledger
+    /// could not be read. Treated as "not valid yet" and never cached.
+    Unavailable(String),
+}
+
+/// Checks a transfer against the block rules for a slot, on that slot's
+/// parent (#1920). Installed by the node with
+/// [`ConsensusService::set_transfer_slot_check`]; it wraps
+/// `Ledger::check_transfer_for_block`.
+pub type TransferSlotCheck =
+    Arc<dyn Fn(&crate::transaction::Transaction, SlotIndex) -> TransferSlotVerdict + Send + Sync>;
+
+/// The production [`TransferSlotCheck`]: `Ledger::check_transfer_for_block`
+/// on the node's shared ledger (#1920).
+///
+/// A tip that is not the slot's parent, a busy ledger lock and a ledger read
+/// error all give [`TransferSlotVerdict::Unavailable`], never a verdict. The
+/// lock is only tried, never waited on, because SCP validity runs on the node
+/// loop.
+pub fn ledger_transfer_slot_check(ledger: Arc<RwLock<crate::ledger::Ledger>>) -> TransferSlotCheck {
+    use crate::ledger::TransferBlockCheck;
+    Arc::new(move |tx, slot_index| {
+        let Ok(ledger) = ledger.try_read() else {
+            return TransferSlotVerdict::Unavailable("ledger lock unavailable".into());
+        };
+        match ledger.check_transfer_for_block(tx, slot_index) {
+            Ok(TransferBlockCheck::Valid) => TransferSlotVerdict::Valid,
+            Ok(TransferBlockCheck::Invalid(reason)) => TransferSlotVerdict::Invalid(reason),
+            Ok(TransferBlockCheck::NotAtParent { tip_height }) => TransferSlotVerdict::Unavailable(
+                format!("ledger tip {tip_height} is not the parent of slot {slot_index}"),
+            ),
+            Err(e) => TransferSlotVerdict::Unavailable(format!("ledger read failed: {e}")),
+        }
+    })
+}
+
 /// The consensus service manages SCP participation
 pub struct ConsensusService {
     /// Our node ID
@@ -323,6 +369,20 @@ pub struct ConsensusService {
 
     /// Shared validation state (for SCP callbacks)
     shared_state: Arc<RwLock<SharedValidationState>>,
+
+    /// The ledger check for transfer values (#1920), shared with the SCP
+    /// validity function. `None` (unit tests, the formal DRT harness) keeps
+    /// the intrinsic-only validity of a transfer.
+    transfer_check: Arc<RwLock<Option<TransferSlotCheck>>>,
+
+    /// Per-slot cache of the ledger verdicts on our own pending transfers
+    /// (#1920): the slot it belongs to, and tx hash -> valid. A slot's parent
+    /// is fixed, so a verdict holds for the whole slot.
+    proposal_verdicts: (SlotIndex, HashMap<[u8; 32], bool>),
+
+    /// The SCP validity function, kept so tests can call it directly.
+    #[cfg(test)]
+    validity_fn: SlotValidityFn<ConsensusValue, String>,
 
     /// Transaction validator
     validator: TransactionValidator,
@@ -435,53 +495,101 @@ impl ConsensusService {
 
         // Validation callback — the SCP consensus validity function.
         //
-        // SAFETY (issue #419 / #417 Finding 1): this MUST be a pure function of
-        // the value, i.e. TIP-AGNOSTIC. SCP's no-fork agreement theorem assumes
-        // "valid for one honest node ⇒ valid for all honest nodes". If validity
+        // SAFETY (issue #419 / #417 Finding 1): validity must be the same for
+        // every honest node. SCP's no-fork agreement theorem assumes "valid
+        // for one honest node ⇒ valid for all honest nodes". If validity
         // depended on the local chain tip, SCP's "silently drop messages
-        // carrying an un-validatable value" rule would partition two competing
-        // minters into two single-node voting instances that each externalize
-        // their own block — the multi-minter fork. So we validate only the
-        // INTRINSIC properties of the minting tx (well-formedness, PoW vs the
-        // tx's stated difficulty, non-future timestamp). The tip-relative
-        // checks (prev_block_hash == tip, height == tip+1, chain difficulty,
-        // emission reward, median-time-past lower bound) are enforced
-        // unconditionally at block-apply (`LedgerStore::add_block`), so a stale
-        // or fraudulent block can never be appended even though its minting tx
-        // is an acceptable consensus *value*.
+        // carrying an un-validatable value" rule would partition two
+        // competing minters into two single-node voting instances that each
+        // externalize their own block — the multi-minter fork. So a minting
+        // tx is checked for its INTRINSIC properties only (well-formedness,
+        // PoW vs the tx's stated difficulty, non-future timestamp). The
+        // tip-relative checks (prev_block_hash == tip, height == tip+1, chain
+        // difficulty, emission reward, median-time-past lower bound) are
+        // enforced unconditionally at block-apply (`LedgerStore::add_block`),
+        // so a stale or fraudulent block can never be appended even though
+        // its minting tx is an acceptable consensus *value*.
+        //
+        // Transfers (#1920) are checked intrinsically and then, when the node
+        // has installed a ledger check (`set_transfer_slot_check`), against
+        // every per-transaction block rule for a block at THIS SLOT's height
+        // on this slot's parent. That is not tip-dependent in the #419 sense:
+        // - The height is the slot's own index, bound into this function by the SCP
+        //   node when it creates the slot (`Node::new_slot_aware`), never the node's
+        //   current slot or tip.
+        // - The pre-state is the slot's parent, block `slot - 1`, which SCP agreed on
+        //   and every honest node applied identically. The check refuses to give a
+        //   verdict on any other pre-state (`Unavailable`).
+        // So every honest node that reaches a verdict for (value, slot)
+        // reaches the same one, and honest nodes never hold votes for a value
+        // another honest node rejects. `Unavailable` (ledger not at the
+        // slot's parent, e.g. the parent's apply is still in flight) is an
+        // error, which SCP does NOT cache (`Slot::validate` caches only
+        // `Ok`): the message is set aside like a "not in cache" value and
+        // is processed when it arrives again (the peer's next message, or the
+        // stalled-slot rebroadcast) once the parent is committed. Accepting
+        // such a value unchecked instead would be cached for the slot and
+        // could leave this node voting for a value its peers reject, a
+        // liveness trap.
         let validation_state = shared_state.clone();
-        let validity_fn: Arc<dyn Fn(&ConsensusValue) -> Result<(), String> + Send + Sync> =
-            Arc::new(move |value: &ConsensusValue| {
-                let state = validation_state
+        let transfer_check: Arc<RwLock<Option<TransferSlotCheck>>> = Arc::new(RwLock::new(None));
+        let validity_check = transfer_check.clone();
+        let validity_fn: SlotValidityFn<ConsensusValue, String> =
+            Arc::new(move |slot_index: SlotIndex, value: &ConsensusValue| {
+                let transfer_bytes = {
+                    let state = validation_state
+                        .read()
+                        .map_err(|_| "Failed to acquire validation state lock".to_string())?;
+
+                    // Look up transaction in cache
+                    let entry = state.tx_cache.get(&value.tx_hash).ok_or_else(|| {
+                        format!("Transaction not in cache: {:?}", &value.tx_hash[0..8])
+                    })?;
+
+                    // Ballot composition uses the advertised kind. Bind it to the
+                    // cached payload so a transfer cannot masquerade as the mint
+                    // required to build a block (or hide a mint as a transfer).
+                    if value.is_minting_tx != entry.is_minting_tx {
+                        return Err("Consensus value kind does not match cached transaction".into());
+                    }
+
+                    // Create a temporary validator for the intrinsic check.
+                    // `validate_from_bytes_intrinsic` never reads `chain_state`;
+                    // the clone is retained only because
+                    // `TransactionValidator::new` requires a chain-state handle
+                    // for its non-intrinsic (gossip/apply) methods.
+                    let temp_state = Arc::new(RwLock::new(state.chain_state.clone()));
+                    let temp_validator = TransactionValidator::new(temp_state);
+
+                    temp_validator
+                        .validate_from_bytes_intrinsic(&entry.data, entry.is_minting_tx)
+                        .map_err(|e| e.to_string())?;
+
+                    if entry.is_minting_tx {
+                        return Ok(());
+                    }
+                    entry.data.clone()
+                };
+
+                // The ledger check runs without the validation-state lock held.
+                let check = validity_check
                     .read()
-                    .map_err(|_| "Failed to acquire validation state lock".to_string())?;
-
-                // Look up transaction in cache
-                let entry = state.tx_cache.get(&value.tx_hash).ok_or_else(|| {
-                    format!("Transaction not in cache: {:?}", &value.tx_hash[0..8])
-                })?;
-
-                // Ballot composition uses the advertised kind. Bind it to the
-                // cached payload so a transfer cannot masquerade as the mint
-                // required to build a block (or hide a mint as a transfer).
-                if value.is_minting_tx != entry.is_minting_tx {
-                    return Err("Consensus value kind does not match cached transaction".into());
+                    .map_err(|_| "Failed to acquire transfer check lock".to_string())?
+                    .clone();
+                let Some(check) = check else {
+                    return Ok(());
+                };
+                let tx: crate::transaction::Transaction = bincode::deserialize(&transfer_bytes)
+                    .map_err(|e| format!("Failed to decode transfer: {e}"))?;
+                match check(&tx, slot_index) {
+                    TransferSlotVerdict::Valid => Ok(()),
+                    TransferSlotVerdict::Invalid(reason) => Err(format!(
+                        "Transfer invalid in a block at slot {slot_index}: {reason}"
+                    )),
+                    TransferSlotVerdict::Unavailable(reason) => Err(format!(
+                        "Transfer not yet checkable for slot {slot_index}: {reason}"
+                    )),
                 }
-
-                // Create a temporary validator for the (tip-agnostic) check.
-                // BOTH the minting-tx and transfer-tx intrinsic paths are now
-                // fully tip-agnostic (issue #451 removed the transfer staleness
-                // check that read the local tip), so `validate_from_bytes_intrinsic`
-                // never reads `chain_state`. The clone below is retained only
-                // because `TransactionValidator::new` requires a chain-state
-                // handle for its non-intrinsic (gossip/apply) methods.
-                let temp_state = Arc::new(RwLock::new(state.chain_state.clone()));
-                let temp_validator = TransactionValidator::new(temp_state);
-
-                // Validate INTRINSIC (tip-agnostic) properties only.
-                temp_validator
-                    .validate_from_bytes_intrinsic(&entry.data, entry.is_minting_tx)
-                    .map_err(|e| e.to_string())
             });
 
         // Combine callback - how to combine multiple values
@@ -558,7 +666,9 @@ impl ConsensusService {
             "Starting consensus at slot (next block height)"
         );
 
-        let scp_node = Node::new(
+        #[cfg(test)]
+        let test_validity_fn = validity_fn.clone();
+        let scp_node = Node::new_slot_aware(
             node_id.clone(),
             quorum_set.clone(),
             validity_fn,
@@ -575,6 +685,10 @@ impl ConsensusService {
             pending_values: BTreeSet::new(),
             proposed_values: BTreeSet::new(),
             shared_state,
+            transfer_check,
+            proposal_verdicts: (initial_slot, HashMap::new()),
+            #[cfg(test)]
+            validity_fn: test_validity_fn,
             validator,
             events: VecDeque::new(),
             last_slot_attempt: Instant::now(),
@@ -595,6 +709,113 @@ impl ConsensusService {
             initial_sync_complete: true,
             peer_advertised_slots: HashMap::new(),
         }
+    }
+
+    /// Install the ledger check for transfer values (#1920).
+    ///
+    /// From then on a transfer is a valid SCP value for slot `N` only if a
+    /// block at height `N` on the slot's parent would accept it (see the
+    /// validity function in [`Self::new`]), and this node proposes only such
+    /// transfers. Without it a transfer value is checked intrinsically only.
+    pub fn set_transfer_slot_check(&mut self, check: TransferSlotCheck) {
+        if let Ok(mut slot) = self.transfer_check.write() {
+            *slot = Some(check);
+        }
+        self.proposal_verdicts.1.clear();
+    }
+
+    /// TEST ONLY: the SCP validity verdict on `value` for `slot`.
+    #[cfg(test)]
+    pub(crate) fn validate_value_for_slot(
+        &self,
+        slot: SlotIndex,
+        value: &ConsensusValue,
+    ) -> Result<(), String> {
+        (self.validity_fn)(slot, value)
+    }
+
+    /// The ledger verdict on our pending transfer `value` for `slot`, or
+    /// `None` when no ledger check is installed (#1920). Valid and Invalid
+    /// verdicts are cached for the slot; `Unavailable` is not.
+    fn pending_transfer_verdict(
+        &mut self,
+        value: &ConsensusValue,
+        slot: SlotIndex,
+    ) -> Option<TransferSlotVerdict> {
+        let check = self.transfer_check.read().ok()?.clone()?;
+        if self.proposal_verdicts.0 != slot {
+            self.proposal_verdicts = (slot, HashMap::new());
+        }
+        if let Some(valid) = self.proposal_verdicts.1.get(&value.tx_hash) {
+            return Some(if *valid {
+                TransferSlotVerdict::Valid
+            } else {
+                TransferSlotVerdict::Invalid("cached for this slot".into())
+            });
+        }
+        let Some(bytes) = self.get_tx_data(&value.tx_hash) else {
+            return Some(TransferSlotVerdict::Unavailable(
+                "transfer not in cache".into(),
+            ));
+        };
+        let verdict = match bincode::deserialize::<crate::transaction::Transaction>(&bytes) {
+            Ok(tx) => check(&tx, slot),
+            Err(e) => TransferSlotVerdict::Invalid(format!("undecodable transfer: {e}")),
+        };
+        match &verdict {
+            TransferSlotVerdict::Valid => {
+                self.proposal_verdicts.1.insert(value.tx_hash, true);
+            }
+            TransferSlotVerdict::Invalid(_) => {
+                self.proposal_verdicts.1.insert(value.tx_hash, false);
+            }
+            TransferSlotVerdict::Unavailable(_) => {}
+        }
+        Some(verdict)
+    }
+
+    /// Our pending values that may be proposed for `slot` (#1920).
+    ///
+    /// With a ledger check installed, a pending transfer that a block at
+    /// `slot` would reject is dropped from `pending_values` (it will not
+    /// become valid later: the fee floor only rises with height, spent key
+    /// images stay spent and a stale tx only gets staler; the sender can
+    /// resubmit with a higher fee), and one that cannot be checked yet is held
+    /// back for this attempt. This is also the only ledger check on the solo
+    /// path, which externalizes without SCP validation.
+    fn proposable_pending_values(&mut self, slot: SlotIndex) -> BTreeSet<ConsensusValue> {
+        let transfers: Vec<ConsensusValue> = self
+            .pending_values
+            .iter()
+            .filter(|v| !v.is_minting_tx)
+            .cloned()
+            .collect();
+        let mut proposable = self.pending_values.clone();
+        for value in transfers {
+            match self.pending_transfer_verdict(&value, slot) {
+                None | Some(TransferSlotVerdict::Valid) => {}
+                Some(TransferSlotVerdict::Invalid(reason)) => {
+                    warn!(
+                        slot,
+                        tx_hash = hex::encode(&value.tx_hash[0..8]),
+                        reason = %reason,
+                        "Dropping pending transfer that fails block validation at this slot"
+                    );
+                    self.pending_values.remove(&value);
+                    proposable.remove(&value);
+                }
+                Some(TransferSlotVerdict::Unavailable(reason)) => {
+                    debug!(
+                        slot,
+                        tx_hash = hex::encode(&value.tx_hash[0..8]),
+                        reason = %reason,
+                        "Holding back pending transfer: not checkable for this slot yet"
+                    );
+                    proposable.remove(&value);
+                }
+            }
+        }
+        proposable
     }
 
     /// Declare how many connected peers this node expects before it may produce
@@ -1321,7 +1542,11 @@ impl ConsensusService {
         // Fee preference at capacity (issue #1498): rank transfers by
         // priority (raw fee) before applying the slot cap, rather than taking
         // the first `remaining_slots` in `pending_values` (hash) order.
-        let transfer_txs = select_transfers_by_priority(&self.pending_values, remaining_slots);
+        //
+        // #1920: only transfers a block at this slot would accept count.
+        let slot = self.scp_node.current_slot_index();
+        let proposable = self.proposable_pending_values(slot);
+        let transfer_txs = select_transfers_by_priority(&proposable, remaining_slots);
 
         to_propose.extend(transfer_txs);
 
@@ -2117,6 +2342,90 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert_eq!(values.iter().filter(|v| v.is_minting_tx).count(), 1);
         assert!(values.iter().any(|v| v.tx_hash == transfer.hash()));
+    }
+
+    // ---- Issue #1920: transfers checked for the slot's block ----
+
+    /// A stub ledger check: `bad` is invalid at slot 1, every other transfer
+    /// valid at slot 1, and no verdict for any other slot.
+    fn stub_check(bad: [u8; 32]) -> TransferSlotCheck {
+        Arc::new(move |tx, slot| {
+            if slot != 1 {
+                TransferSlotVerdict::Unavailable("not the parent".into())
+            } else if tx.hash() == bad {
+                TransferSlotVerdict::Invalid("fee below the consensus fee floor".into())
+            } else {
+                TransferSlotVerdict::Valid
+            }
+        })
+    }
+
+    /// #1920: the SCP validity function applies the installed ledger check at
+    /// the slot it is asked about; minting values are not passed to it.
+    #[test]
+    fn validity_applies_transfer_check_at_slot() {
+        let mut svc = solo_service();
+        let good = transfer_with(1, MIN_TX_FEE, 1);
+        let bad = transfer_with(2, MIN_TX_FEE, 1);
+        submit_tx(&mut svc, &good);
+        submit_tx(&mut svc, &bad);
+        submit_mint(&mut svc);
+        let mint = svc
+            .pending_values
+            .iter()
+            .find(|v| v.is_minting_tx)
+            .cloned()
+            .unwrap();
+        let value = |tx: &Transaction| ConsensusValue::from_transaction(tx.hash(), tx.fee);
+
+        svc.set_transfer_slot_check(stub_check(bad.hash()));
+        assert!(svc.validate_value_for_slot(1, &value(&good)).is_ok());
+        let err = svc.validate_value_for_slot(1, &value(&bad)).unwrap_err();
+        assert!(err.contains("invalid in a block at slot 1"), "{err}");
+        let err = svc.validate_value_for_slot(2, &value(&good)).unwrap_err();
+        assert!(err.contains("not yet checkable for slot 2"), "{err}");
+        // Mints are never sent to the ledger check (it says Unavailable at 2).
+        assert!(svc.validate_value_for_slot(2, &mint).is_ok());
+    }
+
+    /// #1920: the solo path (which bypasses SCP validation) externalizes only
+    /// transfers the ledger check accepts for the slot, and drops a rejected
+    /// one from the pending set.
+    #[test]
+    fn solo_proposal_excludes_and_drops_invalid_transfer() {
+        let mut svc = solo_service();
+        let good = transfer_with(1, MIN_TX_FEE, 1);
+        let bad = transfer_with(2, MIN_TX_FEE, 1);
+        submit_tx(&mut svc, &good);
+        submit_tx(&mut svc, &bad);
+        submit_mint(&mut svc);
+        svc.set_transfer_slot_check(stub_check(bad.hash()));
+        svc.propose_pending_values();
+        let values = svc.externalized.as_ref().unwrap();
+        assert!(values.iter().any(|v| v.tx_hash == good.hash()));
+        assert!(!values.iter().any(|v| v.tx_hash == bad.hash()));
+        assert!(
+            !svc.pending_values.iter().any(|v| v.tx_hash == bad.hash()),
+            "an invalid transfer is dropped from the pending set"
+        );
+    }
+
+    /// #1920: a transfer that cannot be checked for the slot yet is held back
+    /// (kept pending, not proposed) rather than proposed unchecked.
+    #[test]
+    fn proposal_holds_back_unavailable_transfer() {
+        let mut svc = solo_service();
+        let good = transfer_with(1, MIN_TX_FEE, 1);
+        submit_tx(&mut svc, &good);
+        submit_mint(&mut svc);
+        svc.set_transfer_slot_check(Arc::new(|_, _| {
+            TransferSlotVerdict::Unavailable("parent apply in flight".into())
+        }));
+        svc.propose_pending_values();
+        let values = svc.externalized.as_ref().unwrap();
+        assert_eq!(values.len(), 1, "mint only");
+        assert!(values[0].is_minting_tx);
+        assert!(svc.pending_values.iter().any(|v| v.tx_hash == good.hash()));
     }
 
     // ---- Issue #1498: fee preference at slot capacity ----
