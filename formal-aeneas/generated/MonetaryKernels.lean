@@ -316,7 +316,7 @@ def monetary.MonetaryPolicy.halving_reward
   else ok none
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::calculate_tail_reward_u128]:
-    Source: 'cluster-tax/src/monetary.rs', lines 342:4-361:5
+    Source: 'cluster-tax/src/monetary.rs', lines 346:4-365:5
     Visibility: public -/
 def monetary.MonetaryPolicy.calculate_tail_reward_u128
   (self : monetary.MonetaryPolicy) (supply_at_transition : Std.U128) :

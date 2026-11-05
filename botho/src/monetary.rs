@@ -7,13 +7,16 @@
 //! - **Phase 1 (Halving)**: Bitcoin-like halving schedule for ~5 years (~1-year
 //!   halvings x 5). Difficulty adjusts to maintain target block time.
 //!
-//! - **Phase 2 (Tail Emission)**: Fixed tail reward with inflation-targeting.
-//!   Difficulty adjusts to hit 2% net inflation (gross emission - fee burns).
+//! - **Phase 2 (Tail Emission)**: Recompute each block's reward from current
+//!   cumulative gross issuance. The 200-bps target plus 50-bps assumed burn
+//!   calibrates 2.5% annual gross issuance at the reference block count; actual
+//!   net supply depends on realized burns and block timing.
 //!
 //! ## Key Insight
 //!
-//! Rewards are predictable (fixed per phase), difficulty adapts to monetary
-//! goals. This gives minters stable income while absorbing fee burn volatility.
+//! Halving rewards are fixed within each epoch. Tail rewards compound from
+//! gross issuance, while difficulty targets block time, not net inflation.
+//! This documents current behavior; the policy decision in #1788 remains open.
 //!
 //! ## Difficulty controller
 //!
@@ -43,12 +46,16 @@ use bth_cluster_tax::MonetaryPolicy;
 /// This creates a natural inflation dampener: busy network = full inflation,
 /// idle network = reduced inflation.
 ///
-/// | Actual Block Time  | Effective Inflation | Halving Period |
+/// | Actual Block Time  | Calibrated net target* | Halving Period |
 /// |--------------------|--------------------:|---------------:|
 /// | 3s (very high load)| ~3.3%/year          | ~0.6 years     |
 /// | 5s (high load)     | 2.0%/year           | 1 year         |
 /// | 20s (normal)       | 0.5%/year           | 4 years        |
 /// | 40s (idle)         | 0.25%/year          | 8 years        |
+///
+/// *The scaled 200-bps target assumes the calibrated burn rate. These are
+/// not guarantees of realized net inflation; actual rewards use gross issuance
+/// and fee burns vary. The gross calibration is 250 bps per reference year.
 ///
 /// # Canonical Emission Schedule (decided 2026-06-15, issue #351)
 ///
@@ -58,10 +65,14 @@ use bth_cluster_tax::MonetaryPolicy;
 /// - `halving_interval` = `BLOCKS_PER_YEAR` (~1 year at 5s blocks)
 /// - `halving_count` = 5  →  time-to-tail = `H * K / BLOCKS_PER_YEAR` = 5.00
 ///   years
-/// - `tail_inflation_bps` = 200 (2% perpetual net inflation)
+/// - `tail_inflation_bps` = 200 (net target, plus 50 bps assumed fee burn)
 ///
-/// Derived Phase-1 supply = `R0 * H * (2 - 2^-(K-1))`
-/// = 50 * 6,307,200 * 1.9375 = **611,010,000 BTH** (~611M).
+/// Nominal Phase-1 sum, including a reward at height zero:
+/// `R0 * H * (2 - 2^-(K-1))` = 50 * 6,307,200 * 1.9375
+/// = **611,010,000 BTH**. Accepted genesis mints nothing, so heights
+/// 1 through `5H - 1` issue **611,009,950 BTH**, exactly 50 BTH less.
+/// The first tail reward from that gross total is 2,421,874,801,813 pico.
+/// See `formal/MONETARY.md` for the checked model and its domain limits.
 ///
 /// `const` so wallet-side constants can be derived from the policy at compile
 /// time (e.g. `decoy_selection::BLOCKS_PER_DAY`, #1692).
@@ -162,7 +173,7 @@ mod tests {
     }
 
     /// Locks the canonical emission schedule chosen in #351 so the decision is
-    /// regression-proof: derived Phase-1 supply ~611M BTH and time-to-tail = 5
+    /// regression-proof: nominal Phase-1 sum ~611M BTH and time-to-tail = 5
     /// years, computed directly from the policy parameters.
     #[test]
     fn test_mainnet_emission_schedule_locked() {
@@ -180,7 +191,7 @@ mod tests {
             "time-to-tail expected 5.00 years, got {years_to_tail}",
         );
 
-        // Derived Phase-1 supply by summing the halving schedule:
+        // Nominal inclusive-height-zero sum (accepted genesis issues no reward):
         //   sum_{i=0}^{K-1} (R0 >> i) * H  (in picocredits).
         let r0 = policy.initial_reward as u128;
         let h128 = h as u128;
@@ -194,7 +205,7 @@ mod tests {
         let supply_bth = supply_pico / PICO_PER_BTH;
         assert_eq!(
             supply_bth, 611_010_000,
-            "Phase-1 supply expected 611,010,000 BTH, got {supply_bth}",
+            "Nominal Phase-1 sum expected 611,010,000 BTH, got {supply_bth}",
         );
 
         // u128 supply accounting (#333): ~611M BTH = 6.11e20 picocredits, which

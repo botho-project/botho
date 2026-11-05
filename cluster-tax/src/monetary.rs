@@ -309,7 +309,7 @@ impl MonetaryPolicy {
     }
 
     /// Get the block reward for a given height (Phase 1 only).
-    /// Returns None if in Phase 2 (use tail_reward from state).
+    /// Returns None in Phase 2; recompute the tail from current gross issuance.
     pub fn halving_reward(&self, height: u64) -> Option<u64> {
         if !self.is_halving_phase(height) {
             return None;
@@ -319,11 +319,10 @@ impl MonetaryPolicy {
         Some(self.initial_reward >> halvings)
     }
 
-    /// Calculate the tail emission reward based on supply at transition.
+    /// Calculate the tail reward from a u64 supply, widening before arithmetic.
     ///
-    /// This is called once when transitioning to Phase 2.
-    /// The reward is set to achieve target_net + expected_fees at target block
-    /// rate.
+    /// The node uses the u128 variant with current cumulative gross issuance
+    /// on every tail block. This compatibility wrapper is for narrow callers.
     pub fn calculate_tail_reward(&self, supply_at_transition: u64) -> u64 {
         self.calculate_tail_reward_u128(supply_at_transition as u128)
     }
@@ -337,8 +336,13 @@ impl MonetaryPolicy {
     /// entry point. The arithmetic is identical to the `u64` version (which
     /// already computed internally in `u128`) — only the input width differs.
     ///
-    /// A single block reward never approaches `u64::MAX`, so the return type
-    /// stays `u64`.
+    /// This helper has a bounded arithmetic domain: ordinary u128 products
+    /// and addition panic on overflow under the workspace release profile.
+    /// The final `max(1) as u64` truncates; an arithmetic-safe synthetic supply
+    /// can therefore return zero. For the mainnet policy, supply at most
+    /// `u64::MAX * 6_307_200 * 40` gives safe arithmetic, lossless narrowing
+    /// and reward >= 1 (formal/MONETARY.md, #1921). This sufficient one-call
+    /// bound is not a proved invariant or genesis-reachable horizon.
     pub fn calculate_tail_reward_u128(&self, supply_at_transition: u128) -> u64 {
         // Target annual NET emission
         let target_net = supply_at_transition * self.tail_inflation_bps as u128 / 10_000;
@@ -1844,6 +1848,150 @@ mod tests {
             actual_supply,
             expected_supply
         );
+    }
+    /// #1921: production-policy arithmetic, not the generic/fast-test schedule.
+    #[test]
+    fn monetary_1921_phase_and_demurrage_boundaries() {
+        let p = mainnet_policy_mirror();
+        let h = p.halving_interval;
+        assert_eq!(
+            (p.initial_reward, h, p.halving_count),
+            (50_000_000_000_000, 6_307_200, 5)
+        );
+        assert_eq!(
+            (
+                p.tail_inflation_bps,
+                p.expected_fee_burn_rate_bps,
+                p.target_block_time_secs
+            ),
+            (200, 50, 5)
+        );
+        assert_eq!(p.target_blocks_per_year(), h);
+        assert_eq!(p.tail_emission_start_height(), 31_536_000);
+        let mut heights = vec![0, 1, u64::MAX];
+        for k in 1..=5 {
+            heights.extend([k * h - 1, k * h, k * h + 1]);
+        }
+        for height in heights {
+            let phase1 = height < 5 * h;
+            assert_eq!(p.is_halving_phase(height), phase1);
+            let expected = if phase1 {
+                Some(p.initial_reward >> (height / h))
+            } else {
+                None
+            };
+            assert_eq!(p.halving_reward(height), expected, "height {height}");
+            assert_eq!(p.block_reward_at(height, 0), expected.unwrap_or(1));
+            let reward = p.block_reward_at(height, 0);
+            let share = p.lottery_emission_share(height, reward);
+            assert!(share <= reward);
+            assert_eq!(reward.saturating_sub(share) + share, reward);
+            assert_eq!(
+                p.demurrage_rate_bps(height),
+                if height < h { 0 } else { 200 }
+            );
+        }
+        assert_eq!(
+            (0..5)
+                .map(|k| p.halving_reward(k * h).unwrap())
+                .collect::<Vec<_>>(),
+            [
+                50_000_000_000_000,
+                25_000_000_000_000,
+                12_500_000_000_000,
+                6_250_000_000_000,
+                3_125_000_000_000
+            ]
+        );
+    }
+
+    /// Synthetic helper inputs. The modulo-zero and panic cases are not
+    /// claimed to be genesis-reachable blocks or accepted-chain exploits.
+    #[test]
+    fn monetary_1921_checked_tail_and_narrowing() {
+        let p = mainnet_policy_mirror();
+        let m = u64::MAX as u128;
+        let b = m * p.halving_interval as u128 * 40;
+        let zero_cast = (m + 1) * p.halving_interval as u128 * 40;
+        assert_eq!(b, 4_653_892_168_868_035_357_845_120_000);
+        assert_eq!(zero_cast, 4_653_892_168_868_035_358_097_408_000);
+        for (supply, expected) in [
+            (0, 1),
+            (1, 1),
+            (m, 73_117_802_169),
+            (b - 1, u64::MAX - 1),
+            (b, u64::MAX),
+            (b + 1, u64::MAX),
+            (zero_cast, 0),
+        ] {
+            assert_eq!(
+                p.calculate_tail_reward_u128(supply),
+                expected,
+                "supply {supply}"
+            );
+            let net = supply.checked_mul(200).unwrap() / 10_000;
+            let burn = supply.checked_mul(50).unwrap() / 10_000;
+            assert!(net.checked_add(burn).is_some());
+        }
+        assert_eq!(
+            (zero_cast * 200 / 10_000 + zero_cast * 50 / 10_000)
+                / p.target_blocks_per_year() as u128,
+            m + 1
+        );
+        for supply in [0, 1, u64::MAX] {
+            assert_eq!(
+                p.calculate_tail_reward(supply),
+                p.calculate_tail_reward_u128(supply as u128)
+            );
+        }
+        // Invokes the real ordinary multiply. The workspace release profile
+        // has overflow-checks=true; a wrapping release build fails this test.
+        assert!(std::panic::catch_unwind(|| p.calculate_tail_reward_u128(u128::MAX)).is_err());
+    }
+
+    #[test]
+    fn monetary_1921_genesis_excluding_phase1_and_first_tail() {
+        let p = mainnet_policy_mirror();
+        let tail = p.tail_emission_start_height();
+        assert_eq!(p.cumulative_issuance_at(0), 0);
+        assert_eq!(p.cumulative_issuance_at(1), p.initial_reward as u128);
+        let accepted = p.cumulative_issuance_at(tail - 1);
+        let nominal: u128 = (0..5)
+            .map(|k| (p.initial_reward >> k) as u128 * p.halving_interval as u128)
+            .sum();
+        assert_eq!(nominal, 611_010_000_000_000_000_000);
+        assert_eq!(accepted, 611_009_950_000_000_000_000);
+        assert_eq!(nominal - accepted, p.initial_reward as u128);
+        assert_eq!(p.block_reward_at(tail, accepted), 2_421_874_801_813);
+        assert_eq!(p.cumulative_issuance_at(tail), accepted + 2_421_874_801_813);
+    }
+
+    /// Legacy simulator's u64 shadow counters, not the node's u128 ledger.
+    #[test]
+    fn monetary_1921_legacy_raw_pico_counter_boundary() {
+        let p = mainnet_policy_mirror();
+        let reward = p.initial_reward;
+        let good = u64::MAX / reward;
+        assert_eq!(good, 368_934);
+        let mut c = DifficultyController::new(p, 0, 1, 0);
+        for height in 1..=good {
+            assert_eq!(c.process_block(height * 5), reward);
+        }
+        assert_eq!(c.state.height, good);
+        assert_eq!(c.state.total_supply, good * reward);
+        assert_eq!(c.state.total_rewards_emitted, good * reward);
+        assert_eq!(c.state.gross_issued, good as u128 * reward as u128);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || c.process_block((good + 1) * 5)
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn monetary_1921_legacy_height_successor_panics() {
+        let mut c = DifficultyController::new(mainnet_policy_mirror(), 0, 1, 0);
+        c.state.height = u64::MAX;
+        assert!(std::panic::catch_unwind(|| c.block_reward()).is_err());
     }
 }
 
