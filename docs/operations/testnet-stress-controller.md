@@ -805,7 +805,8 @@ Every key file must be owner-only. The prefunder refuses a manifest if:
 - `count × grants_per_wallet × grant_picocredits` exceeds
   `max_principal_picocredits`;
 - the worst-case fees (`count × grants_per_wallet × max_single_signed_fee`)
-  exceed `max_signed_fee_picocredits`.
+  exceed `max_signed_fee_picocredits`. This still counts one maximum fee per
+  grant, so it over-bounds the batched prefund below.
 
 For x1, 32 grants of 10^11 per wallet gives a principal of 1.024×10^14.
 Since #1615 the x-series plan has 64 wallets, and 64 × 32 × 10^11 would exceed
@@ -846,21 +847,42 @@ above still hold at once.
 
 The snapshot is saved once, to `opening.json`.
 
-**Grants and the never-resubmit rule.** Grant *N* goes to wallet `N % count`.
-It uses `selection.choose()` over the funding wallet. The inputs of every
-unconfirmed grant are passed to `prepare` as `reserved`. For each grant, the
-prefunder:
+**Grant batches (#1937).** Grant *N* goes to wallet `N % count`. Grants are
+signed in batches of up to 15 (`GRANTS_PER_BATCH`): one transaction pays the
+next 15 grants, in grant order, as outputs `0..14`, with change as output 15.
+That is consensus `MAX_OUTPUTS` (16). Batch *B* is the main signer's
+prefund-only `prepare_grants` request, checked with `inspect_grants`. Campaign
+transfers keep the one-recipient `prepare` and `inspect`, unchanged; `inspect`
+still refuses more than two outputs. The batch fee follows the same rule as a
+campaign transfer at multiplier 1, for 16 outputs, and must not exceed
+`max_single_signed_fee_picocredits`. At the dynamic base's ceiling (100) and
+the largest cluster factor the estimate is about 4.4×10^8, below the x-series
+cap of 10^9. At the idle base it is the 10^8 floor. A 16-output batch is 22 to
+24 KB with one or two inputs.
+
+Why batches: since #1809 an input is spendable only when the thinnest
+random-offset window of its age band holds 19 decoys. A fresh chain has about
+one decoy-eligible output per block, so the first funding input is spendable
+around height 220, and then about one more per block. One grant per input
+needed 2048 inputs, about a day; 137 batches fit the window. A batch's 16
+outputs are decoys for each other, so the grant outputs and the change sit in
+dense blocks. The change is spendable again about 20 blocks later.
+
+**Batches and the never-resubmit rule.** Each batch uses `selection.choose()`
+over the funding wallet for the batch principal. The inputs of every
+unconfirmed batch are passed as `reserved`. For each batch, the prefunder:
 
 1. inspects the signed artifact;
-2. creates `grants/grant-NNNN.json` exclusively;
-3. creates the exclusive `grants/grant-NNNN.submit` marker;
+2. creates `grants/batch-NNNN.json` exclusively, listing the grants it covers
+   (`index`, `recipient`, `amount`, `output_index`);
+3. creates the exclusive `grants/batch-NNNN.submit` marker;
 4. calls `tx_submit` exactly once, on the producer.
 
-A grant with a marker is **never prepared or submitted again**. An uncertain
-reply marks the grant `unknown` and holds the run. A grant left unconfirmed for
+A batch with a marker is **never prepared or submitted again**. An uncertain
+reply marks the batch `unknown` and holds the run. A batch left unconfirmed for
 15 minutes after its submission also holds. Pacing follows the plan's
-`max_inflight` and `max_normal_submissions_per_minute`. Nothing new is signed
-while any grant is uncertain or unsent.
+`max_inflight` and `max_normal_submissions_per_minute`, counted in
+transactions. Nothing new is signed while any batch is uncertain or unsent.
 
 The producer's request budget (the same per-endpoint count and `Retry-After`
 backoff that `Rpc` enforces) is checked before signing, with room for
@@ -876,7 +898,8 @@ A grant is `confirmed` only when:
 - all five nodes report it confirmed, with agreeing
   `(blockHeight, fee, outputCount, totalOutput)`;
 - all five report its key images spent;
-- a scan finds the recipient and change outputs.
+- a scan finds every grant output in its recipient wallet and the change in
+  the funding wallet.
 
 The funding wallet must account exactly:
 `opening + coinbase/lottery inflow − remaining − principal − fees == 0`.
@@ -884,9 +907,13 @@ Any other transfer into the funding or campaign wallets holds the run.
 
 **Resume.** Restarting the prefunder is safe:
 
-- it reloads every grant record and verifies each artifact's SHA-256;
+- it reloads every batch record and verifies each artifact's SHA-256;
+- it holds if a batch's grants are not exactly the next grants in order, as
+  the batch was made;
+- it holds on a per-grant `grant-NNNN` state directory from before batching;
+  use a new `state_dir`;
 - it holds on any orphan artifact or marker that has no record;
-- it holds on a leftover `grant-NNNN.json.tmp`, which an interrupted record
+- it holds on a leftover `batch-NNNN.json.tmp`, which an interrupted record
   update leaves behind. The record still holds its previous state. Review the
   `.tmp` against it, then remove the `.tmp`;
 - it requires `state_dir`, `grants/` and `artifacts/` to be owner-only
@@ -906,9 +933,9 @@ full scan writes two files:
   excluding lottery awards, which is exactly the profile's `opening_balances`
   list. `funding-health.json` reports any awards separately as
   `opening_lottery_balances`;
-- `funding-health.json`: grants, fees, the accounting difference, per-wallet
-  grant-output counts, and per-wallet `choose()` readiness evidence at the
-  current height.
+- `funding-health.json`: grants, batches, fees, the accounting difference,
+  per-wallet grant-output counts, and per-wallet `choose()` readiness evidence
+  at the current height.
 
 The prefunder then stops. Outputs that are still maturing show as
 `maturing_or_generator_limited`; the controller rechecks readiness before

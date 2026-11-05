@@ -24,13 +24,17 @@ nothing spendable yet. The opening snapshot then waits, rescanning every
 spendable and needed amounts, until the balance covers the principal plus
 worst-case fees; it holds only at the write deadline.
 
-Every grant is one main-signer ``prepare``. Its record is created exclusively
-before an exclusive submit marker, and ``tx_submit`` is called once. A grant
-with a marker is never prepared or submitted again. A record without a marker
-was never sent; it is retried on later ticks (after all five nodes report its
-hash ``unknown``) and nothing new is signed until it is sent. Any uncertainty
-holds the run for operator review. A restart resumes from the records and
-never replays a submission.
+Grants are batched (#1937): one main-signer ``prepare_grants`` pays the next
+up-to-``GRANTS_PER_BATCH`` grants, in grant order, as outputs ``0..n-1`` plus
+change. Since #1809 a fresh chain makes about one funding input eligible per
+block, so one input per grant cannot fund an x-series in its window. A batch's
+record lists the grants it covers, is created exclusively before an exclusive
+submit marker, and ``tx_submit`` is called once. A batch with a marker is never
+prepared or submitted again. A record without a marker was never sent; it is
+retried on later ticks (after all five nodes report its hash ``unknown``) and
+nothing new is signed until it is sent. Any uncertainty holds the run for
+operator review. A restart resumes from the records and never replays a
+submission.
 """
 import argparse
 import asyncio
@@ -62,7 +66,12 @@ SIGNER_FIELDS = {
     'prepare': {'wallet', 'blocks', 'height', 'selected', 'spent', 'reserved', 'recipient',
                 'allowed_recipients', 'amount', 'base_rate', 'fee_multiplier', 'artifact'},
     'inspect': {'artifact'},
+    'prepare_grants': {'wallet', 'blocks', 'height', 'selected', 'spent', 'reserved', 'outputs',
+                       'allowed_recipients', 'base_rate', 'artifact'},
+    'inspect_grants': {'artifact'},
 }
+# stress.rs MAX_GRANT_OUTPUTS: consensus MAX_OUTPUTS (16) less one change output.
+GRANTS_PER_BATCH = 15
 MANIFEST_FIELDS = {
     'schema_version', 'plan_file', 'plan_sha256', 'targets', 'tls_ca_file', 'tls_ca_sha256',
     'signer', 'signer_sha256', 'producer_role', 'funding_wallet', 'wallets',
@@ -175,6 +184,8 @@ def load_manifest(path):
          'grant below the largest transfer plus the maximum signed fee')
     need(count * grants * amount <= int(plan['funding']['max_principal_picocredits']),
          'prefund principal exceeds max_principal_picocredits')
+    # One maximum fee per grant: batching (#1937) signs fewer transactions, each
+    # still capped at max_single_signed_fee, so this bound only gets looser.
     need(count * grants * max_fee <= int(limits['max_signed_fee_picocredits']),
          'worst-case prefund fees exceed max_signed_fee_picocredits')
     need(isinstance(m['state_dir'], str) and Path(m['state_dir']).is_absolute(), 'absolute state_dir required')
@@ -299,38 +310,60 @@ class Prefunder(Controller):
     # ---- durable records -------------------------------------------------
 
     def record_path(self, index):
-        return self.grants_dir / f'grant-{index:04d}.json'
+        return self.grants_dir / f'batch-{index:04d}.json'
 
     def marker_path(self, index):
-        return self.grants_dir / f'grant-{index:04d}.submit'
+        return self.grants_dir / f'batch-{index:04d}.submit'
 
     def artifact_path(self, index):
-        return self.artifacts / f'grant-{index:04d}.bin'
+        return self.artifacts / f'batch-{index:04d}.bin'
+
+    def batch_grants(self, first):
+        """The next batch: grants ``first..`` in order, grant N to wallet ``N % count``."""
+        return [{'index': g, 'recipient': g % self.count, 'recipient_address': self.wallets[g % self.count]['address'],
+                 'amount': self.m['grant_picocredits'], 'output_index': g - first}
+                for g in range(first, min(first + GRANTS_PER_BATCH, self.total))]
+
+    def granted(self, rows=None):
+        """Grants covered by ``rows`` (default: every batch record)."""
+        return sum(len(r['grants']) for r in (self.records if rows is None else rows))
 
     def load_records(self):
         records = []
         names = sorted(p.name for p in self.grants_dir.iterdir())
+        legacy = [n for n in names + sorted(p.name for p in self.artifacts.iterdir()) if n.startswith('grant-')]
+        # A per-grant state_dir predates batching (#1937); never reinterpret it.
+        need(not legacy, 'per-grant records from a pre-batch prefunder: ' + ', '.join(legacy[:3])
+             + '; review that state_dir, then use a new one')
         partial = [n for n in names if n.endswith('.tmp')]
         # atomic() was interrupted: the record itself still holds its previous state.
         need(not partial, 'interrupted grant record update left ' + ', '.join(partial)
              + '; review it against the record, then remove it')
+        granted = 0
         for index, name in enumerate(n for n in names if n.endswith('.json')):
-            need(name == f'grant-{index:04d}.json', 'grant record sequence has a gap or a foreign file')
+            need(name == f'batch-{index:04d}.json', 'grant record sequence has a gap or a foreign file')
             row = json.loads(self.record_path(index).read_text())
             need(row.get('index') == index and row.get('artifact') == str(self.artifact_path(index)),
                  'grant record identity changed')
             need(self.artifact_path(index).exists() and sha256_file(row['artifact']) == row['artifact_sha256'],
                  'saved grant artifact missing or altered: ' + name)
+            # Every batch covers the next grants in order, exactly as offer() made them.
+            grants = row.get('grants')
+            need(isinstance(grants, list) and 0 < len(grants) <= GRANTS_PER_BATCH
+                 and grants == self.batch_grants(granted)
+                 and row.get('amount') == sum(g['amount'] for g in grants),
+                 'grant batch coverage changed: ' + name)
+            granted += len(grants)
             records.append(row)
-        expected = {f'grant-{i:04d}.json' for i in range(len(records))}
-        expected |= {f'grant-{i:04d}.submit' for i in range(len(records))}
+        expected = {f'batch-{i:04d}.json' for i in range(len(records))}
+        expected |= {f'batch-{i:04d}.submit' for i in range(len(records))}
         need(set(names) <= expected, 'orphan submit marker without a grant record')
-        recorded = {f'grant-{i:04d}.bin' for i in range(len(records))}
+        recorded = {f'batch-{i:04d}.bin' for i in range(len(records))}
         orphans = sorted(p.name for p in self.artifacts.iterdir() if p.name not in recorded)
         # A signed artifact without a record may already be anywhere: hold, never re-sign.
         need(not orphans, 'orphan signed artifact without a grant record: ' + ', '.join(orphans))
         need(len({r['hash'] for r in records}) == len(records), 'duplicate grant transaction hash')
-        need(len(records) <= self.total, 'more grant records than the manifest allows')
+        need(granted <= self.total, 'more grant records than the manifest allows')
         return records
 
     def save(self, row):
@@ -469,13 +502,13 @@ class Prefunder(Controller):
         except Exception as error:
             row.update(state='unknown', reason=str(error))
             self.save(row)
-            raise Gate('grant %d submit reply uncertain; never resubmitted' % row['index']) from error
+            raise Gate('grant batch %d submit reply uncertain; never resubmitted' % row['index']) from error
         row.update(state='accepted', accepted_at=self.clock())
         self.save(row)
 
     async def offer(self):
-        """Prepare, record and submit at most one new grant."""
-        if len(self.records) >= self.total or self.clock() >= self.m['deadline']:
+        """Prepare, record and submit at most one new grant batch."""
+        if self.granted() >= self.total or self.clock() >= self.m['deadline']:
             return False
         self.gate(write=True)
         limits = self.j.limits
@@ -488,7 +521,9 @@ class Prefunder(Controller):
             return False
         reserved = self.reserve_inputs()
         height = await self.sync()
-        amount = self.m['grant_picocredits']
+        grants = self.batch_grants(self.granted())
+        amount = sum(g['amount'] for g in grants)
+        # choose() adds one max_single_signed_fee, which also caps the batch fee.
         selected, evidence = choose(self, self.funding, height, amount)
         self.j.set('selection_latest', evidence)
         if not selected:
@@ -499,32 +534,32 @@ class Prefunder(Controller):
         quote = await self.rpc.call(self.m['producer_role'], 'fee_getRate')
         self.gate(write=True)
         index = len(self.records)
-        recipient = index % self.count
         artifact = self.artifact_path(index)
         funding_images = {o['key_image'] for o in self.inventory[self.funding]}
         info = await self.native({
-            'operation': 'prepare', 'wallet': self.wallets[self.funding]['key'], 'blocks': self.blocks,
+            'operation': 'prepare_grants', 'wallet': self.wallets[self.funding]['key'], 'blocks': self.blocks,
             'height': height, 'selected': [o['id'] for o in selected],
-            'spent': [s for s in self.spent if s['keyImage'] in funding_images],
-            'reserved': reserved, 'recipient': self.wallets[recipient]['address'],
+            'spent': [s for s in self.spent if s['keyImage'] in funding_images], 'reserved': reserved,
+            'outputs': [{'recipient': g['recipient_address'], 'amount': g['amount']} for g in grants],
             'allowed_recipients': [w['address'] for w in self.wallets[:self.count]],
-            'amount': amount, 'base_rate': int(quote['baseRate']), 'fee_multiplier': 1,
-            'artifact': str(artifact)})
+            'base_rate': int(quote['baseRate']), 'artifact': str(artifact)})
         # From here a signed artifact exists. Any refusal leaves it as an orphan,
         # which holds every later start until an operator reviews it.
         need(0 < info['fee'] <= self.max_fee, 'signed grant fee exceeds max_single_signed_fee')
         need(info['bytes'] <= limits['max_signed_transaction_bytes'], 'signed grant byte budget')
         need([s['id'] for s in info['selected']] == [o['id'] for o in selected]
              and info['key_images'] == [s['key_image'] for s in info['selected']], 'signer changed the inputs')
-        need(info['outputs'][0]['index'] == 0 and info['outputs'][0]['amount'] == amount
-             and [o['index'] for o in info['outputs']] in ([0], [0, 1]), 'grant output shape')
+        # Grant i is output i; change, if any, is the one output after them.
+        n = len(grants)
+        need([o['index'] for o in info['outputs']] in (list(range(n)), list(range(n + 1)))
+             and [o['amount'] for o in info['outputs'][:n]] == [g['amount'] for g in grants], 'grant output shape')
         need(sum(s['amount'] for s in info['selected']) == sum(o['amount'] for o in info['outputs']) + info['fee'],
              'signed grant does not balance')
-        inspected = await self.native({'operation': 'inspect', 'artifact': str(artifact)})
+        inspected = await self.native({'operation': 'inspect_grants', 'artifact': str(artifact)})
         need(all(inspected[k] == info[k] for k in ('hash', 'fee', 'bytes', 'outputs', 'key_images')),
              'inspected artifact differs from signer response')
         need(info['hash'] not in {r['hash'] for r in self.records}, 'duplicate grant hash')
-        row = {'index': index, 'recipient': recipient, 'recipient_address': self.wallets[recipient]['address'],
+        row = {'index': index, 'grants': grants,
                'amount': amount, 'hash': info['hash'], 'fee': info['fee'], 'bytes': info['bytes'],
                'outputs': info['outputs'], 'key_images': info['key_images'], 'selected': info['selected'],
                'artifact': str(artifact), 'artifact_sha256': sha256_file(artifact), 'fee_quote': quote,
@@ -552,7 +587,7 @@ class Prefunder(Controller):
         self.producer_budget(2, 'producer request budget before unsent grant')
         statuses = await self.all_hosts('getTransactionStatus', {'hash': row['hash']})
         need(all(s.get('status') == 'unknown' for s in statuses),
-             'unsubmitted grant %d unexpectedly known to the fleet' % row['index'])
+             'unsubmitted grant batch %d unexpectedly known to the fleet' % row['index'])
         await self.submit(row)
 
     async def resume(self):
@@ -571,7 +606,7 @@ class Prefunder(Controller):
                     self.marker_path(row['index']).read_text())['at'])
                 self.save(row)
             elif row['state'] != 'confirmed':
-                need(marker, 'grant %d lost its submit marker' % row['index'])
+                need(marker, 'grant batch %d lost its submit marker' % row['index'])
         self.reserve_inputs()
         await self.reconcile(force=True)
         self.resumed = True
@@ -593,12 +628,12 @@ class Prefunder(Controller):
             statuses = await self.all_hosts('getTransactionStatus', {'hash': row['hash']})
             if not all(s.get('confirmed') and s.get('txHash') == row['hash'] for s in statuses):
                 need(self.clock() - row.get('submitted_at', row['prepared_at']) <= UNRESOLVED_SECONDS,
-                     'grant %d unresolved after fifteen minutes; never resubmitted' % row['index'])
+                     'grant batch %d unresolved after fifteen minutes; never resubmitted' % row['index'])
                 continue
             receipts = await self.all_hosts('getTransaction', {'hash': row['hash']})
             shapes = {(r.get('blockHeight'), r.get('fee'), r.get('outputCount'), r.get('totalOutput'))
                       for r in receipts}
-            need(len(shapes) == 1, 'fleet grant receipt disagreement: grant %d' % row['index'])
+            need(len(shapes) == 1, 'fleet grant receipt disagreement: batch %d' % row['index'])
             need(all(r.get('txHash', row['hash']) == row['hash'] for r in receipts), 'fleet receipt hash mismatch')
             block, fee, outputs, total = shapes.pop()
             need(type(block) is int and fee == row['fee'] and outputs == len(row['outputs'])
@@ -611,12 +646,13 @@ class Prefunder(Controller):
             if not scanned:
                 await self.sync()
                 scanned = True
+            owners = {g['output_index']: g['recipient'] for g in row['grants']}
             for expected in row['outputs']:
-                owner = row['recipient'] if expected['index'] == 0 else self.funding
+                owner = owners.get(expected['index'], self.funding)
                 found = [o for o in self.inventory[owner] if o['id'] == row['hash'] + ':' + str(expected['index'])]
                 need(len(found) == 1 and found[0]['utxo']['amount'] == expected['amount']
                      and bytes(found[0]['utxo']['target_key']).hex() == expected['target_key'],
-                     'grant %d recipient/change scan mismatch' % row['index'])
+                     'grant batch %d recipient/change scan mismatch' % row['index'])
             row.update(state='confirmed', block_height=block, confirmed_at=self.clock(),
                        receipts=dict(zip(HOSTS, receipts)))
             self.save(row)
@@ -650,7 +686,8 @@ class Prefunder(Controller):
              + (v2['undiscovered'][0]['payout'] if v2['undiscovered'] else ''))
         need(difference == 0, 'exact funding-wallet accounting mismatch')
         for wallet in range(self.count):
-            grants = {r['hash'] + ':0' for r in self.records if r['recipient'] == wallet}
+            grants = {r['hash'] + ':' + str(g['output_index'])
+                      for r in self.records for g in r['grants'] if g['recipient'] == wallet}
             for output in self.inventory[wallet]:
                 need(output['id'] in grants or self.is_award(output, awards),
                      'unexpected transfer into campaign wallet-%d' % (wallet + 1))
@@ -675,13 +712,14 @@ class Prefunder(Controller):
         for w in range(self.count):
             ready, counts = choose(self, w, height, headroom=wallets['decoy_headroom'])
             probe, _ = choose(self, w, height, largest, 4, wallets['decoy_headroom'])
-            grants = sum(r['recipient'] == w for r in self.records)
+            grants = sum(g['recipient'] == w for r in self.records for g in r['grants'])
             need(sum(1 for o in self.unspent(w) if not self.is_award(o, awards)) == grants,
                  'campaign wallet-%d grant outputs spent or missing' % (w + 1))
             readiness.append({**counts, 'grant_outputs': grants, 'four_input_probe_feasible': bool(probe),
                               'ready': len(ready) >= wallets['min_mature_utxos_per_wallet'] and bool(probe)})
         health = {'at': self.clock(), 'height': height, 'plan_sha256': self.m['plan_sha256'],
-                  'grants': len(self.records), 'grant_picocredits': self.m['grant_picocredits'],
+                  'grants': self.granted(), 'batches': len(self.records),
+                  'grant_picocredits': self.m['grant_picocredits'],
                   'principal': report['principal'], 'fees': report['fees'],
                   'max_fee': max(r['fee'] for r in self.records), 'accounting': report,
                   'opening_balances': balances, 'opening_lottery_balances': lottery_balances,
@@ -701,7 +739,7 @@ class Prefunder(Controller):
     async def tick(self):
         """One bounded step. Returns True once the outputs are written."""
         self.gate()
-        if (self.state / 'opening_balances.json').exists() and len(self.records) == self.total:
+        if (self.state / 'opening_balances.json').exists() and self.granted() == self.total:
             return True
         await self.lottery_preflight()
         await self.health(force=not self.statuses)
@@ -713,7 +751,7 @@ class Prefunder(Controller):
         if not self.resumed:
             await self.resume()
         await self.reconcile()
-        if len(self.records) == self.total and not self.unconfirmed():
+        if self.granted() == self.total and not self.unconfirmed():
             await self.complete()
             return True
         unsent = self.unsent()
@@ -724,7 +762,7 @@ class Prefunder(Controller):
         if not self.unconfirmed():
             await self.sync()
             self.accounting()
-        if len(self.records) < self.total:
+        if self.granted() < self.total:
             need(self.clock() < self.m['deadline'], 'prefund deadline reached before every grant was offered')
             await self.offer()
         return False
@@ -741,7 +779,8 @@ class Prefunder(Controller):
         except BaseException as error:
             create_exclusive(self.state / ('held-%d.json' % time.time_ns()), {
                 'at': self.clock(), 'error': str(error), 'type': type(error).__name__,
-                'grants': len(self.records), 'confirmed': len(self.records) - len(self.unconfirmed()),
+                'grants': self.granted(), 'batches': len(self.records),
+                'confirmed': self.granted() - self.granted(self.unconfirmed()),
                 'resubmit_forbidden': True})
             raise
 
