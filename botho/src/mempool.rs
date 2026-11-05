@@ -3065,7 +3065,9 @@ mod tests {
         };
 
         let fee_config = FeeConfig::default();
-        let consensus_floor = ledger.consensus_fee_floor(&tx, tip_height).unwrap();
+        // Relay prices demurrage at the inclusion height, tip + 1 (#1875), so
+        // compare with the floor the next block is validated at.
+        let consensus_floor = ledger.consensus_fee_floor(&tx, tip_height + 1).unwrap();
         let cold = DynamicFeeBase::default();
         let relay_cold = relay_minimum_fee(&tx, &ledger, &fee_config, &cold, false);
         assert!(
