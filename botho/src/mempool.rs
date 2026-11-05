@@ -1313,9 +1313,51 @@ impl Mempool {
 
     /// Remove transactions that are no longer valid
     ///
-    /// Checks if any key images were spent in the ledger.
+    /// Run after every commit (`Node::after_block_commit`). Evicts a pending
+    /// transaction when:
+    /// - any of its key images is now spent in the ledger, or
+    /// - its fee is below the consensus fee floor of the next block, priced at
+    ///   [`relay_inclusion_height`] (new tip + 1) (#1920). The floor rises with
+    ///   the height for wealthy-cluster coins (demurrage, #1875), so a tx
+    ///   admitted with less headroom than the floor's growth since admission
+    ///   can no longer be included in any block. Keeping it would only have it
+    ///   nominated and skipped; evicting it frees its key images so the sender
+    ///   can resubmit with a higher fee.
+    ///
+    /// The fee floor is enforced at SCP validity and at seal time
+    /// (`BlockBuilder::finalize_for_apply`); this eviction is mempool hygiene
+    /// only, never what keeps an under-floor tx out of a block.
+    ///
+    /// The key-image check fails closed: a ledger read error evicts (M7),
+    /// because keeping a possible double-spend risks re-proposing it. The fee
+    /// floor check does not need that: if the chain state the floor is priced
+    /// from cannot be read, fee-floor eviction is skipped for this call (with
+    /// a warning) and no tx is evicted for its fee, so a transient read error
+    /// never empties the mempool. A per-tx error computing the floor still
+    /// evicts that tx.
     pub fn remove_invalid(&mut self, ledger: &Ledger) {
+        let inclusion_height = ledger
+            .get_chain_state()
+            .map(|state| state.height.saturating_add(1))
+            .map_err(|e| e.to_string());
+        self.remove_invalid_at(ledger, inclusion_height);
+    }
+
+    /// [`Self::remove_invalid`] with the inclusion height already read, or
+    /// the error reading it (the seam the unreadable-chain-state test uses).
+    fn remove_invalid_at(&mut self, ledger: &Ledger, inclusion_height: Result<u64, String>) {
         let mut to_remove = Vec::new();
+        let inclusion_height = match inclusion_height {
+            Ok(height) => Some(height),
+            Err(e) => {
+                warn!(
+                    "Chain state unreadable; skipping fee-floor eviction of the mempool this \
+                     tick (key-image eviction still runs): {}",
+                    e
+                );
+                None
+            }
+        };
 
         for (tx_hash, pending) in &self.txs {
             // Check if any key image was spent in ledger.
@@ -1344,6 +1386,39 @@ impl Mempool {
 
             if is_invalid {
                 to_remove.push(*tx_hash);
+                continue;
+            }
+
+            // #1920: the consensus fee floor of the next block. Same function
+            // and height block validation uses (`verify_consensus_fee_floor`
+            // at `block.height()` == tip + 1), so a tx kept here pays at least
+            // what the next block requires of it. Skipped when the chain
+            // state could not be read (see above).
+            let Some(inclusion_height) = inclusion_height else {
+                continue;
+            };
+            match ledger.consensus_fee_floor(&pending.tx, inclusion_height) {
+                Ok(floor) if pending.tx.fee >= floor => {}
+                Ok(floor) => {
+                    debug!(
+                        "Evicting mempool tx {}: fee {} below the consensus fee floor {} at \
+                         height {}",
+                        hex::encode(&tx_hash[0..8]),
+                        pending.tx.fee,
+                        floor,
+                        inclusion_height
+                    );
+                    to_remove.push(*tx_hash);
+                }
+                Err(e) => {
+                    warn!(
+                        "DB error computing the fee floor for mempool tx {}; \
+                         evicting (fail closed): {}",
+                        hex::encode(&tx_hash[0..8]),
+                        e
+                    );
+                    to_remove.push(*tx_hash);
+                }
             }
         }
 
@@ -2068,6 +2143,34 @@ mod tests {
         assert!(
             mempool.is_empty(),
             "eviction must fail closed (evict on DB error), tx still present"
+        );
+    }
+
+    /// #1920 review: on the real ledger, a chain-state read error (the LMDB
+    /// reader table exhausted) skips fee-floor eviction instead of evicting
+    /// every pending tx. The tx has no CLSAG inputs, so the key-image check
+    /// (which still fails closed, see above) reads nothing; only the fee-floor
+    /// path depends on the chain state.
+    #[test]
+    fn test_remove_invalid_keeps_txs_when_chain_state_unreadable() {
+        use crate::{ledger::Ledger, transaction::TxInputs};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_single_reader(dir.path()).unwrap();
+        let _held = ledger.read_txn_for_test().unwrap();
+        assert!(ledger.get_chain_state().is_err(), "the read error is real");
+
+        let mut mempool = Mempool::new();
+        let tx = Transaction {
+            inputs: TxInputs::new(Vec::new()),
+            ..test_tx(MIN_TX_FEE, 1)
+        };
+        mempool.txs.insert(tx.hash(), PendingTx::new(tx));
+        mempool.remove_invalid(&ledger);
+        assert_eq!(
+            mempool.len(),
+            1,
+            "a chain-state read error must not empty the mempool"
         );
     }
 
@@ -3188,6 +3291,112 @@ mod tests {
         assert_eq!(
             floor_rose, 64,
             "expected the consensus floor to rise every block for this wealthy aged ring"
+        );
+    }
+
+    /// #1920 (the Judge's #1913 probe case): a tx admitted at exactly the
+    /// uncongested relay minimum (= the consensus floor of the next block) is
+    /// kept while the tip stays put, and evicted by `remove_invalid` once the
+    /// tip advances and the next block's floor rises past its fee. Ring: two
+    /// 1M BTH members of a 10M BTH cluster created at 7,999,000 and 7,999,010;
+    /// a 0.9M BTH spend; tips from 8,000,000.
+    #[test]
+    fn remove_invalid_evicts_tx_once_floor_rises_past_its_fee() {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+        use bth_transaction_types::{ClusterId, TAG_WEIGHT_SCALE};
+
+        const BTH: u64 = 1_000_000_000_000; // picocredits
+        let cluster = 9u64;
+        let fee_config = FeeConfig::default();
+        let cold = DynamicFeeBase::default();
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let seed = |tip: u64| {
+            seed_ring_via_snapshot(
+                &ledger,
+                &[
+                    (1_000_000 * BTH, 7_999_000, cluster, 80),
+                    (1_000_000 * BTH, 7_999_010, cluster, 81),
+                ],
+                tip,
+                &[(cluster, 10_000_000u128 * BTH as u128)],
+            )
+        };
+
+        let tip = 8_000_000u64;
+        let ring = seed(tip);
+        let unpriced = Transaction {
+            inputs: TxInputs::new(vec![ClsagRingInput {
+                ring,
+                key_image: [7u8; 32],
+                commitment_key_image: [0u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount: 0,
+            }]),
+            outputs: vec![TxOutput {
+                amount: 900_000 * BTH,
+                target_key: [130; 32],
+                public_key: [131; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::from_pairs(&[(
+                    ClusterId(cluster),
+                    TAG_WEIGHT_SCALE,
+                )]),
+                kem_ciphertext: None,
+            }],
+            fee: 0,
+            created_at_height: tip,
+            settlement: None,
+        };
+        let relay_min = relay_minimum_fee(&unpriced, &ledger, &fee_config, &cold, false);
+        let tx = Transaction {
+            fee: relay_min,
+            ..unpriced
+        };
+        assert_eq!(
+            relay_min,
+            ledger.consensus_fee_floor(&tx, tip + 1).unwrap(),
+            "admitted at exactly the next block's floor (zero headroom)"
+        );
+
+        let mut mempool = Mempool::new();
+        let tx_hash = tx.hash();
+        mempool.txs.insert(tx_hash, PendingTx::new(tx.clone()));
+        mempool
+            .spent_key_images
+            .insert([7u8; 32], std::time::Instant::now());
+
+        // Same tip: the tx still pays the next block's floor, so it stays.
+        mempool.remove_invalid(&ledger);
+        assert_eq!(mempool.len(), 1, "kept while its fee covers tip + 1");
+
+        // One block later the floor of the next block (tip + 2) is higher.
+        seed(tip + 1);
+        let next_floor = ledger.consensus_fee_floor(&tx, tip + 2).unwrap();
+        assert!(
+            next_floor > tx.fee,
+            "sensitivity: the floor must rise past the fee ({next_floor} vs {})",
+            tx.fee
+        );
+        assert!(ledger
+            .verify_consensus_fee_floor_for_test(&tx, tip + 2)
+            .is_err());
+        // #1920 review: an unreadable chain state skips fee-floor eviction for
+        // the tick instead of evicting every pending tx.
+        mempool.remove_invalid_at(&ledger, Err("injected chain-state read error".into()));
+        assert_eq!(
+            mempool.len(),
+            1,
+            "an unreadable chain state must not evict a tx for its fee"
+        );
+        mempool.remove_invalid(&ledger);
+        assert!(
+            mempool.is_empty(),
+            "evicted once below the next block's floor"
+        );
+        assert!(
+            !mempool.spent_key_images.contains_key(&[7u8; 32]),
+            "eviction frees the key image so the sender can resubmit with a higher fee"
         );
     }
 }

@@ -37,6 +37,16 @@ pub type CombineFn<V, E> = Arc<dyn Fn(&[V]) -> Result<Vec<V>, E> + Sync + Send>;
 /// Application-specific validation of value.
 pub type ValidityFn<V, E> = Arc<dyn Fn(&V) -> Result<(), E> + Sync + Send>;
 
+/// Application-specific validation of a value FOR A GIVEN SLOT.
+///
+/// The node binds each slot's index into this function when it creates the
+/// slot (see [`crate::Node::new_slot_aware`]), so every validity check a slot
+/// performs is evaluated for that slot's own index, never for whatever slot
+/// the node happens to be on when the check runs. An application whose value
+/// validity depends on the slot (for example, on the state the slot builds
+/// on) uses this instead of [`ValidityFn`].
+pub type SlotValidityFn<V, E> = Arc<dyn Fn(SlotIndex, &V) -> Result<(), E> + Sync + Send>;
+
 /// The various phases of the SCP protocol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Phase {

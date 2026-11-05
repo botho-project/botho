@@ -42,6 +42,11 @@ mod mempool_tag_gate_tests;
 // the SHA-pinned store.rs.
 #[cfg(test)]
 mod cluster_tag_rules_tests;
+// #1920: an admitted transfer that fails block validation at its block's
+// height never reaches an applied block (builder skip, SCP slot check). Kept
+// out of the SHA-pinned store.rs.
+#[cfg(test)]
+mod fee_floor_inclusion_tests;
 
 // #1840 end-to-end checks of the Lean cluster-tag counterexamples
 // (formal/Botho/Tags/), kept out of the SHA-pinned store.rs.
@@ -56,7 +61,10 @@ pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;
 // validation (Rule 1) and mempool admission (Rule 2).
 pub(crate) use store::{check_output_clusters_on_ring, first_malformed_output_tags};
 pub use store::{
-    v2::{DerivationContext, LOTTERY_RULES_VERSION},
+    v2::{
+        BlockIdentity, DerivationContext, DroppedTransfer, TransferBlockCheck,
+        LOTTERY_RULES_VERSION,
+    },
     ClusterWealthInfo, EmissionStateUpdate, Ledger, LedgerStorageUsage, TxLocation,
 };
 

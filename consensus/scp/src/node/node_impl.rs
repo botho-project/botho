@@ -4,14 +4,14 @@
 //! with the members of its quorum set.
 use crate::{
     msg::{ExternalizePayload, Msg, Topic},
-    slot::{CombineFn, ScpSlot, Slot, SlotMetrics, ValidityFn},
+    slot::{CombineFn, ScpSlot, Slot, SlotMetrics, SlotValidityFn, ValidityFn},
     QuorumSet, ScpNode, SlotIndex, Value,
 };
 use bth_common::{
     logger::{log, Logger},
     HashMap, NodeID,
 };
-use std::{collections::BTreeSet, fmt::Display, mem, time::Duration};
+use std::{collections::BTreeSet, fmt::Display, mem, sync::Arc, time::Duration};
 
 /// Default limit on number of externalized slots to store.
 const MAX_EXTERNALIZED_SLOTS: usize = 1;
@@ -33,8 +33,10 @@ pub struct Node<V: Value, ValidationError: Clone + Display> {
     /// A queue of externalized slots, ordered by increasing slot index.
     externalized_slots: Vec<Box<dyn ScpSlot<V>>>,
 
-    /// Application-specific validation of value.
-    validity_fn: ValidityFn<V, ValidationError>,
+    /// Application-specific validation of value, for a given slot. Each slot
+    /// is created with this function bound to its own index (see
+    /// [`Self::slot_validity_fn`]).
+    validity_fn: SlotValidityFn<V, ValidationError>,
 
     /// Application-specific function for combining multiple values. Must be
     /// deterministic.
@@ -69,11 +71,39 @@ impl<V: Value, ValidationError: Clone + Display + 'static> Node<V, ValidationErr
         current_slot_index: SlotIndex,
         logger: Logger,
     ) -> Self {
+        let slot_agnostic: SlotValidityFn<V, ValidationError> =
+            Arc::new(move |_slot_index, value| validity_fn(value));
+        Self::new_slot_aware(
+            node_id,
+            quorum_set,
+            slot_agnostic,
+            combine_fn,
+            current_slot_index,
+            logger,
+        )
+    }
+
+    /// Creates a new Node whose value validity may depend on the slot.
+    ///
+    /// Identical to [`Self::new`], except that `validity_fn` also receives the
+    /// index of the slot the value is being validated for. The index is bound
+    /// when the slot is created, so a slot's checks always name that slot,
+    /// including checks made after the node has moved on to a later slot
+    /// (messages for a retained externalized slot) and the post-externalize
+    /// re-check in `externalize`.
+    pub fn new_slot_aware(
+        node_id: NodeID,
+        quorum_set: QuorumSet,
+        validity_fn: SlotValidityFn<V, ValidationError>,
+        combine_fn: CombineFn<V, ValidationError>,
+        current_slot_index: SlotIndex,
+        logger: Logger,
+    ) -> Self {
         let slot = Slot::new(
             node_id.clone(),
             quorum_set.clone(),
             current_slot_index,
-            validity_fn.clone(),
+            Self::bind_slot(&validity_fn, current_slot_index),
             combine_fn.clone(),
             logger.clone(),
         );
@@ -91,6 +121,20 @@ impl<V: Value, ValidationError: Clone + Display + 'static> Node<V, ValidationErr
         }
     }
 
+    /// `validity_fn` with `slot_index` bound, as one slot's [`ValidityFn`].
+    fn bind_slot(
+        validity_fn: &SlotValidityFn<V, ValidationError>,
+        slot_index: SlotIndex,
+    ) -> ValidityFn<V, ValidationError> {
+        let validity_fn = validity_fn.clone();
+        Arc::new(move |value| validity_fn(slot_index, value))
+    }
+
+    /// This node's validity function bound to `slot_index`.
+    fn slot_validity_fn(&self, slot_index: SlotIndex) -> ValidityFn<V, ValidationError> {
+        Self::bind_slot(&self.validity_fn, slot_index)
+    }
+
     // Record the values externalized by the current slot and advance the current
     // slot.
     fn externalize(&mut self, payload: &ExternalizePayload<V>) -> Result<(), String> {
@@ -99,7 +143,7 @@ impl<V: Value, ValidationError: Clone + Display + 'static> Node<V, ValidationErr
         // Log an error if any invalid values were externalized.
         // This is be redundant, but may be helpful during development.
         for value in &payload.C.X {
-            if let Err(e) = (self.validity_fn)(value) {
+            if let Err(e) = (self.validity_fn)(slot_index, value) {
                 log::error!(
                     self.logger,
                     "Slot {} externalized invalid value: {:?}, {}",
@@ -114,7 +158,7 @@ impl<V: Value, ValidationError: Clone + Display + 'static> Node<V, ValidationErr
             self.ID.clone(),
             self.Q.clone(),
             slot_index + 1,
-            self.validity_fn.clone(),
+            self.slot_validity_fn(slot_index + 1),
             self.combine_fn.clone(),
             self.logger.clone(),
         ));
@@ -175,7 +219,7 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
             self.ID.clone(),
             quorum_set,
             slot_index,
-            self.validity_fn.clone(),
+            self.slot_validity_fn(slot_index),
             self.combine_fn.clone(),
             self.logger.clone(),
         ));
@@ -371,7 +415,7 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
             self.ID.clone(),
             self.Q.clone(),
             slot_index,
-            self.validity_fn.clone(),
+            self.slot_validity_fn(slot_index),
             self.combine_fn.clone(),
             self.logger.clone(),
         ));
@@ -403,6 +447,46 @@ mod tests {
             slot_index,
             logger,
         )
+    }
+
+    #[test_with_logger]
+    // A slot-aware validity function sees the index of the slot each check is
+    // made for, and a slot re-created at a later index validates for that
+    // index (#1920).
+    fn test_slot_aware_validity_binds_slot_index(logger: Logger) {
+        use std::sync::Mutex;
+
+        let seen: Arc<Mutex<Vec<SlotIndex>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        // "late" is valid only for slot 9.
+        let validity_fn: SlotValidityFn<&'static str, TransactionValidationError> =
+            Arc::new(move |slot_index, value: &&'static str| {
+                recorder.lock().unwrap().push(slot_index);
+                if *value == "late" && slot_index != 9 {
+                    Err(TransactionValidationError)
+                } else {
+                    Ok(())
+                }
+            });
+        let mut node = Node::<&'static str, TransactionValidationError>::new_slot_aware(
+            test_node_id(1),
+            QuorumSet::new_with_node_ids(1, vec![test_node_id(2)]),
+            validity_fn,
+            Arc::new(trivial_combine_fn),
+            8,
+            logger,
+        );
+
+        // Slot 8 rejects the value, so nothing is nominated.
+        assert_eq!(node.propose_values(btreeset! {"late"}).unwrap(), None);
+        assert_eq!(*seen.lock().unwrap(), vec![8]);
+
+        // The same value is checked for slot 9, where it is valid and is
+        // recorded among the slot's validated values.
+        node.reset_slot_index(9);
+        node.propose_values(btreeset! {"late"}).unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![8, 9]);
+        assert!(node.get_retained_values().contains(&"late"));
     }
 
     #[test_with_logger]
@@ -822,7 +906,7 @@ mod tests {
             node.ID.clone(),
             node.Q.clone(),
             7,
-            node.validity_fn.clone(),
+            node.slot_validity_fn(7),
             node.combine_fn.clone(),
             logger,
         );

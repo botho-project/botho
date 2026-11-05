@@ -152,6 +152,72 @@ pub(in crate::ledger) trait ValidationReads {
 
         Ok(())
     }
+    /// Every per-transaction rule block application enforces on an ordinary
+    /// transfer, for a block at `block_height` built on this pre-state (#1920).
+    ///
+    /// This is the per-transaction part of [`Self::validate_ordinary_body`]
+    /// plus the writer's [`Self::verify_transaction`] (key images unspent,
+    /// CLSAG signatures) and its key-image recording: first the uniqueness of
+    /// the transaction's own key images (`add_block` records each input's key
+    /// image through its write transaction, so a repeat within one transaction
+    /// is a collision there), then the same functions in the same order as the
+    /// block validator: ML-KEM ciphertext shape, C5 staleness, C3 ring
+    /// members, Rule 1 tag shape and C6 tag inheritance, C7 fee floor, C8
+    /// settlement structure, then key images and signatures. Every one of
+    /// these is a reason `add_block` rejects the block, so their order only
+    /// picks which reason is reported. It omits only the checks that span
+    /// transactions (the fee-sum overflow guard and key-image uniqueness
+    /// across the block), which the caller applies across its candidate set.
+    ///
+    /// Every rule here reads only the transaction, `block_height` and the
+    /// committed pre-state, so a transaction that passes here is accepted by
+    /// block application of a block at `block_height` on the same pre-state,
+    /// and one that fails would make that block invalid. The block builder's
+    /// skip (`Ledger::retain_block_valid_transfers`) and the SCP value check
+    /// (`Ledger::check_transfer_for_block`) both call this, so they apply
+    /// exactly the rule the block validator applies.
+    ///
+    /// Keep this in step with `validate_ordinary_body`: a per-transaction rule
+    /// added there must be added here too, or the builder can emit a block
+    /// the validator rejects (a terminal consensus failure).
+    fn verify_transfer_for_block(
+        &self,
+        tx: &BothoTransaction,
+        block_height: u64,
+    ) -> Result<(), LedgerError> {
+        let mut own_key_images = std::collections::BTreeSet::new();
+        for (i, input) in tx.inputs.clsag().iter().enumerate() {
+            if !own_key_images.insert(input.key_image) {
+                return Err(LedgerError::InvalidBlock(format!(
+                    "Input {} repeats a key image of an earlier input of the same transaction",
+                    i
+                )));
+            }
+        }
+        for (out_idx, output) in tx.outputs.iter().enumerate() {
+            crate::consensus::check_kem_ciphertext(&output.kem_ciphertext).map_err(|e| {
+                LedgerError::InvalidBlock(format!("output {} ML-KEM ciphertext: {}", out_idx, e))
+            })?;
+        }
+        if is_stale_transfer_at(tx, block_height) {
+            return Err(LedgerError::InvalidBlock(format!(
+                "stale: created_at_height {} + MAX_TX_AGE {} < block height {}",
+                tx.created_at_height, MAX_TX_AGE, block_height
+            )));
+        }
+        self.verify_ring_members(tx)?;
+        if let Some(i) = first_malformed_output_tags(&tx.outputs) {
+            return Err(LedgerError::InvalidBlock(format!(
+                "output {} has malformed cluster tags ({} entries)",
+                i,
+                tx.outputs[i].cluster_tags.len()
+            )));
+        }
+        self.verify_cluster_tag_inheritance(tx, block_height)?;
+        self.verify_consensus_fee_floor(tx, block_height)?;
+        self.verify_settlement(tx)?;
+        self.verify_transaction(tx)
+    }
     fn verify_consensus_fee_floor(
         &self,
         tx: &BothoTransaction,

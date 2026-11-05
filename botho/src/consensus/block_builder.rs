@@ -296,6 +296,49 @@ impl BlockBuilder {
         ledger.seal_block(block)
     }
 
+    /// Drop the transfers that would make an externalized block invalid, then
+    /// seal it ([`Self::apply_lottery`]) (#1920).
+    ///
+    /// SCP agrees on a SET of values, and each node builds the block from it.
+    /// A transfer can be valid when it is admitted and nominated and still
+    /// fail block validation at the block's own height: the consensus fee
+    /// floor rises with the block height (demurrage, #1875), so a transfer
+    /// admitted with less headroom than one block of floor growth falls below
+    /// the floor of a later block. Before #1920 such a block failed
+    /// `add_block` on every node, a terminal consensus failure that halted
+    /// the chain. Here every transfer that fails a per-transaction block rule
+    /// at `block.height()` ([`Ledger::retain_block_valid_transfers`]) is
+    /// skipped instead, so the block that is sealed applies.
+    ///
+    /// This runs at seal time, not in [`Self::build_from_externalized`],
+    /// because only here is the pre-state pinned: the apply job holds the
+    /// apply mutex, the tip is the block's parent, and no commit can land
+    /// before `add_block`. `build_from_externalized` runs on the node loop as
+    /// soon as a slot externalizes, possibly before the parent block is
+    /// committed (an apply still in flight, or a decision parked until sync
+    /// supplies its parent, #1583). Filtering there would read whatever tip
+    /// the node is at, so two nodes could drop different transfers, build
+    /// different blocks and fork. At seal time every node filters the same
+    /// externalized block against the same parent and keeps the same
+    /// transfers.
+    ///
+    /// [`Ledger::retain_block_valid_transfers`]: crate::ledger::Ledger::retain_block_valid_transfers
+    pub fn finalize_for_apply(
+        block: Block,
+        ledger: &crate::ledger::Ledger,
+    ) -> Result<Block, crate::ledger::LedgerError> {
+        let (block, dropped) = ledger.retain_block_valid_transfers(block)?;
+        for skipped in &dropped {
+            warn!(
+                height = block.height(),
+                tx_hash = hex::encode(&skipped.tx_hash[0..8]),
+                reason = %skipped.reason,
+                "Skipping externalized transfer that fails block validation at this height"
+            );
+        }
+        Self::apply_lottery(block, ledger)
+    }
+
     /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax
     /// format).
     ///

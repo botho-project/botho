@@ -418,6 +418,139 @@ impl Ledger {
         Ok(block)
     }
 
+    /// Check one transfer against every per-transaction block rule for the
+    /// block built on `parent` (#1920): height `parent_height + 1`, whose
+    /// `prev_block_hash` is `parent_hash`.
+    ///
+    /// That is the block `add_block` would accept on that parent (it requires
+    /// `height == tip + 1` and `prev_block_hash == tip`), and the height
+    /// [`BlockBuilder::finalize_for_apply`] filters at. The height is taken
+    /// from the parent, never from an SCP slot index, which can run ahead of
+    /// the ledger height (#421 drift).
+    ///
+    /// All reads come from one pinned read transaction, the same
+    /// [`ProductionView`] block application validates against, so the verdict
+    /// is exactly the one `add_block` would reach for that transaction in that
+    /// block. If the tip is not `parent` (behind it, past it, or on another
+    /// branch), that pre-state is not available here and the result is
+    /// [`TransferBlockCheck::NotAtParent`], never a verdict.
+    ///
+    /// Ledger read failures propagate as `Err` (fail closed, M7); they are
+    /// never reported as `Valid`.
+    ///
+    /// [`BlockBuilder::finalize_for_apply`]: crate::consensus::BlockBuilder::finalize_for_apply
+    pub fn check_transfer_for_block(
+        &self,
+        tx: &crate::transaction::Transaction,
+        parent_height: u64,
+        parent_hash: [u8; 32],
+    ) -> Result<TransferBlockCheck, LedgerError> {
+        let txn = self
+            .env
+            .read_txn()
+            .map_err(db_op("transfer check read txn"))?;
+        let view = self.production_view(&txn);
+        let (tip_height, tip_hash) = (view.height()?, view.tip_hash()?);
+        if tip_height != parent_height || tip_hash != parent_hash {
+            return Ok(TransferBlockCheck::NotAtParent {
+                tip_height,
+                tip_hash,
+            });
+        }
+        let Some(block_height) = parent_height.checked_add(1) else {
+            return Ok(TransferBlockCheck::Invalid("block height overflows".into()));
+        };
+        match view.verify_transfer_for_block(tx, block_height) {
+            Ok(()) => Ok(TransferBlockCheck::Valid),
+            Err(LedgerError::InvalidBlock(reason)) => Ok(TransferBlockCheck::Invalid(reason)),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// The committed block at `height`, as its hash and the hash of its
+    /// minting tx (#1920), or `None` above the tip. The consensus service
+    /// uses it to learn which block an externalized decision produced.
+    pub fn block_identity_at(&self, height: u64) -> Result<Option<BlockIdentity>, LedgerError> {
+        let tip = self.get_chain_state()?.height;
+        if height > tip {
+            return Ok(None);
+        }
+        let block = self.get_block(height)?;
+        Ok(Some(BlockIdentity {
+            height,
+            hash: block.hash(),
+            minting_tx_hash: block.minting_tx.hash(),
+        }))
+    }
+
+    /// Drop every transfer that would make `block` invalid on the current tip
+    /// (#1920), returning the remaining block and the dropped transfers.
+    ///
+    /// The block builder runs this on an externalized block just before
+    /// sealing it, under the apply mutex, so the tip is the block's parent and
+    /// no commit can land in between. Every node applying the same
+    /// externalized block on the same parent drops the same transfers, so
+    /// they all build the same block. A transfer is dropped when it fails
+    /// [`ValidationReads::verify_transfer_for_block`] at `block.height()`
+    /// (for example, a fee below the consensus fee floor at that height), when
+    /// it repeats a key image of an earlier kept transfer, or when its fee
+    /// would overflow the block's fee sum (`checked_block_fees`). The order
+    /// of the kept transfers is unchanged.
+    ///
+    /// If the tip is not the block's parent, the block is returned unchanged:
+    /// it cannot be applied here anyway, and [`Self::seal_block`] reports the
+    /// mismatch. Ledger read failures propagate as `Err`.
+    pub fn retain_block_valid_transfers(
+        &self,
+        mut block: Block,
+    ) -> Result<(Block, Vec<DroppedTransfer>), LedgerError> {
+        let txn = self
+            .env
+            .read_txn()
+            .map_err(db_op("transfer retain read txn"))?;
+        let view = self.production_view(&txn);
+        let (height, tip) = (view.height()?, view.tip_hash()?);
+        if height.checked_add(1) != Some(block.height()) || block.header.prev_block_hash != tip {
+            return Ok((block, Vec::new()));
+        }
+        let block_height = block.height();
+        let mut kept = Vec::with_capacity(block.transactions.len());
+        let mut dropped = Vec::new();
+        let mut seen_key_images = std::collections::BTreeSet::new();
+        let mut fee_sum: u64 = 0;
+        for tx in std::mem::take(&mut block.transactions) {
+            let reason = match view.verify_transfer_for_block(&tx, block_height) {
+                Ok(()) => None,
+                Err(LedgerError::InvalidBlock(reason)) => Some(reason),
+                Err(other) => return Err(other),
+            };
+            let reason = reason.or_else(|| {
+                tx.inputs
+                    .clsag()
+                    .iter()
+                    .any(|input| seen_key_images.contains(&input.key_image))
+                    .then(|| "repeats a key image of an earlier transfer in the block".into())
+            });
+            let reason = reason.or_else(|| match fee_sum.checked_add(tx.fee) {
+                Some(_) => None,
+                None => Some("fee overflows the block fee sum".into()),
+            });
+            match reason {
+                Some(reason) => dropped.push(DroppedTransfer {
+                    tx_hash: tx.hash(),
+                    reason,
+                }),
+                None => {
+                    fee_sum = fee_sum.saturating_add(tx.fee);
+                    seen_key_images.extend(tx.inputs.clsag().iter().map(|input| input.key_image));
+                    kept.push(tx);
+                }
+            }
+        }
+        block.transactions = kept;
+        Ok((block, dropped))
+    }
+
     /// Crate-internal spend-recovery read (#1640): the persisted output and
     /// its committed derivation context as the crypto-layer `Context`
     /// (`base_index` = ORIGINAL derivation index, `tweak` = cumulative V2
@@ -763,4 +896,42 @@ impl ValidationReads for ProductionView<'_, '_> {
             .map(|b| fixed(b).map(u64::from_le_bytes))
             .transpose()
     }
+}
+
+/// Verdict of [`Ledger::check_transfer_for_block`] (#1920).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferBlockCheck {
+    /// Block application of a block at the requested height on the current
+    /// tip accepts the transfer.
+    Valid,
+    /// Block application would reject a block containing the transfer.
+    Invalid(String),
+    /// The tip is not the requested block's parent, so no verdict: the
+    /// pre-state the block would be applied to is not available.
+    NotAtParent {
+        /// The current tip height.
+        tip_height: u64,
+        /// The current tip hash.
+        tip_hash: [u8; 32],
+    },
+}
+
+/// A committed block's identity (#1920): see [`Ledger::block_identity_at`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockIdentity {
+    /// The block height.
+    pub height: u64,
+    /// The block hash.
+    pub hash: [u8; 32],
+    /// The hash of the block's minting tx (its SCP consensus value hash).
+    pub minting_tx_hash: [u8; 32],
+}
+
+/// A transfer [`Ledger::retain_block_valid_transfers`] dropped (#1920).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedTransfer {
+    /// The transfer's hash.
+    pub tx_hash: [u8; 32],
+    /// Why block application would have rejected it.
+    pub reason: String,
 }

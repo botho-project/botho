@@ -175,7 +175,15 @@ fn first_stale_transfer_tx(block: &Block) -> Option<usize> {
     block
         .transactions
         .iter()
-        .position(|tx| tx.created_at_height.saturating_add(MAX_TX_AGE) < block_height)
+        .position(|tx| is_stale_transfer_at(tx, block_height))
+}
+
+/// The per-transaction staleness predicate behind [`first_stale_transfer_tx`]:
+/// `created_at_height + MAX_TX_AGE < block_height`, saturating. Shared with the
+/// per-transaction block check (`ValidationReads::verify_transfer_for_block`,
+/// #1920) so the block validator and the block builder's skip agree exactly.
+fn is_stale_transfer_at(tx: &BothoTransaction, block_height: u64) -> bool {
+    tx.created_at_height.saturating_add(MAX_TX_AGE) < block_height
 }
 
 /// Consensus decay rate for the cluster-tag inflation guard (issue #576).
