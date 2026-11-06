@@ -299,3 +299,11 @@ import Botho
 #print axioms Botho.Consensus.slot_in_tiers
 #print axioms Botho.Consensus.tierOf_idle_iff
 #print axioms Botho.Consensus.forward_dated_block_forces_idle
+
+-- Botho.Timestamps (#1941; status: proven (model), with zero-skew acceptance
+-- refuted in the timestamp-rule model; Rust mapping read from source, no DRT yet)
+#print axioms Botho.Timestamps.short_window_zero
+#print axioms Botho.Timestamps.rolling_mtp_monotone
+#print axioms Botho.Timestamps.honest_stamp_headroom_iff
+#print axioms Botho.Timestamps.zero_skew_counterexample
+#print axioms Botho.Timestamps.some_observed_gap_floor

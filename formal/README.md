@@ -329,15 +329,15 @@ which there was no median-time-past rule. Its counterexamples are finding
 #1848, fixed in protocol 8.0.0 (#1869): `timestamp > MTP(last 11)`, a 60 s
 future bound, a 3 s floor on the observed difficulty gap
 (`observed_block_time`), and minters stamping `max(now, MTP + 1)`. The
-theorems stay as the record of the 7.x bug; the 8.0.0 timestamp rules are
-not modelled yet. The controller kernel and the slot-duration code are
+theorems stay as the historical record of the 7.x bug; the 8.0.0 timestamp
+rules have a separate [timestamp model](#the-timestamp-model). The controller kernel and the slot-duration code are
 unchanged in 8.0.0, so their models and DRT legs cover the code on main.
 
 | Lean | Rust | Status |
 |------|------|--------|
 | `Botho.Difficulty.step` | `EmissionController::compute_time_adjusted_difficulty`, `botho/src/block.rs` | proven + tested |
 | `Botho.Difficulty.run`, `recordBlock` | `EmissionController::record_block`, `botho/src/block.rs` | proven + tested |
-| `Botho.Difficulty.observedSecs` | `observed_secs` in `node::commit_block_locked`, `botho/src/node/mod.rs`, protocol ≤ 7.x (8.0.0: `observed_block_time`, floored at 3 s, not modelled; tested in Rust by `production_feed_floors_gaps_post_1848`) | proven (model); read from the 7.x code |
+| `Botho.Difficulty.observedSecs` | `observed_secs` in `node::commit_block_locked`, `botho/src/node/mod.rs`, protocol ≤ 7.x (8.0.0: `observed_block_time`, floored at 3 s, separately modelled by `Botho.Timestamps.observedGap`; tested in Rust by `production_feed_floors_gaps_post_1848`) | proven (model); read from the 7.x code |
 | `Botho.Difficulty.tsValid`, `applyChain` | the protocol ≤ 7.x timestamp checks in `ledger/store/validation.rs` and `consensus/validation.rs` (`ts >= tip`, `ts <= now + 2 h`; 8.0.0 replaced them with `ts > MTP`, `ts <= now + 60 s`) | proven (model) for 7.x; the validator clock `now` is a trusted input |
 | `Botho.Consensus.slotSecs`, `recordBlock` | `ConsensusService::current_slot_duration`, `record_block`, `botho/src/consensus/service.rs` | proven + tested; the f64 rate is modelled exactly (trusted agreement domain in the module docstring) |
 
@@ -353,6 +353,67 @@ test `forward_dated_tip_accepts_honest_minting_tx_post_1848` pins the fixed
 validator behaviour. `compute_time_adjusted_difficulty` is
 integer-only and a candidate for the `botho` extraction lane (#1838); this
 model does not depend on it.
+
+## The timestamp model
+
+`Botho/Timestamps.lean` (#1941) models the protocol 8.0.0 rules retained in
+9.0.0. The five listed claims are **proven (model)**; the skew-only acceptance
+claim is **refuted in the timestamp-rule model**. All Rust mappings below are
+**read from source**. These proofs do not establish Rust correspondence;
+#1942 owns helper DRT and #1943 owns the production acceptance seam and DRT.
+Neither has been supplied by this child.
+
+| Lean (`Botho.Timestamps.*`) | Rust | Status and scope |
+|------|------|------|
+| `tail11`, `slots`, `mtp`, `roll`, `nextMin` | `median_time_past_of`, `ChainState::rolled_timestamps`, `next_min_timestamp` in `botho/src/ledger/mod.rs` | read from source; fixed padded median, rolling history and saturated successor |
+| `honestStamp` | `minting_timestamp` and its clock-reading caller in `botho/src/node/minter.rs` | read from source; maximum of supplied clock and minimum stamp |
+| `accepts`, `futureCap` | C2b in `botho/src/ledger/store/validation.rs` | read from source; scalar conjunction only, saturated future cap |
+| `accepts` on `v ≤ U-60` | full minting validation in `botho/src/consensus/validation.rs` | read from source; full validator checks ordinary `now+60` before MTP; agreement concerns the scalar conjunction on this restricted domain |
+| upper clause of `accepts` on `v ≤ U-60` | intrinsic minting validation in `botho/src/consensus/validation.rs` | read from source; only the ordinary `now+60` upper bound, no MTP check |
+| `observedGap` | `difficulty::observed_block_time` in `botho/src/block.rs` | read from source; zero parent gives `None`, other gaps are saturated subtraction floored at three |
+
+Let `U = 2^64-1`. Public claims take natural timestamps with explicit
+`≤ U` bounds and `Bounded(w) := ∀ t ∈ w, t ≤ U`. The window can be any finite
+length, including greater than eleven. Its entries are oldest first: take
+the last eleven, pad the front with zeroes to eleven slots, sort ascending,
+and select index five. The model proves the slot length and index bounds.
+Rolling keeps the final at most ten entries and appends the stamp.
+`nextMin(w) = min(MTP(w)+1,U)`, `honestStamp(w,n) = max(n,nextMin(w))`, and
+`futureCap(v) = min(v+60,U)` use the existing `Botho.satAdd` convention.
+
+The universal results establish that windows of length at most five have
+zero MTP, and that a stamp strictly above MTP cannot decrease the rolled
+MTP. The latter assumes neither sorted inputs nor chain reachability. Its
+proof characterizes a sorted median by the count of slots below a threshold;
+rolling drops one normalized slot and adds a stamp above the old median.
+For an accepted history, induct on its transitions: the base MTP is equal to
+itself; each accepted step supplies the strict-lower-bound premise, preserves
+bounded entries through drop/append, and composes the one-step inequality
+by transitivity. Thus MTP never decreases along a timestamp-accepted chain.
+
+The exact honest-stamp result is
+`accepts(w,honestStamp(w,n),v) ↔ MTP(w) < futureCap(v) ∧ n ≤ futureCap(v)`.
+It requires actual median headroom as well as the clock bound. The typed
+counterexample checks six accepted `(stamp=1060, validatorNow=1000)`
+transitions from an empty window, reaching six 1060 entries and MTP 1060.
+Next minter and validator clocks are both 1000, so skew is zero and below
+60; the honest stamp is 1061 and is rejected by the 1060 cap. The earlier
+stamps are accepted scalar inputs, not asserted honestly generated stamps.
+This refutes a skew-only guarantee in the timestamp-rule model, including
+the unconditional acceptance prose in the minter source. It does not prove
+realizability under SCP pacing, physical clocks, PoW or complete ledger
+acceptance. Header/minting equality, error order and clock-read timing are
+outside the model.
+
+At eleven `U` stamps, MTP, the saturated successor, and every bounded-clock
+honest stamp all equal `U`, failing the strict lower bound. At `v=U-60`,
+ordinary `v+60` equals `U`; above that boundary, the ledger caps while the
+minting validators' ordinary u64 addition is outside the agreement domain.
+These artificial maximum-time inputs check arithmetic boundaries, not a
+present-day exploit. Kernel examples also cover short/long, duplicate and
+unsorted windows, ignored prefixes, rolling truncation and backward/equal
+gaps. Every `Some` observed gap is at least three; parent zero remains
+`None`. No downstream division-safety theorem follows here.
 
 ## Differential random testing (DRT)
 
