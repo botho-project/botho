@@ -322,6 +322,104 @@ class PrepareHistorySemanticsTests(unittest.TestCase):
         self.assertEqual(prepare_spent(rows, {'a'}), [rows[0], rows[2]])
 
 
+def window_ages(blocks, height, created, excluded):
+    """Ages of the signer's canonical decoys inside ``age_band(height - created)``."""
+    low, high = age_band(height - created)
+    seen, ages = set(), []
+    for block in sorted(blocks, key=lambda b: b['height']):
+        for o in block['outputs']:
+            if block['height'] == 0 or o.get('lottery'):
+                continue
+            key = o['targetKey'].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if low <= height - block['height'] <= high and key not in excluded:
+                ages.append(height - block['height'])
+    return ages
+
+
+def clumped_chain(blocks, clump, per_clump_height=15):
+    """One output per block, except ``per_clump_height`` at each height in ``clump``.
+
+    This is a young chain where prefund batch transactions put 15 outputs at
+    one height (#1939).
+    """
+    history, n = [], 0
+    for height in range(blocks):
+        rows = []
+        for _ in range(per_clump_height if height in clump else 1):
+            rows.append(output(n))
+            n += 1
+        history.append({'height': height, 'outputs': rows})
+    return history
+
+
+class SignerWindowTopUpTests(unittest.TestCase):
+    """Every window the signer can draw keeps 19 decoys after sampling (#1948).
+
+    The signer draws ONE random-offset window, half the envelope, and refuses
+    when it holds fewer than 19 (#1692/#1809). A whole-band top-up is not
+    enough: a band can hold 64 sampled decoys while one window holds 14.
+    """
+
+    SEEDS = range(200)
+
+    def check(self, history, height, created, seeds=SEEDS):
+        inputs = selected_at(history, created)
+        excluded = {o['targetKey'] for o, _ in inputs}
+        sizes = []
+        for seed in seeds:
+            blocks = prepare_blocks(history, height, ids_of(inputs), rng=random.Random(seed))
+            for _, h in inputs:
+                age = height - h
+                full = thinnest_window_count(age, window_ages(history, height, h, excluded))
+                sent = window_ages(blocks, height, h, excluded)
+                self.assertGreaterEqual(thinnest_window_count(age, sent), min(RING_DECOYS, full),
+                                        (seed, age))
+                sizes.append(len(sent))
+        return sum(sizes) / len(sizes)
+
+    def test_clumped_band_edge_keeps_every_window(self):
+        # Age 475, envelope 429..521, window width 46. Fifteen-output clumps
+        # near the old edge make the band large (p about 0.2), so a window
+        # at the young edge, which avoids them, expects only about 10.
+        height = 999
+        clump = {height - a for a in range(430, 446)}
+        history = clumped_chain(1000, clump)
+        mean = self.check(history, height, [height - 475])
+        self.assertLess(mean, 1.5 * DECOY_SAMPLE_TARGET)
+
+    def test_clumped_band_at_random_places_keeps_every_window(self):
+        # Clumps scattered through the band, as prefund batches land.
+        height = 999
+        for trial in range(20):
+            rng = random.Random(10_000 + trial)
+            clump = {height - rng.randrange(420, 530) for _ in range(12)}
+            history = clumped_chain(1000, clump - {height - 475})
+            self.check(history, height, [height - 475], seeds=range(20))
+
+    def test_uniform_band_keeps_every_window_near_the_target(self):
+        history = chain(blocks=4000, outputs=40_000)
+        height = 3999
+        mean = self.check(history, height, [height - 2000])
+        # The top-up is rare here: the mean stays close to the target.
+        self.assertLess(mean, 1.15 * DECOY_SAMPLE_TARGET)
+        self.assertGreater(mean, 0.85 * DECOY_SAMPLE_TARGET)
+
+    def test_thin_full_history_is_matched_not_exceeded(self):
+        # Age 150 with one output per block: every window holds 14 in the
+        # full history. The sample keeps that minimum and invents nothing.
+        history = chain(blocks=300, outputs=300)
+        self.check(history, 299, [299 - 150], seeds=range(20))
+
+    def test_multi_input_groups_keep_every_window(self):
+        height = 999
+        clump = {height - a for a in range(430, 446)}
+        history = clumped_chain(1000, clump)
+        self.check(history, height, [height - 475, height - 480], seeds=range(40))
+
+
 class ScanChunkTests(unittest.TestCase):
     def test_empty_history_still_sends_one_request(self):
         payloads = list(scan_payloads({'operation': 'scan', 'wallet': 'w', 'blocks': []}))

@@ -55,12 +55,26 @@ from public data must never be used. Once a sample is as small as a ring,
 the seed alone fixes the ring. An observer could then replay the sampling
 for each ring member and find the real input.
 
-Two documented departures from exact uniformity can occur:
+Three documented departures from exact uniformity can occur:
 
 * A band can draw fewer than 19 eligible outputs. The expected count is
   ``DECOY_SAMPLE_TARGET`` = 64, so the probability is below 1e-10. In that
-  case the band is topped up uniformly from its unsent outputs, and the
-  signer's "Not enough decoys" error is never introduced.
+  case the band is topped up uniformly from its unsent outputs.
+* The signer does not draw from the whole band. It draws one random-offset
+  window, half the band wide, and refuses when it holds fewer than 19
+  (#1809). A W-wide window expects only about half of the 64. On a young
+  chain the band can be clumpy: prefund batch transactions put 15 outputs
+  at one height (#1939), so a window that misses the clumps holds a small
+  share of the sample. This is not rare. Without a correction, a sampled
+  window held 14 in a live rehearsal (#1948). So, for every input,
+  the sample is topped up until its thinnest window
+  (``thinnest_window_count``) holds ``min(19, thinnest window of the full
+  history)``. Each added output is drawn uniformly from the unsent outputs
+  of the currently thinnest window. Outputs in thin windows are then a
+  little more likely to be sent than outputs elsewhere in the band. With
+  this top-up, sampling never introduces the signer's "Not enough decoys"
+  error. The error happens only when the full history would cause it too,
+  and admission (``Controller.spendable``) refuses that input first.
 * A single-input group can exceed ``DECOY_GROUP_CEILING`` expected
   outputs only with extreme density differences inside its band. The
   sampling probability is then capped to keep the request bounded.
@@ -128,6 +142,15 @@ def thinnest_window_count(age, decoy_ages):
     only falls just after ``s`` passes a decoy age, so the minimum is at
     ``s = age - W`` or at ``s = a + 1`` for some decoy age ``a`` in range.
     """
+    return thinnest_window(age, decoy_ages)[0]
+
+
+def thinnest_window(age, decoy_ages):
+    """``(count, low, high)`` of the window with the fewest decoys.
+
+    ``[low, high]`` is the age range of that window, floor applied. With
+    ties, the window with the oldest start is returned.
+    """
     width = 2 * (age * AGE_SIMILARITY_SPREAD_BPS // 10_000)
     ages = sorted(decoy_ages)
     first, last = age - width, age
@@ -136,11 +159,11 @@ def thinnest_window_count(age, decoy_ages):
         return (bisect_right(ages, start + width)
                 - bisect_left(ages, max(start, MIN_DECOY_AGE)))
 
-    best = count(first)
+    best = (count(first), first)
     for a in ages:
-        if first <= a < last:
-            best = min(best, count(a + 1))
-    return best
+        if first <= a < last and count(a + 1) < best[0]:
+            best = (count(a + 1), a + 1)
+    return best[0], max(best[1], MIN_DECOY_AGE), best[1] + width
 
 
 def output_id(output):
@@ -206,19 +229,20 @@ def prepare_blocks(blocks, height, selected_ids, rng=None,
         return [(h, p) for h, p, key in canonical[bisect_left(heights, low):bisect_right(heights, high)]
                 if key not in excluded and h <= height]
 
-    # Height intervals of each band, merged into connected groups.
-    intervals = sorted((height - high, height - low) for low, high in map(age_band, ages))
+    # Height intervals of each band, merged into connected groups. Each
+    # interval keeps the input age it was built from.
+    intervals = sorted((height - age_band(age)[1], height - age_band(age)[0], age) for age in ages)
     groups = []
     # Comparing with the previous interval's high is enough: a band's high
     # rises monotonically with its low (+/- a fixed share, with a floor), so sorted
     # intervals that overlap anything earlier overlap the last one.
-    for low, high in intervals:
+    for low, high, age in intervals:
         if groups and low <= groups[-1][-1][1]:
-            groups[-1].append((low, high))
+            groups[-1].append((low, high, age))
         else:
-            groups.append([(low, high)])
+            groups.append([(low, high, age)])
     for group in groups:
-        bands = [pool(low, high) for low, high in group]
+        bands = [pool(low, high) for low, high, _ in group]
         union = pool(min(b[0] for b in group), max(b[1] for b in group))
         if len(group) > 1:
             # Several rings of one transaction draw from this sample. A
@@ -239,6 +263,23 @@ def prepare_blocks(blocks, height, selected_ids, rng=None,
             need = min(RING_DECOYS, len(band))
             if have < need:
                 sample.update(rng.sample([x for x in band if x not in sample], need - have))
+        # The signer draws one random-offset window, about half the band, and
+        # refuses below nineteen decoys (#1692/#1809). A band-level top-up
+        # does not cover that, so each input's thinnest window is topped up
+        # until it holds as many as the full history guarantees (capped at
+        # nineteen). Every draw is uniform over the unsent outputs of the
+        # current thinnest window. That window holds more in the full pool
+        # than in the sample, so a candidate always exists and the loop ends.
+        # Topping up only adds outputs, so an earlier input stays satisfied.
+        for band, (_, _, age) in zip(bands, group):
+            goal = min(RING_DECOYS, thinnest_window_count(age, [height - h for h, _ in band]))
+            while True:
+                have, low, high = thinnest_window(age, [height - h for h, p in band
+                                                        if (h, p) in sample])
+                if have >= goal:
+                    break
+                sample.add(rng.choice([(h, p) for h, p in band
+                                       if low <= height - h <= high and (h, p) not in sample]))
         chosen |= sample
 
     by_height = {}
