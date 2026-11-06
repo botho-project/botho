@@ -84,6 +84,7 @@ UNRESOLVED_SECONDS = 900        # same bound as Controller.reconcile()
 POLL_SECONDS = 30
 HEALTH_SECONDS = 15
 UNSYNCED_SECONDS = 120
+PENDING_SECONDS = 600           # #1956: a confirmed spend may still read pending on a lagging node
 FUNDING_WAIT_SECONDS = 60       # Full rescans while the funding wallet matures.
 
 
@@ -285,6 +286,7 @@ class Prefunder(Controller):
         self.blocks, self.inventory, self.spent = [], [[] for _ in self.wallets], []
         self.inventory_initialized = False
         self.statuses, self.fresh, self.health_at, self.unsynced_since = {}, 0, 0, None
+        self.pending_since = None
         self.scan_lock = asyncio.Lock()
         self.closed = False
         self.resumed = False
@@ -693,9 +695,21 @@ class Prefunder(Controller):
                      'unexpected transfer into campaign wallet-%d' % (wallet + 1))
         return report
 
+    def wait_for_pending(self):
+        """#1956: mempool eviction can lag block application on one node, so a
+        pending funding key image is a wait like an unsynced node, held only if
+        it persists past PENDING_SECONDS."""
+        if any(s['pending'] for s in self.spent):
+            self.pending_since = self.pending_since or self.clock()
+            need(self.clock() - self.pending_since <= PENDING_SECONDS,
+                 'funding key images pending for ten minutes')
+            raise Quota('funding key images still pending')
+        self.pending_since = None
+
     async def complete(self):
         """Final full scan, exact accounting, then the staging inputs. Then stop."""
         height = await self.sync(full=True)
+        self.wait_for_pending()
         report = self.accounting()
         # Pin prefunded principal only: lottery awards are not principal, may
         # keep arriving before launch, and are opening lottery income there
@@ -761,6 +775,7 @@ class Prefunder(Controller):
             return False
         if not self.unconfirmed():
             await self.sync()
+            self.wait_for_pending()
             self.accounting()
         if self.granted() < self.total:
             need(self.clock() < self.m['deadline'], 'prefund deadline reached before every grant was offered')
