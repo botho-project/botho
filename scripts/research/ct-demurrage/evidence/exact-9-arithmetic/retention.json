@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "retained_at": "2026-11-06T18:56:12.747271+00:00",
+  "files_sha256": {
+    "arithmetic.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "arithmetic.stdout": "3e0b1bca925394fe9fc3ba9cf0ca9d246d9c6aaff2c17ca374a778ec1ceab41a",
+    "build-identity.json": "6b7a690c39e811623fa390f0cf94078a7bd1718e26872773c2bc53c51a156773",
+    "build.stderr": "cb983b66c23735602e8c2b4da619f8c6dbe5d3a716691518e265f676378762e5",
+    "cargo.jsonl.gz": "92b0625e311d44116af4728baf04cc70c9bac5e9136b43041def0f6444a3cab3",
+    "combined.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "combined.stdout": "fcecb63cc9aa04545791a2d96b1cbb91b38c23f13a67b41497c55858b59144f0",
+    "commands.json": "20743dde5c774545b6f55ba290c93246a1968228db00f502b946c79c8025ae7d",
+    "measurements.json": "686f28e3e8ed912b55e69d6249e35e9aafa3c3f61d7078b4de0d6ede8716f9db",
+    "short-hold.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "short-hold.stdout": "a4862884a789c39dbe4910cbf0dc08078046436fa694986003fcaa91ac928825"
+  }
+}

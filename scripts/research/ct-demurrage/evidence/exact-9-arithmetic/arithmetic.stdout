@@ -1,0 +1,14 @@
+
+running 1 test
+test proof_experiment::proof_round_trips_and_measurements ... ordinary: bytes=1121 prove=225.080333ms verify=16.482125ms
+zero-rate: bytes=1121 prove=225.597459ms verify=16.326459ms
+zero-time: bytes=1121 prove=226.92225ms verify=17.137292ms
+zero-year: bytes=1121 prove=226.000125ms verify=16.362375ms
+floor-boundary: bytes=1121 prove=224.791625ms verify=17.315667ms
+maximum-domain: bytes=1121 prove=226.560458ms verify=16.563208ms
+both-caps-cancel: bytes=1121 prove=226.4045ms verify=16.762709ms
+one-cap-difference-one: bytes=1121 prove=226.642417ms verify=17.158917ms
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 1.97s
+

@@ -1,0 +1,15 @@
+{
+  "executable": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+  "executable_sha256": "27f05fc85c30ec1eaaabb43cf14e2c97e357ddfefad74090047144b75a78f034",
+  "profile": {
+    "opt_level": "3",
+    "debuginfo": 0,
+    "debug_assertions": false,
+    "overflow_checks": true,
+    "test": true
+  },
+  "checkout_commit": "e070cedfc8e433ffe6aa3e7e29ae12ed83a8839c",
+  "checkout_tree": "9c8535916b57c8928319b359274d3d8a822a4129",
+  "git_status_porcelain": "",
+  "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

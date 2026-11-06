@@ -1,0 +1,31 @@
+
+running 1 test
+test proof_experiment::combined::combined_round_trips_and_measurements ... combined generator setup=365.2515ms; capacity=32768
+combined ordinary-1 s=2 sample=0: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=229.252083ms verify=16.839666ms
+combined ordinary-1 s=2 sample=1: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=225.402875ms verify=16.941875ms
+combined ordinary-1 s=2 sample=2: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=225.323209ms verify=17.190542ms
+combined ordinary-16 s=2 sample=0: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.432923666s verify=251.355833ms
+combined ordinary-16 s=2 sample=1: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.412738125s verify=250.906ms
+combined ordinary-16 s=2 sample=2: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.420065083s verify=248.072416ms
+combined ordinary-1 s=3 sample=0: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=226.541667ms verify=17.3935ms
+combined ordinary-1 s=3 sample=1: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=229.616375ms verify=16.802083ms
+combined ordinary-1 s=3 sample=2: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=230.084291ms verify=16.498ms
+combined ordinary-16 s=3 sample=0: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.431645125s verify=249.724791ms
+combined ordinary-16 s=3 sample=1: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.428465917s verify=250.741417ms
+combined ordinary-16 s=3 sample=2: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.440911833s verify=252.460916ms
+combined ordinary-1 s=4 sample=0: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=229.31475ms verify=16.628959ms
+combined ordinary-1 s=4 sample=1: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=227.814333ms verify=17.025917ms
+combined ordinary-1 s=4 sample=2: multipliers=1762 constraints=3544 proof=1121 section=1158 prove=225.849583ms verify=16.933875ms
+combined ordinary-16 s=4 sample=0: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.433650959s verify=252.507708ms
+combined ordinary-16 s=4 sample=1: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.429166666s verify=251.296792ms
+combined ordinary-16 s=4 sample=2: multipliers=26152 constraints=52579 proof=1377 section=1894 prove=3.43035s verify=253.709208ms
+combined boundary zero: pass
+combined boundary maximum-sum: pass
+combined boundary caps-cancel: pass
+combined boundary cap-difference-one: pass
+combined boundary one-to-sixteen: pass
+combined boundary sixteen-to-one: pass
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 44.20s
+

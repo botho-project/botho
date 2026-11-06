@@ -49,7 +49,7 @@ circuit has `1562*n + 64*m + 136` multipliers and
 `3140*n + 129*m + 275` constraints. Ownership uses the same arithmetic circuit.
 Existing allocation and section-size ceilings remain unchanged.
 
-## Historical evidence and pending work (#1914)
+## Current review and resource evidence (#1914)
 
 [RESOURCES.md](RESOURCES.md), [COMBINED.md](COMBINED.md),
 [OWNERSHIP.md](OWNERSHIP.md), and their retained manifests, reviews and captures
@@ -60,9 +60,15 @@ been regenerated or relabeled as exact-relation evidence.
 [source manifest](exact-relation-review-sources.json) provide #1953's independent,
 source-pinned derivation of the exact allocator in both directions, including
 strict bounds and conditional ownership/composition obligations. The review
-records primary-reference provenance and precise applicability limits. Fresh
-retained resource measurements/publication
-remain pending in [#1954](https://github.com/botho-project/botho/issues/1954).
+records primary-reference provenance and precise applicability limits.
+[EXACT-RESOURCES.md](EXACT-RESOURCES.md) and its
+[measurement index](exact-measurements.json) provide #1954's fresh arithmetic and
+macOS ownership captures plus the complete source-matched Linux workflow artifact.
+Both matrices retain eight processes/thirteen composed proofs, unchanged limits,
+raw logs/RSS, Cargo identities and original plus supplemental source archives.
+The report maps implementation #1952, review #1953 and measurements #1954 to their
+separate delivered sources; [check_exact_resources.py](check_exact_resources.py)
+validates the new evidence without changing historical validation.
 Finite tests and allocation counts establish no cryptographic security proof,
 formal Rust/R1CS equivalence theorem, or activation claim. No new Lean theorem
 or production policy change is included.
