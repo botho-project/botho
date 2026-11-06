@@ -450,6 +450,7 @@ fn spawn_harness_full(
                         candidates: candidates_rx,
                         submissions: worker_submissions,
                     }),
+                    None,
                 ),
             )
             .await

@@ -234,6 +234,10 @@ pub struct MinterHealth {
     active: Arc<AtomicBool>,
     /// The worker threads' cumulative hash counter (shared with [`Minter`]).
     total_hashes: Arc<AtomicU64>,
+    /// Test-only completed-hash observation: production publishes in batches
+    /// of 10,000, too coarse for the bounded expiry regression (#1958).
+    #[cfg(test)]
+    pub(crate) completed_hashes: Arc<AtomicU64>,
     /// When the miner started, for uptime/hashrate.
     start_time: Instant,
     /// `total_hashes` value observed at the last progress check.
@@ -270,6 +274,8 @@ impl MinterHealth {
         Self {
             active: Arc::new(AtomicBool::new(false)),
             total_hashes,
+            #[cfg(test)]
+            completed_hashes: Arc::new(AtomicU64::new(0)),
             start_time,
             last_observed_hashes: Arc::new(AtomicU64::new(0)),
             last_progress_secs: Arc::new(AtomicU64::new(0)),
@@ -606,6 +612,8 @@ impl Minter {
             let live_workers = self.live_workers.clone();
             let health = self.health.clone();
             let fast_dataset = self.fast_dataset.clone();
+            #[cfg(test)]
+            let completed_hashes = self.health.completed_hashes.clone();
 
             let handle = thread::spawn(move || {
                 // The exit guard fires on EVERY way this worker can terminate —
@@ -627,6 +635,8 @@ impl Minter {
                     current_work,
                     work_version,
                     fast_dataset,
+                    #[cfg(test)]
+                    completed_hashes,
                 );
             });
 
@@ -697,6 +707,7 @@ fn mint_loop(
     current_work: Arc<std::sync::RwLock<MintingWork>>,
     work_version: Arc<AtomicU64>,
     fast_dataset: Arc<Mutex<Option<FastDataset>>>,
+    #[cfg(test)] completed_hashes: Arc<AtomicU64>,
 ) {
     // Each thread starts at a different nonce to avoid overlap
     let mut nonce: u64 = (thread_id as u64) << 56;
@@ -824,6 +835,8 @@ fn mint_loop(
             &minter_spend_key,
         );
         let hash = hasher.hash(&preimage);
+        #[cfg(test)]
+        completed_hashes.fetch_add(1, Ordering::Relaxed);
 
         // Check if hash meets difficulty target
         let hash_value = pow::pow_value(&hash);
