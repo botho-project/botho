@@ -177,7 +177,8 @@ theorem exactCharge_mono_elapsed
   have hn := Nat.mul_le_mul_left
     (value * rate * (clampN 1000 6000 factor - 1000)) h
   have hd := Nat.div_le_div_right hn (c := 10000 * 5000 * year)
-  unfold exactCharge minN
+  dsimp only [exactCharge]
+  unfold minN
   split <;> split <;> omega
 
 /-- Increasing the input factor cannot decrease the total Nat charge, including
@@ -191,7 +192,8 @@ theorem exactCharge_mono_factor
     split <;> (try split) <;> (try split) <;> (try split) <;> omega
   have hn := Nat.mul_le_mul_right elapsed (Nat.mul_le_mul_left (value * rate) hp)
   have hd := Nat.div_le_div_right hn (c := 10000 * 5000 * year)
-  unfold exactCharge minN
+  dsimp only [exactCharge]
+  unfold minN
   split <;> split <;> omega
 
 end Botho.Demurrage
