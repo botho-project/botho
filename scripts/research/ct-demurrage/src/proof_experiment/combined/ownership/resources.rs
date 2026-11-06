@@ -82,7 +82,8 @@ fn ownership_resource_case() {
             (p.multipliers, p.constraints),
             (v.multipliers, v.constraints)
         );
-        assert_eq!(p.multipliers, 1476 * count + 136);
+        assert_eq!(p.multipliers, (INPUT_MULTIPLIERS + 64) * count + 136);
+        assert_eq!(p.constraints, (INPUT_CONSTRAINTS + 129) * count + 275);
         assert_eq!(proof.signatures.len(), count);
         assert!(proof
             .signatures

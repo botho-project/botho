@@ -7,6 +7,7 @@ license = "Apache-2.0"
 description = "Inactive exact-integer CT demurrage constraint research"
 
 [dev-dependencies]
+bth-cluster-tax = { path = "../../../cluster-tax" }
 bth-crypto-keys = { path = "../../../crypto/keys" }
 bth-util-from-random = { path = "../../../util/from-random" }
 rand = { workspace = true }

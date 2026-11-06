@@ -4,6 +4,7 @@
 //! accepted ADR.
 #![cfg(test)]
 
+// Frozen source retained solely for explicitly historical discriminators.
 mod legacy_kernel;
 mod proof_experiment;
 use bulletproofs_og::{
@@ -15,8 +16,15 @@ use merlin::Transcript;
 use num_bigint::BigUint;
 
 const K: u64 = 50_000_000;
-const S: u64 = 1_000_000;
 const M: u64 = u64::MAX;
+// Full-domain widths, checked against arbitrary ranged assignments below.
+const EXCESS_BITS: usize = 147;
+const REMAINDER_BITS: usize = 90;
+const INPUT_RANGE_BITS: usize = 64 + 3 * (64 + EXCESS_BITS + 2 * REMAINDER_BITS) + 5 * 64;
+const INPUT_PRODUCTS: usize = 5;
+const INPUT_EQUATIONS: usize = 9;
+const INPUT_MULTIPLIERS: usize = INPUT_RANGE_BITS + INPUT_PRODUCTS;
+const INPUT_CONSTRAINTS: usize = 2 * INPUT_RANGE_BITS + 2 + INPUT_EQUATIONS + 3 * INPUT_PRODUCTS;
 fn n(x: u64) -> BigUint {
     x.into()
 }
@@ -133,57 +141,51 @@ impl Candidate {
             output,
         });
     }
-    fn annual(&mut self, label: &str, factor: u64, rate: u32) -> usize {
-        let coefficient = n(rate as u64) * n(factor.clamp(1000, 6000) - 1000);
+    fn exact_charge(
+        &mut self,
+        label: &str,
+        factor: u64,
+        rate: u32,
+        elapsed: u64,
+        year: u64,
+    ) -> usize {
+        // Public year-zero branch: 0 = c + excess + r and r + rbar = 0
+        // force every charge witness to zero without division by zero.
+        let (coefficient, denominator) = if year == 0 {
+            (n(0), n(1))
+        } else {
+            (
+                n(rate as u64) * n(factor.clamp(1000, 6000) - 1000) * n(elapsed),
+                n(K) * n(year),
+            )
+        };
         let numerator = &self.wires[self.amount].value * &coefficient;
-        let a = self.wire(&format!("{label}.a"), &numerator / K, 83);
-        let r = self.wire(&format!("{label}.r"), &numerator % K, 26);
+        let quotient = &numerator / &denominator;
+        let capped = quotient.clone().min(n(M));
+        let c = self.wire(&format!("{label}.c"), capped.clone(), 64);
+        let excess = self.wire(&format!("{label}.excess"), quotient - capped, EXCESS_BITS);
+        let r = self.wire(
+            &format!("{label}.r"),
+            &numerator % &denominator,
+            REMAINDER_BITS,
+        );
         let bar = self.wire(
             &format!("{label}.rbar"),
-            n(K - 1) - &self.wires[r].value,
-            26,
+            &denominator - n(1) - &self.wires[r].value,
+            REMAINDER_BITS,
         );
         self.eq(
             label,
             Expr::wire(self.amount).scale(coefficient),
-            Expr::wire(a).scale(n(K)).add(Expr::wire(r)),
-        );
-        self.eq(
-            &format!("{label}.remainder"),
-            Expr::wire(r).add(Expr::wire(bar)),
-            Expr::constant(K - 1),
-        );
-        a
-    }
-    fn temporal(&mut self, label: &str, a: usize, elapsed: u64, year: u64) -> usize {
-        let time = if year == 0 {
-            n(0)
-        } else {
-            n(elapsed) * S / year
-        };
-        let numerator = &self.wires[a].value * &time;
-        let quotient = &numerator / S;
-        let capped = quotient.clone().min(n(M));
-        let c = self.wire(&format!("{label}.c"), capped.clone(), 64);
-        let excess = self.wire(&format!("{label}.excess"), quotient - capped, 147);
-        let r = self.wire(&format!("{label}.r"), &numerator % S, 20);
-        let bar = self.wire(
-            &format!("{label}.rbar"),
-            n(S - 1) - &self.wires[r].value,
-            20,
-        );
-        self.eq(
-            label,
-            Expr::wire(a).scale(time),
             Expr::wire(c)
                 .add(Expr::wire(excess))
-                .scale(n(S))
+                .scale(denominator.clone())
                 .add(Expr::wire(r)),
         );
         self.eq(
             &format!("{label}.remainder"),
             Expr::wire(r).add(Expr::wire(bar)),
-            Expr::constant(S - 1),
+            Expr::constant(1).scale(denominator - n(1)),
         );
         // C*E=M*E is (M-C)*E=0, written with nonnegative sides.
         self.product(
@@ -208,11 +210,12 @@ impl Candidate {
     ) -> Self {
         let mut cs = Self::default();
         cs.amount = cs.wire("value", n(value), 64);
-        let ai = cs.annual("annual.in", input, rate);
-        let ao = cs.annual("annual.out", output, rate);
-        let accrued = cs.temporal("accrued", ai, elapsed, year);
-        let ci = cs.temporal("capital.in", ai, horizon, year);
-        let co = cs.temporal("capital.out", ao, horizon, year);
+        let accrued = cs.exact_charge("accrued", input, rate, elapsed, year);
+        let ci = cs.exact_charge("capital.in", input, rate, horizon, year);
+        let co = cs.exact_charge("capital.out", output, rate, horizon, year);
+        // Clamping and capped charge are monotone in the raw factor, so the
+        // positive difference is also zero whenever production's raw-factor
+        // early return (output >= input) applies.
         let vi = &cs.wires[ci].value;
         let vo = &cs.wires[co].value;
         let (d, j) = if vi >= vo {
@@ -358,9 +361,7 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // The circuit models the pre-9.0.0 quantized kernel, so the differential
-    // reference is a frozen crate-local copy, not live production (#1914).
-    use crate::legacy_kernel::{
+    use bth_cluster_tax::{
         capitalized_reset_charge, demurrage_charge, spend_demurrage_charge, BLOCKS_PER_YEAR_5S,
         SETTLEMENT_HORIZON_BLOCKS,
     };
@@ -463,7 +464,7 @@ mod tests {
         differential(100, 6000, 3500, 0, 200, 1, M - 1);
         assert_eq!(
             demurrage_charge(49, 6000, SETTLEMENT_HORIZON_BLOCKS, 200, BLOCKS_PER_YEAR_5S),
-            0
+            4
         );
         assert_eq!(
             capitalized_reset_charge(
@@ -474,8 +475,66 @@ mod tests {
                 200,
                 BLOCKS_PER_YEAR_5S
             ),
-            5
+            3
         );
+    }
+    #[test]
+    fn exact_quotient_remainder_and_cap_boundaries() {
+        assert_eq!(SETTLEMENT_HORIZON_BLOCKS, 31_536_000);
+        // N/D is just below, at and just above integer boundaries.
+        for (value, quotient, remainder) in [
+            (49, 0, 49_000_000),
+            (50, 1, 0),
+            (51, 1, 1_000_000),
+            (99, 1, 49_000_000),
+            (100, 2, 0),
+            (101, 2, 1_000_000),
+        ] {
+            let c = Candidate::construct(value, 6000, 6000, 1, 200, 1, 0);
+            differential(value, 6000, 6000, 1, 200, 1, 0);
+            assert_eq!(c.result("accrued.c"), quotient);
+            assert_eq!(c.result("accrued.r"), remainder);
+        }
+        for (value, elapsed, capped, excess) in [(M - 1, 1, M - 1, 0), (M, 1, M, 0), (M, 2, M, M)] {
+            let c = Candidate::construct(value, 6000, 6000, elapsed, 10_000, 1, 0);
+            differential(value, 6000, 6000, elapsed, 10_000, 1, 0);
+            assert_eq!(c.result("accrued.c"), capped);
+            assert_eq!(c.result("accrued.excess"), excess);
+        }
+        // Full public horizons and raw-factor early returns, including factors
+        // that clamp to equal endpoints despite different raw ordering.
+        for horizon in [0, 1, M] {
+            for elapsed in [0, 1, M] {
+                for year in [0, 1, M] {
+                    for rate in [0, 200, u32::MAX] {
+                        for (fi, fo) in [(0, M), (M, 0), (6000, M), (M, 6000), (999, 0), (0, 999)] {
+                            differential(M, fi, fo, elapsed, rate, year, horizon);
+                        }
+                    }
+                }
+            }
+        }
+        for (elapsed, accrued_wins) in [(1, false), (10 * BLOCKS_PER_YEAR_5S, true)] {
+            let c = Candidate::construct(
+                10_000,
+                6000,
+                3500,
+                elapsed,
+                200,
+                BLOCKS_PER_YEAR_5S,
+                SETTLEMENT_HORIZON_BLOCKS,
+            );
+            differential(
+                10_000,
+                6000,
+                3500,
+                elapsed,
+                200,
+                BLOCKS_PER_YEAR_5S,
+                SETTLEMENT_HORIZON_BLOCKS,
+            );
+            assert_eq!(c.result("accrued.c") > c.result("difference"), accrued_wins);
+        }
     }
     fn alter(c: &mut Candidate, name: &str, up: bool) {
         let w = c.wires.iter_mut().find(|w| w.name == name).unwrap();
@@ -539,25 +598,49 @@ mod tests {
     }
     #[test]
     fn global_bounds_and_actual_r1cs_census() {
-        let a = n(M) * n(u32::MAX as u64) / 10_000u64;
-        let t = n(M) * S;
-        let product = &a * &t;
-        let quotient = &product / S;
-        assert_eq!(a.bits(), 83);
-        assert_eq!(t.bits(), 84);
-        assert_eq!(product.bits(), 167);
-        assert_eq!(quotient.bits(), 147);
-        assert!(max(128) >= n(M) * S); // justifies absorbing intermediate saturation
+        let numerator = n(M) * n(u32::MAX as u64) * n(5000) * n(M);
+        let denominator = n(K) * n(M);
+        let quotient = &numerator / K; // smallest positive year = 1
+        let rhs = &denominator * (max(64) + max(EXCESS_BITS)) + max(REMAINDER_BITS);
+        let remainder_sum = max(REMAINDER_BITS) * 2u64;
+        let cap_product = max(64) * max(EXCESS_BITS);
+        assert_eq!(numerator.bits(), 173);
+        assert_eq!(denominator.bits(), REMAINDER_BITS as u64);
+        assert_eq!(quotient.bits(), EXCESS_BITS as u64);
+        assert_eq!(rhs.bits(), 237);
+        assert_eq!(remainder_sum.bits(), 91);
+        assert_eq!(cap_product.bits(), 211);
+        for bound in [&numerator, &rhs, &remainder_sum, &cap_product] {
+            assert!(bound < &order());
+        }
+        // Both sides are evaluated at independent maxima for EVERY ranged wire,
+        // including assignments that violate the equations and cap relation.
+        for year in [0, 1, M] {
+            let c = Candidate::construct(M, M, M, M, u32::MAX, year, M);
+            c.check(M).unwrap();
+            for e in &c.equations {
+                assert!(e.left.eval(&c.wires, true) < order(), "{} lhs", e.name);
+                assert!(e.right.eval(&c.wires, true) < order(), "{} rhs", e.name);
+            }
+            for p in &c.products {
+                assert!(p.left.eval(&c.wires, true) * p.right.eval(&c.wires, true) < order());
+                assert!(p.output.eval(&c.wires, true) < order());
+            }
+        }
         let c = Candidate::construct(M, 6000, 6000, M, u32::MAX, 1, M);
-        c.check(M).unwrap();
-        assert_eq!(c.wires.iter().map(|w| w.bits).sum::<usize>(), 1407);
+        assert_eq!(
+            c.wires.iter().map(|w| w.bits).sum::<usize>(),
+            INPUT_RANGE_BITS
+        );
+        assert_eq!(c.products.len(), INPUT_PRODUCTS);
+        assert_eq!(c.equations.len(), INPUT_EQUATIONS);
         let (p, v) = c.allocation_metrics();
         println!(
             "actual R1CS: {} multipliers, {} linear constraints, {} external commitments",
             p.multipliers, p.constraints, 2
         );
-        assert_eq!(p.multipliers, 1412);
-        assert_eq!(p.constraints, 2844);
+        assert_eq!(p.multipliers, INPUT_MULTIPLIERS);
+        assert_eq!(p.constraints, INPUT_CONSTRAINTS);
         assert_eq!(p.multipliers, v.multipliers);
         assert_eq!(p.constraints, v.constraints);
         assert_eq!(p.phase_two_constraints, 0);

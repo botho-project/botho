@@ -158,6 +158,11 @@ impl Statement {
     }
     fn transcript(&self, control: Controls) -> Transcript {
         let mut t = Transcript::new(DOMAIN_COMBINED);
+        t.append_message(b"arithmetic-relation", EXACT_RELATION);
+        self.append_statement(&mut t, control);
+        t
+    }
+    fn append_statement(&self, t: &mut Transcript, control: Controls) {
         if control.statement {
             t.append_u64(b"version", self.version);
             for (label, bytes) in [
@@ -198,7 +203,6 @@ impl Statement {
             }
         }
         // Commitments also bind intrinsically via Prover/Verifier::commit.
-        t
     }
     fn group_balance(&self) -> Result<(), String> {
         let decode = |bytes| {
@@ -601,7 +605,14 @@ fn combined_round_trips_and_measurements() {
                     (p.multipliers, p.constraints),
                     (v.multipliers, v.constraints)
                 );
-                assert_eq!(p.multipliers, 1412 * values.len() + 64 * outs + 136);
+                assert_eq!(
+                    p.multipliers,
+                    INPUT_MULTIPLIERS * values.len() + 64 * outs + 136
+                );
+                assert_eq!(
+                    p.constraints,
+                    INPUT_CONSTRAINTS * values.len() + 129 * outs + 275
+                );
                 assert!(p.multipliers <= 65536 && p.constraints <= 262144);
                 // Proposed section includes its length and count plus C_di vector.
                 let section_bytes = 4 + 1 + 32 * values.len() + proof.len();
@@ -772,6 +783,13 @@ fn combined_public_statement_and_opening_rejections() {
     let full = Controls::COMPLETE;
     let (s, w) = baseline();
     let (proof, _) = prove_control(&s, &w, &bp, full).unwrap();
+    verify_control(&s, &proof, &bp, full).unwrap();
+    // Same graph, fields and commitments; only the relation identifier differs.
+    let mut mismatch = Transcript::new(DOMAIN_COMBINED);
+    mismatch.append_message(b"arithmetic-relation", b"historical-quantized-control");
+    s.append_statement(&mut mismatch, full);
+    assert!(verify_control_with_transcript(&s, &proof, &bp, full, mismatch).is_err());
+    println!("combined relation identifier mismatch: cryptographic rejection");
     let omitted = Controls {
         statement: false,
         ..full
