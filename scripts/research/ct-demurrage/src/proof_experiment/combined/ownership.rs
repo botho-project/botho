@@ -46,12 +46,18 @@ impl Public {
     }
 
     fn statement_digest(&self) -> Result<[u8; 32], String> {
+        let mut t = Transcript::new(STATEMENT_DOMAIN);
+        t.append_message(b"arithmetic-relation", EXACT_RELATION);
+        self.append_statement(&mut t)?;
+        Ok(digest(t))
+    }
+
+    fn append_statement(&self, t: &mut Transcript) -> Result<(), String> {
         // Hashing is not validation. Keep a length guard for indexed ring access;
         // all proof entry points separately enforce the full supported statement.
         if self.rings.len() != self.arithmetic.inputs.len() {
             return Err("ownership ring count".into());
         }
-        let mut t = Transcript::new(STATEMENT_DOMAIN);
         // Exhaustive destructuring makes newly added fields require an explicit
         // binding decision at compile time. This is not a serialization format.
         let Statement {
@@ -144,7 +150,7 @@ impl Public {
             t.append_u64(b"output-index", index as u64);
             t.append_message(b"output-commitment", output);
         }
-        Ok(digest(t))
+        Ok(())
     }
 
     fn arithmetic_transcript(&self) -> Result<Transcript, String> {
@@ -493,6 +499,34 @@ fn ownership_public_binding_and_detached_pseudo_rejections() {
     let (public, secret) = fixture(1);
     let mut e = prove(&public, &secret, &bp).unwrap();
     verify(&public, &e, &bp).unwrap();
+    // Replace only the relation identifier in the statement digest. The same
+    // graph reaches arithmetic verification, and the same indexed CLSAG sees
+    // a different signed message. Neither rejection is a shape/oracle check.
+    let mut mismatch = Transcript::new(STATEMENT_DOMAIN);
+    mismatch.append_message(b"arithmetic-relation", b"historical-quantized-control");
+    public.append_statement(&mut mismatch).unwrap();
+    let wrong_digest = digest(mismatch);
+    assert_ne!(wrong_digest, public.statement_digest().unwrap());
+    let mut arithmetic = Transcript::new(ARITHMETIC_DOMAIN);
+    arithmetic.append_message(b"statement", &wrong_digest);
+    assert!(verify_control_with_transcript(
+        &public.arithmetic,
+        &e.arithmetic_proof,
+        &bp,
+        Controls::COMPLETE,
+        arithmetic
+    )
+    .is_err());
+    assert!(e.signatures[0]
+        .verify(
+            &message(&wrong_digest, &proof_digest(&e.arithmetic_proof), 0),
+            &public.rings[0],
+            &pseudo(&public, 0)
+        )
+        .is_err());
+    println!(
+        "ownership relation identifier mismatch: arithmetic and CLSAG cryptographic rejection"
+    );
     // Same arithmetic remains valid, but the public transcript has changed.
     for mutate in [
         (|p: &mut Public| p.arithmetic.network[0] ^= 1) as fn(&mut Public),

@@ -9,6 +9,8 @@ use rand_core_fixture::SeedableRng;
 use std::time::Instant;
 
 const DOMAIN: &[u8] = b"botho/inactive/ct-demurrage-r1cs";
+// Fixed research relation, independent of production protocol activation.
+const EXACT_RELATION: &[u8] = b"botho/inactive/demurrage-exact-9-v1";
 
 #[derive(Clone, Debug)]
 struct PublicStatement {
@@ -28,6 +30,11 @@ struct PublicStatement {
 impl PublicStatement {
     fn transcript(&self, bindings: Bindings) -> Transcript {
         let mut t = Transcript::new(DOMAIN);
+        t.append_message(b"arithmetic-relation", EXACT_RELATION);
+        self.append_statement(&mut t, bindings);
+        t
+    }
+    fn append_statement(&self, t: &mut Transcript, bindings: Bindings) {
         // UNSAFE OMIT mode exists exclusively as a negative-test control.
         if bindings.statement {
             t.append_u64(b"experiment-version", self.version);
@@ -43,7 +50,6 @@ impl PublicStatement {
             t.append_message(b"amount-commitment", &self.amount_commitment);
             t.append_message(b"charge-commitment", &self.charge_commitment);
         }
-        t
     }
     fn gens(&self) -> PedersenGens {
         let project = generators(self.token);
@@ -89,44 +95,37 @@ impl CircuitLayout {
             output,
         });
     }
-    fn annual(&mut self, label: &str, factor: u64, rate: u32) -> usize {
-        let a = self.wire(&format!("{label}.a"), 83);
-        let r = self.wire(&format!("{label}.r"), 26);
-        let bar = self.wire(&format!("{label}.rbar"), 26);
-        self.eq(
-            label,
-            Expr::wire(self.amount).scale(n(rate as u64) * n(factor.clamp(1000, 6000) - 1000)),
-            Expr::wire(a).scale(n(K)).add(Expr::wire(r)),
-        );
-        self.eq(
-            &format!("{label}.remainder"),
-            Expr::wire(r).add(Expr::wire(bar)),
-            Expr::constant(K - 1),
-        );
-        a
-    }
-    fn temporal(&mut self, label: &str, a: usize, elapsed: u64, year: u64) -> usize {
-        let t = if year == 0 {
+    fn exact_charge(
+        &mut self,
+        label: &str,
+        factor: u64,
+        rate: u32,
+        elapsed: u64,
+        year: u64,
+    ) -> usize {
+        // Constructed from public parameters alone, independently of Candidate.
+        let coefficient = if year == 0 {
             n(0)
         } else {
-            n(elapsed) * S / year
+            n(rate as u64) * n(factor.clamp(1000, 6000) - 1000) * n(elapsed)
         };
+        let denominator = if year == 0 { n(1) } else { n(K) * n(year) };
         let c = self.wire(&format!("{label}.c"), 64);
-        let excess = self.wire(&format!("{label}.excess"), 147);
-        let r = self.wire(&format!("{label}.r"), 20);
-        let bar = self.wire(&format!("{label}.rbar"), 20);
+        let excess = self.wire(&format!("{label}.excess"), EXCESS_BITS);
+        let r = self.wire(&format!("{label}.r"), REMAINDER_BITS);
+        let bar = self.wire(&format!("{label}.rbar"), REMAINDER_BITS);
         self.eq(
             label,
-            Expr::wire(a).scale(t),
+            Expr::wire(self.amount).scale(coefficient),
             Expr::wire(c)
                 .add(Expr::wire(excess))
-                .scale(n(S))
+                .scale(denominator.clone())
                 .add(Expr::wire(r)),
         );
         self.eq(
             &format!("{label}.remainder"),
             Expr::wire(r).add(Expr::wire(bar)),
-            Expr::constant(S - 1),
+            Expr::constant(1).scale(denominator - n(1)),
         );
         self.product(
             &format!("{label}.cap"),
@@ -139,11 +138,9 @@ impl CircuitLayout {
     fn new(s: &PublicStatement) -> Self {
         let mut c = Self::default();
         c.amount = c.wire("value", 64);
-        let ai = c.annual("annual.in", s.input_factor, s.rate);
-        let ao = c.annual("annual.out", s.output_factor, s.rate);
-        let accrued = c.temporal("accrued", ai, s.elapsed, s.year);
-        let ci = c.temporal("capital.in", ai, s.horizon, s.year);
-        let co = c.temporal("capital.out", ao, s.horizon, s.year);
+        let accrued = c.exact_charge("accrued", s.input_factor, s.rate, s.elapsed, s.year);
+        let ci = c.exact_charge("capital.in", s.input_factor, s.rate, s.horizon, s.year);
+        let co = c.exact_charge("capital.out", s.output_factor, s.rate, s.horizon, s.year);
         let d = c.wire("difference", 64);
         let j = c.wire("reverse_difference", 64);
         c.eq(
@@ -271,9 +268,8 @@ fn fixture(
     let charge = c.result("settled");
     assert_eq!(
         charge,
-        // Frozen pre-9.0.0 reference, not live production (#1914).
-        crate::legacy_kernel::demurrage_charge(value, fi, e, rate, year).max(
-            crate::legacy_kernel::capitalized_reset_charge(value, fi, fo, horizon, rate, year)
+        bth_cluster_tax::demurrage_charge(value, fi, e, rate, year).max(
+            bth_cluster_tax::capitalized_reset_charge(value, fi, fo, horizon, rate, year)
         )
     );
     let s = PublicStatement {
@@ -340,8 +336,16 @@ fn verify_control(
     bp: &BulletproofGens,
     bindings: Bindings,
 ) -> Result<Metrics, String> {
+    verify_control_with_transcript(s, bytes, bp, bindings, s.transcript(bindings))
+}
+fn verify_control_with_transcript(
+    s: &PublicStatement,
+    bytes: &[u8],
+    bp: &BulletproofGens,
+    bindings: Bindings,
+    mut t: Transcript,
+) -> Result<Metrics, String> {
     let proof = R1CSProof::from_bytes(bytes).map_err(|e| e.to_string())?;
-    let mut t = s.transcript(bindings);
     let mut v = Verifier::new(&mut t);
     let cv = v.commit(CompressedRistretto(s.amount_commitment));
     let cz = v.commit(CompressedRistretto(s.charge_commitment));
@@ -412,8 +416,8 @@ fn proof_round_trips_and_measurements() {
         let metrics = verify(&s, &proof, &bp).unwrap();
         let vt = now.elapsed();
         println!("{name}: bytes={} prove={pt:?} verify={vt:?}", proof.len());
-        assert_eq!(p.multipliers, 1412);
-        assert_eq!(p.constraints, 2844);
+        assert_eq!(p.multipliers, INPUT_MULTIPLIERS);
+        assert_eq!(p.constraints, INPUT_CONSTRAINTS);
         assert_eq!(p.multipliers, metrics.multipliers);
         assert_eq!(p.constraints, metrics.constraints);
         assert_eq!(proof.len(), 1121);
@@ -421,19 +425,82 @@ fn proof_round_trips_and_measurements() {
 }
 
 #[test]
+fn public_only_layout_domain_parity() {
+    // fixture checks the full wire/equation/product structure against the
+    // independently constructed Candidate, then uses live production charges.
+    for value in [0, 1, M] {
+        for (fi, fo) in [(0, M), (M, 0), (999, 1001), (6000, 3500), (M, 6000)] {
+            for rate in [0, u32::MAX] {
+                for year in [0, 1, M] {
+                    for (elapsed, horizon) in [(0, M), (1, 1), (M, 0), (M, M)] {
+                        fixture(value, fi, fo, elapsed, rate, year, horizon);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn same_factor_short_hold_exact_proof() {
+    let year = bth_cluster_tax::BLOCKS_PER_YEAR_5S;
+    let horizon = bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS;
+    let (s, w) = fixture(M, 6000, 6000, 1, 200, year, horizon);
+    let exact = bth_cluster_tax::demurrage_charge(M, 6000, 1, 200, year);
+    assert_eq!(exact, 58_494_241_735);
+    assert_eq!(
+        crate::legacy_kernel::demurrage_charge(M, 6000, 1, 200, year),
+        0
+    );
+    assert_eq!(
+        crate::legacy_kernel::spend_demurrage_charge(
+            M,
+            6000,
+            6000,
+            1,
+            200,
+            crate::legacy_kernel::BLOCKS_PER_YEAR_5S
+        ),
+        0
+    );
+    assert_eq!(
+        bth_cluster_tax::capitalized_reset_charge(M, 6000, 6000, horizon, 200, year),
+        0
+    );
+    assert_eq!(w.charge, exact);
+    assert_eq!(
+        w.charge,
+        bth_cluster_tax::spend_demurrage_charge(M, 6000, 6000, 1, 200, year)
+    );
+    let bp = BulletproofGens::new(2048, 1);
+    let (proof, p) = prove(&s, &w, &bp).unwrap();
+    let v = verify(&s, &proof, &bp).unwrap();
+    assert_eq!(
+        (p.multipliers, p.constraints),
+        (v.multipliers, v.constraints)
+    );
+    assert_eq!(
+        (p.multipliers, p.constraints),
+        (INPUT_MULTIPLIERS, INPUT_CONSTRAINTS)
+    );
+    println!("short-hold exact={exact} legacy=0 capital=0 bytes={} multipliers={} constraints={} verified", proof.len(), p.multipliers, p.constraints);
+}
+
+#[test]
 fn public_binding_replay_controls() {
     let bp = BulletproofGens::new(2048, 1);
-    // Every mutation below preserves circuit coefficients exactly. Arithmetic
-    // equivalence alone must NOT permit crossing experiment/network/context inputs.
+    // Same-graph mutations isolate transcript binding: even an equivalent
+    // arithmetic relation must not cross experiment/network/context inputs.
     let (s, w) = fixture(100, 999, 999, 0, 0, M, 0);
     let (bound, _) = prove(&s, &w, &bp).unwrap();
+    verify(&s, &bound, &bp).unwrap();
     let omitted = Bindings {
         statement: false,
         ..Bindings::COMPLETE
     };
     let (unbound, _) = prove_control(&s, &w, &bp, omitted).unwrap();
     type Mutation = (&'static str, fn(&mut PublicStatement));
-    let changes: [Mutation; 9] = [
+    let changes: [Mutation; 8] = [
         ("version", |s| s.version += 1),
         ("network", |s| s.network[0] ^= 1),
         ("context", |s| s.context[0] ^= 1),
@@ -441,7 +508,6 @@ fn public_binding_replay_controls() {
         ("output-factor", |s| s.output_factor -= 1),
         ("elapsed", |s| s.elapsed += 1),
         ("rate", |s| s.rate += 1),
-        ("year", |s| s.year -= 1),
         ("horizon", |s| s.horizon += 1),
     ];
     for (name, mutate) in changes {
@@ -460,6 +526,23 @@ fn public_binding_replay_controls() {
             "control did not replay: {name}"
         );
     }
+    // Changing year changes D even with a zero numerator. It reaches the
+    // cryptographic verifier and rejects under BOTH transcript policies; this
+    // does not isolate transcript binding like the same-graph controls above.
+    let mut changed = s.clone();
+    changed.year -= 1;
+    assert_ne!(
+        CircuitLayout::new(&s).equations,
+        CircuitLayout::new(&changed).equations
+    );
+    assert!(verify(&changed, &bound, &bp).is_err());
+    assert!(verify_control(&changed, &unbound, &bp, omitted).is_err());
+    // Replace only the fixed relation identifier in the verification transcript.
+    let mut mismatch = Transcript::new(DOMAIN);
+    mismatch.append_message(b"arithmetic-relation", b"historical-quantized-control");
+    s.append_statement(&mut mismatch, Bindings::COMPLETE);
+    assert!(verify_control_with_transcript(&s, &bound, &bp, Bindings::COMPLETE, mismatch).is_err());
+    println!("single relation identifier mismatch: cryptographic rejection");
     let mut changed = s.clone();
     changed.token = 1;
     assert!(verify(&changed, &bound, &bp).is_err());
@@ -526,7 +609,14 @@ fn change(w: &mut Witness, layout: &CircuitLayout, name: &str, up: bool) {
 #[test]
 fn invalid_witness_relations_reach_crypto_verification() {
     let bp = BulletproofGens::new(2048, 1);
-    for kind in ["cap", "difference", "max", "annual-floor", "time-remainder"] {
+    for kind in [
+        "cap",
+        "difference",
+        "max",
+        "exact-quotient",
+        "exact-remainder",
+        "remainder-bound",
+    ] {
         let (mut s, mut w) = if kind == "max" {
             fixture(100, 6000, 1000, 1, 200, 6_307_200, 31_536_000)
         } else {
@@ -552,14 +642,34 @@ fn invalid_witness_relations_reach_crypto_verification() {
                 }
                 w.charge += 1;
             }
-            "annual-floor" => change(&mut w, &layout, "annual.in.a", false),
-            "time-remainder" => change(&mut w, &layout, "accrued.r", true),
+            "exact-quotient" => change(&mut w, &layout, "accrued.excess", false),
+            "exact-remainder" => {
+                // Keep the complement equation, but violate the division equation.
+                change(&mut w, &layout, "accrued.r", true);
+                change(&mut w, &layout, "accrued.rbar", false);
+            }
+            "remainder-bound" => {
+                // Keep N = D*(c+excess)+r and the cap, but set r >= D.
+                // This is still within 90 bits; only the complement equation
+                // rules out this alternative quotient/remainder assignment.
+                change(&mut w, &layout, "accrued.excess", false);
+                let i = layout
+                    .wires
+                    .iter()
+                    .position(|(n, _)| n == "accrued.r")
+                    .unwrap();
+                w.values[i] += n(K) * n(s.year);
+            }
             _ => unreachable!(),
         }
         s.charge_commitment = project_commit(w.charge, w.charge_blind, 0);
         // No integer checker is called: a proof is actually produced, then rejected.
         let (proof, _) = prove(&s, &w, &bp).unwrap();
         assert!(verify(&s, &proof, &bp).is_err(), "accepted invalid {kind}");
+        println!(
+            "invalid {kind}: in-range proof bytes={} cryptographic rejection",
+            proof.len()
+        );
     }
 }
 
