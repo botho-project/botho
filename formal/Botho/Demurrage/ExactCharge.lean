@@ -168,4 +168,30 @@ example : exactCharge ([315359999, 1].sum) 6000 1 200 6307200 = 1 ∧
     ([315359999, 1].map (fun v => exactCharge v 6000 1 200 6307200)).sum = 0 := by
   decide
 
+/-- Increasing elapsed time cannot decrease the total Nat charge, including
+zero-year division and the final u64 cap plateau. -/
+theorem exactCharge_mono_elapsed
+    (value factor e1 e2 rate year : Nat) (h : e1 ≤ e2) :
+    exactCharge value factor e1 rate year ≤
+      exactCharge value factor e2 rate year := by
+  have hn := Nat.mul_le_mul_left
+    (value * rate * (clampN 1000 6000 factor - 1000)) h
+  have hd := Nat.div_le_div_right hn (c := 10000 * 5000 * year)
+  unfold exactCharge minN
+  split <;> split <;> omega
+
+/-- Increasing the input factor cannot decrease the total Nat charge, including
+both clamp regions, zero-year division and the final u64 cap plateau. -/
+theorem exactCharge_mono_factor
+    (value f1 f2 elapsed rate year : Nat) (h : f1 ≤ f2) :
+    exactCharge value f1 elapsed rate year ≤
+      exactCharge value f2 elapsed rate year := by
+  have hp : clampN 1000 6000 f1 - 1000 ≤ clampN 1000 6000 f2 - 1000 := by
+    unfold clampN
+    split <;> (try split) <;> (try split) <;> (try split) <;> omega
+  have hn := Nat.mul_le_mul_right elapsed (Nat.mul_le_mul_left (value * rate) hp)
+  have hd := Nat.div_le_div_right hn (c := 10000 * 5000 * year)
+  unfold exactCharge minN
+  split <;> split <;> omega
+
 end Botho.Demurrage

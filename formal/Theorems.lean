@@ -307,3 +307,7 @@ import Botho
 #print axioms Botho.Timestamps.honest_stamp_headroom_iff
 #print axioms Botho.Timestamps.zero_skew_counterexample
 #print axioms Botho.Timestamps.some_observed_gap_floor
+
+-- Pending statement proposal for #1962; implementation follows the records PR.
+#print axioms Botho.Demurrage.exactCharge_mono_elapsed
+#print axioms Botho.Demurrage.exactCharge_mono_factor
