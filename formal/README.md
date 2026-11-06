@@ -358,23 +358,25 @@ model does not depend on it.
 
 `Botho/Timestamps.lean` (#1941) models the protocol 8.0.0 rules retained in
 9.0.0. The five listed claims are **proven (model)**; the skew-only acceptance
-claim is **refuted in the timestamp-rule model**. The five pure helpers have
-**tested** agreement under the finite `timestamps` DRT domain (#1942): u64
+claim is **refuted in the timestamp-rule model**. The five pure helpers and three production scalar predicates have **tested**
+agreement under the finite `timestamps` DRT domain (#1942, #1943): u64
 scalars, generated window lengths 0..32, and pinned boundary inputs. Decoding
 and replay accept arbitrary finite window lengths; codec tests also use 64
 entries. This testing is evidence, not a proof of Rust equivalence. The
-clock-reading caller and actual ledger/minting admission checks remain
-**read from source** or outside coverage. #1943 owns the direct production
-acceptance linkage still required by parent #1915.
+ledger predicates cover full-u64 clocks; minting covers only `now ≤ U-60`.
+Above that cap only the nested minting result reports
+`validator_now_out_of_domain`; helper and ledger results remain available.
+Complete-validator equivalence, clock acquisition/failure, SCP scheduling and
+physical-clock realizability remain outside the DRT claim.
 
 | Lean (`Botho.Timestamps.*`) | Rust | Status and scope |
 |------|------|------|
 | `tail11`, `slots`, `mtp`, `roll`, `nextMin` | `median_time_past_of`, `ChainState::rolled_timestamps`, `next_min_timestamp` in `botho/src/ledger/mod.rs` | tested (finite helper DRT); fixed padded median, rolling history and saturated successor |
 | `honestStamp` | `minting_timestamp` in `botho/src/node/minter.rs` | tested (finite helper DRT); maximum of supplied clock and minimum stamp |
 | supplied minter clock | clock-reading caller in `botho/src/node/minter.rs` | read from source; clock read not executed by DRT |
-| `accepts`, `futureCap` | C2b in `botho/src/ledger/store/validation.rs` | read from source; scalar conjunction only, saturated future cap; DRT acceptance fields are adapters, not production-validator coverage |
-| `accepts` on `v ≤ U-60` | full minting validation in `botho/src/consensus/validation.rs` | read from source; full validator checks ordinary `now+60` before MTP; agreement concerns the scalar conjunction on this restricted domain |
-| upper clause of `accepts` on `v ≤ U-60` | intrinsic minting validation in `botho/src/consensus/validation.rs` | read from source; only the ordinary `now+60` upper bound, no MTP check |
+| `mtp < stamp`, `futureCap`, `accepts` | `timestamp_after_mtp`, `ledger_timestamp_within_future_bound` in `ledger/mod.rs`, called by ledger C2b | direct scalar DRT over full u64; lower and saturated upper primitives plus conjunction observed independently |
+| `accepts` on `v ≤ U-60` | `timestamp_after_mtp`, `minting_timestamp_within_future_bound`, called by contextual minting | direct scalar DRT on the no-overflow domain; ordinary addition preserved; caller checks future before MTP |
+| upper clause of `accepts` on `v ≤ U-60` | `minting_timestamp_within_future_bound`, called by intrinsic minting | direct scalar DRT on the no-overflow domain; only the upper bound, no MTP check |
 | `observedGap` | `difficulty::observed_block_time` in `botho/src/block.rs` | tested (finite helper DRT); zero parent gives `None`, other gaps are saturated subtraction floored at three |
 
 Let `U = 2^64-1`. Public claims take natural timestamps with explicit
@@ -482,15 +484,17 @@ and `botho::ledger::formal_drt`, which runs the production
 | `difficulty_step` | `EmissionController::compute_time_adjusted_difficulty` (through `botho::formal_drt_difficulty`) | `Botho.Difficulty.step` |
 | `difficulty_run` | `EmissionController::record_block`, one `Some(gap)` per block (half the runs with gaps floored at 3 s, as `observed_block_time` feeds them since 8.0.0) | `Botho.Difficulty.run` |
 | `slot_duration` | `ConsensusService::record_block` then `current_slot_duration` | `Botho.Consensus.slotSecs` |
-| `timestamps` | `median_time_past_of`, `ChainState::next_min_timestamp`, `rolled_timestamps`, `minting_timestamp`, `observed_block_time`; two `adapter_ledger_*` booleans explicitly do not call production validators | `Botho.Timestamps`; exact u64 decimal strings and arbitrary finite replay windows; generated lengths 0..32 |
+| `timestamps` | `median_time_past_of`, `ChainState::next_min_timestamp`, `rolled_timestamps`, `minting_timestamp`, `observed_block_time`; `timestamp_after_mtp`, `ledger_timestamp_within_future_bound`, `minting_timestamp_within_future_bound` (same predicates called by production) | `Botho.Timestamps`; exact u64 decimal strings and arbitrary finite replay windows; generated lengths 0..32 |
 
-The timestamp leg retained 10,000 generated cases at seed 1915 and 30 pinned
-replays with zero mismatches; the all-leg PR tier uses seed 1707 and discovers
-it through the existing registry. All generated cases are classified by
-window size, optional/floored gap, successor/future saturation and both
-adapter outcomes. The [regression note](../formal-drt/regressions/README.md#timestamps)
-records the schema, exact cases, commands and retained evidence. Its seven
-linked zero-skew snapshots are a timestamp-rule/adapter history, not seven
+The current private-target run passed 10,000 cases at seed 1915 and 31 replays;
+the all-leg tier passed 240,000 cases and 141 replays at seed 1707.
+The timestamp leg preserves all 30 helper fixtures from #1942 and adds the
+missing `U-61` clock boundary. Each candidate/honest lower and ledger upper
+primitive, ledger conjunction, and in-domain minting contextual/intrinsic
+result is classified separately, alongside common/out-of-domain populations.
+The [regression note](../formal-drt/regressions/README.md#timestamps) records
+the schema, exact cases, commands and retained validation evidence. Its seven
+linked zero-skew snapshots are a scalar timestamp-rule history, not seven
 complete ledger admissions or a claim of SCP/physical-clock reachability.
 
 The cluster-tag legs (#1840) live in `formal-drt/src/legs_tags.rs` and

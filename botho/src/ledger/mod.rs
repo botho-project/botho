@@ -270,6 +270,26 @@ pub fn median_time_past_of(window: &[u64]) -> u64 {
     slots[MTP_WINDOW / 2]
 }
 
+/// Public timestamp-helper alias of the consensus policy (also used by DRT).
+pub const MAX_FUTURE_TIMESTAMP_SECS: u64 = crate::consensus::MAX_FUTURE_TIMESTAMP_SECS;
+
+/// Strict lower timestamp bound shared by ledger and contextual minting.
+pub fn timestamp_after_mtp(stamp: u64, mtp: u64) -> bool {
+    stamp > mtp
+}
+
+/// Ledger future bound, including saturation over the full u64 domain.
+pub fn ledger_timestamp_within_future_bound(stamp: u64, now: u64) -> bool {
+    stamp <= now.saturating_add(crate::consensus::MAX_FUTURE_TIMESTAMP_SECS)
+}
+
+/// Minting future bound. Ordinary addition intentionally preserves the callers'
+/// overflow behavior; comparison with the saturated model requires
+/// `now <= u64::MAX - MAX_FUTURE_TIMESTAMP_SECS`.
+pub fn minting_timestamp_within_future_bound(stamp: u64, now: u64) -> bool {
+    stamp <= now + crate::consensus::MAX_FUTURE_TIMESTAMP_SECS
+}
+
 impl ChainState {
     /// Median time past of the chain at this tip (protocol 8.0.0, #1848).
     ///

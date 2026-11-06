@@ -194,14 +194,22 @@ def timestamps (a : Json) : Dec Json := do
   let n ← timestampNat (← field a "minter_now")
   let v ← timestampNat (← field a "validator_now")
   let h := Botho.Timestamps.honestStamp w n
+  let lower t := Json.bool (decide (Botho.Timestamps.mtp w < t))
+  let upper t := Json.bool (decide (t ≤ Botho.Timestamps.futureCap v))
+  let accepts t := Json.bool (decide (Botho.Timestamps.accepts w t v))
+  let minting := if v > Botho.Timestamps.U - 60 then
+      Json.mkObj [("error", Json.str "validator_now_out_of_domain")]
+    else Json.mkObj [("contextual_candidate", accepts t), ("contextual_honest", accepts h),
+      ("intrinsic_candidate", upper t), ("intrinsic_honest", upper h)]
   pure (Json.mkObj [
     ("mtp", encNat (Botho.Timestamps.mtp w)),
     ("next_min", encNat (Botho.Timestamps.nextMin w)), ("honest_stamp", encNat h),
     ("rolled", Json.arr ((Botho.Timestamps.roll w t).map encNat).toArray),
     ("observed_gap", match Botho.Timestamps.observedGap p t with
       | some g => encNat g | none => Json.null),
-    ("adapter_ledger_candidate", Json.bool (decide (Botho.Timestamps.accepts w t v))),
-    ("adapter_ledger_honest", Json.bool (decide (Botho.Timestamps.accepts w h v)))])
+    ("lower_candidate", lower t), ("lower_honest", lower h),
+    ("ledger_future_candidate", upper t), ("ledger_future_honest", upper h),
+    ("ledger_candidate", accepts t), ("ledger_honest", accepts h), ("minting", minting)])
 
 def dispatch (fn : String) (a : Json) : Dec Json := do
   match fn with
