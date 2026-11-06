@@ -1,5 +1,5 @@
-//! Five public timestamp helpers; acceptance fields are DRT-only ledger
-//! adapters. No full validator, wall-clock read, or SCP/physical-clock history
+//! Five public timestamp helpers and three production scalar predicates.
+//! No full validator, wall-clock read, or SCP/physical-clock history
 //! is executed.
 
 use crate::{
@@ -9,7 +9,11 @@ use crate::{
 };
 use botho::{
     block::difficulty::observed_block_time,
-    ledger::{median_time_past_of, ChainState},
+    ledger::{
+        ledger_timestamp_within_future_bound, median_time_past_of,
+        minting_timestamp_within_future_bound, timestamp_after_mtp, ChainState,
+        MAX_FUTURE_TIMESTAMP_SECS,
+    },
     node::minter::minting_timestamp,
 };
 use proptest::prelude::*;
@@ -53,12 +57,28 @@ fn result(i: &Input) -> Value {
     let honest = minting_timestamp(i.minter_now.0, next_min);
     let rolled = state.rolled_timestamps(i.stamp.0);
     let observed_gap = observed_block_time(i.parent.0, i.stamp.0);
-    // Adapter only: the production admission checks are not invoked here.
-    let adapter = |stamp| mtp < stamp && stamp <= i.validator_now.0.saturating_add(60);
+    // Evaluate each primitive independently, even when the conjunction fails.
+    let lower_candidate = timestamp_after_mtp(i.stamp.0, mtp);
+    let lower_honest = timestamp_after_mtp(honest, mtp);
+    let future_candidate = ledger_timestamp_within_future_bound(i.stamp.0, i.validator_now.0);
+    let future_honest = ledger_timestamp_within_future_bound(honest, i.validator_now.0);
+    // This guard belongs only to DRT. Production retains ordinary addition.
+    let minting = if i.validator_now.0 > u64::MAX - MAX_FUTURE_TIMESTAMP_SECS {
+        json!({"error": "validator_now_out_of_domain"})
+    } else {
+        let candidate = minting_timestamp_within_future_bound(i.stamp.0, i.validator_now.0);
+        let honest = minting_timestamp_within_future_bound(honest, i.validator_now.0);
+        json!({"contextual_candidate": lower_candidate && candidate,
+            "contextual_honest": lower_honest && honest,
+            "intrinsic_candidate": candidate, "intrinsic_honest": honest})
+    };
     json!({"mtp": n(mtp), "next_min": n(next_min), "honest_stamp": n(honest),
         "rolled": rolled.into_iter().map(n).collect::<Vec<_>>(),
         "observed_gap": observed_gap.map(n),
-        "adapter_ledger_candidate": adapter(i.stamp.0), "adapter_ledger_honest": adapter(honest)})
+        "lower_candidate": lower_candidate, "lower_honest": lower_honest,
+        "ledger_future_candidate": future_candidate, "ledger_future_honest": future_honest,
+        "ledger_candidate": lower_candidate && future_candidate,
+        "ledger_honest": lower_honest && future_honest, "minting": minting})
 }
 
 fn edge() -> BoxedStrategy<u64> {
@@ -98,7 +118,7 @@ fn windows() -> BoxedStrategy<Vec<u64>> {
 pub struct Timestamps;
 impl Leg for Timestamps {
     const NAME: &'static str = "timestamps";
-    const RUST: &'static str = "botho::{ledger::median_time_past_of, ChainState::{next_min_timestamp,rolled_timestamps}, node::minter::minting_timestamp, block::difficulty::observed_block_time}; adapter_ledger_* are DRT-only inequalities, not validators";
+    const RUST: &'static str = "botho::{ledger::median_time_past_of, ChainState::{next_min_timestamp,rolled_timestamps}, node::minter::minting_timestamp, block::difficulty::observed_block_time}; ledger::{timestamp_after_mtp,ledger_timestamp_within_future_bound,minting_timestamp_within_future_bound}; scalar predicates, not full validators";
     type Input = Input;
 
     fn strategy() -> BoxedStrategy<Input> {
@@ -142,9 +162,36 @@ impl Leg for Timestamps {
         } else {
             "unfloored"
         };
-        format!("window={size}/gap={gap}/successor_saturated={}/future_saturated={}/candidate={}/honest={}",
-            r["mtp"] == n(u64::MAX), i.validator_now.0 > u64::MAX - 60,
-            r["adapter_ledger_candidate"], r["adapter_ledger_honest"])
+        let domain = if r["minting"].get("error").is_some() {
+            "out_of_domain"
+        } else {
+            "common"
+        };
+        let mut label = format!(
+            "window={size}/gap={gap}/successor_saturated={}/minting_domain={domain}",
+            r["mtp"] == n(u64::MAX)
+        );
+        for field in [
+            "lower_candidate",
+            "lower_honest",
+            "ledger_future_candidate",
+            "ledger_future_honest",
+            "ledger_candidate",
+            "ledger_honest",
+        ] {
+            label.push_str(&format!("/{field}={}", r[field]));
+        }
+        if domain == "common" {
+            for field in [
+                "contextual_candidate",
+                "contextual_honest",
+                "intrinsic_candidate",
+                "intrinsic_honest",
+            ] {
+                label.push_str(&format!("/minting_{field}={}", r["minting"][field]));
+            }
+        }
+        label
     }
 }
 
@@ -178,9 +225,49 @@ mod tests {
             model().call_batch(&[wire::request("timestamps", &input)]),
             vec![json!({
                 "mtp": "0", "next_min": "1", "honest_stamp": "1", "rolled": ["1"],
-                "observed_gap": null, "adapter_ledger_candidate": true, "adapter_ledger_honest": true
+                "observed_gap": null, "lower_candidate": true, "lower_honest": true,
+                "ledger_future_candidate": true, "ledger_future_honest": true,
+                "ledger_candidate": true, "ledger_honest": true,
+                "minting": {"contextual_candidate": true, "contextual_honest": true,
+                    "intrinsic_candidate": true, "intrinsic_honest": true}
             })]
         );
+    }
+
+    #[test]
+    fn minting_domain_and_independent_primitives() {
+        let mut model = model();
+        for now in [u64::MAX - 60, u64::MAX - 59, u64::MAX - 1, u64::MAX] {
+            let i = Input::new(vec![u64::MAX; 11], 0, u64::MAX, u64::MAX, now);
+            let r = result(&i);
+            assert_eq!(r["lower_candidate"], false);
+            assert_eq!(r["ledger_future_candidate"], true);
+            assert_eq!(r["ledger_candidate"], false);
+            if now == u64::MAX - 60 {
+                assert_eq!(
+                    r["minting"],
+                    json!({"contextual_candidate": false,
+                    "contextual_honest": false, "intrinsic_candidate": true, "intrinsic_honest": true})
+                );
+            } else {
+                assert_eq!(
+                    r["minting"],
+                    json!({"error": "validator_now_out_of_domain"})
+                );
+            }
+            assert_eq!(
+                model.call_batch(&[wire::request(Timestamps::NAME, &roundtrip(&i))]),
+                vec![r]
+            );
+        }
+        // A failed lower clause must not mask a changed upper clause.
+        for (stamp, future) in [(1060, true), (1061, false)] {
+            let r = result(&Input::new(vec![2000; 11], 0, stamp, stamp, 1000));
+            assert_eq!(r["lower_candidate"], false);
+            assert_eq!(r["ledger_future_candidate"], future);
+            assert_eq!(r["ledger_candidate"], false);
+            assert_eq!(r["minting"]["intrinsic_candidate"], future);
+        }
     }
 
     #[test]
@@ -296,6 +383,57 @@ mod tests {
     }
 
     #[test]
+    fn seeded_coverage_exercises_domains_and_predicate_outcomes() {
+        use proptest::test_runner::{Config, RngAlgorithm, TestRng};
+        use sha2::{Digest, Sha256};
+        use std::collections::BTreeSet;
+        // Same seed derivation as the CLI runner, including the leg name.
+        let mut hash = Sha256::new();
+        hash.update(b"botho-formal-drt");
+        hash.update(1915u64.to_le_bytes());
+        hash.update(Timestamps::NAME.as_bytes());
+        let seed: [u8; 32] = hash.finalize().into();
+        let mut runner = TestRunner::new_with_rng(
+            Config::default(),
+            TestRng::from_seed(RngAlgorithm::ChaCha, &seed),
+        );
+        let mut seen = BTreeSet::new();
+        for _ in 0..10_000 {
+            let i = Timestamps::strategy()
+                .new_tree(&mut runner)
+                .unwrap()
+                .current();
+            seen.extend(
+                Timestamps::classify(&i, &result(&i))
+                    .split('/')
+                    .map(str::to_owned),
+            );
+        }
+        for domain in ["common", "out_of_domain"] {
+            assert!(seen.contains(&format!("minting_domain={domain}")));
+        }
+        for field in [
+            "lower_candidate",
+            "lower_honest",
+            "ledger_future_candidate",
+            "ledger_future_honest",
+            "ledger_candidate",
+            "ledger_honest",
+            "minting_contextual_candidate",
+            "minting_contextual_honest",
+            "minting_intrinsic_candidate",
+            "minting_intrinsic_honest",
+        ] {
+            for outcome in [false, true] {
+                assert!(
+                    seen.contains(&format!("{field}={outcome}")),
+                    "{field}={outcome}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pinned_expectations_and_linked_history() {
         let rows: Vec<Value> = include_str!("../regressions/timestamps.jsonl")
             .lines()
@@ -328,12 +466,12 @@ mod tests {
             let r = result(&i);
             if k < 6 {
                 assert_eq!(r["rolled"], history[k + 1]["input"]["window"]);
-                assert_eq!(r["adapter_ledger_candidate"], true);
+                assert_eq!(r["ledger_candidate"], true);
             } else {
                 assert_eq!(r["mtp"], "1060");
                 assert_eq!(r["honest_stamp"], "1061");
-                assert_eq!(r["adapter_ledger_candidate"], false);
-                assert_eq!(r["adapter_ledger_honest"], false);
+                assert_eq!(r["ledger_candidate"], false);
+                assert_eq!(r["ledger_honest"], false);
             }
         }
     }

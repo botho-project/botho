@@ -9,7 +9,10 @@
 use super::*;
 use crate::{
     block::calculate_block_reward,
-    ledger::{median_time_past_of, MTP_WINDOW},
+    ledger::{
+        ledger_timestamp_within_future_bound, median_time_past_of,
+        minting_timestamp_within_future_bound, timestamp_after_mtp, MTP_WINDOW,
+    },
     wallet::Wallet,
 };
 use tempfile::TempDir;
@@ -59,6 +62,50 @@ fn assert_rejected(result: Result<Block, LedgerError>, needle: &str) {
         }
         other => panic!("expected InvalidBlock({needle:?}), got {other:?}"),
     }
+}
+
+#[test]
+fn timestamp_predicate_boundaries() {
+    for mtp in [0, 1, 1 << 53, u64::MAX - 1, u64::MAX] {
+        assert!(!timestamp_after_mtp(mtp, mtp));
+        if mtp < u64::MAX {
+            assert!(timestamp_after_mtp(mtp + 1, mtp));
+        }
+    }
+    for now in [
+        0,
+        1000,
+        u64::MAX - 61,
+        u64::MAX - 60,
+        u64::MAX - 59,
+        u64::MAX - 1,
+        u64::MAX,
+    ] {
+        let cap = now.saturating_add(MAX_FUTURE_TIMESTAMP_SECS);
+        assert!(ledger_timestamp_within_future_bound(cap, now));
+        if cap < u64::MAX {
+            assert!(!ledger_timestamp_within_future_bound(cap + 1, now));
+        }
+        if now <= u64::MAX - MAX_FUTURE_TIMESTAMP_SECS {
+            assert!(minting_timestamp_within_future_bound(cap, now));
+            if cap < u64::MAX {
+                assert!(!minting_timestamp_within_future_bound(cap + 1, now));
+            }
+        }
+    }
+}
+
+#[test]
+fn header_minting_timestamp_mismatch_precedes_lower_rejection() {
+    let dir = TempDir::new().unwrap();
+    let ledger = open(dir.path());
+    let wallet = Wallet::from_mnemonic(WORDS).unwrap();
+    let mut block = block_at(&ledger, &wallet, 0); // Also fails strict MTP.
+    block.minting_tx.timestamp = 1;
+    assert_rejected(
+        ledger.add_block(&block).map(|()| block),
+        "Minting tx timestamp does not match header",
+    );
 }
 
 // ---- The pure median ------------------------------------------------------
@@ -153,7 +200,7 @@ fn add_block_enforces_median_time_past_not_parent() {
 
     assert_rejected(mine_at(&ledger, &wallet, mtp), "not after median time past");
     assert_rejected(
-        mine_at(&ledger, &wallet, now() + MAX_FUTURE_TIMESTAMP_SECS + 5),
+        mine_at(&ledger, &wallet, now() + 3_600),
         "too far in the future",
     );
     assert_eq!(ledger.get_chain_state().unwrap().height, 11);

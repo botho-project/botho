@@ -8,7 +8,7 @@
 
 use crate::{
     block::{calculate_block_reward, MintingTx},
-    ledger::ChainState,
+    ledger::{minting_timestamp_within_future_bound, timestamp_after_mtp, ChainState},
     network::PROTOCOL_VERSION,
     transaction::Transaction,
 };
@@ -273,7 +273,7 @@ impl TransactionValidator {
                 ValidationError::ChainStateUnavailable
             })?;
 
-        if tx.timestamp > now + MAX_FUTURE_TIMESTAMP_SECS {
+        if !minting_timestamp_within_future_bound(tx.timestamp, now) {
             warn!(
                 timestamp = tx.timestamp,
                 now = now,
@@ -381,7 +381,7 @@ impl TransactionValidator {
                 ValidationError::ChainStateUnavailable
             })?;
 
-        if tx.timestamp > now + MAX_FUTURE_TIMESTAMP_SECS {
+        if !minting_timestamp_within_future_bound(tx.timestamp, now) {
             warn!(
                 timestamp = tx.timestamp,
                 now = now,
@@ -396,7 +396,7 @@ impl TransactionValidator {
         // locked out every honest minter. Tip-relative, so it stays out of
         // `validate_minting_tx_intrinsic` (#419).
         let median_time_past = state.median_time_past();
-        if tx.timestamp <= median_time_past {
+        if !timestamp_after_mtp(tx.timestamp, median_time_past) {
             warn!(
                 timestamp = tx.timestamp,
                 median_time_past, "Minting tx timestamp not after median time past"
@@ -932,8 +932,9 @@ mod tests {
     /// The residual the operator's addition A closes: once 6 of the last 11
     /// stamps are forward-dated, the median itself is ahead of `now`, so a
     /// `now` stamp is rejected; but the honest minter's stamp
-    /// `max(now, MTP + 1)` is valid (it stays within the 60 s future bound
-    /// because every window entry was itself accepted under that bound).
+    /// `max(now, MTP + 1)` is valid in this +50 s fixture, which leaves
+    /// headroom below the 60 s future cap. Prior acceptance alone does not
+    /// ensure headroom: a +60 s median is the zero-skew counterexample (#1941).
     #[test]
     fn forward_dated_window_majority_needs_min_stamp() {
         let now = current_timestamp();
@@ -1007,8 +1008,8 @@ mod tests {
         let window: Vec<u64> = (0..11).map(|i| now - 50 + 5 * i).collect();
         let state = chain_state_with_window(window);
         let validator = TransactionValidator::new(state.clone());
-        // 61 s ahead plus margin for the clock ticking during the test.
-        let too_far = minting_tx_at(&state, now + 65);
+        // Stay well away from the boundary; exact equality is tested as a scalar.
+        let too_far = minting_tx_at(&state, now + 3_600);
         assert_eq!(
             validator.validate_minting_tx(&too_far),
             Err(ValidationError::TimestampTooFarInFuture)
@@ -1021,6 +1022,43 @@ mod tests {
             &validator,
             &minting_tx_at(&state, now + 30)
         ));
+    }
+
+    #[test]
+    fn minting_timestamp_future_precedes_mtp_rejection() {
+        let now = current_timestamp();
+        let state = chain_state_with_window(vec![now + 7_200; 11]);
+        let validator = TransactionValidator::new(state.clone());
+        let tx = minting_tx_at(&state, now + 3_600);
+        assert!(tx.timestamp <= state.read().unwrap().median_time_past());
+        assert_eq!(
+            validator.validate_minting_tx(&tx),
+            Err(ValidationError::TimestampTooFarInFuture)
+        );
+    }
+
+    #[test]
+    fn intrinsic_timestamp_has_no_mtp_lower_bound() {
+        let now = current_timestamp();
+        let state = chain_state_with_window(vec![now - 1_000; 11]);
+        let validator = TransactionValidator::new(state.clone());
+        let mut tx = minting_tx_at(&state, now - 2_000);
+        // Ensure the PoW failure is deterministic for this actual fixture.
+        tx.nonce = (0..100)
+            .find(|nonce| {
+                tx.nonce = *nonce;
+                !tx.verify_pow()
+            })
+            .expect("fixture must have an unsolved PoW nonce");
+        assert_eq!(
+            validator.validate_minting_tx(&tx),
+            Err(ValidationError::TimestampNotAfterMedian)
+        );
+        // Reaching PoW establishes only that the intrinsic timestamp stage passed.
+        assert_eq!(
+            TransactionValidator::validate_minting_tx_intrinsic(&tx),
+            Err(ValidationError::InvalidPoW)
+        );
     }
 
     #[test]

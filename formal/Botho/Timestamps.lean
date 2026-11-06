@@ -3,10 +3,13 @@ import Botho.Basic
 /-!
 Protocol 8.0.0 timestamp rules, retained in 9.0.0 (#1941).
 Status: proven (model); the zero-skew claim is refuted in the timestamp-rule
-model. The five pure helpers have tested agreement in the finite `timestamps`
-DRT domain (#1942): u64 scalars, generated windows of length 0..32 and pinned
-boundaries. Acceptance outputs are DRT-only adapters. Clock-reading callers
-and full validators remain read-from-source mappings, outside this coverage.
+model. The `timestamps` DRT leg (#1942, #1943) calls five pure helpers and the
+production scalar lower/future predicates: full-u64 ledger inputs, minting
+only at validator now ≤ U-60, generated windows of length 0..32 and pinned
+boundaries. Above U-60 the minting subrequest returns an explicit domain error;
+helper and saturated ledger observations remain available. This finite testing
+does not prove Rust equivalence. Clock acquisition/failure, full validators,
+SCP scheduling and physical-clock realizability remain outside DRT coverage.
 
 `ledger/mod.rs::median_time_past_of`, `next_min_timestamp`, and
 `rolled_timestamps` supply the window rules; `node/minter.rs::minting_timestamp`

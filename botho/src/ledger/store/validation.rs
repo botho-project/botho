@@ -2,6 +2,7 @@
 //! retain their existing reads/errors; experimental adapters pin a strict
 //! pre-state.
 use super::{writer::WriteTables, *};
+use crate::ledger::{ledger_timestamp_within_future_bound, timestamp_after_mtp};
 /// Which commitment `header.tx_root` must equal.
 #[derive(Clone, Copy)]
 pub(in crate::ledger) enum RootRule {
@@ -608,7 +609,7 @@ pub(in crate::ledger) trait ValidationReads {
             ));
         }
         let median_time_past = state.median_time_past();
-        if block.header.timestamp <= median_time_past {
+        if !timestamp_after_mtp(block.header.timestamp, median_time_past) {
             return Err(LedgerError::InvalidBlock(format!(
                 "Block timestamp {} is not after median time past {}",
                 block.header.timestamp, median_time_past
@@ -618,7 +619,7 @@ pub(in crate::ledger) trait ValidationReads {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .map_err(|_| LedgerError::InvalidBlock("System time before UNIX epoch".to_string()))?;
-        if block.header.timestamp > now.saturating_add(MAX_FUTURE_TIMESTAMP_SECS) {
+        if !ledger_timestamp_within_future_bound(block.header.timestamp, now) {
             return Err(LedgerError::InvalidBlock(format!(
                 "Block timestamp {} is too far in the future (now={})",
                 block.header.timestamp, now
