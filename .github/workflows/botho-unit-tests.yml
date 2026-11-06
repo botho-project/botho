@@ -29,7 +29,7 @@ jobs:
   botho-lib:
     name: Full Botho library suite
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 61
     steps:
       - uses: actions/checkout@v7
         with:
@@ -122,6 +122,33 @@ jobs:
           assert passed == counts['non_ignored'] and ignored == counts['ignored'], (summary.group(), counts)
           print(summary.group())
           PY
+      - name: Run the bounded mint-window resource regression alone
+        timeout-minutes: 6
+        env:
+          BOTHO_TEST_EXECUTABLE: ${{ steps.library.outputs.executable }}
+        run: |
+          set -o pipefail
+          sha256sum "$BOTHO_TEST_EXECUTABLE" > "$RUNNER_TEMP/botho-unit-tests/mint-window-binary.sha256"
+          started=$(date +%s)
+          set +e
+          timeout 300s "$BOTHO_TEST_EXECUTABLE" \
+            commands::run::mint_window_tests::mint_window_runtime_regression \
+            --ignored --exact --test-threads=1 --nocapture 2>&1 \
+            | tee "$RUNNER_TEMP/botho-unit-tests/mint-window.log"
+          result=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+          printf '{"exit_code":%s,"seconds":%s}\n' "$result" "$elapsed" \
+            > "$RUNNER_TEMP/botho-unit-tests/mint-window-result.json"
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          python3 - <<'PYCODE'
+          import os, re
+          from pathlib import Path
+          log = Path(os.environ['RUNNER_TEMP'], 'botho-unit-tests', 'mint-window.log').read_text()
+          assert re.search(r'test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured;', log), 'expected exactly one resource test'
+          assert log.count('MINT_WINDOW_ATTEMPT ') == 2, 'expected two bounded attempts'
+          assert log.count('MINT_WINDOW_JOIN ') == 2, 'expected both worker joins'
+          PYCODE
       - name: Retain build, inventory and execution evidence
         if: always()
         uses: actions/upload-artifact@v7

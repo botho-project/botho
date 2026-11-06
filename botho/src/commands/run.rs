@@ -31,6 +31,9 @@ use super::{
 mod consensus_failure_tests;
 #[cfg(test)]
 use consensus_failure_tests::FailureTestHooks;
+#[cfg(test)]
+#[path = "mint_window_tests.rs"]
+mod mint_window_tests;
 
 use crate::{
     block::MintingTx,
@@ -503,6 +506,8 @@ async fn run_async(
         shutdown,
         #[cfg(test)]
         None,
+        #[cfg(test)]
+        None,
     )
     .await
 }
@@ -650,6 +655,7 @@ async fn run_async_with_shutdown(
     mut mint_window: TestnetMintWindow,
     shutdown: Arc<AtomicBool>,
     #[cfg(test)] mut test_hooks: Option<FailureTestHooks>,
+    #[cfg(test)] mut mint_test: Option<mint_window_tests::Hooks>,
 ) -> Result<()> {
     // Get network type for port/peer defaults
     let network_type = config.network_type();
@@ -1233,6 +1239,11 @@ async fn run_async_with_shutdown(
     println!();
     node.print_status_public()?;
 
+    #[cfg(test)]
+    if let Some(hooks) = &mut mint_test {
+        hooks.attach(&ws_broadcaster);
+    }
+
     // Start minting only if quorum is satisfied AND initial sync is complete
     // (issue #770). A peer-expecting node that boots behind the fleet tip has
     // `initial_sync_complete == false` here, so it does NOT arm minting at
@@ -1291,6 +1302,10 @@ async fn run_async_with_shutdown(
     let mut sync_tick = tokio::time::interval(Duration::from_secs(2));
     let mut minting_check_interval = tokio::time::interval(Duration::from_millis(100));
     let mut faucet_balance_interval = tokio::time::interval(Duration::from_secs(10));
+    #[cfg(test)]
+    if mint_test.as_ref().is_some_and(|hooks| hooks.controlled()) {
+        faucet_balance_interval = tokio::time::interval(Duration::from_millis(100));
+    }
     // Periodically re-dial bootstrap peers when we have no connections, so a
     // node that lost its only connection right after startup can rejoin
     // (issue #409). Cheap and a no-op once peers are connected.
@@ -2968,8 +2983,19 @@ async fn run_async_with_shutdown(
             _ = faucet_balance_interval.tick() => {
                 // Evaluate and enforce expiry BEFORE any fallible balance scan.
                 // A ledger/scan error must not leave override-backed mining alive.
+                #[cfg(test)]
+                let step = if let Some(hooks) = &mut mint_test {
+                    hooks.observe("tick", minting_enabled, minting_paused_for_balance, &rpc_state, None);
+                    hooks.step(&mut config, &mut initial_sync_complete).await?
+                } else {
+                    mint_window_tests::Step::default()
+                };
+                let wall = unix_seconds();
+                let clock = Instant::now();
+                #[cfg(test)]
+                let (wall, clock) = step.clock.unwrap_or((wall, clock));
                 let window_was_enabled = mint_window.deadline.is_some();
-                let continuous = mint_window.active(unix_seconds(), Instant::now());
+                let continuous = mint_window.active(wall, clock);
                 if expired_window_requires_pause(window_was_enabled, continuous, minting_enabled) {
                     node.stop_minting_public();
                     minting_enabled = false;
@@ -2979,6 +3005,10 @@ async fn run_async_with_shutdown(
                     }
                     metrics_updater.set_minting_active(false);
                     ws_broadcaster.minting_status(false, 0.0, 0);
+                }
+                #[cfg(test)]
+                if let Some(hooks) = &mut mint_test {
+                    hooks.observe("after_expiry", minting_enabled, minting_paused_for_balance, &rpc_state, None);
                 }
                 if !balance_scan_required(continuous, minting_enabled) {
                     continue;
@@ -2992,7 +3022,14 @@ async fn run_async_with_shutdown(
                         Ok(ledger) => {
                             // Context-aware discovery (botho.ledger.2, #1286 P7):
                             // V2 lottery payouts count, legacy aliased rows do not.
-                            match ledger.unspent_wallet_outputs(wallet) {
+                            let owned = ledger.unspent_wallet_outputs(wallet);
+                            #[cfg(test)]
+                            let owned = if step.fail_scan {
+                                Err(crate::ledger::LedgerError::Database("injected mint-window scan failure".into()))
+                            } else {
+                                owned
+                            };
+                            match owned {
                                 Ok(owned) => {
                                     // Unspent on chain; also skip mempool-pending spends.
                                     let mempool = rpc_state.mempool.read().ok();
@@ -3008,6 +3045,10 @@ async fn run_async_with_shutdown(
                                 }
                                 Err(e) => {
                                     warn!("Failed to scan UTXOs for balance check: {}", e);
+                                    #[cfg(test)]
+                                    if let Some(hooks) = &mut mint_test {
+                                        hooks.observe("scan_failed", minting_enabled, minting_paused_for_balance, &rpc_state, None);
+                                    }
                                     continue;
                                 }
                             }
@@ -3018,6 +3059,8 @@ async fn run_async_with_shutdown(
                         }
                     };
 
+                    #[cfg(test)]
+                    let balance = step.balance.unwrap_or(balance);
                     let balance_bth = balance as f64 / 1_000_000_000_000.0;
 
                     // Number of pending transactions awaiting inclusion in a
@@ -3032,6 +3075,12 @@ async fn run_async_with_shutdown(
                         .map(|mp| mp.len())
                         .unwrap_or(0);
 
+                    #[cfg(test)]
+                    let mempool_len = step.pending.unwrap_or(mempool_len);
+                    #[cfg(test)]
+                    if let Some(hooks) = &mut mint_test {
+                        hooks.observe("scanned", minting_enabled, minting_paused_for_balance, &rpc_state, Some((balance, mempool_len)));
+                    }
                     let (pause_for_balance, resume_from_balance) = balance_minting_policy(
                         balance, FAUCET_BALANCE_HIGH, FAUCET_BALANCE_LOW, mempool_len, continuous,
                     );
@@ -3096,6 +3145,10 @@ async fn run_async_with_shutdown(
                             }
                         }
                     }
+                }
+                #[cfg(test)]
+                if let Some(hooks) = &mut mint_test {
+                    hooks.observe("settled", minting_enabled, minting_paused_for_balance, &rpc_state, None);
                 }
             }
         }
