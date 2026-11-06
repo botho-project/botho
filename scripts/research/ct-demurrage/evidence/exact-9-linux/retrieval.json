@@ -1,0 +1,28 @@
+{
+  "pr": 1955,
+  "run": 42215470766,
+  "attempt": 1,
+  "artifact_id": 13500827575,
+  "artifact_dir": "/tmp/botho-1955-linux-artifact",
+  "measured_source_archive": "/tmp/botho-1955-linux-measured-sources.tar.gz",
+  "checkout_merge_sha": "e7b24e9c43e1a9f6bbc6dd820af1c529ad655255",
+  "head_sha": "701afc3e16a2e4e14808bca48c45f5c9f34404d4",
+  "measured_source_hashes_verified": 15,
+  "matrix_validation": "check_cases passed;8 cases/13 proofs",
+  "supplemental_production_source_sha256": {
+    "cluster-tax/Cargo.toml": "1f4691538f4c376ac84c854e5632a514953db4ea949347c448485b876ae79076",
+    "cluster-tax/src/lib.rs": "7ce7a65667392b1b83b8f0c0cfb6f41a6e120e00a06b415c8aef5650b39261e1",
+    "cluster-tax/src/demurrage.rs": "9d1bfeadc16192948529fbc8b5e3ada89d8991e9c0a825fc8e74b53f963fe4f0"
+  },
+  "scope": "Raw artifact retrieval and hash/matrix validation; #1954 publication remains pending review-source match and complete macOS evidence.",
+  "artifact_zip": "/tmp/botho-1955-linux-artifact.zip",
+  "artifact_zip_sha256": "29b0303e1e5e857852eee1fae7e96a4773eb82c193232a31bb3ef54ae12cf9f8",
+  "artifact_zip_matches_forge_digest": true,
+  "complete_extracted_files_match_zip": 18,
+  "merged_implementation_source_hash_match": {
+    "commit": "6bc0b08623e973a79ea5be084fe5c6c094faa669",
+    "source_count": 15,
+    "all_match": true,
+    "scope": "Measured source list matches landed implementation; full review and publication remain separate."
+  }
+}

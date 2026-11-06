@@ -1,0 +1,117 @@
+[
+  {
+    "name": "build",
+    "argv": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "bth-ct-demurrage-reference",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "cwd": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954",
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target",
+      "CARGO_BUILD_JOBS": "2",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-06-09",
+      "CARGO_TERM_COLOR": "never",
+      "RUSTC_WRAPPER": ""
+    },
+    "started_at": "2026-11-06T18:50:24.082295+00:00",
+    "finished_at": "2026-11-06T18:50:50.492760+00:00",
+    "seconds": 26.41006579203531,
+    "exit_code": 0,
+    "timed_out": false,
+    "timeout_seconds": 900,
+    "stdout": "/tmp/botho-1954-build.stdout",
+    "stderr": "/tmp/botho-1954-build.stderr",
+    "stdout_sha256": "05a4bf8dba9454c3c54c488efcb1639be94f6a8309c4cb65b719a490223ef85f",
+    "stderr_sha256": "cb983b66c23735602e8c2b4da619f8c6dbe5d3a716691518e265f676378762e5"
+  },
+  {
+    "name": "arithmetic",
+    "argv": [
+      "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+      "proof_experiment::proof_round_trips_and_measurements",
+      "--exact",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "cwd": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954",
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target",
+      "CARGO_BUILD_JOBS": "2",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-06-09",
+      "CARGO_TERM_COLOR": "never",
+      "RUSTC_WRAPPER": ""
+    },
+    "started_at": "2026-11-06T18:51:40.385936+00:00",
+    "finished_at": "2026-11-06T18:51:42.360624+00:00",
+    "seconds": 1.9745098329149187,
+    "exit_code": 0,
+    "timed_out": false,
+    "timeout_seconds": 120,
+    "stdout": "/tmp/botho-1954-arithmetic.stdout",
+    "stderr": "/tmp/botho-1954-arithmetic.stderr",
+    "stdout_sha256": "3e0b1bca925394fe9fc3ba9cf0ca9d246d9c6aaff2c17ca374a778ec1ceab41a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "combined",
+    "argv": [
+      "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+      "proof_experiment::combined::combined_round_trips_and_measurements",
+      "--exact",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "cwd": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954",
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target",
+      "CARGO_BUILD_JOBS": "2",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-06-09",
+      "CARGO_TERM_COLOR": "never",
+      "RUSTC_WRAPPER": ""
+    },
+    "started_at": "2026-11-06T18:51:47.849877+00:00",
+    "finished_at": "2026-11-06T18:52:32.067594+00:00",
+    "seconds": 44.21721666702069,
+    "exit_code": 0,
+    "timed_out": false,
+    "timeout_seconds": 120,
+    "stdout": "/tmp/botho-1954-combined.stdout",
+    "stderr": "/tmp/botho-1954-combined.stderr",
+    "stdout_sha256": "fcecb63cc9aa04545791a2d96b1cbb91b38c23f13a67b41497c55858b59144f0",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "short-hold",
+    "argv": [
+      "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+      "proof_experiment::same_factor_short_hold_exact_proof",
+      "--exact",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "cwd": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954",
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target",
+      "CARGO_BUILD_JOBS": "2",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-06-09",
+      "CARGO_TERM_COLOR": "never",
+      "RUSTC_WRAPPER": ""
+    },
+    "started_at": "2026-11-06T18:53:06.382282+00:00",
+    "finished_at": "2026-11-06T18:53:06.651847+00:00",
+    "seconds": 0.26930833305232227,
+    "exit_code": 0,
+    "timed_out": false,
+    "timeout_seconds": 120,
+    "stdout": "/tmp/botho-1954-short-hold.stdout",
+    "stderr": "/tmp/botho-1954-short-hold.stderr",
+    "stdout_sha256": "a4862884a789c39dbe4910cbf0dc08078046436fa694986003fcaa91ac928825",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

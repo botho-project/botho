@@ -1,0 +1,62 @@
+[
+  {
+    "name": "build",
+    "argv": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "bth-ct-demurrage-reference",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "cwd": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954",
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target",
+      "CARGO_BUILD_JOBS": "2",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-06-09",
+      "CARGO_TERM_COLOR": "never",
+      "RUSTC_WRAPPER": ""
+    },
+    "started_at": "2026-11-06T18:50:24.082295+00:00",
+    "finished_at": "2026-11-06T18:50:50.492760+00:00",
+    "seconds": 26.41006579203531,
+    "exit_code": 0,
+    "timed_out": false,
+    "timeout_seconds": 900,
+    "stdout": "/tmp/botho-1954-build.stdout",
+    "stderr": "/tmp/botho-1954-build.stderr",
+    "stdout_sha256": "05a4bf8dba9454c3c54c488efcb1639be94f6a8309c4cb65b719a490223ef85f",
+    "stderr_sha256": "cb983b66c23735602e8c2b4da619f8c6dbe5d3a716691518e265f676378762e5"
+  },
+  {
+    "name": "macos-matrix",
+    "argv": [
+      "python3",
+      "scripts/research/ct-demurrage/measure_ownership.py",
+      "--cargo-messages",
+      "/tmp/botho-1954-build.stdout",
+      "--output-dir",
+      "/tmp/botho-1954-macos-raw"
+    ],
+    "cwd": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954",
+    "environment": {
+      "CARGO_TARGET_DIR": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target",
+      "CARGO_BUILD_JOBS": "2",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-06-09",
+      "CARGO_TERM_COLOR": "never",
+      "RUSTC_WRAPPER": ""
+    },
+    "started_at": "2026-11-06T18:53:15.930742+00:00",
+    "finished_at": "2026-11-06T18:53:39.211767+00:00",
+    "seconds": 23.28067100001499,
+    "exit_code": 0,
+    "timed_out": false,
+    "timeout_seconds": 330,
+    "stdout": "/tmp/botho-1954-macos-matrix.stdout",
+    "stderr": "/tmp/botho-1954-macos-matrix.stderr",
+    "stdout_sha256": "63ee58d00edf737ca32a9ff301281ef74435a61d09211fde84e24bfbf7382ce8",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

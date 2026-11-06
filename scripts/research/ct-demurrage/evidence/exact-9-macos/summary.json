@@ -1,0 +1,510 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "cases": [
+    {
+      "case": "generators",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/generators.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "16265a60c6b2b2686b38955d7fbc45a01b2b4d2cfbb5f261dbd2b35a9357a2a0",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 361233292
+        }
+      ],
+      "fixture": [],
+      "samples": [],
+      "whole_case_peak_rss_bytes": 13598720,
+      "rss_raw_sha256": "72b51d967161ee47c731b39ce4bfe24b1d8dc43f2ea01a0a8ad9084a83cc4550"
+    },
+    {
+      "case": "ordinary-1",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/ordinary-1.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "ae76beaed4a0ae2a6a622a9207dc81ee97f57e0c1a60a47b52e6617f97424be7",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 367317875
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 1755250
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1762,
+          "constraints": 3544,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 235163000,
+          "verify_ns": 22128125
+        },
+        {
+          "sample": 1,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1762,
+          "constraints": 3544,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 231646250,
+          "verify_ns": 21599833
+        },
+        {
+          "sample": 2,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1762,
+          "constraints": 3544,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 231759959,
+          "verify_ns": 21671833
+        }
+      ],
+      "whole_case_peak_rss_bytes": 29081600,
+      "rss_raw_sha256": "abd135783361db059662582e5f659bde61a3780310eebe0d48815d568e73fc8b"
+    },
+    {
+      "case": "ordinary-4",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/ordinary-4.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "5b9ea98217dc837027992fea6c3deca812095672886e5a095f28bd446fdd1798",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 370419500
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 6703375
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 4,
+          "outputs": 4,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 6640,
+          "constraints": 13351,
+          "arithmetic_bytes": 1249,
+          "clsag_field_bytes": 2944,
+          "signatures": 4,
+          "prove_ns": 889499250,
+          "verify_ns": 82544042
+        },
+        {
+          "sample": 1,
+          "inputs": 4,
+          "outputs": 4,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 6640,
+          "constraints": 13351,
+          "arithmetic_bytes": 1249,
+          "clsag_field_bytes": 2944,
+          "signatures": 4,
+          "prove_ns": 889380833,
+          "verify_ns": 81230916
+        },
+        {
+          "sample": 2,
+          "inputs": 4,
+          "outputs": 4,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 6640,
+          "constraints": 13351,
+          "arithmetic_bytes": 1249,
+          "clsag_field_bytes": 2944,
+          "signatures": 4,
+          "prove_ns": 884273875,
+          "verify_ns": 81147667
+        }
+      ],
+      "whole_case_peak_rss_bytes": 73629696,
+      "rss_raw_sha256": "02d05d3a8e0680583f03d48cccade4a4318a2b8a6507af1605d11469d4bb4ba0"
+    },
+    {
+      "case": "ordinary-16",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/ordinary-16.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "fbaa0ea0aa915f3722450034a6fd68d482d54355e69389389dc27472809914d7",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 365837583
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 25626291
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 26152,
+          "constraints": 52579,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 3522065792,
+          "verify_ns": 321824292
+        },
+        {
+          "sample": 1,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 26152,
+          "constraints": 52579,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 3505899583,
+          "verify_ns": 322925625
+        },
+        {
+          "sample": 2,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 26152,
+          "constraints": 52579,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 3499777875,
+          "verify_ns": 324349000
+        }
+      ],
+      "whole_case_peak_rss_bytes": 262438912,
+      "rss_raw_sha256": "97ccc33980f86e2943d892489dcfee3d9374f718f97e09d258dc7eddf7fc0586"
+    },
+    {
+      "case": "zero",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/zero.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "9b9297553025cd544eb83c428c67960db2ece86e0b462c856369bdfafd41d69c",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 364914625
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 1694375
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1762,
+          "constraints": 3544,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 233612625,
+          "verify_ns": 21749709
+        }
+      ],
+      "whole_case_peak_rss_bytes": 26427392,
+      "rss_raw_sha256": "b5f55230c7c976e873e4f683e8854971c55bdbae44b5da23f80b7d051d8596fb"
+    },
+    {
+      "case": "both-caps-cancel",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/both-caps-cancel.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "ae05b1c0eaefd9bcdc1d495ead06df28de581e36f831ff4550ab54d5cc5e1888",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 367667042
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 1716000
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1762,
+          "constraints": 3544,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 235470250,
+          "verify_ns": 21914875
+        }
+      ],
+      "whole_case_peak_rss_bytes": 26214400,
+      "rss_raw_sha256": "f7e2806d55f5f59869b81aac6fc90b6eb2d019df86cd80819165c2a477d64ea5"
+    },
+    {
+      "case": "one-cap-difference",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/one-cap-difference.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "fb16c78bbaa2255fab24662a30c4995e17666e8f78984d1e1f2f2c0bcae6e0ac",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 363421250
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 1669791
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1762,
+          "constraints": 3544,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 237558042,
+          "verify_ns": 21211541
+        }
+      ],
+      "whole_case_peak_rss_bytes": 27312128,
+      "rss_raw_sha256": "f96cd43a0cb4396150852fea62d2c7814e9a370a172c8d5b7c0a1f8836f014c0"
+    },
+    {
+      "case": "maximum-sum",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "-o",
+        "/private/tmp/botho-1954-macos-raw/maximum-sum.rss.txt",
+        "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "e3de45ad682166fbcf42c41bc3e372c28e70b5989abfce50494bf2e07407116d",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 367250666
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 25379541
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 26152,
+          "constraints": 52579,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 3517211000,
+          "verify_ns": 325159333
+        }
+      ],
+      "whole_case_peak_rss_bytes": 173178880,
+      "rss_raw_sha256": "32fc1787be8558d41a0475023b83466f12b1740351d4d28518c080f15aecf365"
+    }
+  ],
+  "checkout_commit": "e070cedfc8e433ffe6aa3e7e29ae12ed83a8839c",
+  "source_sha256": {
+    "scripts/research/ct-demurrage/src/legacy_kernel.rs": "7b65c56241c675abca468c48c789e17466e3bae03cf1133bfa3163aa0555574a",
+    "scripts/research/ct-demurrage/src/lib.rs": "e455076e8a0211069b195fcbfb310a21f237ce5410c49dcc15fc5c551016cf79",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership/resources.rs": "11e9c3f33cf480c5a1b8b89a4f755a3e06a2220e0046bc9e8abf89ccacded589",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership.rs": "9e8328777baad49232f0f7d62877eac83624f64e7b14f9337ff6459a706795de",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined.rs": "dfcea19312e53863102b81daf1cf104047ae9f3dcac96eaffaad0fd9caee2ef8",
+    "scripts/research/ct-demurrage/src/proof_experiment.rs": "d7cdb72277947d5483c9b8c86980fc86bdc343667ac23ced36b1ccbec8edd4d8",
+    "Cargo.lock": "d3392fd6793ed819b2d11c54cd4787ff795f21308a792c20c04da35ecebff7ea",
+    "Cargo.toml": "56602410faf86c403131290d2b3d8376fa68160e0259f75656cbc0a062c75f28",
+    "rust-toolchain": "42ff6f0501c10e27ed7fbabbae730900b2b973011297d49a4fcdb8415b9b17cc",
+    "scripts/research/ct-demurrage/measure_ownership.py": "5eec9e58759b6010cb29b38779f27304c16db3b681c148c6a170d888c07f04ab",
+    "scripts/research/ct-demurrage/Cargo.toml": "ee6f45ce1c17d241334a28eda9cfa18d8b1e05041108184a31bfcda8a48bd336",
+    ".github/workflows/ownership-resources.yml": "c3a251a80f99fcaee0f85bda0b0b7ae32eedc8bddb4b65aeadbfdee2c61da7e5",
+    "crypto/ring-signature/src/ring_signature/clsag.rs": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+    "vendor/bulletproofs-og/src/r1cs/prover.rs": "e38d670c95974e64608ca8d72f136bb4d03c33819356ed4618e504a26937447e",
+    "vendor/bulletproofs-og/src/r1cs/verifier.rs": "bd07ee4bed98e0e1ddce7314e2da77fd8a0e43c1ded552c25acc77c696878396"
+  },
+  "git_status_porcelain": "",
+  "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "compile_recipe": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "bth-ct-demurrage-reference",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "build_evidence_note": "Recipe used by workflow/reproduction command; Cargo stdout selects executable. Hashes identify supplied output/binary/source, not a hermetic build attestation.",
+  "executable": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1954/target/release/deps/bth_ct_demurrage_reference-50a6ba0e9b827ced",
+  "executable_sha256": "27f05fc85c30ec1eaaabb43cf14e2c97e357ddfefad74090047144b75a78f034",
+  "cargo_messages": "/private/tmp/botho-1954-build.stdout",
+  "cargo_messages_sha256": "05a4bf8dba9454c3c54c488efcb1639be94f6a8309c4cb65b719a490223ef85f",
+  "environment": {
+    "system": "Darwin",
+    "release": "27.0.0",
+    "machine": "arm64",
+    "processor": "Apple M3 Ultra",
+    "python": "3.15.2",
+    "rustc": "rustc 1.98.0-nightly (cb46fbb8c 2026-06-08)"
+  },
+  "ci": {
+    "GITHUB_REPOSITORY": null,
+    "GITHUB_SHA": null,
+    "GITHUB_RUN_ID": null,
+    "GITHUB_RUN_ATTEMPT": null
+  },
+  "limits_seconds": {
+    "per_case": 120,
+    "matrix": 300
+  },
+  "scope": "Whole-case peak RSS includes generators, fixtures and all samples; no per-proof subtraction. Field bytes are not a wire envelope.",
+  "elapsed_seconds": 22.87529750005342
+}

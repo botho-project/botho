@@ -1,0 +1,7 @@
+
+running 1 test
+test proof_experiment::same_factor_short_hold_exact_proof ... short-hold exact=58494241735 legacy=0 capital=0 bytes=1121 multipliers=1562 constraints=3140 verified
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.26s
+

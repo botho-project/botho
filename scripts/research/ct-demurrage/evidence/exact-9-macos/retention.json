@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "retained_at": "2026-11-06T18:56:12.748489+00:00",
+  "files_sha256": {
+    "both-caps-cancel.log": "ae05b1c0eaefd9bcdc1d495ead06df28de581e36f831ff4550ab54d5cc5e1888",
+    "both-caps-cancel.rss.txt": "f7e2806d55f5f59869b81aac6fc90b6eb2d019df86cd80819165c2a477d64ea5",
+    "build-identity.json": "6b7a690c39e811623fa390f0cf94078a7bd1718e26872773c2bc53c51a156773",
+    "build.stderr": "cb983b66c23735602e8c2b4da619f8c6dbe5d3a716691518e265f676378762e5",
+    "cargo.jsonl.gz": "92b0625e311d44116af4728baf04cc70c9bac5e9136b43041def0f6444a3cab3",
+    "collector.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "collector.stdout": "63ee58d00edf737ca32a9ff301281ef74435a61d09211fde84e24bfbf7382ce8",
+    "commands.json": "adc607dc9d81205b4fb5ba6670df6f89a31509319c66dcf16f651f72d8132723",
+    "generators.log": "16265a60c6b2b2686b38955d7fbc45a01b2b4d2cfbb5f261dbd2b35a9357a2a0",
+    "generators.rss.txt": "72b51d967161ee47c731b39ce4bfe24b1d8dc43f2ea01a0a8ad9084a83cc4550",
+    "maximum-sum.log": "e3de45ad682166fbcf42c41bc3e372c28e70b5989abfce50494bf2e07407116d",
+    "maximum-sum.rss.txt": "32fc1787be8558d41a0475023b83466f12b1740351d4d28518c080f15aecf365",
+    "one-cap-difference.log": "fb16c78bbaa2255fab24662a30c4995e17666e8f78984d1e1f2f2c0bcae6e0ac",
+    "one-cap-difference.rss.txt": "f96cd43a0cb4396150852fea62d2c7814e9a370a172c8d5b7c0a1f8836f014c0",
+    "ordinary-1.log": "ae76beaed4a0ae2a6a622a9207dc81ee97f57e0c1a60a47b52e6617f97424be7",
+    "ordinary-1.rss.txt": "abd135783361db059662582e5f659bde61a3780310eebe0d48815d568e73fc8b",
+    "ordinary-16.log": "fbaa0ea0aa915f3722450034a6fd68d482d54355e69389389dc27472809914d7",
+    "ordinary-16.rss.txt": "97ccc33980f86e2943d892489dcfee3d9374f718f97e09d258dc7eddf7fc0586",
+    "ordinary-4.log": "5b9ea98217dc837027992fea6c3deca812095672886e5a095f28bd446fdd1798",
+    "ordinary-4.rss.txt": "02d05d3a8e0680583f03d48cccade4a4318a2b8a6507af1605d11469d4bb4ba0",
+    "sources.tar.gz": "5e892d25c0d01aa7b276392c8f59ec43734bbb1518fad2c822d04af668384560",
+    "summary.json": "a02480bf9db2fd78f5456c8e2a2f35dd592e10b5e9ddfa9fa0024d3ea6ff6665",
+    "supplemental-sources.json": "ac1d2d6065c6a3673b5b202e6e70b6f8aeec7b63a53f172c71e10172c94a7042",
+    "supplemental-sources.tar.gz": "d906a90347e8d5d647a904fe41360ddfc552c5b0a930af3662ce083139ca0ecb",
+    "zero.log": "9b9297553025cd544eb83c428c67960db2ece86e0b462c856369bdfafd41d69c",
+    "zero.rss.txt": "b5f55230c7c976e873e4f683e8854971c55bdbae44b5da23f80b7d051d8596fb"
+  }
+}

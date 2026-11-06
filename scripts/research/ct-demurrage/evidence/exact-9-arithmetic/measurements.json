@@ -1,0 +1,278 @@
+{
+  "schema": 1,
+  "single": [
+    {
+      "case": "ordinary",
+      "proof_bytes": 1121,
+      "prove_ns": 225080333,
+      "verify_ns": 16482125
+    },
+    {
+      "case": "zero-rate",
+      "proof_bytes": 1121,
+      "prove_ns": 225597459,
+      "verify_ns": 16326459
+    },
+    {
+      "case": "zero-time",
+      "proof_bytes": 1121,
+      "prove_ns": 226922250,
+      "verify_ns": 17137292
+    },
+    {
+      "case": "zero-year",
+      "proof_bytes": 1121,
+      "prove_ns": 226000125,
+      "verify_ns": 16362375
+    },
+    {
+      "case": "floor-boundary",
+      "proof_bytes": 1121,
+      "prove_ns": 224791625,
+      "verify_ns": 17315667
+    },
+    {
+      "case": "maximum-domain",
+      "proof_bytes": 1121,
+      "prove_ns": 226560458,
+      "verify_ns": 16563208
+    },
+    {
+      "case": "both-caps-cancel",
+      "proof_bytes": 1121,
+      "prove_ns": 226404500,
+      "verify_ns": 16762709
+    },
+    {
+      "case": "one-cap-difference-one",
+      "proof_bytes": 1121,
+      "prove_ns": 226642417,
+      "verify_ns": 17158917
+    }
+  ],
+  "single_allocation": {
+    "multipliers": 1562,
+    "constraints": 3140,
+    "evidence": "All eight prove/verify allocator counts are asserted equal by the pinned test; the separate short-hold log prints its observed counts."
+  },
+  "combined": [
+    {
+      "case": "ordinary-1",
+      "significant_bits": 2,
+      "sample": 0,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 229252083,
+      "verify_ns": 16839666
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 2,
+      "sample": 1,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 225402875,
+      "verify_ns": 16941875
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 2,
+      "sample": 2,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 225323209,
+      "verify_ns": 17190542
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 2,
+      "sample": 0,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3432923666,
+      "verify_ns": 251355833
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 2,
+      "sample": 1,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3412738125,
+      "verify_ns": 250906000
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 2,
+      "sample": 2,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3420065083,
+      "verify_ns": 248072416
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 3,
+      "sample": 0,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 226541667,
+      "verify_ns": 17393500
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 3,
+      "sample": 1,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 229616375,
+      "verify_ns": 16802083
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 3,
+      "sample": 2,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 230084291,
+      "verify_ns": 16498000
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 3,
+      "sample": 0,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3431645125,
+      "verify_ns": 249724791
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 3,
+      "sample": 1,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3428465917,
+      "verify_ns": 250741417
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 3,
+      "sample": 2,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3440911833,
+      "verify_ns": 252460916
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 4,
+      "sample": 0,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 229314750,
+      "verify_ns": 16628959
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 4,
+      "sample": 1,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 227814333,
+      "verify_ns": 17025917
+    },
+    {
+      "case": "ordinary-1",
+      "significant_bits": 4,
+      "sample": 2,
+      "multipliers": 1762,
+      "constraints": 3544,
+      "proof_bytes": 1121,
+      "proposed_section_bytes": 1158,
+      "prove_ns": 225849583,
+      "verify_ns": 16933875
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 4,
+      "sample": 0,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3433650959,
+      "verify_ns": 252507708
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 4,
+      "sample": 1,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3429166666,
+      "verify_ns": 251296792
+    },
+    {
+      "case": "ordinary-16",
+      "significant_bits": 4,
+      "sample": 2,
+      "multipliers": 26152,
+      "constraints": 52579,
+      "proof_bytes": 1377,
+      "proposed_section_bytes": 1894,
+      "prove_ns": 3430350000,
+      "verify_ns": 253709208
+    }
+  ],
+  "combined_boundary_passes": [
+    "zero",
+    "maximum-sum",
+    "caps-cancel",
+    "cap-difference-one",
+    "one-to-sixteen",
+    "sixteen-to-one"
+  ],
+  "combined_generator": {
+    "capacity": 32768,
+    "setup_ns": 365251500
+  },
+  "short_hold": {
+    "exact": 58494241735,
+    "legacy": 0,
+    "capital": 0,
+    "proof_bytes": 1121,
+    "multipliers": 1562,
+    "constraints": 3140
+  }
+}
