@@ -174,8 +174,38 @@ def monetary (a : Json) : Dec Json := do
     ("lottery_share", encNat (Botho.Supply.Block.emission height reward Botho.Monetary.halvingInterval)),
     ("demurrage_bps", encNat (Botho.Monetary.demurrageRateBps height))])
 
+/-- Timestamp-only decoding: decimal ASCII strings in the full u64 domain. -/
+def timestampNat (j : Json) : Dec Nat := do
+  let s ← j.getStr?
+  if s.isEmpty || !s.toList.all (fun c => '0' ≤ c && c ≤ '9') then
+    throw "expected decimal u64 string"
+  let n ← asNat j
+  if n > Botho.Timestamps.U then throw "timestamp exceeds u64"
+  pure n
+
+/-- Five model helper outputs and two explicitly named scalar acceptance adapters. -/
+def timestamps (a : Json) : Dec Json := do
+  for (key, _) in (← a.getObj?).toList do
+    if !["window", "parent", "stamp", "minter_now", "validator_now"].contains key then
+      throw s!"unknown timestamp field {key}"
+  let w ← (← arr a "window").mapM timestampNat
+  let p ← timestampNat (← field a "parent")
+  let t ← timestampNat (← field a "stamp")
+  let n ← timestampNat (← field a "minter_now")
+  let v ← timestampNat (← field a "validator_now")
+  let h := Botho.Timestamps.honestStamp w n
+  pure (Json.mkObj [
+    ("mtp", encNat (Botho.Timestamps.mtp w)),
+    ("next_min", encNat (Botho.Timestamps.nextMin w)), ("honest_stamp", encNat h),
+    ("rolled", Json.arr ((Botho.Timestamps.roll w t).map encNat).toArray),
+    ("observed_gap", match Botho.Timestamps.observedGap p t with
+      | some g => encNat g | none => Json.null),
+    ("adapter_ledger_candidate", Json.bool (decide (Botho.Timestamps.accepts w t v))),
+    ("adapter_ledger_honest", Json.bool (decide (Botho.Timestamps.accepts w h v)))])
+
 def dispatch (fn : String) (a : Json) : Dec Json := do
   match fn with
+  | "timestamps" => timestamps a
   | "monetary" => monetary a
   | "demurrage_charge" =>
     -- Protocol 9.0.0 exact kernel (#1875); `Botho.Demurrage.charge` is the

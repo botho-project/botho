@@ -3,7 +3,10 @@ import Botho.Basic
 /-!
 Protocol 8.0.0 timestamp rules, retained in 9.0.0 (#1941).
 Status: proven (model); the zero-skew claim is refuted in the timestamp-rule
-model. Rust correspondence is read from source, not yet DRT-tested.
+model. The five pure helpers have tested agreement in the finite `timestamps`
+DRT domain (#1942): u64 scalars, generated windows of length 0..32 and pinned
+boundaries. Acceptance outputs are DRT-only adapters. Clock-reading callers
+and full validators remain read-from-source mappings, outside this coverage.
 
 `ledger/mod.rs::median_time_past_of`, `next_min_timestamp`, and
 `rolled_timestamps` supply the window rules; `node/minter.rs::minting_timestamp`
