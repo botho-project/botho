@@ -43,6 +43,7 @@ class Fleet:
         self.spent, self.mempool, self.txs = {}, {}, {}
         self.status_override, self.receipt_override, self.known_override = {}, {}, {}
         self.chain_info_override = {}
+        self.pending_override = set()  # mined images a lagging mempool still reports (#1956)
         self.submits, self.requests, self.submit_hook = [], [], None
         self.counter = 0
         self.coinbase_to = None
@@ -98,7 +99,7 @@ class Fleet:
             return [{'height': h, 'outputs': copy.deepcopy(self.blocks.get(h, []))}
                     for h in range(params['start_height'], params['end_height'] + 1)]
         if method == 'chain_areKeyImagesSpent':
-            pending = self.pending_images()
+            pending = self.pending_images() | self.pending_override
             return [{'keyImage': i, 'spent': i in self.spent, 'pending': i in pending,
                      'spentHeight': self.spent.get(i)} for i in params['keyImages']]
         if method == 'getTransactionStatus':
@@ -900,6 +901,41 @@ class ReconcileTests(PrefundBase):
         selected = [s['id'] for r in p.records for s in r['selected']]
         self.assertGreater(len(p.records), 1)
         self.assertEqual(len(selected), len(set(selected)))  # no spent input reselected
+
+    def confirmed_image_reads_pending(self):
+        """After one confirmed grant, a lagging node reports a funding image pending."""
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        selected = {s['id'] for r in p.records for s in r['selected']}
+        image = next(o['key_image'] for o in p.unspent(p.funding) if o['id'] not in selected)
+        self.fleet.pending_override.add(image)
+        return p
+
+    def test_transient_pending_image_waits_then_proceeds(self):
+        """#1956: a mined spend that still reads pending is a wait, not a hold."""
+        p = self.confirmed_image_reads_pending()
+        submits = len(self.fleet.submits)
+        for _ in range(3):
+            self.advance()  # confirms the batch offered meanwhile; then only the image blocks
+            with self.assertRaisesRegex(Quota, 'still pending'):
+                self.tick(p)
+        self.assertEqual(len(self.fleet.submits), submits)  # nothing new offered while waiting
+        self.fleet.pending_override.clear()
+        self.offer_one(p)
+        self.assertGreater(len(self.fleet.submits), submits)
+        self.assertIsNone(p.pending_since)
+
+    def test_persistent_pending_image_holds(self):
+        p = self.confirmed_image_reads_pending()
+        self.advance()
+        with self.assertRaises(Quota):
+            self.tick(p)
+        self.now += prefund.PENDING_SECONDS + 1
+        with self.assertRaisesRegex(Gate, 'pending for ten minutes'):
+            self.tick(p)
 
     def test_receipt_disagreement_holds(self):
         p = self.prefunder()
