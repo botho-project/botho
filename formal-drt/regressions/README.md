@@ -85,6 +85,7 @@ WORKTREE_ABS="$(git rev-parse --show-toplevel)"
 : "${CARGO_TARGET_DIR:?Select the private target described above}"
 export CARGO_TARGET_DIR CARGO_BUILD_JOBS=2
 (cd "$WORKTREE_ABS/formal-drt/lean" && elan run leanprover/lean4:v4.35.0 lake build)
+cp "$WORKTREE_ABS/Cargo.lock" "$WORKTREE_ABS/formal-drt/Cargo.lock"
 cargo +nightly-2026-06-09 build --release --manifest-path "$WORKTREE_ABS/formal-drt/Cargo.toml"
 runner="$CARGO_TARGET_DIR/release/botho-formal-drt"
 model="$WORKTREE_ABS/formal-drt/lean/.lake/build/bin/botho-model"
@@ -92,6 +93,11 @@ regressions="$WORKTREE_ABS/formal-drt/regressions"
 "$runner" --model "$model" --regressions "$regressions" --legs timestamps --seed 1915 --cases 10000 --no-write-regressions --json /tmp/botho-1942-reproduced-timestamps-1915.json
 "$runner" --model "$model" --regressions "$regressions" --seed 1707 --cases 10000 --no-write-regressions --json /tmp/botho-1942-reproduced-all-1707.json
 ```
+
+The excluded `formal-drt` workspace needs the root lockfile copied in, as in
+CI. Its first build adapts that copy to the DRT crate graph; `--locked` rejects
+that necessary update immediately after the copy. The tracked root lockfile
+is unchanged.
 
 The output filenames above keep the retained reports intact. Runner hashes
 identify a particular build: ordinary builds embed build time, so record the
