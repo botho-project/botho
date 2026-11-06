@@ -25704,3 +25704,104 @@ theorem Botho.Demurrage.exactCharge_split_clipping_counterexample sha256:4472e2b
     := fun (lo hi x : Nat) => @ite.{1} Nat (@LT.lt.{0} Nat instLTNat x lo) (Nat.decLt x lo) lo (@ite.{1} Nat (@LT.lt.{0} Nat instLTNat hi x) (Nat.decLt hi x) hi x)
   def Botho.Lottery.minN : Nat → Nat → Nat
     := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
+
+theorem Botho.Timestamps.short_window_zero sha256:21f535dfa9c6d3e6daaf320292332400fd71198e5a9d9e76b1da4e9f665f8836
+  : ∀ (w : List.{0} Nat), Botho.Timestamps.Bounded w → @LE.le.{0} Nat instLENat (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))) → @Eq.{1} Nat (Botho.Timestamps.mtp w) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Timestamps.Bounded : List.{0} Nat → Prop
+    := fun (w : List.{0} Nat) => ∀ (t : Nat), @Membership.mem.{0, 0} Nat (List.{0} Nat) (@List.instMembership.{0} Nat) w t → @LE.le.{0} Nat instLENat t Botho.Timestamps.U
+  def Botho.Timestamps.U : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.mtp : List.{0} Nat → Nat
+    := fun (w : List.{0} Nat) => @List.getD.{0} Nat (@List.mergeSort.{0} Nat (Botho.Timestamps.slots w) fun (a b : Nat) => @Decidable.decide (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b)) (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Timestamps.slots : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.replicate.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11))) (@List.length.{0} Nat (Botho.Timestamps.tail11 w))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (Botho.Timestamps.tail11 w)
+  def Botho.Timestamps.tail11 : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @List.drop.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11)))) w
+
+theorem Botho.Timestamps.rolling_mtp_monotone sha256:fb77632616a3a5a85b80a528bf058089902250165d7330abadcc551481685946
+  : ∀ (w : List.{0} Nat) (t : Nat), Botho.Timestamps.Bounded w → @LE.le.{0} Nat instLENat t Botho.Timestamps.U → @LT.lt.{0} Nat instLTNat (Botho.Timestamps.mtp w) t → @LE.le.{0} Nat instLENat (Botho.Timestamps.mtp w) (Botho.Timestamps.mtp (Botho.Timestamps.roll w t))
+  def Botho.Timestamps.Bounded : List.{0} Nat → Prop
+    := fun (w : List.{0} Nat) => ∀ (t : Nat), @Membership.mem.{0, 0} Nat (List.{0} Nat) (@List.instMembership.{0} Nat) w t → @LE.le.{0} Nat instLENat t Botho.Timestamps.U
+  def Botho.Timestamps.U : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.mtp : List.{0} Nat → Nat
+    := fun (w : List.{0} Nat) => @List.getD.{0} Nat (@List.mergeSort.{0} Nat (Botho.Timestamps.slots w) fun (a b : Nat) => @Decidable.decide (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b)) (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Timestamps.roll : List.{0} Nat → Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) (t : Nat) => @HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.drop.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 10) (instOfNatNat (nat_lit 10)))) w) (@List.cons.{0} Nat t (@List.nil.{0} Nat))
+  def Botho.Timestamps.slots : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.replicate.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11))) (@List.length.{0} Nat (Botho.Timestamps.tail11 w))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (Botho.Timestamps.tail11 w)
+  def Botho.Timestamps.tail11 : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @List.drop.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11)))) w
+
+theorem Botho.Timestamps.honest_stamp_headroom_iff sha256:70fcc472e2fdc9af0afc304f69099b64f5d75c6388dcccbc678ef1cba4c39e75
+  : ∀ (w : List.{0} Nat) (n v : Nat), Botho.Timestamps.Bounded w → @LE.le.{0} Nat instLENat n Botho.Timestamps.U → @LE.le.{0} Nat instLENat v Botho.Timestamps.U → Iff (Botho.Timestamps.accepts w (Botho.Timestamps.honestStamp w n) v) (And (@LT.lt.{0} Nat instLTNat (Botho.Timestamps.mtp w) (Botho.Timestamps.futureCap v)) (@LE.le.{0} Nat instLENat n (Botho.Timestamps.futureCap v)))
+  def Botho.satAdd : Nat → Nat → Nat → Nat
+    := fun (cap a b : Nat) => @Min.min.{0} Nat instMinNat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) cap
+  def Botho.Timestamps.Bounded : List.{0} Nat → Prop
+    := fun (w : List.{0} Nat) => ∀ (t : Nat), @Membership.mem.{0, 0} Nat (List.{0} Nat) (@List.instMembership.{0} Nat) w t → @LE.le.{0} Nat instLENat t Botho.Timestamps.U
+  def Botho.Timestamps.U : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.accepts : List.{0} Nat → Nat → Nat → Prop
+    := fun (w : List.{0} Nat) (t v : Nat) => And (@LT.lt.{0} Nat instLTNat (Botho.Timestamps.mtp w) t) (@LE.le.{0} Nat instLENat t (Botho.Timestamps.futureCap v))
+  def Botho.Timestamps.futureCap : Nat → Nat
+    := fun (v : Nat) => Botho.satAdd Botho.Timestamps.U v (@OfNat.ofNat.{0} Nat (nat_lit 60) (instOfNatNat (nat_lit 60)))
+  def Botho.Timestamps.honestStamp : List.{0} Nat → Nat → Nat
+    := fun (w : List.{0} Nat) (n : Nat) => @Max.max.{0} Nat Nat.instMax n (Botho.Timestamps.nextMin w)
+  def Botho.Timestamps.mtp : List.{0} Nat → Nat
+    := fun (w : List.{0} Nat) => @List.getD.{0} Nat (@List.mergeSort.{0} Nat (Botho.Timestamps.slots w) fun (a b : Nat) => @Decidable.decide (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b)) (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Timestamps.nextMin : List.{0} Nat → Nat
+    := fun (w : List.{0} Nat) => Botho.satAdd Botho.Timestamps.U (Botho.Timestamps.mtp w) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.slots : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.replicate.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11))) (@List.length.{0} Nat (Botho.Timestamps.tail11 w))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (Botho.Timestamps.tail11 w)
+  def Botho.Timestamps.tail11 : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @List.drop.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11)))) w
+
+theorem Botho.Timestamps.zero_skew_counterexample sha256:00f3f2e153731b3e2a6fc46dda1403760f60fae947bcbaf2232fa0cbfbf48895
+  : And (Botho.Timestamps.acceptedHistory (@List.nil.{0} Nat) Botho.Timestamps.zeroSkewHistory)
+        (And (@Eq.{1} (List.{0} Nat) Botho.Timestamps.reachedWindow (@List.replicate.{0} Nat (@OfNat.ofNat.{0} Nat (nat_lit 6) (instOfNatNat (nat_lit 6))) (@OfNat.ofNat.{0} Nat (nat_lit 1060) (instOfNatNat (nat_lit 1060)))))
+          (And (Botho.Timestamps.Bounded Botho.Timestamps.reachedWindow)
+            (And (@Eq.{1} Nat (Botho.Timestamps.mtp Botho.Timestamps.reachedWindow) (@OfNat.ofNat.{0} Nat (nat_lit 1060) (instOfNatNat (nat_lit 1060))))
+              (have minterNow : Nat := @OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000));
+              have validatorNow : Nat := @OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000));
+              And (@LE.le.{0} Nat instLENat minterNow Botho.Timestamps.U) (And (@LE.le.{0} Nat instLENat validatorNow Botho.Timestamps.U) (And (@Eq.{1} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@Max.max.{0} Nat Nat.instMax minterNow validatorNow) (@Min.min.{0} Nat instMinNat minterNow validatorNow)) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (And (@LT.lt.{0} Nat instLTNat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@Max.max.{0} Nat Nat.instMax minterNow validatorNow) (@Min.min.{0} Nat instMinNat minterNow validatorNow)) (@OfNat.ofNat.{0} Nat (nat_lit 60) (instOfNatNat (nat_lit 60)))) (And (@Eq.{1} Nat (Botho.Timestamps.honestStamp Botho.Timestamps.reachedWindow minterNow) (@OfNat.ofNat.{0} Nat (nat_lit 1061) (instOfNatNat (nat_lit 1061)))) (Not (Botho.Timestamps.accepts Botho.Timestamps.reachedWindow (Botho.Timestamps.honestStamp Botho.Timestamps.reachedWindow minterNow) validatorNow))))))))))
+  def Botho.satAdd : Nat → Nat → Nat → Nat
+    := fun (cap a b : Nat) => @Min.min.{0} Nat instMinNat (@HAdd.hAdd.{0, 0, 0} Nat Nat Nat (@instHAdd.{0} Nat instAddNat) a b) cap
+  def Botho.Timestamps.Bounded : List.{0} Nat → Prop
+    := fun (w : List.{0} Nat) => ∀ (t : Nat), @Membership.mem.{0, 0} Nat (List.{0} Nat) (@List.instMembership.{0} Nat) w t → @LE.le.{0} Nat instLENat t Botho.Timestamps.U
+  def Botho.Timestamps.U : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.acceptedHistory : List.{0} Nat → List.{0} (Prod.{0, 0} Nat Nat) → Prop
+    := fun (x : List.{0} Nat) (x_1 : List.{0} (Prod.{0, 0} Nat Nat)) => @List.brecOn.{1, 0} (Prod.{0, 0} Nat Nat) (fun (x : List.{0} (Prod.{0, 0} Nat Nat)) => List.{0} Nat → Prop) x_1 Botho.Timestamps.acceptedHistory._f x
+  def Botho.Timestamps.accepts : List.{0} Nat → Nat → Nat → Prop
+    := fun (w : List.{0} Nat) (t v : Nat) => And (@LT.lt.{0} Nat instLTNat (Botho.Timestamps.mtp w) t) (@LE.le.{0} Nat instLENat t (Botho.Timestamps.futureCap v))
+  def Botho.Timestamps.futureCap : Nat → Nat
+    := fun (v : Nat) => Botho.satAdd Botho.Timestamps.U v (@OfNat.ofNat.{0} Nat (nat_lit 60) (instOfNatNat (nat_lit 60)))
+  def Botho.Timestamps.honestStamp : List.{0} Nat → Nat → Nat
+    := fun (w : List.{0} Nat) (n : Nat) => @Max.max.{0} Nat Nat.instMax n (Botho.Timestamps.nextMin w)
+  def Botho.Timestamps.mtp : List.{0} Nat → Nat
+    := fun (w : List.{0} Nat) => @List.getD.{0} Nat (@List.mergeSort.{0} Nat (Botho.Timestamps.slots w) fun (a b : Nat) => @Decidable.decide (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b)) (@OfNat.ofNat.{0} Nat (nat_lit 5) (instOfNatNat (nat_lit 5))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))
+  def Botho.Timestamps.nextMin : List.{0} Nat → Nat
+    := fun (w : List.{0} Nat) => Botho.satAdd Botho.Timestamps.U (Botho.Timestamps.mtp w) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.reachedWindow : List.{0} Nat
+    := Botho.Timestamps.replay (@List.nil.{0} Nat) Botho.Timestamps.zeroSkewHistory
+  def Botho.Timestamps.replay : List.{0} Nat → List.{0} (Prod.{0, 0} Nat Nat) → List.{0} Nat
+    := fun (w : List.{0} Nat) (history : List.{0} (Prod.{0, 0} Nat Nat)) => @List.foldl.{0, 0} (List.{0} Nat) (Prod.{0, 0} Nat Nat) (fun (window : List.{0} Nat) (step : Prod.{0, 0} Nat Nat) => Botho.Timestamps.roll window (@Prod.fst.{0, 0} Nat Nat step)) w history
+  def Botho.Timestamps.roll : List.{0} Nat → Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) (t : Nat) => @HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.drop.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 10) (instOfNatNat (nat_lit 10)))) w) (@List.cons.{0} Nat t (@List.nil.{0} Nat))
+  def Botho.Timestamps.slots : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @HAppend.hAppend.{0, 0, 0} (List.{0} Nat) (List.{0} Nat) (List.{0} Nat) (@instHAppendOfAppend.{0} (List.{0} Nat) (@List.instAppend.{0} Nat)) (@List.replicate.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11))) (@List.length.{0} Nat (Botho.Timestamps.tail11 w))) (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (Botho.Timestamps.tail11 w)
+  def Botho.Timestamps.tail11 : List.{0} Nat → List.{0} Nat
+    := fun (w : List.{0} Nat) => @List.drop.{0} Nat (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@List.length.{0} Nat w) (@OfNat.ofNat.{0} Nat (nat_lit 11) (instOfNatNat (nat_lit 11)))) w
+  def Botho.Timestamps.zeroSkewHistory : List.{0} (Prod.{0, 0} Nat Nat)
+    := @List.replicate.{0} (Prod.{0, 0} Nat Nat) (@OfNat.ofNat.{0} Nat (nat_lit 6) (instOfNatNat (nat_lit 6))) (@Prod.mk.{0, 0} Nat Nat (@OfNat.ofNat.{0} Nat (nat_lit 1060) (instOfNatNat (nat_lit 1060))) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))))
+  def Botho.Timestamps.acceptedHistory._f : (x : List.{0} (Prod.{0, 0} Nat Nat)) → @List.below.{1, 0} (Prod.{0, 0} Nat Nat) (fun (x : List.{0} (Prod.{0, 0} Nat Nat)) => List.{0} Nat → Prop) x → List.{0} Nat → Prop
+    := fun (x : List.{0} (Prod.{0, 0} Nat Nat)) (f : @List.below.{1, 0} (Prod.{0, 0} Nat Nat) (fun (x : List.{0} (Prod.{0, 0} Nat Nat)) => List.{0} Nat → Prop) x) (x_1 : List.{0} Nat) => Botho.Timestamps.acceptedHistory.match_1.{1} (fun (x : List.{0} Nat) (x_2 : List.{0} (Prod.{0, 0} Nat Nat)) => @List.below.{1, 0} (Prod.{0, 0} Nat Nat) (fun (x : List.{0} (Prod.{0, 0} Nat Nat)) => List.{0} Nat → Prop) x_2 → Prop) x_1 x (fun (w : List.{0} Nat) (x : @List.below.{1, 0} (Prod.{0, 0} Nat Nat) (fun (x : List.{0} (Prod.{0, 0} Nat Nat)) => List.{0} Nat → Prop) (@List.nil.{0} (Prod.{0, 0} Nat Nat))) => Botho.Timestamps.Bounded w) (fun (w : List.{0} Nat) (t v : Nat) (rest : List.{0} (Prod.{0, 0} Nat Nat)) (x : @List.below.{1, 0} (Prod.{0, 0} Nat Nat) (fun (x : List.{0} (Prod.{0, 0} Nat Nat)) => List.{0} Nat → Prop) (@List.cons.{0} (Prod.{0, 0} Nat Nat) (@Prod.mk.{0, 0} Nat Nat t v) rest)) => And (Botho.Timestamps.Bounded w) (And (@LE.le.{0} Nat instLENat t Botho.Timestamps.U) (And (@LE.le.{0} Nat instLENat v Botho.Timestamps.U) (And (Botho.Timestamps.accepts w t v) (x.1 (Botho.Timestamps.roll w t)))))) f
+  def Botho.Timestamps.acceptedHistory.match_1 : (motive : List.{0} Nat → List.{0} (Prod.{0, 0} Nat Nat) → Sort u_1) → (x : List.{0} Nat) → (x_1 : List.{0} (Prod.{0, 0} Nat Nat)) → ((w : List.{0} Nat) → motive w (@List.nil.{0} (Prod.{0, 0} Nat Nat))) → ((w : List.{0} Nat) → (t v : Nat) → (rest : List.{0} (Prod.{0, 0} Nat Nat)) → motive w (@List.cons.{0} (Prod.{0, 0} Nat Nat) (@Prod.mk.{0, 0} Nat Nat t v) rest)) → motive x x_1
+    := fun (motive : List.{0} Nat → List.{0} (Prod.{0, 0} Nat Nat) → Sort u_1) (x : List.{0} Nat) (x_1 : List.{0} (Prod.{0, 0} Nat Nat)) (h_1 : (w : List.{0} Nat) → motive w (@List.nil.{0} (Prod.{0, 0} Nat Nat))) (h_2 : (w : List.{0} Nat) → (t v : Nat) → (rest : List.{0} (Prod.{0, 0} Nat Nat)) → motive w (@List.cons.{0} (Prod.{0, 0} Nat Nat) (@Prod.mk.{0, 0} Nat Nat t v) rest)) => @List.casesOn.{u_1, 0} (Prod.{0, 0} Nat Nat) (fun (x_2 : List.{0} (Prod.{0, 0} Nat Nat)) => motive x x_2) x_1 (h_1 x) fun (head : Prod.{0, 0} Nat Nat) (tail : List.{0} (Prod.{0, 0} Nat Nat)) => @Prod.casesOn.{u_1, 0, 0} Nat Nat (fun (x_2 : Prod.{0, 0} Nat Nat) => motive x (@List.cons.{0} (Prod.{0, 0} Nat Nat) x_2 tail)) head fun (fst snd : Nat) => h_2 x fst snd tail
+
+theorem Botho.Timestamps.some_observed_gap_floor sha256:e7af9c7ca46c448adeda3a3ea70aa1b864757bb27db964749d8b2cef008f801e
+  : ∀ (parent stamp gap : Nat), @LE.le.{0} Nat instLENat parent Botho.Timestamps.U → @LE.le.{0} Nat instLENat stamp Botho.Timestamps.U → @Eq.{1} (Option.{0} Nat) (Botho.Timestamps.observedGap parent stamp) (@Option.some.{0} Nat gap) → @LE.le.{0} Nat instLENat (@OfNat.ofNat.{0} Nat (nat_lit 3) (instOfNatNat (nat_lit 3))) gap
+  def Botho.Timestamps.U : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Timestamps.observedGap : Nat → Nat → Option.{0} Nat
+    := fun (parent stamp : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Nat parent (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (instDecidableEqNat parent (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@Option.none.{0} Nat) (@Option.some.{0} Nat (@Max.max.{0} Nat Nat.instMax (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) stamp parent) (@OfNat.ofNat.{0} Nat (nat_lit 3) (instOfNatNat (nat_lit 3)))))
