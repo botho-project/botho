@@ -35,6 +35,10 @@ import Botho
 #print axioms Botho.Demurrage.exactCharge_split_rounding
 #print axioms Botho.Demurrage.exactCharge_split_clipping_counterexample
 
+-- Exact-charge monotonicity (#1963; proven (model), separately DRT-tested).
+#print axioms Botho.Demurrage.exactCharge_mono_elapsed
+#print axioms Botho.Demurrage.exactCharge_mono_factor
+
 -- Botho.Basic (scaffold toy; status: proven)
 #print axioms Botho.transfer_conserves
 #print axioms Botho.transfer_isSome_iff
