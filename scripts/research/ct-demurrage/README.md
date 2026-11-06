@@ -56,8 +56,13 @@ Existing allocation and section-size ceilings remain unchanged.
 remain historical evidence for the pre-9.0.0 quantized circuit. They have not
 been regenerated or relabeled as exact-relation evidence.
 
-The exact implementation is pending the independent relation review in #1953
-and fresh retained resource measurements/publication in #1954. Local allocation
-checks and finite production parity tests do not supply that review, a
-cryptographic security proof, a Rust/R1CS equivalence theorem, or an activation
-claim. No new Lean theorem or production policy change is included.
+[EXACT-RELATION-REVIEW.md](EXACT-RELATION-REVIEW.md) and its
+[source manifest](exact-relation-review-sources.json) provide #1953's independent,
+source-pinned derivation of the exact allocator in both directions, including
+strict bounds and conditional ownership/composition obligations. The review
+records primary-reference provenance and precise applicability limits. Fresh
+retained resource measurements/publication
+remain pending in [#1954](https://github.com/botho-project/botho/issues/1954).
+Finite tests and allocation counts establish no cryptographic security proof,
+formal Rust/R1CS equivalence theorem, or activation claim. No new Lean theorem
+or production policy change is included.

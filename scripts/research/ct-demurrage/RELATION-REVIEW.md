@@ -1,5 +1,10 @@
 # Conditional relation review for the inactive CT experiment
 
+Historical-scope notice — 2026-11-06: this review and its original manifest
+describe the pre-9.0.0 quantized relation at the source identity below. The
+current exact relation is reviewed separately in [EXACT-RELATION-REVIEW.md](EXACT-RELATION-REVIEW.md).
+The historical derivations, measurements and source hashes are preserved.
+
 This is the internal review artifact for #1355, a child of the still-open #1307. It derives the integer relation implemented by the complete allocator and states the additional cryptographic obligations needed to interpret an accepted ownership envelope. It is not a security reduction, an audit, an accepted protocol specification, or production integration. All relevant harness code remains in an unpublished, test-only crate.
 
 ## Source boundary and equation map

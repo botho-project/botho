@@ -1,0 +1,840 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-11-06",
+  "scope": "Independent source-derived integer-relation review; no cryptographic reduction, formal Rust/R1CS proof, resource remeasurement or protocol activation.",
+  "source_commit": "6bc0b08623e973a79ea5be084fe5c6c094faa669",
+  "source_tree": "0fde6491d16e16674f4d27532c59ee79d74752cf",
+  "documentation_base_commit": "4606a66f7fbe075921968dac635ab5a6a86fc2c1",
+  "documentation_base_tree": "821157c9a18b82d87422905aafcce60e0f522f37",
+  "documentation_revision": {
+    "commit": null,
+    "reason": "The containing documentation commit is not self-embedded; resolve it with git log -1 --format=%H -- scripts/research/ct-demurrage/EXACT-RELATION-REVIEW.md scripts/research/ct-demurrage/exact-relation-review-sources.json. The PR and external Builder receipt pin the resulting head.",
+    "base_changes_from_reviewed_source": [
+      "scripts/stress/prefund.py",
+      "scripts/stress/test_prefund.py"
+    ],
+    "all_listed_sources_identical_at_documentation_base": true
+  },
+  "hash_method": "SHA256 of raw git show <source_commit>:<path> bytes; verified separately at documentation_base_commit. Symbols are source-location checks, not theorem certificates.",
+  "sources": [
+    {
+      "path": "scripts/research/ct-demurrage/src/lib.rs",
+      "sha256": "e455076e8a0211069b195fcbfb310a21f237ce5410c49dcc15fc5c551016cf79",
+      "role": "arithmetic and composition",
+      "symbols": [
+        "EXCESS_BITS",
+        "REMAINDER_BITS",
+        "order",
+        "scalar",
+        "Expr",
+        "Candidate",
+        "exact_charge",
+        "construct",
+        "allocate",
+        "global_bounds_and_actual_r1cs_census"
+      ]
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment.rs",
+      "sha256": "d7cdb72277947d5483c9b8c86980fc86bdc343667ac23ced36b1ccbec8edd4d8",
+      "role": "arithmetic and composition",
+      "symbols": [
+        "EXACT_RELATION",
+        "PublicStatement",
+        "CircuitLayout",
+        "exact_charge",
+        "assert_reference_parity",
+        "project_commit",
+        "prove_control",
+        "verify_control",
+        "public_only_layout_domain_parity",
+        "same_factor_short_hold_exact_proof",
+        "invalid_witness_relations_reach_crypto_verification"
+      ]
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment/combined.rs",
+      "sha256": "dfcea19312e53863102b81daf1cf104047ae9f3dcac96eaffaad0fd9caee2ef8",
+      "role": "arithmetic and composition",
+      "symbols": [
+        "MAX_COUNT",
+        "Controls",
+        "bucket",
+        "preimage",
+        "audit_input",
+        "endpoints",
+        "audit",
+        "transcript",
+        "group_balance",
+        "range",
+        "allocate",
+        "prove_control_with_transcript",
+        "verify_control_with_transcript"
+      ]
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership.rs",
+      "sha256": "9e8328777baad49232f0f7d62877eac83624f64e7b14f9337ff6459a706795de",
+      "role": "arithmetic and composition",
+      "symbols": [
+        "RING_SIZE",
+        "check_shape",
+        "statement_digest",
+        "append_statement",
+        "arithmetic_transcript",
+        "proof_digest",
+        "message",
+        "pseudo",
+        "sign_proof",
+        "verify_ownership",
+        "prove_measured",
+        "verify_measured"
+      ]
+    },
+    {
+      "path": "cluster-tax/src/demurrage.rs",
+      "sha256": "9d1bfeadc16192948529fbc8b5e3ada89d8991e9c0a825fc8e74b53f963fe4f0",
+      "role": "arithmetic and composition",
+      "symbols": [
+        "demurrage_charge",
+        "capitalized_reset_charge",
+        "spend_demurrage_charge",
+        "SETTLEMENT_HORIZON_BLOCKS"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/ring_signature/clsag.rs",
+      "sha256": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "sign",
+        "sign_with_balance_check",
+        "verify",
+        "compute_aggregation_coefficients",
+        "compute_round_hash"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/ring_signature/mod.rs",
+      "sha256": "b6e969e943eaa52f5906c932da740fc2d27487d4e521b3def17f126c96f5d1dd",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "B_BLINDING",
+        "PedersenGens",
+        "generators",
+        "hash_to_point",
+        "ReducedTxOut"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/domain_separators.rs",
+      "sha256": "aa46f2c34ebb0e57fbceca74bacd915c48db946a073f0f6cdb5e0f531e1f8830",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "HASH_TO_POINT_DOMAIN_TAG",
+        "CLSAG_AGG_COEFF_P_DOMAIN_TAG",
+        "CLSAG_AGG_COEFF_C_DOMAIN_TAG",
+        "CLSAG_ROUND_HASH_DOMAIN_TAG"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/compat.rs",
+      "sha256": "5c8090ec6eaf4bd7366741c5bd195fe96033152ed0403049918c36821d8369cf",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "scalar_from_hash",
+        "point_from_hash",
+        "random_scalar"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/amount/commitment.rs",
+      "sha256": "03285e810af06c9ff38fe2c12c2108d2c5f00e162ac29dd49c45cf4d353b441a",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "Commitment",
+        "new",
+        "decompress"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/amount/compressed_commitment.rs",
+      "sha256": "84666080892ff717f468a8d8d33ebf2122a6fdeb8a663c110bb4d5470a0936af",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "CompressedCommitment",
+        "new",
+        "try_from"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/ring_signature/key_image.rs",
+      "sha256": "0489280f0745eab563c629575bd1a6266a5dd9cc49f8429eacd2ab190156676d",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "KeyImage",
+        "hash_to_point"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/ring_signature/curve_scalar.rs",
+      "sha256": "d6b4576bb9fc55bfc8e10f4af8d2cd84803c28afeca56e83f59f1f51a93cdf04",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "CurveScalar",
+        "from_bytes_mod_order"
+      ]
+    },
+    {
+      "path": "crypto/keys/src/ristretto.rs",
+      "sha256": "85ec27c0f36989e2b170666d2957bbf1bef739380f6387cea3e31559a041d921",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "RistrettoPrivate",
+        "RistrettoPublic",
+        "CompressedRistrettoPublic"
+      ]
+    },
+    {
+      "path": "crypto/hashes/src/lib.rs",
+      "sha256": "34524e51a1afdd626dae008ffc12a42eb854719f10112c0bd4d0d065e4df8f6f",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "Blake2b512",
+        "Digest"
+      ]
+    },
+    {
+      "path": "util/from-random/src/lib.rs",
+      "sha256": "e3805625384d80dff2433da08d63e6cb4f4bd0b8b825b581fea2baaad0648894",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "FromRandom",
+        "OsRng"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/lib.rs",
+      "sha256": "69c825a5216b6203e0f9be70be31a2c503d1d7277360d84373059ec68e7822ae",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "compat",
+        "ring_signature"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/constraint_system.rs",
+      "sha256": "002fca10eefaa29c615fbc65807f4416b1586d9a67fd1b28b18575bf0f86a779",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "ConstraintSystem",
+        "multiply",
+        "allocate_multiplier"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/linear_combination.rs",
+      "sha256": "42e597aaee86952d1d2fdd6c419557d8af0b01abd99022f1f2a1dbe58db976a3",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "Variable",
+        "LinearCombination"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/metrics.rs",
+      "sha256": "c6819746a72c79cb5193724f15e431e3d036c6dd7de0a504a9bfcadfd1c7eda9",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "Metrics"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/mod.rs",
+      "sha256": "658e54aa06fab1a85fc5f9190117d7464b1b21428855bdd6668a388e8c41a747",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "R1CSProof",
+        "Prover",
+        "Verifier"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/prover.rs",
+      "sha256": "e38d670c95974e64608ca8d72f136bb4d03c33819356ed4618e504a26937447e",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "Prover",
+        "multiply",
+        "allocate_multiplier",
+        "commit",
+        "prove_and_return_transcript"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/verifier.rs",
+      "sha256": "bd07ee4bed98e0e1ddce7314e2da77fd8a0e43c1ded552c25acc77c696878396",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "Verifier",
+        "multiply",
+        "allocate_multiplier",
+        "commit",
+        "verify_and_return_transcript"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/proof.rs",
+      "sha256": "e1c6b5be7d3c58cefa1479150d1fc6a40293bb3da15bd20976fc33e2229dae45",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "R1CSProof",
+        "to_bytes",
+        "from_bytes"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/transcript.rs",
+      "sha256": "95e3313038e591405381f6aed8d3c6a1532271a33fd90b3cc8af7a1a59a3ae6d",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "TranscriptProtocol",
+        "r1cs_domain_sep",
+        "challenge_scalar"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/generators.rs",
+      "sha256": "d632fb3a5e758e0c1d801bca99dc5019cb483d9490a3fa3cd709dda7fe8e4bc1",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "PedersenGens",
+        "GeneratorsChain",
+        "BulletproofGens"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/inner_product_proof.rs",
+      "sha256": "a216c9f47f63a691eeb72a53481c8cadee2fc1924c99fea7e62a2bf58639991b",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "InnerProductProof",
+        "verification_scalars",
+        "from_bytes"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/util.rs",
+      "sha256": "e986726795cc031cdb7101888a858bdf77389a6316c34fe3e2198054ca9ab070",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "VecPoly1",
+        "VecPoly3",
+        "Poly6",
+        "inner_product"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/errors.rs",
+      "sha256": "bd1d665d8dbf5c50c6e28ca9ecbb2be3cac82153d51220fd95e56536df039f86",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "R1CSError",
+        "ProofError"
+      ]
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/lib.rs",
+      "sha256": "fbcfd7697c410bda0286e753a17fde457aeacbff840520d8ee0324f16e2b5b61",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "r1cs"
+      ]
+    },
+    {
+      "path": "transaction/core/src/range_proofs/mod.rs",
+      "sha256": "1f6ab447d73ae215b7a9679150f705bfa02c16a0e8faa7de32d9fcb6975081a9",
+      "role": "cryptographic boundaries (security conditional)",
+      "symbols": [
+        "convert_gens",
+        "point_to_v4",
+        "scalar_to_v4"
+      ]
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "56602410faf86c403131290d2b3d8376fa68160e0259f75656cbc0a062c75f28",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "d3392fd6793ed819b2d11c54cd4787ff795f21308a792c20c04da35ecebff7ea",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "rust-toolchain",
+      "sha256": "42ff6f0501c10e27ed7fbabbae730900b2b973011297d49a4fcdb8415b9b17cc",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": ".cargo/config.toml",
+      "sha256": "839f98ad034c930d26eeecc61f3bfd4e876690ff112e360c77a01f1c0ff0d294",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "scripts/research/ct-demurrage/Cargo.toml",
+      "sha256": "ee6f45ce1c17d241334a28eda9cfa18d8b1e05041108184a31bfcda8a48bd336",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "cluster-tax/Cargo.toml",
+      "sha256": "1f4691538f4c376ac84c854e5632a514953db4ea949347c448485b876ae79076",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "crypto/ring-signature/Cargo.toml",
+      "sha256": "32e3d4c75f95177c48e668ca4123e8eac60edc8e5bf421db003d3d60b053c264",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "crypto/keys/Cargo.toml",
+      "sha256": "1f3544afb79cf47499fa2c362a711746fcdf58793edcdbfeae44d4be313b686e",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "crypto/hashes/Cargo.toml",
+      "sha256": "398275c4b7a15cc7a0fab7185862fbff69618aae71b452cf5f599d0d70b39af8",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "util/from-random/Cargo.toml",
+      "sha256": "ded439cb965376f8b7a8d97ecca462f87bd28bf1eb8d0a0a5be475c38fdd77ae",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "vendor/bulletproofs-og/Cargo.toml",
+      "sha256": "5f6acd5d755ddaab9d27d27495ab4d7edd86653a3bf59226a12b812b022b120c",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": ".github/workflows/ownership-resources.yml",
+      "sha256": "c3a251a80f99fcaee0f85bda0b0b7ae32eedc8bddb4b65aeadbfdee2c61da7e5",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": ".github/workflows/workspace-build.yml",
+      "sha256": "67d4670e93ca8f859a9dbefaba2562ca775f272e6c826bca8ffdbb54e448203e",
+      "role": "dependency and toolchain identity",
+      "symbols": []
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/legacy_kernel.rs",
+      "sha256": "7b65c56241c675abca468c48c789e17466e3bae03cf1133bfa3163aa0555574a",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "demurrage_charge"
+      ]
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership/resources.rs",
+      "sha256": "11e9c3f33cf480c5a1b8b89a4f755a3e06a2220e0046bc9e8abf89ccacded589",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "ownership_resource_case"
+      ]
+    },
+    {
+      "path": "formal/Botho/Demurrage/ExactCharge.lean",
+      "sha256": "6e1261f491db51a9e95c63eb3e91856dc5d3fad0415b70c079d33f459aba7122",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "exactCharge",
+        "exactCharge_positive_iff",
+        "exactCharge_split_loss_bound",
+        "exactCharge_split_rounding",
+        "exactCharge_split_clipping_counterexample"
+      ]
+    },
+    {
+      "path": "formal/Botho/Demurrage/Counterexamples.lean",
+      "sha256": "26a249a6a6b62dd1efcaa29983212c6c76a6116e0e7eda237d74a74cce444286",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "charge"
+      ]
+    },
+    {
+      "path": "formal/DEMURRAGE.md",
+      "sha256": "c55e2ae92bdddae0bc1c5b70e5b1288c6b5dc6c8b2a1ff9ee2cfba8407f69787",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "exactCharge"
+      ]
+    },
+    {
+      "path": "formal/Theorems.lean",
+      "sha256": "d463bdf4d5fa70b2408ef43a5452b49ae048c921fcccfb90c754b49ebaeba2de",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "exactCharge_positive_iff"
+      ]
+    },
+    {
+      "path": "formal/statements.txt",
+      "sha256": "927e8f70198430931d4d61fa84a61f2dd99ac54451d59827fdad39a9d9938b3b",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": [
+        "Botho.Demurrage.exactCharge"
+      ]
+    },
+    {
+      "path": "formal/lean-toolchain",
+      "sha256": "ca5f1f601d34c49079e38d7e7041eb0f2a9c227fbc1df0f404820069a052330c",
+      "role": "context only; preserved, not used as a proof of this implementation",
+      "symbols": []
+    }
+  ],
+  "resolved_dependency_identity": {
+    "origin": "Cargo.lock at source_commit; complete transitive resolution is pinned by that file. Registry checksums identify packages; registry backend correctness is assumed, not audited here.",
+    "packages": [
+      {
+        "name": "blake2",
+        "version": "0.10.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+      },
+      {
+        "name": "blake2",
+        "version": "0.11.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "5b5d4d889834ee8ecfc0f8426ad30faf7cdcb10f741a8e6d7224d95325479f6f"
+      },
+      {
+        "name": "bulletproofs-og",
+        "version": "3.0.0-pre.1"
+      },
+      {
+        "name": "curve25519-dalek",
+        "version": "4.1.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+      },
+      {
+        "name": "curve25519-dalek",
+        "version": "5.0.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+      },
+      {
+        "name": "digest",
+        "version": "0.9.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "d3dd60d1080a57a05ab032377049e0591415d2b31afd7028356dbf3cc6dcb066"
+      },
+      {
+        "name": "digest",
+        "version": "0.10.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+      },
+      {
+        "name": "digest",
+        "version": "0.11.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.2.17",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.3.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.4.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+      },
+      {
+        "name": "keccak",
+        "version": "0.1.6",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+      },
+      {
+        "name": "keccak",
+        "version": "0.2.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "9e24a010dd405bd7ed803e5253182815b41bf2e6a80cc3bfc066658e03a198aa"
+      },
+      {
+        "name": "merlin",
+        "version": "3.0.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "58c38e2799fc0978b65dfff8023ec7843e2330bb462f19198840b34b6582397d"
+      },
+      {
+        "name": "num-bigint",
+        "version": "0.4.8",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+      },
+      {
+        "name": "num-bigint",
+        "version": "0.5.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
+      },
+      {
+        "name": "num-integer",
+        "version": "0.1.46",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
+      },
+      {
+        "name": "num-traits",
+        "version": "0.2.19",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+      },
+      {
+        "name": "rand",
+        "version": "0.8.7",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
+      },
+      {
+        "name": "rand",
+        "version": "0.9.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
+      },
+      {
+        "name": "rand",
+        "version": "0.10.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+      },
+      {
+        "name": "rand_chacha",
+        "version": "0.3.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+      },
+      {
+        "name": "rand_chacha",
+        "version": "0.9.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+      },
+      {
+        "name": "rand_chacha",
+        "version": "0.10.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+      },
+      {
+        "name": "rand_core",
+        "version": "0.6.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+      },
+      {
+        "name": "rand_core",
+        "version": "0.9.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
+      },
+      {
+        "name": "rand_core",
+        "version": "0.10.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+      },
+      {
+        "name": "sha3",
+        "version": "0.10.9",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+      },
+      {
+        "name": "sha3",
+        "version": "0.11.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+      },
+      {
+        "name": "subtle",
+        "version": "2.6.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+      },
+      {
+        "name": "zeroize",
+        "version": "1.9.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+      }
+    ],
+    "r1cs_features": [
+      "std",
+      "yoloproofs"
+    ],
+    "workspace_toolchain": "nightly-2026-06-09",
+    "new_rust_or_lean_build_performed": false
+  },
+  "bounds": {
+    "scalar_order_decimal": "7237005577332262213973186563042994240857116359379907606001950938285454250989",
+    "convention": "Inclusive maxima; bounds are independently calculated from public types and declared ranges, without assuming desired equations.",
+    "values": {
+      "coefficient": {
+        "maximum_decimal": "396140812479087967577697157125000",
+        "bits": 109,
+        "less_than_scalar_order": true
+      },
+      "numerator": {
+        "maximum_decimal": "7307508184953102755621450221306366125943952506875000",
+        "bits": 173,
+        "less_than_scalar_order": true
+      },
+      "denominator": {
+        "maximum_decimal": "922337203685477580750000000",
+        "bits": 90,
+        "less_than_scalar_order": true
+      },
+      "canonical_quotient": {
+        "maximum_decimal": "146150163699062055112429004426127322518879050",
+        "bits": 147,
+        "less_than_scalar_order": true
+      },
+      "arbitrary_quotient_rhs": {
+        "maximum_decimal": "164550455732120604206576637190441147288582470893957441549826841399124223",
+        "bits": 237,
+        "less_than_scalar_order": true
+      },
+      "remainder_sum": {
+        "maximum_decimal": "2475880078570760549798248446",
+        "bits": 91,
+        "less_than_scalar_order": true
+      },
+      "cap_product": {
+        "maximum_decimal": "3291009114642412084131532403526456024833185966639228760939823105",
+        "bits": 211,
+        "less_than_scalar_order": true
+      },
+      "difference_or_max_sum": {
+        "maximum_decimal": "36893488147419103230",
+        "bits": 65,
+        "less_than_scalar_order": true
+      },
+      "difference_or_max_product": {
+        "maximum_decimal": "340282366920938463426481119284349108225",
+        "bits": 128,
+        "less_than_scalar_order": true
+      },
+      "aggregate_inputs_or_charges": {
+        "maximum_decimal": "295147905179352825840",
+        "bits": 68,
+        "less_than_scalar_order": true
+      },
+      "outputs_plus_fee": {
+        "maximum_decimal": "313594649253062377455",
+        "bits": 69,
+        "less_than_scalar_order": true
+      },
+      "aggregate_gap_side": {
+        "maximum_decimal": "590295810358705651695",
+        "bits": 69,
+        "less_than_scalar_order": true
+      }
+    }
+  },
+  "allocation_derivation": {
+    "range_bits_per_input": 1557,
+    "products_per_input": 5,
+    "linear_equations_per_input": 9,
+    "external_equalities_per_input": 2,
+    "multipliers_per_input": 1562,
+    "constraints_per_input": 3140,
+    "combined_multipliers": "1562*n + 64*m + 136",
+    "combined_constraints": "3140*n + 129*m + 275",
+    "combined_16_16": [
+      26152,
+      52579
+    ],
+    "basis": "Source/API counting only in this review; existing execution assertions are finite supporting evidence."
+  },
+  "historical_manifest": {
+    "path": "scripts/research/ct-demurrage/relation-review-sources.json",
+    "sha256": "38d8d9cf138d3bd1a5c37f6db8f64814c4a9f605dff2d339a2f394515cfd6287",
+    "unchanged": true
+  },
+  "primary_references": [
+    {
+      "url": "https://eprint.iacr.org/2019/654.pdf",
+      "current_attempt": {
+        "url": "https://eprint.iacr.org/2019/654.pdf",
+        "attempted_at": "2026-11-06T18:01:16.919972+00:00",
+        "error": "HTTP Error 403: Forbidden"
+      },
+      "primary_text_available_to_this_review": false,
+      "retrieved_bytes": null,
+      "retrieved_sha256": null,
+      "historical_record_only": {
+        "url": "https://eprint.iacr.org/2019/654.pdf",
+        "retrieved_date": "2026-09-20",
+        "sha256": "c38699c9a235a70285165ff8cce0bf3e48989de8092c15514116ca4c95d41e3f"
+      },
+      "applicability": "No primary PDF was available for rereading; historical dates/hashes are not new retrievals. No theorem statements, theorem numbers or applicability are newly verified or used to establish the arithmetic derivation."
+    },
+    {
+      "url": "https://eprint.iacr.org/2017/1066.pdf",
+      "current_attempt": {
+        "url": "https://eprint.iacr.org/2017/1066.pdf",
+        "attempted_at": "2026-11-06T18:01:16.734598+00:00",
+        "error": "HTTP Error 403: Forbidden"
+      },
+      "primary_text_available_to_this_review": true,
+      "historical_record_only": {
+        "url": "https://eprint.iacr.org/2017/1066.pdf",
+        "retrieved_date": "2026-09-20",
+        "sha256": "2204cf02c3818543adcdd4325b5d4ca205e43d428701300214f198d19e86de61"
+      },
+      "applicability": "The paper states Protocol 3 witness-extended emulation and the logarithmic arithmetic protocol soundness; COMPLETE external bindings supply the full-column-rank structural prerequisite. No claim that all exact-fork, generator, Fiat-Shamir, or composition hypotheses hold.",
+      "inspected_snapshot": {
+        "url": "https://web.stanford.edu/~buenz/pubs/bulletproofs.pdf",
+        "attempted_at": "2026-11-06T18:14:01.646535+00:00",
+        "path": "/tmp/botho-1953-bulletproofs-stanford.pdf",
+        "bytes": 617865,
+        "sha256": "f7b6c9297bdd5b5705b3a4866f1f0dcd9d236517642265854667e6794619e4bc",
+        "is_pdf": true,
+        "retrieved_date": "2026-11-06",
+        "pages": 45,
+        "inspected_sections": [
+          "4.4",
+          "5.1 relation (73), rank prerequisite and Theorem 4",
+          "5.2 and Theorem 5"
+        ],
+        "relationship_to_historical_snapshot": "Distinct author-hosted bytes; no equivalence to the blocked IACR PDF is asserted."
+      }
+    }
+  ]
+}
