@@ -928,6 +928,32 @@ class ReconcileTests(PrefundBase):
         self.assertGreater(len(self.fleet.submits), submits)
         self.assertIsNone(p.pending_since)
 
+    def test_transient_pending_image_at_completion_waits(self):
+        """#1956 review: the final accounting in complete() waits the same way."""
+        p = self.prefunder()
+        for _ in range(400):
+            for _ in range(40):
+                before = len(self.fleet.submits)
+                self.assertFalse(self.tick(p))
+                if len(self.fleet.submits) == before:
+                    break
+            if p.granted() == p.total:
+                break
+            self.advance()
+        self.assertEqual(p.granted(), p.total)
+        self.assertTrue(p.unconfirmed())  # the last batch is still in flight
+        selected = {s['id'] for r in p.records for s in r['selected']}
+        spare = next(o['key_image'] for o in p.unspent(p.funding) if o['id'] not in selected)
+        self.fleet.pending_override.add(spare)
+        self.advance()
+        with self.assertRaisesRegex(Quota, 'still pending'):
+            self.tick(p)
+        self.assertFalse((Path(self.m['state_dir']) / 'opening_balances.json').exists())
+        self.fleet.pending_override.clear()
+        self.now += 30
+        self.assertTrue(self.tick(p))
+        self.assertTrue((Path(self.m['state_dir']) / 'opening_balances.json').exists())
+
     def test_persistent_pending_image_holds(self):
         p = self.confirmed_image_reads_pending()
         self.advance()

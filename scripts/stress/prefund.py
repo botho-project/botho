@@ -695,9 +695,21 @@ class Prefunder(Controller):
                      'unexpected transfer into campaign wallet-%d' % (wallet + 1))
         return report
 
+    def wait_for_pending(self):
+        """#1956: mempool eviction can lag block application on one node, so a
+        pending funding key image is a wait like an unsynced node, held only if
+        it persists past PENDING_SECONDS."""
+        if any(s['pending'] for s in self.spent):
+            self.pending_since = self.pending_since or self.clock()
+            need(self.clock() - self.pending_since <= PENDING_SECONDS,
+                 'funding key images pending for ten minutes')
+            raise Quota('funding key images still pending')
+        self.pending_since = None
+
     async def complete(self):
         """Final full scan, exact accounting, then the staging inputs. Then stop."""
         height = await self.sync(full=True)
+        self.wait_for_pending()
         report = self.accounting()
         # Pin prefunded principal only: lottery awards are not principal, may
         # keep arriving before launch, and are opening lottery income there
@@ -763,14 +775,7 @@ class Prefunder(Controller):
             return False
         if not self.unconfirmed():
             await self.sync()
-            if any(s['pending'] for s in self.spent):
-                # #1956: mempool eviction can lag block application on one node,
-                # so wait like an unsynced node, holding only if it persists.
-                self.pending_since = self.pending_since or self.clock()
-                need(self.clock() - self.pending_since <= PENDING_SECONDS,
-                     'funding key images pending for ten minutes')
-                raise Quota('funding key images still pending')
-            self.pending_since = None
+            self.wait_for_pending()
             self.accounting()
         if self.granted() < self.total:
             need(self.clock() < self.m['deadline'], 'prefund deadline reached before every grant was offered')
