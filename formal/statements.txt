@@ -25805,3 +25805,29 @@ theorem Botho.Timestamps.some_observed_gap_floor sha256:e7af9c7ca46c448adeda3a3e
     := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
   def Botho.Timestamps.observedGap : Nat → Nat → Option.{0} Nat
     := fun (parent stamp : Nat) => @ite.{1} (Option.{0} Nat) (@Eq.{1} Nat parent (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (instDecidableEqNat parent (@OfNat.ofNat.{0} Nat (nat_lit 0) (instOfNatNat (nat_lit 0)))) (@Option.none.{0} Nat) (@Option.some.{0} Nat (@Max.max.{0} Nat Nat.instMax (@HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) stamp parent) (@OfNat.ofNat.{0} Nat (nat_lit 3) (instOfNatNat (nat_lit 3)))))
+
+theorem Botho.Demurrage.exactCharge_mono_elapsed sha256:b54c9da1b8d5401e46aae546e67ad5c5e9fbd6598a9b3c8ce60d1af2ec6ee84a
+  : ∀ (value factor e1 e2 rate year : Nat), @LE.le.{0} Nat instLENat e1 e2 → @LE.le.{0} Nat instLENat (Botho.Demurrage.exactCharge value factor e1 rate year) (Botho.Demurrage.exactCharge value factor e2 rate year)
+  def Botho.Demurrage.exactCharge : Nat → Nat → Nat → Nat → Nat → Nat
+    := fun (value factor elapsed rate year : Nat) =>
+        have progressivity : Nat := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (Botho.Lottery.clampN (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) (@OfNat.ofNat.{0} Nat (nat_lit 6000) (instOfNatNat (nat_lit 6000))) factor) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000)));
+        Botho.Lottery.minN (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) value rate) progressivity) elapsed) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000))) (@OfNat.ofNat.{0} Nat (nat_lit 5000) (instOfNatNat (nat_lit 5000)))) year)) Botho.Lottery.U64_MAX
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.clampN : Nat → Nat → Nat → Nat
+    := fun (lo hi x : Nat) => @ite.{1} Nat (@LT.lt.{0} Nat instLTNat x lo) (Nat.decLt x lo) lo (@ite.{1} Nat (@LT.lt.{0} Nat instLTNat hi x) (Nat.decLt hi x) hi x)
+  def Botho.Lottery.minN : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
+
+theorem Botho.Demurrage.exactCharge_mono_factor sha256:94409988c029116c0380684894bcb4eca7e20867f23ab3c63b4082e13e10d66e
+  : ∀ (value f1 f2 elapsed rate year : Nat), @LE.le.{0} Nat instLENat f1 f2 → @LE.le.{0} Nat instLENat (Botho.Demurrage.exactCharge value f1 elapsed rate year) (Botho.Demurrage.exactCharge value f2 elapsed rate year)
+  def Botho.Demurrage.exactCharge : Nat → Nat → Nat → Nat → Nat → Nat
+    := fun (value factor elapsed rate year : Nat) =>
+        have progressivity : Nat := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (Botho.Lottery.clampN (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000))) (@OfNat.ofNat.{0} Nat (nat_lit 6000) (instOfNatNat (nat_lit 6000))) factor) (@OfNat.ofNat.{0} Nat (nat_lit 1000) (instOfNatNat (nat_lit 1000)));
+        Botho.Lottery.minN (@HDiv.hDiv.{0, 0, 0} Nat Nat Nat (@instHDiv.{0} Nat Nat.instDiv) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) value rate) progressivity) elapsed) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@HMul.hMul.{0, 0, 0} Nat Nat Nat (@instHMul.{0} Nat instMulNat) (@OfNat.ofNat.{0} Nat (nat_lit 10000) (instOfNatNat (nat_lit 10000))) (@OfNat.ofNat.{0} Nat (nat_lit 5000) (instOfNatNat (nat_lit 5000)))) year)) Botho.Lottery.U64_MAX
+  def Botho.Lottery.U64_MAX : Nat
+    := @HSub.hSub.{0, 0, 0} Nat Nat Nat (@instHSub.{0} Nat instSubNat) (@HPow.hPow.{0, 0, 0} Nat Nat Nat (@instHPow.{0, 0} Nat Nat (@instPowNat.{0} Nat instNatPowNat)) (@OfNat.ofNat.{0} Nat (nat_lit 2) (instOfNatNat (nat_lit 2))) (@OfNat.ofNat.{0} Nat (nat_lit 64) (instOfNatNat (nat_lit 64)))) (@OfNat.ofNat.{0} Nat (nat_lit 1) (instOfNatNat (nat_lit 1)))
+  def Botho.Lottery.clampN : Nat → Nat → Nat → Nat
+    := fun (lo hi x : Nat) => @ite.{1} Nat (@LT.lt.{0} Nat instLTNat x lo) (Nat.decLt x lo) lo (@ite.{1} Nat (@LT.lt.{0} Nat instLTNat hi x) (Nat.decLt hi x) hi x)
+  def Botho.Lottery.minN : Nat → Nat → Nat
+    := fun (a b : Nat) => @ite.{1} Nat (@LE.le.{0} Nat instLENat a b) (Nat.decLe a b) a b
