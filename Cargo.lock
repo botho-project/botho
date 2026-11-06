@@ -1847,7 +1847,7 @@ dependencies = [
  "rand_core 0.10.1",
  "rand_distr",
  "randomx-rs",
- "rcgen 0.13.2",
+ "rcgen 0.14.10",
  "reqwest 0.12.28",
  "ring",
  "rpassword",
