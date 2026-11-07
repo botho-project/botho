@@ -9,6 +9,11 @@
 //!
 //! Both components are value-weighted to prevent Sybil attacks.
 
+/// Integer production transition; legacy methods in this module remain
+/// research.
+#[path = "lottery_production.rs"]
+pub mod production;
+
 use std::collections::BTreeMap;
 
 use rand::{Rng, RngExt, SeedableRng};
@@ -541,6 +546,7 @@ pub struct LotterySimulation {
     /// seed, which is what flaked `test_sybil_not_profitable`.
     pub utxos: BTreeMap<u64, LotteryUtxo>,
     next_utxo_id: u64,
+    production: Option<production::ProductionState>,
 
     /// All owners. A `BTreeMap` for the same deterministic-iteration reason as
     /// [`Self::utxos`].
@@ -621,6 +627,7 @@ impl LotterySimulation {
             current_block: 0,
             utxos: BTreeMap::new(),
             next_utxo_id: 1,
+            production: None,
             owners: BTreeMap::new(),
             cluster_wealth: ClusterWealth::new(),
             next_cluster_id: 1,
