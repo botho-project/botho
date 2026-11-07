@@ -246,6 +246,7 @@ def capture_parity(build_receipt: Path, directory: Path) -> None:
     verified_build(build_receipt, binary)
     directory.mkdir(parents=True, exist_ok=True)
     payload = directory / "production-lottery.json"
+    payload.unlink(missing_ok=True)  # a previous invocation cannot satisfy this run
     argv = ["cargo", "test", "--locked", "-p", "botho", "--test", "sim_code_parity"]
     result = subprocess.run(argv, cwd=REPO, capture_output=True,
                             env={**os.environ, "BOTHO_LOTTERY_PARITY_PAYLOAD": str(payload)})
@@ -259,6 +260,7 @@ def capture_parity(build_receipt: Path, directory: Path) -> None:
         "context": execution_context(), "command": argv, "exit": result.returncode,
         "build_receipt_sha256": digest(build_receipt.read_bytes()),
         "binary_sha256": digest(binary.read_bytes()),
+        "payload_produced": payload.is_file(),
         "payload_sha256": digest(payload.read_bytes()) if payload.exists() else None,
         "inputs_sha256": digest(json.dumps(inputs, sort_keys=True).encode()) if inputs else None,
         "config_sha256": digest(json.dumps(data["config"], sort_keys=True).encode()) if data else None,

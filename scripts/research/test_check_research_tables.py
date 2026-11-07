@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -119,6 +120,28 @@ class BuildReceiptTests(unittest.TestCase):
                 self.assertEqual(json.loads(receipt.read_text())["exit"], 7)
                 with self.assertRaises(RuntimeError):
                     tables.capture_cargo_build(command, "missing-target", receipt)
+
+    def test_parity_requires_a_fresh_payload_even_after_successful_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            binary = directory / "binary"
+            binary.write_bytes(b"synthetic test executable")
+            build = directory / "build.json"
+            build.write_text(json.dumps({"binary": str(binary)}))
+            payload = directory / "production-lottery.json"
+            payload.write_text('{"stale": true}')
+            completed = subprocess.CompletedProcess([], 0, b"test command succeeded\n", b"")
+            with patch.object(tables, "verified_build"), patch.object(tables, "execution_context", return_value={}), \
+                    patch.object(tables.subprocess, "run", return_value=completed) as command, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "payload missing"):
+                    tables.capture_parity(build, directory)
+                command.assert_called_once()
+            self.assertFalse(payload.exists())
+            receipt = json.loads((directory / "parity-receipt.json").read_text())
+            self.assertEqual(receipt["exit"], 0)  # command success is insufficient
+            self.assertFalse(receipt["payload_produced"])
+            self.assertIsNone(receipt["payload_sha256"])
 
     def test_workflow_update_preserves_committed_drift_guard(self):
         workflow = (tables.REPO / ".github/workflows/research-sims.yml").read_text()
