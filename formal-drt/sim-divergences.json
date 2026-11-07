@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "surfaces": [
+    {
+      "id": "production.transition",
+      "classification": "production",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_production.rs#LotterySimulation::new_production",
+        "cluster-tax/src/simulation/lottery_production.rs#LotterySimulation::apply_production_block"
+      ],
+      "members": [
+        "new_production",
+        "apply_production_block"
+      ],
+      "reason": "The canonical entry commits integer outputs, owner credits, fees, burn, distribution and u128 carryover atomically; awards are fresh synthetic outputs and source records remain unchanged. It uses the explicit node 800-permille fee split and default draw policy.",
+      "effect_on_production_claims": "Every node/model/simulator field or observed-state mismatch fails lottery_sim. This record provides no exemption; constructor and bookkeeping checks are simulator representation constraints, not a consensus-admission proof."
+    },
+    {
+      "id": "legacy.ticket_model",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery.rs#TicketModel",
+        "cluster-tax/src/simulation/lottery.rs#LotteryUtxo::tickets_for_model"
+      ],
+      "members": [
+        "TicketModel::ActivityBased",
+        "TicketModel::FeeProportional",
+        "TicketModel::PureValueWeighted",
+        "TicketModel::UniformPerUtxo"
+      ],
+      "reason": "ActivityBased multiplies value/factor by activity; FeeProportional uses recorded fees and a floating factor discount; PureValueWeighted uses value/factor; UniformPerUtxo counts outputs. Factor, activity and ticket calculations use floats.",
+      "effect_on_production_claims": "These historical ticket models are research alternatives. They do not select the integer canonical production draw or establish its economics."
+    },
+    {
+      "id": "legacy.distribution_mode",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery.rs#DistributionMode",
+        "cluster-tax/src/simulation/lottery.rs#LotterySimulation::run_drawing",
+        "cluster-tax/src/simulation/lottery.rs#LotterySimulation::distribute_to_winners"
+      ],
+      "members": [
+        "DistributionMode::Pooled",
+        "DistributionMode::Immediate"
+      ],
+      "reason": "Pooled accumulates fees until the configured drawing_interval. Immediate distributes per transaction to winners_per_tx; that parameter is a research setting rather than the node block transition cadence.",
+      "effect_on_production_claims": "Neither legacy cadence is production block accounting. Production is tested separately on every supplied block and persistent carryover."
+    },
+    {
+      "id": "legacy.selection_mode",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery.rs#SelectionMode",
+        "cluster-tax/src/simulation/lottery.rs#LotterySimulation::select_winner_by_mode"
+      ],
+      "members": [
+        "SelectionMode::Uniform",
+        "SelectionMode::ValueWeighted",
+        "SelectionMode::SqrtWeighted",
+        "SelectionMode::LogWeighted",
+        "SelectionMode::CappedUniform",
+        "SelectionMode::Hybrid",
+        "SelectionMode::AgeWeighted",
+        "SelectionMode::ClusterWeighted",
+        "SelectionMode::EntropyWeighted",
+        "SelectionMode::ValueWeightedWithFloor"
+      ],
+      "reason": "This is the legacy lottery module SelectionMode, distinct from the canonical draw enum. Rules use value, sqrt/log weights, max_per_owner, Hybrid alpha, max_age_blocks/age_bonus, cluster factor or entropy_bonus. ValueWeightedWithFloor uses ticket_threshold, decay_rate_per_day, min_eligibility and blocks_per_day. Activity history, tag entropy and simulator owner knowledge are assumed available; selectors can repeat winners.",
+      "effect_on_production_claims": "Owner caps, activity/entropy weighting and these parameterized research policies are not implemented canonical production rules, privacy guarantees or Sybil-resistance results."
+    },
+    {
+      "id": "legacy.application",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery.rs#LotteryConfig::structure_factor",
+        "cluster-tax/src/simulation/lottery.rs#LotterySimulation::run_drawing",
+        "cluster-tax/src/simulation/lottery.rs#LotterySimulation::distribute_to_winners"
+      ],
+      "members": [
+        "float_tickets_and_rounding",
+        "activity_and_entropy",
+        "structure_fees",
+        "pooled_proportional_credit",
+        "immediate_in_place_credit"
+      ],
+      "reason": "Legacy floating tickets/factors/activity/entropy and structure_factor split penalties/consolidation discounts affect fees and weights. run_drawing allocates proportional float shares, truncates each payout, clears the pool and records the whole pool. distribute_to_winners uses integer division without production last-winner remainder allocation, in-place credits and activity refresh.",
+      "effect_on_production_claims": "These paths do not provide production fresh-output accounting, residue conservation or carryover behavior; a legacy modeling difference cannot waive an actual production state failure."
+    },
+    {
+      "id": "legacy.fee_time_units",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery.rs#LotteryConfig",
+        "cluster-tax/src/simulation/lottery.rs#LotteryConfig::combined_mechanism",
+        "cluster-tax/src/simulation/lottery.rs#LotterySimulation::with_consensus_fee"
+      ],
+      "members": [
+        "legacy_fee_formula",
+        "twenty_second_clock",
+        "caller_selected_units"
+      ],
+      "reason": "LotteryConfig uses base_fee, floating pool_fraction, factor, output_fee_exponent and optional structure/demurrage settings. Its time convention is 4320 blocks/day (20 seconds) and blocks_per_year=4320*365; combined_mechanism comments use 1000 simulation units/BTH. with_consensus_fee instead takes caller-supplied pico_per_unit and preserves the configured blocks_per_year; units are not implicitly node picocredits.",
+      "effect_on_production_claims": "Legacy fee/time/unit approximations must be stated when interpreting results. Selecting shared fee arithmetic does not convert the lottery selection or application into production behavior."
+    },
+    {
+      "id": "sweep.selection",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_selection_sweep.rs#Rule",
+        "cluster-tax/src/simulation/lottery_selection_sweep.rs#run_lottery_selection_sweep",
+        "cluster-tax/src/bin/sim.rs#run_lottery_selection_sweep_cli"
+      ],
+      "members": [
+        "Rule::Uniform",
+        "Rule::ClusterWeighted",
+        "Rule::FeeInverse",
+        "Rule::CirculationGated",
+        "Rule::Hybrid"
+      ],
+      "reason": "The sweep calculates expected-value population redistribution and weights for each Rule. SEED=0xB07A_0902 is documentary; this is not a seeded lottery draw campaign. It uses shared MAINNET_BLOCKS_PER_YEAR, LOTTERY_BASE_FEE_PICO and PICO_PER_BTH with analytic annual demurrage/population assumptions.",
+      "effect_on_production_claims": "Matching constants or expected-value outcomes is not stateful production parity or a profitability proof. This CLI does not call apply_production_block.",
+      "command": "lottery-selection-sweep"
+    },
+    {
+      "id": "sweep.sybil_brake",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_sybil_brake_sweep.rs#HonestPolicy",
+        "cluster-tax/src/simulation/lottery_sybil_brake_sweep.rs#run_sybil_brake_sweep",
+        "cluster-tax/src/bin/sim.rs#run_lottery_sybil_brake_sweep_cli"
+      ],
+      "members": [
+        "HonestPolicy::Burn",
+        "HonestPolicy::UniformAll",
+        "HonestPolicy::WindowedCirculated"
+      ],
+      "reason": "Stationary capture/window formulas and expected-value honest redistribution compare Burn, UniformAll and WindowedCirculated. SEED=0xB07A_0902_2 is documentary, with no random draws. Fee floors, annual time and BTH/pico conversion use the shared mainnet constants within analytic population assumptions.",
+      "effect_on_production_claims": "These policy comparisons do not execute the production transition and cannot validate its full state or invalidate the faithful profitability refutation.",
+      "command": "lottery-sybil-brake-sweep"
+    },
+    {
+      "id": "sweep.reward_cap",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_reward_cap_sweep.rs#ExcessPolicy",
+        "cluster-tax/src/simulation/lottery_reward_cap_sweep.rs#GiniPolicy",
+        "cluster-tax/src/simulation/lottery_reward_cap_sweep.rs#run_reward_cap_sweep",
+        "cluster-tax/src/bin/sim.rs#run_lottery_reward_cap_sweep_cli"
+      ],
+      "members": [
+        "ExcessPolicy::Burn",
+        "ExcessPolicy::CarryForward",
+        "GiniPolicy::Burn",
+        "GiniPolicy::UncappedWindowed",
+        "GiniPolicy::CappedBurn",
+        "GiniPolicy::CappedCarryForward",
+        "GiniPolicy::ValueWeightedAll"
+      ],
+      "reason": "This expected-value rate-based cap study uses annual/lump accounting, burn/carry policies and shared mainnet year, base-fee and pico-unit constants. SEED=0xB07A_0902_3 is documentary; no random production draws are sampled.",
+      "effect_on_production_claims": "The modeled rate cap and aggregate economics are not the implemented window-count/block-reward cap or block-by-block payout/carryover equivalence.",
+      "command": "lottery-reward-cap-sweep"
+    },
+    {
+      "id": "sweep.reward_cap.faithful",
+      "classification": "research",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_reward_cap_faithful.rs#Rules",
+        "cluster-tax/src/simulation/lottery_reward_cap_faithful.rs#Capacity",
+        "cluster-tax/src/simulation/lottery_reward_cap_faithful.rs#run_faithful_sweep",
+        "cluster-tax/src/simulation/lottery_reward_cap_faithful.rs#window_mc",
+        "cluster-tax/src/bin/sim.rs#run_lottery_reward_cap_faithful_cli"
+      ],
+      "members": [
+        "Rules::CurrentCode",
+        "Rules::PerBlockCap",
+        "Rules::WindowOverLength",
+        "Rules::BaseFeePerOutput",
+        "Rules::PerBlockAndBaseFee",
+        "Rules::PerBlockBaseFeeNoFree",
+        "Rules::MinValue1Bth",
+        "Capacity::ProposerSlot",
+        "Capacity::BlockSize"
+      ],
+      "reason": "CurrentCode is expected-value analysis with mirrored kernels/parity goldens: window rho truncated at 10000, payout bounded by block reward, size-based fee floor, eligible free tickets and backlog/epoch assumptions. Other Rules are candidate remedies (per-block/window-length cap, output base fees, no-free eligibility or 1 BTH minimum), not implemented production rules. Capacity compares proposer-slot and block-size bounds. Separate SplitMix64 window_mc uses SEED=0x1682_FA17_0902 and 400 offsets per current setting to sample candidate windows, not production payout draws.",
+      "effect_on_production_claims": "The faithful flag selects this analysis, not apply_production_block. Mirror parity and candidate-window Monte Carlo do not prove economic safety; the #1682/#1761 profitability refutation and its assumptions remain in force.",
+      "command": "lottery-reward-cap-sweep --faithful"
+    },
+    {
+      "id": "assumption.fees",
+      "classification": "external_assumption",
+      "sources": [
+        "cluster-tax/src/consensus_fee.rs#FeeModelMode",
+        "cluster-tax/src/consensus_fee.rs#SimConsensusFee",
+        "cluster-tax/src/simulation/lottery_production.rs#ProductionBlock"
+      ],
+      "members": [
+        "FeeModelMode::ConsensusOnly=consensus",
+        "FeeModelMode::ConsensusPlusRelayMin=consensus+relay",
+        "collected_fees_and_fee_floor"
+      ],
+      "reason": "The shared fee adapter offers ConsensusOnly (consensus floor) and ConsensusPlusRelayMin (max with relay minimum), labeled consensus and consensus+relay. It converts caller units with pico_per_unit, saturates ledger-width amounts and carries sub-unit fee remainder. The production lottery leg receives total_fees already collected; upstream fee-floor resolution and fee mode are external inputs.",
+      "effect_on_production_claims": "Testing the canonical 800-permille split/accounting does not test fee collection, transaction validity or the choice of relay policy. Existing sim_code_parity and faithful parity goldens guard shared constants; they do not establish economics."
+    },
+    {
+      "id": "assumption.candidates",
+      "classification": "external_assumption",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_production.rs#ProductionBlock",
+        "formal-drt/src/legs_sim.rs#Reference::resolve"
+      ],
+      "members": [
+        "candidate_discovery",
+        "window_and_order",
+        "spent_record_policy"
+      ],
+      "reason": "The caller supplies an ordered candidate snapshot and chooses discovery/window/order and spent-record policy. Later award references resolve from independent node/reference inventory, not simulator outputs. Lean receives these snapshots, including node-derived prior awards, rather than discovering ledger candidates.",
+      "effect_on_production_claims": "The leg compares arithmetic and application for supplied snapshots; it does not prove candidate discovery, accepted-chain reachability or equivalence of the simulator inventory to an admitted ledger."
+    },
+    {
+      "id": "assumption.owners",
+      "classification": "external_assumption",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_production.rs#ProductionOutput",
+        "cluster-tax/src/simulation/lottery_production.rs#LotterySimulation::new_production",
+        "formal-drt/src/legs_sim.rs#Reference::observe"
+      ],
+      "members": [
+        "immutable_registration",
+        "external_owner_mapping",
+        "fresh_output_and_owner_credits"
+      ],
+      "reason": "Initial output identity/value/factor/height and owner mapping are externally registered. The independent reference keeps immutable originals and predicts fresh payouts/owner credits from node results. Public simulator inventory, owner/UTXO totals and metrics are then observed after each step.",
+      "effect_on_production_claims": "These are Rust state-application checks, not Lean ownership, privacy, cryptographic-outpoint or accepted-chain proofs."
+    },
+    {
+      "id": "assumption.emission",
+      "classification": "external_assumption",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_production.rs#ProductionBlock"
+      ],
+      "members": [
+        "emission_share",
+        "block_reward_schedule"
+      ],
+      "reason": "Each block supplies emission_share and block_reward already resolved by its caller; the leg exercises their arithmetic use, including saturation and caps, without deriving a monetary schedule.",
+      "effect_on_production_claims": "Lottery correspondence does not validate emission scheduling, principal bounds, monetary policy or economic incentives."
+    },
+    {
+      "id": "assumption.seed",
+      "classification": "external_assumption",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_production.rs#ProductionBlock",
+        "formal-drt/lean/Drt/Codec.lean#lotterySim"
+      ],
+      "members": [
+        "already_derived_v2_seed"
+      ],
+      "reason": "Each block supplies an exact 32-byte V2 seed. The lottery_sim composition starts after seed derivation and takes candidate order as supplied.",
+      "effect_on_production_claims": "This leg does not test V2 hash derivation or RandomX. Wider DRT has a Lean SHA-256 implementation with startup FIPS vectors and supplies RandomX outputs from Rust where applicable; those trust boundaries remain separate."
+    },
+    {
+      "id": "assumption.representation",
+      "classification": "external_assumption",
+      "sources": [
+        "cluster-tax/src/simulation/lottery_production.rs#LotterySimulation::new_production",
+        "formal-drt/src/legs_sim.rs#Reference::new",
+        "formal-drt/src/legs_sim.rs#Input"
+      ],
+      "members": [
+        "synthetic_ids",
+        "representable_counters_and_owners",
+        "bounded_sequences_and_snapshots"
+      ],
+      "reason": "The valid domain has 1-4 strictly increasing blocks, at most 10000 initial/snapshot entries, decimal-string u64 fields/u128 carryover and exact-width hex IDs/seeds. Synthetic output IDs and checked allocator, owner and metric representation impose simulator constraints. Invalid identity/mapping/overflow inputs are exercised separately by atomic-rejection tests.",
+      "effect_on_production_claims": "Constructive finite DRT covers representable valid inputs; these guards are not consensus rules or full-domain proofs. Synthetic IDs and Rust bookkeeping are not modeled cryptographic output identities."
+    }
+  ]
+}
