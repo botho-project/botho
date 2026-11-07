@@ -18,7 +18,7 @@ baseline. All samples carry the canonical manifest SHA256.
 
 | Profile | Warmup | Sustained measurement | Follow-up | Total | Result scope |
 |---|---|---|---|---|---|
-| `minting` | 30 min | 4 h continuous minting | 30 s settling + 30 min verified idle | 5 h 30 s | `limited_minting` |
+| `minting` | 30 min | 4 h continuous minting | 2 min settling + 30 min verified idle | 5 h 2 min | `limited_minting` |
 | `payments` | 30 min | 4 h sustained payments | 3 × (10 min active, 10 min idle) | 5.5 h | `sustained_payments` |
 
 The first minting profile has **one** idle period. The production miner has no
@@ -26,9 +26,11 @@ pause/resume RPC, so the runner must arrange its normal pause condition at the
 original 4.5-hour mint deadline. Do not invent three cycles, restart processes,
 or suspend consensus with signals. Every declared producer must report
 `mining=true` during warmup and measurement and `mining=false` during idle.
-Relays must report `mining=false`. A fixed 30-second settling phase follows the deadline because the normal miner
-control runs on a ten-second balance tick. Preserve all settling observations;
-no mining-state gate applies during those thirty seconds. Every subsequent
+Relays must report `mining=false`. A fixed 120-second settling phase follows the deadline. It covers the normal miner
+control's ten-second balance tick and the one block that mints already
+pending in consensus can still externalize about a slot (40 s) later
+(#1966; memqual7 saw it at +45 s). Preserve all settling observations;
+no mining-state or height gate applies during those 120 seconds. Every subsequent
 idle observation must report mining disabled, with no further observed height advance. A missed deadline or
 continued minting yields `incomplete`; never rebase the measurement window.
 
@@ -146,7 +148,7 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
   ```
 
   For the minting profile, `mint_until = t0 + 16200` (warmup plus sustained),
-  the profile ends at `t0 + 18030`, and the independent lab deadline is
+  the profile ends at `t0 + 18120`, and the independent lab deadline is
   `t0 + 6 h`. `recommended_node_end_unix_s` is the profile end plus 15 min,
   so the nodes outlive the last tick.
 - **`manifest`** writes the manifest exactly once from the
@@ -201,8 +203,8 @@ Steps 3 to 6 are tracked in `scripts/stress/collect_sustained_memory.py`
   ```json
   {"record": "collector_terminal", "schema": 1, "manifest_sha256": "...",
    "nodes": ["n1"], "started_at_unix_s": 1790000000, "first_tick_unix_s": 1790000000,
-   "ticks_expected": 3607, "ticks_written": 3607, "ticks_missed": 0,
-   "rows_written": 3607, "error_rows": 0, "finished_at_unix_s": 1790018030.4,
+   "ticks_expected": 3625, "ticks_written": 3625, "ticks_missed": 0,
+   "rows_written": 3625, "error_rows": 0, "finished_at_unix_s": 1790018120.4,
    "complete": true}
   ```
 
@@ -232,7 +234,7 @@ ends with exactly one `collector_terminal` record, and that record:
 - names only manifest nodes, each once, and every row in the file belongs
   to one of them;
 - has `ticks_expected` equal to the profile's grid tick count,
-  `ceil(profile_s / sample_interval_s) + 1` (3607 for minting, 3961 for
+  `ceil(profile_s / sample_interval_s) + 1` (3625 for minting, 3961 for
   payments), with `ticks_written` equal to it and `ticks_missed` = 0;
 - has `rows_written` = `ticks_written` × its node count, `error_rows` = 0,
   `first_tick_unix_s` exactly t0 and `complete: true`.

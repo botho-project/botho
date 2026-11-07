@@ -276,8 +276,8 @@ class ScheduleTests(unittest.TestCase):
     def test_minting_timeline_is_fixed_and_absolute(self):
         schedule = csm.profile_schedule("minting", T0)
         self.assertEqual(schedule["mint_until_unix_s"], T0 + 1800 + 14400)
-        self.assertEqual(schedule["profile_end_unix_s"], T0 + 18030)
-        self.assertEqual(schedule["tick_count"], 18030 // 5 + 1)
+        self.assertEqual(schedule["profile_end_unix_s"], T0 + 18120)
+        self.assertEqual(schedule["tick_count"], 18120 // 5 + 1)
         self.assertEqual(
             [p["name"] for p in schedule["phases"]],
             ["warmup", "sustained", "settling", "idle"],
@@ -401,7 +401,7 @@ class CollectTests(Harness):
         plan = make_plan(fleet)
         summary, rows, logs = self.run_collect(fleet, plan)
         self.assertTrue(summary["complete"], logs)
-        self.assertEqual(summary["ticks_sampled"], 18030 // 5 + 1)
+        self.assertEqual(summary["ticks_sampled"], 18120 // 5 + 1)
         self.assertEqual(summary["rows_written"], 2 * summary["ticks_sampled"])
         self.assertEqual(summary["first_tick_unix_s"], T0)
         # One fsync per tick, plus one for the terminal record.
@@ -807,7 +807,7 @@ class CollectCliTests(Harness):
         self.assertIn("loopback", stderr.getvalue())
 
     def test_profile_already_over_or_t0_too_far(self):
-        self.clock.time = T0 + 18031
+        self.clock.time = T0 + 18121
         self.assertIn("already ended", self.cli()[2])
         self.clock.time = T0 - csm.MAX_LEAD_S - 1
         self.assertIn("ahead", self.cli()[2])

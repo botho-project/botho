@@ -15,7 +15,7 @@
     },
     {
       "name": "settling",
-      "duration_s": 30
+      "duration_s": 120
     },
     {
       "name": "idle",
