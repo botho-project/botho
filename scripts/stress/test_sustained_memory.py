@@ -280,6 +280,11 @@ class SustainedMemoryTests(unittest.TestCase):
                 row["chain_hash"] = f"{row['chain_height']:064x}"
         self.assertEqual(analyze(plan, rows)["status"], "passed")
 
+    def test_example_manifest_matches_fixed_profile(self):
+        # #1966: the operator-facing example must track profile_phases.
+        example = Path(__file__).with_name("sustained-memory-manifest.example.json")
+        validate_manifest(json.loads(example.read_text()))
+
     def test_cgroup_move_fails_and_shared_group_manifest_rejected(self):
         self.rows[600]["cgroup_path"] = "/different"
         self.assertEqual(analyze(self.plan, self.rows)["status"], "failed")
