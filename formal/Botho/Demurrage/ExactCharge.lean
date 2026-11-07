@@ -1,6 +1,6 @@
 /-
 The protocol 9.0.0 demurrage kernel (#1875): one floor of the full rational
-charge. Status: proven (model), with the four claims below listed and
+charge. Status: proven (model), with the six claims below listed and
 statement-bound; separately tested (DRT leg `demurrage_charge`).
 
 `Botho.Demurrage.charge` in `Counterexamples.lean` is the LEGACY pre-9.0.0
@@ -167,5 +167,54 @@ example (v f e r : Nat) : exactCharge v f e r 0 = 0 := by simp [exactCharge, min
 example : exactCharge ([315359999, 1].sum) 6000 1 200 6307200 = 1 ∧
     ([315359999, 1].map (fun v => exactCharge v 6000 1 200 6307200)).sum = 0 := by
   decide
+
+private theorem minN_mono_left (a b cap : Nat) (h : a ≤ b) :
+    minN a cap ≤ minN b cap := by
+  unfold minN
+  split <;> split <;> omega
+
+/-- Increasing elapsed time cannot decrease the total Nat charge, including
+zero-year division and the final u64 cap plateau. -/
+theorem exactCharge_mono_elapsed
+    (value factor e1 e2 rate year : Nat) (h : e1 ≤ e2) :
+    exactCharge value factor e1 rate year ≤
+      exactCharge value factor e2 rate year := by
+  have hn := Nat.mul_le_mul_left
+    (value * rate * (clampN 1000 6000 factor - 1000)) h
+  have hd := Nat.div_le_div_right hn (c := 10000 * 5000 * year)
+  dsimp only [exactCharge]
+  exact minN_mono_left _ _ _ hd
+
+/-- Increasing the input factor cannot decrease the total Nat charge, including
+both clamp regions, zero-year division and the final u64 cap plateau. -/
+theorem exactCharge_mono_factor
+    (value f1 f2 elapsed rate year : Nat) (h : f1 ≤ f2) :
+    exactCharge value f1 elapsed rate year ≤
+      exactCharge value f2 elapsed rate year := by
+  have hp : clampN 1000 6000 f1 - 1000 ≤ clampN 1000 6000 f2 - 1000 := by
+    unfold clampN
+    split <;> (try split) <;> (try split) <;> (try split) <;> omega
+  have hn := Nat.mul_le_mul_right elapsed (Nat.mul_le_mul_left (value * rate) hp)
+  have hd := Nat.div_le_div_right hn (c := 10000 * 5000 * year)
+  dsimp only [exactCharge]
+  exact minN_mono_left _ _ _ hd
+
+-- Kernel-checked boundary examples supplement the full-Nat proofs.
+example : exactCharge 1000000 6000 1 200 0 = 0 ∧
+    exactCharge 1000000 6000 2 200 0 = 0 := by decide
+
+-- Below, at and immediately above the lower factor clamp.
+example : exactCharge 5000 999 1 10000 1 = 0 ∧
+    exactCharge 5000 1000 1 10000 1 = 0 ∧
+    exactCharge 5000 1001 1 10000 1 = 1 := by decide
+
+-- Below, at and immediately above the upper factor clamp.
+example : exactCharge 5000 5999 1 10000 1 = 4999 ∧
+    exactCharge 5000 6000 1 10000 1 = 5000 ∧
+    exactCharge 5000 6001 1 10000 1 = 5000 := by decide
+
+-- Increasing elapsed time on the final cap plateau preserves the charge.
+example : exactCharge U64_MAX 6000 1 10000 1 = U64_MAX ∧
+    exactCharge U64_MAX 6000 2 10000 1 = U64_MAX := by decide
 
 end Botho.Demurrage

@@ -27,8 +27,8 @@ clamped to `u64::MAX`, with no intermediate time fraction.
 - `exactCharge` (`ExactCharge.lean`) is the 9.0.0 kernel, written as the
   specification itself on `Nat` (it does not mirror the Rust u128
   decomposition, so the DRT checks that the decomposition is exact). The
-  `demurrage_charge` DRT leg now runs `exactCharge`. Its four claims below
-  are listed in `Theorems.lean` and bound in `statements.txt` (#1916).
+  `demurrage_charge` DRT leg now runs `exactCharge`. Its six claims below
+  are listed in `Theorems.lean` and bound in `statements.txt` (#1916, #1963).
 - With the DRT dispatch temporarily pointed back at the legacy `charge`, the
   committed regression lines produce mismatches against the 9.0.0 Rust
   kernel, so the leg distinguishes the two kernels.
@@ -78,7 +78,46 @@ evidence of correspondence with Rust.
 
 These statements preserve the existing `exactCharge` definition. They prove
 arithmetic properties of the model, not Rust-to-Lean equivalence or general
-fee-floor, churn, monotonicity or ledger-reachability claims.
+fee-floor, churn, or ledger-reachability claims.
+
+### Exact-charge monotonicity (#1963)
+
+Two additional statements are **proven (model)** for the existing total `Nat`
+formula, with all other inputs held fixed:
+
+- `exactCharge_mono_elapsed`: `e1 ≤ e2` implies
+  `exactCharge value factor e1 rate year ≤ exactCharge value factor e2 rate year`.
+- `exactCharge_mono_factor`: `f1 ≤ f2` implies
+  `exactCharge value f1 elapsed rate year ≤ exactCharge value f2 elapsed rate year`.
+
+Neither requires positive year, Rust-width inputs or an uncapped result. The
+proofs include zero year (natural division by zero is zero), zero inputs,
+both factor clamp regions and the final `u64::MAX` plateau. They are
+non-strict inequalities: increasing an input may leave the charge unchanged.
+Unnamed kernel-checked examples cover year zero, factors 999/1000/1001 and
+5999/6000/6001, and elapsed 1/2 on the cap plateau. The reviewed statement
+records landed separately in #1962/PR #1964; their bytes remain unchanged.
+
+Separately **tested** correspondence is reused from historical CI
+[run 42310903557, job 128211803318](https://github.com/botho-project/botho/actions/runs/42310903557/job/128211803318):
+10,000 generated `demurrage_charge` cases plus 8 committed regressions,
+zero mismatches, seed 1707. Its checkout
+`1006ffb1ace1059220a225bbb01b23b75d61e6fa` has the complete tree of the
+records base `25474cba31fd89dcca9e65efc64bdfc01c4f42c7`.
+Artifact `13548218953` has ZIP SHA-256
+`9bfcf962e2bda4c19b9d0e8051fc98e28bef06fa9a47b5d2ee57d76615f3a254`.
+The report does not supply a binary digest. This is not a fresh proof-head
+or local DRT run. The reuse audit preserves the executable `exactCharge`
+expression and its arithmetic definitions; changes in the model file are
+proofs, examples and its claim-count comment. Production, Cargo inputs,
+generator, runner, codec, dispatch and fixtures match the historical receipt.
+The ordinary final-head CI gates, including DRT, still apply.
+
+These model proofs and finite correspondence tests do not establish Rust
+semantics equivalence, Rust panic-freedom, reset-horizon monotonicity,
+charge bounded by principal, or accepted-chain reachability. The separate
+Aeneas `capitalized_reset_charge_no_downgrade` result and #1713 retain their
+own scope and trust assumptions.
 
 ## Time quantization defeats a positive-value threshold (pre-9.0.0)
 
@@ -232,9 +271,11 @@ target/release/botho-formal-drt --cases 100000 --seed 1711 \
 # 9.0.0 exact kernel (#1875): the same command with --seed 1875
 ```
 
-This is a partial #1711 contribution. Settlement/reset/spend composition,
-ring elapsed centroid/quantile, `consensus_fee_floor`, monotonicity proofs,
-fuzz-corpus replay and accepted-block witnesses remain outstanding. Do not
-mark #1711 complete on these counterexamples or weaken its targets silently.
+This is a partial #1711 contribution. The unconditional principal bound
+remains refuted. Settlement/reset/spend composition, ring elapsed
+centroid/quantile, monotonicity of other kernels, adversarial dilution,
+fee-floor bounds, binary fuzz-corpus replay and reachable transaction/block
+witnesses remain outstanding. Do not mark #1711 complete on these results
+or weaken its targets silently.
 Any arithmetic repair changes consensus outputs and needs its own reviewed
 policy, activation and regression work.
