@@ -744,6 +744,378 @@ mod tests {
         test_runner::{Config, RngAlgorithm, TestRng, TestRunner},
     };
 
+    // Documentation validation only: no runtime comparator, registration,
+    // generator, shrinker or replay path reads this inventory.
+    const INVENTORY: &str = include_str!("../sim-divergences.json");
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    enum Classification {
+        Production,
+        Research,
+        ExternalAssumption,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Inventory {
+        schema_version: u32,
+        surfaces: Vec<Surface>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Surface {
+        id: String,
+        classification: Classification,
+        sources: Vec<String>,
+        members: Vec<String>,
+        reason: String,
+        effect_on_production_claims: String,
+        #[serde(default)]
+        command: Option<String>,
+    }
+
+    struct SurfaceSpec {
+        id: &'static str,
+        classification: Classification,
+        sources: Vec<String>,
+        members: Vec<String>,
+        command: Option<&'static str>,
+    }
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn surface_specs() -> Vec<SurfaceSpec> {
+        use bth_cluster_tax::{
+            consensus_fee::FeeModelMode,
+            simulation::{
+                lottery::{DistributionMode, SelectionMode, TicketModel},
+                lottery_reward_cap_faithful::{Capacity, Rules},
+                lottery_reward_cap_sweep::{ExcessPolicy, GiniPolicy},
+                lottery_selection_sweep::Rule,
+                lottery_sybil_brake_sweep::HonestPolicy,
+            },
+        };
+        use Classification::{ExternalAssumption as External, Production, Research};
+
+        // Exhaustive matches fail to compile when a source enum grows. The
+        // expected members are independent of the document being validated.
+        macro_rules! variants {
+            ($ty:ident: $($variant:ident),+ $(,)?) => {
+                [$($ty::$variant),+].map(|v| match v {
+                    $($ty::$variant => concat!(stringify!($ty), "::", stringify!($variant)).to_owned()),+
+                }).to_vec()
+            };
+        }
+        let tickets = variants!(TicketModel: ActivityBased, FeeProportional, PureValueWeighted, UniformPerUtxo);
+        let distribution = [
+            DistributionMode::Pooled,
+            DistributionMode::Immediate { winners_per_tx: 1 },
+        ]
+        .map(|v| match v {
+            DistributionMode::Pooled => "DistributionMode::Pooled".into(),
+            DistributionMode::Immediate { .. } => "DistributionMode::Immediate".into(),
+        })
+        .to_vec();
+        let selection = [
+            SelectionMode::Uniform,
+            SelectionMode::ValueWeighted,
+            SelectionMode::SqrtWeighted,
+            SelectionMode::LogWeighted,
+            SelectionMode::CappedUniform { max_per_owner: 1 },
+            SelectionMode::Hybrid { alpha: 0.5 },
+            SelectionMode::AgeWeighted {
+                max_age_blocks: 1,
+                age_bonus: 1.0,
+            },
+            SelectionMode::ClusterWeighted,
+            SelectionMode::EntropyWeighted { entropy_bonus: 1.0 },
+            SelectionMode::ValueWeightedWithFloor {
+                ticket_threshold: 1,
+                decay_rate_per_day: 0.1,
+                min_eligibility: 0.1,
+                blocks_per_day: 1,
+            },
+        ]
+        .map(|v| {
+            match v {
+                SelectionMode::Uniform => "SelectionMode::Uniform",
+                SelectionMode::ValueWeighted => "SelectionMode::ValueWeighted",
+                SelectionMode::SqrtWeighted => "SelectionMode::SqrtWeighted",
+                SelectionMode::LogWeighted => "SelectionMode::LogWeighted",
+                SelectionMode::CappedUniform { .. } => "SelectionMode::CappedUniform",
+                SelectionMode::Hybrid { .. } => "SelectionMode::Hybrid",
+                SelectionMode::AgeWeighted { .. } => "SelectionMode::AgeWeighted",
+                SelectionMode::ClusterWeighted => "SelectionMode::ClusterWeighted",
+                SelectionMode::EntropyWeighted { .. } => "SelectionMode::EntropyWeighted",
+                SelectionMode::ValueWeightedWithFloor { .. } => {
+                    "SelectionMode::ValueWeightedWithFloor"
+                }
+            }
+            .to_owned()
+        })
+        .to_vec();
+        let rules = Rule::all()
+            .into_iter()
+            .map(|v| {
+                match v {
+                    Rule::Uniform => "Rule::Uniform",
+                    Rule::ClusterWeighted => "Rule::ClusterWeighted",
+                    Rule::FeeInverse => "Rule::FeeInverse",
+                    Rule::CirculationGated => "Rule::CirculationGated",
+                    Rule::Hybrid => "Rule::Hybrid",
+                }
+                .to_owned()
+            })
+            .collect();
+        let honest = variants!(HonestPolicy: Burn, UniformAll, WindowedCirculated);
+        let mut cap = variants!(ExcessPolicy: Burn, CarryForward);
+        cap.extend(variants!(GiniPolicy: Burn, UncappedWindowed, CappedBurn, CappedCarryForward, ValueWeightedAll));
+        let mut faithful = Rules::all()
+            .map(|v| {
+                match v {
+                    Rules::CurrentCode => "Rules::CurrentCode",
+                    Rules::PerBlockCap => "Rules::PerBlockCap",
+                    Rules::WindowOverLength => "Rules::WindowOverLength",
+                    Rules::BaseFeePerOutput => "Rules::BaseFeePerOutput",
+                    Rules::PerBlockAndBaseFee => "Rules::PerBlockAndBaseFee",
+                    Rules::PerBlockBaseFeeNoFree => "Rules::PerBlockBaseFeeNoFree",
+                    Rules::MinValue1Bth => "Rules::MinValue1Bth",
+                }
+                .to_owned()
+            })
+            .to_vec();
+        faithful.extend(variants!(Capacity: ProposerSlot, BlockSize));
+        let mut fees = [
+            FeeModelMode::ConsensusOnly,
+            FeeModelMode::ConsensusPlusRelayMin,
+        ]
+        .map(|v| {
+            let variant = match v {
+                FeeModelMode::ConsensusOnly => "ConsensusOnly",
+                FeeModelMode::ConsensusPlusRelayMin => "ConsensusPlusRelayMin",
+            };
+            format!("FeeModelMode::{variant}={}", v.label())
+        })
+        .to_vec();
+        fees.push("collected_fees_and_fee_floor".into());
+
+        // Concrete paths/symbols identify the intended surfaces, not arbitrary
+        // nonempty strings. These are reviewed source references, not a parser
+        // or a registry of scalar parameter combinations/constants.
+        let legacy = "cluster-tax/src/simulation/lottery.rs";
+        let production = "cluster-tax/src/simulation/lottery_production.rs";
+        let cli = "cluster-tax/src/bin/sim.rs";
+        let leg = "formal-drt/src/legs_sim.rs";
+        let selection_sweep = "cluster-tax/src/simulation/lottery_selection_sweep.rs";
+        let sybil = "cluster-tax/src/simulation/lottery_sybil_brake_sweep.rs";
+        let reward = "cluster-tax/src/simulation/lottery_reward_cap_sweep.rs";
+        let faithful_sweep = "cluster-tax/src/simulation/lottery_reward_cap_faithful.rs";
+        macro_rules! spec {
+            ($id:literal, $class:ident, [$($path:expr => $symbol:literal),+], $members:expr, $command:expr) => {
+                SurfaceSpec { id: $id, classification: $class,
+                    sources: vec![$(format!("{}#{}", $path, $symbol)),+], members: $members, command: $command }
+            };
+        }
+        vec![
+            spec!("production.transition", Production, [production => "LotterySimulation::new_production", production => "LotterySimulation::apply_production_block"], names(&["new_production", "apply_production_block"]), None),
+            spec!("legacy.ticket_model", Research, [legacy => "TicketModel", legacy => "LotteryUtxo::tickets_for_model"], tickets, None),
+            spec!("legacy.distribution_mode", Research, [legacy => "DistributionMode", legacy => "LotterySimulation::run_drawing", legacy => "LotterySimulation::distribute_to_winners"], distribution, None),
+            spec!("legacy.selection_mode", Research, [legacy => "SelectionMode", legacy => "LotterySimulation::select_winner_by_mode"], selection, None),
+            spec!("legacy.application", Research, [legacy => "LotteryConfig::structure_factor", legacy => "LotterySimulation::run_drawing", legacy => "LotterySimulation::distribute_to_winners"], names(&["float_tickets_and_rounding", "activity_and_entropy", "structure_fees", "pooled_proportional_credit", "immediate_in_place_credit"]), None),
+            spec!("legacy.fee_time_units", Research, [legacy => "LotteryConfig", legacy => "LotteryConfig::combined_mechanism", legacy => "LotterySimulation::with_consensus_fee"], names(&["legacy_fee_formula", "twenty_second_clock", "caller_selected_units"]), None),
+            spec!("sweep.selection", Research, [selection_sweep => "Rule", selection_sweep => "run_lottery_selection_sweep", cli => "run_lottery_selection_sweep_cli"], rules, Some("lottery-selection-sweep")),
+            spec!("sweep.sybil_brake", Research, [sybil => "HonestPolicy", sybil => "run_sybil_brake_sweep", cli => "run_lottery_sybil_brake_sweep_cli"], honest, Some("lottery-sybil-brake-sweep")),
+            spec!("sweep.reward_cap", Research, [reward => "ExcessPolicy", reward => "GiniPolicy", reward => "run_reward_cap_sweep", cli => "run_lottery_reward_cap_sweep_cli"], cap, Some("lottery-reward-cap-sweep")),
+            spec!("sweep.reward_cap.faithful", Research, [faithful_sweep => "Rules", faithful_sweep => "Capacity", faithful_sweep => "run_faithful_sweep", faithful_sweep => "window_mc", cli => "run_lottery_reward_cap_faithful_cli"], faithful, Some("lottery-reward-cap-sweep --faithful")),
+            spec!("assumption.fees", External, ["cluster-tax/src/consensus_fee.rs" => "FeeModelMode", "cluster-tax/src/consensus_fee.rs" => "SimConsensusFee", production => "ProductionBlock"], fees, None),
+            spec!("assumption.candidates", External, [production => "ProductionBlock", leg => "Reference::resolve"], names(&["candidate_discovery", "window_and_order", "spent_record_policy"]), None),
+            spec!("assumption.owners", External, [production => "ProductionOutput", production => "LotterySimulation::new_production", leg => "Reference::observe"], names(&["immutable_registration", "external_owner_mapping", "fresh_output_and_owner_credits"]), None),
+            spec!("assumption.emission", External, [production => "ProductionBlock"], names(&["emission_share", "block_reward_schedule"]), None),
+            spec!("assumption.seed", External, [production => "ProductionBlock", "formal-drt/lean/Drt/Codec.lean" => "lotterySim"], names(&["already_derived_v2_seed"]), None),
+            spec!("assumption.representation", External, [production => "LotterySimulation::new_production", leg => "Reference::new", leg => "Input"], names(&["synthetic_ids", "representable_counters_and_owners", "bounded_sequences_and_snapshots"]), None),
+        ]
+    }
+
+    fn validate_inventory(text: &str) -> Result<Inventory, String> {
+        let inventory: Inventory = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if inventory.schema_version != 1 {
+            return Err("unknown schema version".into());
+        }
+        let specs = surface_specs();
+        if inventory.surfaces.len() != specs.len() {
+            return Err("missing/extra surface".into());
+        }
+        let mut ids = BTreeSet::new();
+        for surface in &inventory.surfaces {
+            if !ids.insert(&surface.id) {
+                return Err(format!("duplicate surface: {}", surface.id));
+            }
+            let spec = specs
+                .iter()
+                .find(|s| s.id == surface.id)
+                .ok_or_else(|| format!("unknown surface: {}", surface.id))?;
+            if surface.classification != spec.classification
+                || surface.command.as_deref() != spec.command
+            {
+                return Err(format!("wrong classification/command: {}", surface.id));
+            }
+            if surface.reason.trim().is_empty()
+                || surface.effect_on_production_claims.trim().is_empty()
+            {
+                return Err(format!("empty reason/effect: {}", surface.id));
+            }
+            for (field, actual, expected) in [
+                ("sources", &surface.sources, &spec.sources),
+                ("members", &surface.members, &spec.members),
+            ] {
+                let set: BTreeSet<_> = actual.iter().collect();
+                if actual.iter().any(|s| s.trim().is_empty())
+                    || set.len() != actual.len()
+                    || set != expected.iter().collect()
+                {
+                    return Err(format!("invalid {field}: {}", surface.id));
+                }
+            }
+        }
+        Ok(inventory)
+    }
+
+    #[test]
+    fn lottery_sim_inventory_complete_and_registered() {
+        let inventory = validate_inventory(INVENTORY).unwrap();
+        assert_eq!(
+            inventory
+                .surfaces
+                .iter()
+                .filter(|s| s.command.is_some())
+                .count(),
+            4
+        );
+        assert!(crate::LEGS
+            .iter()
+            .any(|(name, _)| *name == LotterySim::NAME));
+    }
+
+    #[test]
+    fn lottery_sim_inventory_rejects_malformed_and_incomplete_declarations() {
+        let good: Value = serde_json::from_str(INVENTORY).unwrap();
+        let mut bad = vec![
+            ("malformed JSON".to_owned(), "{".to_owned()),
+            (
+                "duplicate JSON field".into(),
+                INVENTORY.replacen(
+                    "\"schema_version\": 1",
+                    "\"schema_version\": 1, \"schema_version\": 1",
+                    1,
+                ),
+            ),
+        ];
+        let mut add = |label: &str, value: Value| bad.push((label.into(), value.to_string()));
+        for (pointer, value) in [
+            ("/schema_version", json!(2)),
+            ("/schema_version", json!("1")),
+            ("/surfaces", json!({})),
+            ("/surfaces/0", json!(null)),
+            ("/surfaces/0/id", json!(17)),
+            ("/surfaces/0/id", json!("unknown")),
+            ("/surfaces/0/classification", json!("unknown")),
+            ("/surfaces/0/classification", json!("research")),
+            ("/surfaces/0/reason", json!([])),
+            ("/surfaces/0/reason", json!(" \t\n")),
+            ("/surfaces/0/effect_on_production_claims", json!(null)),
+            ("/surfaces/0/effect_on_production_claims", json!(" ")),
+            ("/surfaces/0/sources", json!("path#symbol")),
+            ("/surfaces/0/sources", json!([])),
+            ("/surfaces/0/sources/0", json!(" ")),
+            (
+                "/surfaces/0/sources/0",
+                json!("wrong.rs#apply_production_block"),
+            ),
+            (
+                "/surfaces/0/sources/0",
+                json!("cluster-tax/src/simulation/lottery_production.rs#wrong"),
+            ),
+            ("/surfaces/0/members", json!({})),
+            ("/surfaces/0/members", json!([])),
+            ("/surfaces/0/members/0", json!("unknown")),
+            ("/surfaces/3/members/0", json!("SelectionMode::Unknown")),
+            ("/surfaces/10/members/0", json!("FeeModelMode::Legacy")),
+            ("/surfaces/0/members/0", json!(" ")),
+            ("/surfaces/6/command", json!("lottery-reward-cap-sweep")),
+            ("/surfaces/6/command", json!(null)),
+            ("/surfaces/6/command", json!(4)),
+        ] {
+            let mut v = good.clone();
+            *v.pointer_mut(pointer).unwrap() = value;
+            add(pointer, v);
+        }
+        for field in ["schema_version", "surfaces"] {
+            let mut v = good.clone();
+            v.as_object_mut().unwrap().remove(field);
+            add(field, v);
+        }
+        // Each record and each policy member is mandatory, including every
+        // sweep policy; missing-member coverage is not limited to production.
+        for (i, surface) in good["surfaces"].as_array().unwrap().iter().enumerate() {
+            let mut v = good.clone();
+            v["surfaces"].as_array_mut().unwrap().remove(i);
+            add("missing surface", v);
+            for field in [
+                "id",
+                "classification",
+                "sources",
+                "members",
+                "reason",
+                "effect_on_production_claims",
+            ] {
+                let mut v = good.clone();
+                v["surfaces"][i].as_object_mut().unwrap().remove(field);
+                add(field, v);
+            }
+            for field in ["members", "sources"] {
+                for j in 0..surface[field].as_array().unwrap().len() {
+                    let mut v = good.clone();
+                    v["surfaces"][i][field].as_array_mut().unwrap().remove(j);
+                    add("missing member/source", v);
+                }
+                let mut v = good.clone();
+                v["surfaces"][i][field]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(surface[field][0].clone());
+                add("duplicate member/source", v);
+            }
+        }
+        let mut v = good.clone();
+        v["surfaces"][1] = v["surfaces"][0].clone();
+        add("duplicate ID", v);
+        let mut v = good.clone();
+        v["unknown"] = json!(true);
+        add("unknown root key", v);
+        for field in [
+            "unknown",
+            "mismatch_exemption",
+            "allow_mismatch",
+            "exemptions",
+        ] {
+            for value in [json!(true), json!(false), json!([]), json!(null)] {
+                let mut v = good.clone();
+                v["surfaces"][0][field] = value;
+                add(field, v);
+            }
+        }
+        for (label, text) in bad {
+            assert!(
+                validate_inventory(&text).is_err(),
+                "accepted {label}: {text}"
+            );
+        }
+    }
+
     fn runner() -> TestRunner {
         TestRunner::new_with_rng(
             Config {
@@ -907,6 +1279,30 @@ mod tests {
         let mut changed = clean.clone();
         changed["simulator_state"] = json!({"ok": false, "failed_checks": failed});
         assert_ne!(clean, changed);
+
+        // Valid research documentation (including an extended explanation)
+        // cannot change observation of the actual corrupted simulator state.
+        let mut extended: Value = serde_json::from_str(INVENTORY).unwrap();
+        extended["surfaces"][1]["reason"] =
+            json!("Additional research observation: legacy ticket weights differ.");
+        extended["surfaces"][1]["effect_on_production_claims"] =
+            json!("This research declaration grants no production waiver.");
+        for document in [INVENTORY.to_owned(), extended.to_string()] {
+            validate_inventory(&document).unwrap();
+            assert_eq!(node_projection(cap, &a, &draw), sim_projection(&result));
+            let mut observed = vec![];
+            reference.observe(&sim, "0", &mut observed);
+            assert_eq!(observed, ["0/total_distributed"]);
+            let mut actual = clean.clone();
+            actual["simulator_state"] = json!({"ok": false, "failed_checks": observed});
+            assert_eq!(actual, changed);
+            assert_ne!(clean, actual); // the runner's ordinary JSON equality
+        }
+        extended["surfaces"][0]["mismatch_exemption"] = json!("0/total_distributed");
+        assert!(validate_inventory(&extended.to_string()).is_err());
+        let mut still_failed = vec![];
+        reference.observe(&sim, "0", &mut still_failed);
+        assert_eq!(still_failed, ["0/total_distributed"]);
     }
 
     // Public snapshot covers rollback observables. The existing production

@@ -476,6 +476,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `draw_lottery_winners_seeded` | `consensus::draw_lottery_winners_seeded` | `drawLotteryWinnersSeeded` |
 | `lottery_candidates` | `Ledger::get_lottery_validation_candidates` over a real LMDB ledger | `lotteryCandidates` |
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
+| `lottery_sim` | Actual `LotterySimulation::apply_production_block` and separate node cap/accounting/draw calls; independent per-step public-state checks | One composed `Drt.lotterySim` result in both expected slots; Lean advances its own arithmetic carryover |
 | `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
 | `monetary` | Actual mainnet policy phase/halving, both tail wrappers, library and node block reward, lottery bps/share and demurrage | `Botho.Monetary` and `Botho.Supply.Block`; independent u64 inputs and arithmetic-safe wide supply 0..A, including modulo cast loss; see [domain/coverage](MONETARY.md#monetary-drt-domain-and-replay-1922) |
 | `cluster_tag_inheritance` | 8.0.0 (#1870): `first_malformed_output_tags` (Rule 1), then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2, C6) over the in-memory double `botho::ledger::formal_drt_tags`; fixtures include #1870's `rules_golden_vectors` | `Botho.Tags.inheritOk₈`, the import cluster derived from the height in the DRT driver (and the failing rule's numbers) |
@@ -486,8 +487,9 @@ and `botho::ledger::formal_drt`, which runs the production
 | `slot_duration` | `ConsensusService::record_block` then `current_slot_duration` | `Botho.Consensus.slotSecs` |
 | `timestamps` | `median_time_past_of`, `ChainState::next_min_timestamp`, `rolled_timestamps`, `minting_timestamp`, `observed_block_time`; `timestamp_after_mtp`, `ledger_timestamp_within_future_bound`, `minting_timestamp_within_future_bound` (same predicates called by production) | `Botho.Timestamps`; exact u64 decimal strings and arbitrary finite replay windows; generated lengths 0..32 |
 
-The current private-target run passed 10,000 cases at seed 1915 and 31 replays;
-the all-leg tier passed 240,000 cases and 141 replays at seed 1707.
+Historical timestamp validation (#1950 / PR #1951) passed 10,000 cases at seed 1915 and
+31 replays in its private target; that source's all-leg tier passed 240,000 cases
+and 141 replays at seed 1707. These are not current lottery-simulation counts.
 The timestamp leg preserves all 30 helper fixtures from #1942 and adds the
 missing `U-61` clock boundary. Each candidate/honest lower and ledger upper
 primitive, ledger conjunction, and in-domain minting contextual/intrinsic
@@ -507,6 +509,128 @@ The `drawing` double reimplements the candidate read over an in-memory
 table (it cannot use LMDB); the `lottery_candidates` leg checks the
 production reader against the same model, so the two legs together tie both
 to the model.
+
+### Stateful lottery simulation and divergence inventory
+
+`lottery_sim` (#1972) calls the actual
+`LotterySimulation::new_production` / `apply_production_block` entry and the
+node's reward-cap, pool-accounting and seeded-draw functions separately, with
+an explicit 800-permille fee split and default draw configuration. Its JSON
+result has `node` and `simulator` arrays (each step's cap, accounting, draw,
+paid amount and carryover), plus `simulator_state: {ok, failed_checks}`.
+Lean's `Drt.lotterySim` composes the existing model functions and advances
+its **own arithmetic carryover**. It puts that **one** result in both expected
+array slots; those slots are not independent Lean implementations. The expected
+state slot is `{ok: true, failed_checks: []}`. A state-only failure therefore
+fails the same JSON equality as an arithmetic or draw mismatch, even when the
+node and simulator's returned projections agree.
+
+The Rust reference inventory advances from node results, never from simulator
+outputs. It independently resolves later references to prior awards, preserves
+original records and predicts output inventory, owner credits and carryover at
+every step. It observes the actual simulator's public outputs, UTXOs, owners,
+metrics, current block and awards. Fresh synthetic IDs, original-output
+immutability and owner/counter bookkeeping are **Rust state-application
+invariants**; Lean does not reconstruct owner inventory or prove cryptographic
+outpoint identity. Private next-ID/last-height behavior is exercised through
+successive transitions and the production module's rollback tests, without
+exposing another production API.
+
+The valid comparison domain is 1–4 strictly increasing blocks, at most 10,000
+initial outputs and 10,000 candidates per snapshot, decimal-string u64 fields
+and u128 carryover, and exact-width hexadecimal IDs (36 bytes) and V2 seeds
+(32 bytes). Constructive generation covers representable owner, allocator and
+metric state, including boundary values and sparse maximum-sized fixtures;
+shrinking stays within that domain. These bounds and guards are simulator/input
+representation restrictions, not consensus admission rules. Rejected identities,
+mappings, counters and malformed wire inputs have separate rejection/atomicity
+tests and are not silently filtered out of a purported full-domain success run.
+Each sequence gets one composite class (`kind/size/state`) so its histogram
+counts sequences once. The ordinary runner replays committed fixtures first,
+including the restored state-only mutation input, and shrinks any new mismatch.
+
+The externally supplied assumptions are candidate discovery, window/order and
+spent-record policy; immutable initial registration and owner mapping;
+already-collected fees and upstream fee-floor/mode resolution; emission share
+and block-reward scheduling; and already-derived V2 seeds. Lean receives resolved
+candidate snapshots, including node-derived prior awards, rather than discovering
+them. Wider DRT implements SHA-256 in Lean with startup FIPS vectors and accepts
+RandomX outputs from Rust where applicable. This leg starts **after V2 seed
+derivation**: it does not test that derivation, candidate discovery, accepted-chain
+reachability, cryptographic ownership or economic validity. Proven model
+statements retain their existing hypotheses; finite correspondence and Rust
+state checks do not strengthen those theorems.
+
+[`sim-divergences.json`](../formal-drt/sim-divergences.json) documents the separate
+production, research and external-assumption surfaces. It enumerates legacy
+ticket/distribution/selection families, floating arithmetic and application,
+fee/time/unit conventions, every sweep policy and the faithful analysis's
+candidate remedies and window Monte Carlo. The four stable execution IDs are
+`sweep.selection`, `sweep.sybil_brake`, `sweep.reward_cap` and
+`sweep.reward_cap.faithful` (the last is `lottery-reward-cap-sweep --faithful`).
+The flag selects analysis, not the production entry. Shared `FeeModelMode`
+labels remain `consensus` and `consensus+relay`. Existing node/simulator constant
+parity and faithful mirror goldens remain separate checks; constant agreement
+does not establish full-state or economic equivalence.
+
+The strict validator lives only in `legs_sim.rs` tests. Its required identities,
+source references and enum members are independent of the JSON; it rejects
+unknown/malformed/duplicate/missing declarations and empty explanations.
+There is no exemption field or production mismatch waiver. Runtime registration,
+comparison, generation, shrinking and replay do not read this document. The
+existing actual-state corruption test also checks that an extended valid research
+declaration cannot hide a production mismatch. Stable IDs are the handoff to
+#1970's later CLI-label/table/conclusion audit. This inventory does not change
+the #1682/#1761 profitability refutation or complete parent #1969/#1709.
+
+**Historical prerequisite evidence (not a run of #1973).** The following records
+bind results to their tested sources; subsequent inventory changes need their own
+final-head CI report, including the restored witness replay.
+
+- Final #1974 head `d949406d0ac3b00d806bf3b0afbc5023a25be525`, actual CI checkout
+  `058dfd7c27ebb7e9d5161c839a6332ddf88ff792`, tree
+  `bbb7c4504d20035aa10d1b54dee4100ae53cf0ff` (also merged main
+  `a0e0b70f7360ef279f79e84c001d29b9cbd6c648`):
+  [run 42360160073 / job 128366639221](https://github.com/botho-project/botho/actions/runs/42360160073/job/128366639221),
+  [`formal-drt-report` artifact 13569074425](https://github.com/botho-project/botho/actions/runs/42360160073/artifacts/13569074425).
+  Seed 1707: 25 legs × 10,000 generated cases, 166 total replays, zero mismatches;
+  `lottery_sim` has 25 replays. Report SHA-256:
+  `c9d63e1aad427ac90e3be589e69798bba193c6ad98fbaed30164702c6666df19`.
+- [Control run 42359239325 / job 128363877879](https://github.com/botho-project/botho/actions/runs/42359239325/job/128363877879),
+  attempt 1, [`lottery-sim-mutation-control` artifact 13568309455](https://github.com/botho-project/botho/actions/runs/42359239325/artifacts/13568309455):
+  source `8d053866e8831ad1db1684e2b2f2d3db00255955`, tree
+  `f647c445ee4972197bf2f15d51e70c8b69d9b7b4`. The patch changes the actual simulator's
+  `metrics.total_distributed` commit to `total_distributed.saturating_add(1)`.
+  Generation (32 cases) detected and shrank one state-only witness
+  (`0/total_distributed`, exit 1); saved replay (`--cases 0`, one replay) exited 1.
+  Exact-tree restoration/rebuild made that replay pass (exit 0); 10,000 restored
+  cases at seed 1707 plus one replay also passed. Draw/accounting projections
+  remained equal during the failure.
+- The control artifact retains `actual-simulator-mutation.patch`, `commands.json`,
+  `identity.json`, reports/logs and the generated fixture. CI-local mutated commit
+  `3f531d13a0d33e552305a1ed49df65b32615eb01` has tree
+  `7b26de2382923cab615f4f0d9477c1debc1521b8`; restored commit
+  `86081e715b231646e4a17ae8bbf3d87026236eb1` returns to the control tree above.
+  SHA-256 digests: model
+  `1279ccb239f25c08f44df2ba2d2e338b665365bc21c5d4fc29dc916081ed1635`;
+  clean / mutated / restored runner respectively
+  `34924ba09bba3a9ff63002f104bce5dcb30ca861ee0022660c913faa34c8e97e`,
+  `3c9c51abab2c6c1d4d8ac673686e60dc47273efe120fe3e9e4da9da4003adb04`,
+  `3c8372a9100775aaa19da1faf077f46040331d90451c9a2ed779cd5bc7f0123c`.
+  Original artifact ZIP SHA-256:
+  `e389841af219bc28be8f4792a69ad3241b8da2082dba8da93f8f9b3efb8142ad`.
+- Saved witness SHA-256:
+  `d4a2c1e3001e3a37c31622c56080061b7cbeefa699faec81f41d56fdfd59e9ce`;
+  its input is among the 25 committed `lottery_sim.jsonl` regressions. It is an
+  artificial mutation detector, not an observed production bug. The earlier
+  [control attempt 42358155396](https://github.com/botho-project/botho/actions/runs/42358155396)
+  timed out after 270 seconds in repeated generation/shrinking, restored/rebuilt
+  in cleanup and **did not reach replay**. That attempt is not a successful
+  mutation sequence; generic duplicate-shrink work remains #1975.
+
+Retained operator copies are in `.loom/diagnostics/issue-1972-evidence/` and
+`.loom/diagnostics/issue-1974-root/`, outside worktree cleanup; they are not new
+tracked deliverables or substitutes for source-bound CI evidence.
 
 ### Running it (macOS or Linux)
 
