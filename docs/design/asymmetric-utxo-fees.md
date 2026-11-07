@@ -6,8 +6,10 @@
 passed attack resistance but FAILED the Gini-reduction criterion, and per-UTXO
 ticket floors were later shown to subsidize whoever splits hardest. The
 cluster-weighted selection that replaced it was itself superseded: the shipped
-lottery draws **uniformly** per eligible output (Path C, ADR 0009), splitting
-is profitable under it (#1761, #1682), and redistribution is not demonstrated
+lottery draws **uniformly** per eligible output (Path C, ADR 0009). The
+historical #1761 expected-value/candidate-window study found profitable
+splitting under its stationary-model premises (#1682); current quantitative
+production profitability needs production-mode re-run ([evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation)). Redistribution is not demonstrated
 at production parameters (#1790; redesign under study, #1801) — see
 [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) and
 `cluster-tax/src/lottery.rs`. Kept for the analysis framework and attack

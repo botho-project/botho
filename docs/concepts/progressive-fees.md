@@ -2,7 +2,7 @@
 
 Botho implements a novel **provenance-based progressive fee system** that prices coins by the wealth of their origin cluster, without enabling Sybil attacks on the fee rate or compromising privacy.
 
-> **Status:** the fee schedule is progressive as specified, but the redistribution mechanism it feeds is **not demonstrated** to measurably reduce inequality at production parameters (mechanism ΔGini −0.028 to +0.003 against a 0.05 bar; even at 1000x the transaction rate no case clears the bar at both 10 and 20 years; #1790, #1808). Lottery ticket-splitting is currently profitable (#1761, #1682), and a redesign is under study (#1801). See [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
+> **Status:** the fee schedule is progressive as specified, but the redistribution mechanism it feeds is **not demonstrated** to measurably reduce inequality at production parameters (mechanism ΔGini −0.028 to +0.003 against a 0.05 bar; even at 1000x the transaction rate no case clears the bar at both 10 and 20 years; #1790, #1808). The historical #1761 stationary expected-value study found profitable lottery ticket-splitting (#1682); current quantitative production profitability needs production-mode re-run, and a redesign is under study (#1801). See [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
 
 ![System Overview](../../cluster-tax/docs/figures/system_overview.png)
 
@@ -105,7 +105,7 @@ quadratic output penalties (up to 100x per transaction)
 Result: Fee attack defeated (splitting costs extra, saves nothing)
 ```
 
-Splitting does not lower the fee rate, but it does buy lottery tickets: each eligible output is one ticket in a uniform draw. At the implemented fee floor that is profitable (#1761, #1682); see [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
+Splitting does not lower the fee rate, but it does buy lottery tickets: each eligible output is one ticket in a uniform draw. The historical stationary expected-value/candidate-window study found that profitable under its fee/cap assumptions (#1761, #1682), not through current stateful production execution; see the [evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation) and [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
 
 ### Attack 2: Sybil Shuffle
 ```

@@ -121,8 +121,8 @@ who pays and who wins; at production parameters they do not measurably do so
     factor (Section~\ref{sec:monetary})
   \item A uniform per-output draw depends on UTXO count, which a holder
     controls. Its split resistance rests on the Path~C reward cap, whose
-    premises the implementation does not meet, so splitting is profitable
-    (\#1761, pending \#1682); coinbase and payout outputs are also free
+    premises the implementation does not meet. The historical stationary
+    model found profitable splitting (\#1761, pending \#1682); coinbase and payout outputs are also free
     tickets (pending \#1690)
   \item Any progressivity therefore has to come from the intake side
     (demurrage, and the factor-scaled fee where it binds), not from the
@@ -355,8 +355,8 @@ The table is therefore an earlier design's result, not a measurement of the
 implemented mechanism. The row closest to the implemented draw is ``Uniform per UTXO
 + emission'', which inverts under gaming; the Path~C reward cap was meant to
 prevent that inversion, and as built it does not bind (\#1682). The
-code-faithful re-runs (\#1696 for M2 at production scale, \#1761 for splitting
-under the implemented cap) are reported in
+M2 production-scale re-run (\#1696) and separate historical stationary
+splitting study (\#1761, a model of the fee/cap rules) are reported in
 Section~\ref{sec:redistribution-status}.
 
 \begin{table}[h]
@@ -467,18 +467,23 @@ failure mechanisms are structural:
 Under egalitarian mining the mechanism is mildly regressive on average. The
 record is \path{docs/research/m2-production-verdicts.md}.
 
-\textbf{Lottery splitting is profitable.} A faithful-to-code re-run of the
-splitting experiment (PR \#1761, \texttt{lottery-reward-cap-sweep
+\textbf{Historical splitting-model result.} The stationary expected-value
+and candidate-window study (PR \#1761, \texttt{lottery-reward-cap-sweep
 -{}-faithful}) finds splitting profitable at all 192 grid points: an extra
 output costs far less than the ticket share it buys, and the Path~C reward
-cap does not bind as built (issue \#1682). The record is
-\path{docs/research/ct-compatible-lottery-selection.md}, \S9.1.1.
+cap does not bind in the studied regimes (issue \#1682). This did not execute
+stateful production payouts; current quantitative production profitability
+needs a production-mode re-run. The model/evidence reconciliation is in
+\path{docs/research/ct-compatible-lottery-selection.md}, including \S9.1.1. Uniform
+selection avoids a hidden-value sort; that structural property does not prove
+economic neutrality.
 
 \textbf{What happens next.} A sim-only redesign study (issue \#1801) targets
 the failure mechanisms above. Candidate directions include tickets weighted
 by value, age or cluster factor instead of output count, and any candidate
-must pass the production-fidelity harness of \#1790 and the splitting grid of
-\#1761 before a constant or consensus rule moves. Raising the existing levers
+must pass the production-fidelity harness of \#1790 and the historical
+splitting grid of \#1761 before a constant or consensus rule moves; neither
+substitutes for sufficient production-mode economic evidence. Raising the existing levers
 (demurrage rate, lottery share, per-transaction floor) was considered and
 rejected, because the failure is structural. Until the study concludes, the
 redistribution mechanism should be read as specified and implemented, but not

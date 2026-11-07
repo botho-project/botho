@@ -7,10 +7,11 @@ current specification. The lottery as built (protocol 7.0.0) draws 4 winners
 **uniformly** from outputs aged 720-10,000 blocks and worth at least 1e6 pico,
 seeded from the parent block's PoW fields (`BOTHO_LOTTERY_SEED_V2`), with a
 payout cap `min(rho * 0.25 BTH, block_reward)` and a cumulative carry-forward
-pool fed by fees and an emission share. Fees are not distributed immediately,
-and the per-output fee does not make splitting prohibitive at today's
-constants (#1682, #1688): a faithful-to-code re-run finds splitting
-profitable (#1761). Redistribution is not demonstrated at production
+pool fed by fees and an emission share. Fees are not distributed immediately.
+The historical fee/cap audit (#1682, #1688) motivated an expected-value/candidate-window
+study found profitable splitting (#1761), not a measured current production
+profit rate. That quantitative conclusion needs production-mode re-run; see
+the [evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation). Redistribution is not demonstrated at production
 parameters (#1790); a redesign is under study (#1801).
 
 Current specification:

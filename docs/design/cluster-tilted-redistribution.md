@@ -14,8 +14,11 @@ demonstrated at production parameters**:
   ΔGini at −0.028 to +0.003 (3-seed means, 10 and 20 years) against the 0.05
   bar, and even at 1000x the transaction rate no case clears the bar at both
   10 and 20 years.
-- Lottery ticket-splitting is profitable at all 192 points of the
-  faithful-to-code grid (#1761, issue #1682).
+- The historical expected-value/candidate-window study found lottery
+  ticket-splitting profitable at all 192 grid points (#1761, issue #1682).
+  This is a stationary model, not stateful production economics; current
+  quantitative conclusions need production-mode re-run. See the
+  [evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation).
 - A sim-only redesign study is under way (#1801), targeting tickets
   proportional to hashpower and output count, frequent spenders losing their
   tickets (a sim artifact: the node keeps ring-spent outputs in the draw,
@@ -38,8 +41,8 @@ in `cluster-tax/src/lottery.rs` for simulation only; the consensus default is
 the consensus fee floor (`consensus_fee_floor`,
 `botho/src/ledger/store/validation.rs`; zero in epoch 0, #1685). The
 simulated Gini results below are for the tilted payout and do not measure the
-implemented draw; the code-faithful re-runs (#1696, #1761) are summarised
-above.
+implemented draw; the separate M2 re-run (#1696) and historical stationary splitting study
+(#1761) are summarised above.
 
 Current specification: [ADR 0009](../decisions/0009-confidential-amounts-economics.md),
 [Path C research memo](../research/ct-compatible-lottery-selection.md),
@@ -407,5 +410,6 @@ state), which bounds seed-grinding gain below the PoW cost of a regrind.
   (#605).
 - 2026-11-01: Restated the redistribution claim per the operator ruling on
   #1727 / #1682 (#1800): not demonstrated at production parameters, splitting
-  profitable, redesign under study (#1801). Title changed from "Validated
+  profitable in the historical #1761 stationary model, redesign under study
+  (#1801). Title changed from "Validated
   Design" to "Design History".
