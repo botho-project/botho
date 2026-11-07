@@ -1,4 +1,13 @@
-# Reward-Cap Sweep — Path C Ratification Gate (issue #902 §9)
+# Reward Cap — historical rate-based expected-value research
+
+Research-Surface: sweep.reward_cap
+Research-Command: lottery-reward-cap-sweep
+Research-Classification: research
+Research-Method: expected-value rate-based cap and annual/lump accounting; research policies
+Research-RNG: none; SEED 0xB07A_0902_3 is documentary, not consumed
+Research-Fees: claim1 prices hypothetical LOTTERY_BASE_FEE_PICO per output; throughput uses annual/lump demurrage; no production 800-permille track
+Research-Assumptions: rate-based cap and annual/lump demurrage; hypothetical per-output ticket charge is not an enforced consensus floor
+Research-Policies: research ExcessPolicy/GiniPolicy variants listed in formal-drt/sim-divergences.json; historical neutrality is not current production evidence
 
 ### Setup
 

@@ -28,11 +28,14 @@ on:
       - 'web/packages/desktop/**'
       - '.github/workflows/workspace-build.yml'
       - 'scripts/research/ct-economics/**'
+      - 'scripts/research/check_research_tables.py'
+      - 'formal-drt/sim-divergences.json'
       - 'web/packages/wasm-signer/test/fixtures/decoy-age-band.json'
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   workspace-build:
@@ -176,7 +179,26 @@ jobs:
       # intentional divergences stay as documented.
       - name: Run sim<->code constant parity guard
         timeout-minutes: 10
-        run: cargo test --locked -p botho --test sim_code_parity
+        run: |
+          python3 - <<'PYBUILD'
+          import sys, os
+          from pathlib import Path
+          sys.path.insert(0, "scripts/research")
+          from check_research_tables import capture_cargo_build, capture_parity
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "lottery-production"
+          receipt = evidence / "parity-build.json"
+          capture_cargo_build(["cargo", "test", "--locked", "-p", "botho", "--test", "sim_code_parity",
+              "--no-run", "--message-format=json-render-diagnostics"], "sim_code_parity", receipt)
+          capture_parity(receipt, evidence)
+          PYBUILD
+
+      - name: Retain actual production lottery parity evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lottery-production-evidence
+          path: ${{ runner.temp }}/lottery-production/
+          if-no-files-found: warn
 
       # The compact-block suite caught serialized-size drift (#1187/#1212), but
       # --no-run never exercised its assertions. It needs no external services

@@ -1,4 +1,13 @@
-# Structural Sybil-Brake Sweep (issue #902 §7)
+# Sybil Brake — historical expected-value research
+
+Research-Surface: sweep.sybil_brake
+Research-Command: lottery-sybil-brake-sweep
+Research-Classification: research
+Research-Method: expected-value stationary capture/window and annual redistribution; research policies
+Research-RNG: none; SEED 0xB07A_0902_2 is documentary, not consumed
+Research-Fees: capture prices recurring hypothetical LOTTERY_BASE_FEE_PICO ticket refreshes; honest track redistributes annual demurrage; no production 800-permille track
+Research-Assumptions: analytic organic stream/window and annual demurrage; hypothetical per-output ticket charge is not an enforced consensus floor
+Research-Policies: research HonestPolicy variants listed in formal-drt/sim-divergences.json; no production transition
 
 ### Setup
 

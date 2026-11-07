@@ -1,4 +1,13 @@
-# Reward-Cap Sweep — faithful to the implemented rules (issue #1682)
+# Reward Cap — CurrentCode approximation and candidate remedies
+
+Research-Surface: sweep.reward_cap.faithful
+Research-Command: lottery-reward-cap-sweep --faithful
+Research-Classification: research
+Research-Method: expected-value stationary economics plus candidate-window Monte Carlo; no production payout transitions
+Research-RNG: SplitMix64 synthetic transaction-key ordering and offsets; SEED=0x1682_FA17_0902; mixed seed=SEED ^ ((rho_o as u64) << 32) ^ (k as u64); 400 offsets for each of four settings
+Research-Fees: whale scenarios sweep ConsensusOnly (consensus) and ConsensusPlusRelayMin (consensus+relay); organic_tx_fee always ConsensusPlusRelayMin; 800-permille fee pool
+Research-Assumptions: default Uniform/four winners/age 720/minimum 1000000 pico/circulation 10000 blocks; truncated 10000-candidate window; free-ticket fixed point; backlog/epoch and ProposerSlot/BlockSize capacity; synthetic ordering is not ledger discovery
+Research-Policies: Rules::CurrentCode is an approximation; all other Rules in formal-drt/sim-divergences.json are unimplemented candidate remedies; #1682/#1761 profitability refutation unchanged
 
 ### Setup (faithful to protocol 7.0.0)
 

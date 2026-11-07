@@ -1,4 +1,13 @@
-# CT-Compatible Lottery-Selection Sweep (issue #902)
+# Lottery Selection — historical expected-value research
+
+Research-Surface: sweep.selection
+Research-Command: lottery-selection-sweep
+Research-Classification: research
+Research-Method: expected-value annual population redistribution; research policies
+Research-RNG: none; SEED 0xB07A_0902 is documentary, not consumed
+Research-Fees: public-fee proxy = hypothetical LOTTERY_BASE_FEE_PICO plus demurrage; annual redistribution of demurrage; no production 800-permille track
+Research-Assumptions: analytic population/annual demurrage and weight model; hypothetical per-output ticket charge is not an enforced consensus floor
+Research-Policies: research Rule variants listed in formal-drt/sim-divergences.json; no production transition
 
 ### Redistribution population (factors from the real `ClusterFactorCurve`)
 

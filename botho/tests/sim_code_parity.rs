@@ -542,6 +542,142 @@ mod production_lottery {
         compare(&mut sim, &block);
     }
 
+    // Deterministic evidence uses decimal amounts and explicit supplied seeds;
+    // execution/source identities belong in the CI receipt, not this payload.
+    fn output_evidence(o: &ProductionOutput) -> serde_json::Value {
+        serde_json::json!({"id": hex::encode(o.id), "simulation_id": o.simulation_id,
+            "owner_id": o.owner_id, "value_pico": o.value.to_string(),
+            "cluster_factor": o.cluster_factor, "creation_block": o.creation_block})
+    }
+
+    fn block_evidence(b: &ProductionBlock) -> serde_json::Value {
+        serde_json::json!({"height": b.height, "total_fees_pico": b.total_fees.to_string(),
+            "emission_share_pico": b.emission_share.to_string(),
+            "block_reward_pico": b.block_reward.to_string(), "supplied_v2_seed": hex::encode(b.v2_seed),
+            "ordered_candidates": b.candidates.iter().map(output_evidence).collect::<Vec<_>>()})
+    }
+
+    fn result_evidence(r: &ProductionBlockResult) -> serde_json::Value {
+        serde_json::json!({"block_height": r.block_height, "total_fees_pico": r.total_fees.to_string(),
+            "fee_pool_pico": r.fee_pool.to_string(), "burn_pico": r.burn_amount.to_string(),
+            "emission_share_pico": r.emission_share.to_string(), "available_pico": r.available.to_string(),
+            "payout_cap_pico": r.payout_cap.to_string(), "payout_pico": r.payout.to_string(),
+            "pool_amount_pico": r.pool_amount.to_string(), "result_seed": hex::encode(r.seed),
+            "paid_pico": r.paid.to_string(), "carryover_pico": r.carryover.to_string(),
+            "awards": r.awards.iter().map(|a| serde_json::json!({
+                "winner_id": hex::encode(a.winner_id), "output": output_evidence(&a.output),
+                "quintile": a.quintile})).collect::<Vec<_>>()})
+    }
+
+    #[test]
+    fn actual_production_paired_two_block_evidence() {
+        let config = canonical();
+        assert_eq!(config.pool_fraction_permille, 800);
+        assert_eq!(config.draw_config.selection_mode, SelectionMode::Uniform);
+        assert_eq!(config.draw_config.winners_per_draw, 4);
+        assert_eq!(config.draw_config.min_utxo_age, 720);
+        assert_eq!(config.draw_config.min_utxo_value, 1_000_000);
+        assert_eq!(config.draw_config.circulation_window, 10_000);
+        let mut traces = vec![];
+        for height in [1439, 1440] {
+            let (mut sim, mut first_block) = fixture(4, 10_000_000);
+            first_block.total_fees = 1_250_000;
+            first_block.emission_share = 2_000_000;
+            first_block.block_reward = 4_000_000;
+            let initial = sim.production_outputs().unwrap().clone();
+            let first = compare(&mut sim, &first_block);
+            // Independent numeric oracle, in addition to canonical node parity.
+            assert_eq!(
+                (first.fee_pool, first.burn_amount, first.available),
+                (1_000_000, 250_000, 13_000_000)
+            );
+            assert_eq!(
+                (first.payout_cap, first.payout, first.paid, first.carryover),
+                (4_000_000, 4_000_000, 4_000_000, 9_000_000)
+            );
+            assert_eq!(first.awards.len(), 4);
+            assert_eq!(first.seed, [73; 32]);
+            assert!(first
+                .awards
+                .iter()
+                .all(|a| a.output.value == 1_000_000 && a.output.creation_block == 720));
+            let after_first = sim.production_outputs().unwrap().clone();
+            assert_eq!(after_first.len(), 8);
+            let second_block = ProductionBlock {
+                height,
+                total_fees: 2_500_000,
+                emission_share: 3_000_000,
+                block_reward: 4_000_000,
+                v2_seed: [74; 32],
+                candidates: first.awards.iter().map(|a| a.output.clone()).collect(),
+            };
+            let second = compare(&mut sim, &second_block);
+            assert_eq!(
+                (second.fee_pool, second.burn_amount, second.available),
+                (2_000_000, 500_000, 14_000_000)
+            );
+            let mature = height == 1440;
+            let expected_paid = if mature { 4_000_000 } else { 0 };
+            assert_eq!(
+                (second.payout_cap, second.payout, second.paid),
+                (expected_paid, expected_paid, expected_paid)
+            );
+            assert_eq!(
+                second.carryover,
+                if mature { 10_000_000 } else { 14_000_000 }
+            );
+            assert_eq!(second.awards.len(), if mature { 4 } else { 0 });
+            assert_eq!(second.seed, if mature { [74; 32] } else { [0; 32] });
+            assert_eq!(second.pool_amount, expected_paid);
+            for award in &second.awards {
+                assert_eq!(award.output.creation_block, 1440);
+                assert_eq!(award.output.value, 1_000_000);
+                assert!(!after_first.contains_key(&award.output.id));
+            }
+            for (id, output) in initial.iter().chain(after_first.iter()) {
+                assert_eq!(&sim.production_outputs().unwrap()[id], output);
+            }
+            assert_eq!(
+                sim.production_outputs().unwrap().len(),
+                if mature { 12 } else { 8 }
+            );
+            assert_eq!(sim.metrics.total_fees_collected, 3_750_000);
+            assert_eq!(sim.total_burned, 750_000);
+            assert_eq!(
+                sim.metrics.total_distributed,
+                if mature { 8_000_000 } else { 4_000_000 }
+            );
+            assert_eq!(second.available, second.paid as u128 + second.carryover);
+            let owners: Vec<_> = [0, 1].into_iter().map(|id| {
+                assert_eq!(sim.owner_value(id), if mature { 6_000_000 } else { 4_000_000 });
+                assert_eq!(sim.owners[&id].total_winnings, if mature { 4_000_000 } else { 2_000_000 });
+                assert_eq!(sim.owners[&id].utxo_ids.len(), if mature { 6 } else { 4 });
+                serde_json::json!({"owner_id": id, "balance_pico": sim.owner_value(id).to_string(),
+                    "winnings_pico": sim.owners[&id].total_winnings.to_string(),
+                    "utxo_ids": sim.owners[&id].utxo_ids})
+            }).collect();
+            traces.push(serde_json::json!({"second_height": height,
+                "initial_carryover_pico": "10000000", "initial_outputs": initial.values().map(output_evidence).collect::<Vec<_>>(),
+                "blocks": [block_evidence(&first_block), block_evidence(&second_block)],
+                "results": [result_evidence(&first), result_evidence(&second)],
+                "final_outputs": sim.production_outputs().unwrap().values().map(output_evidence).collect::<Vec<_>>(),
+                "owners": owners, "fees_collected_pico": sim.metrics.total_fees_collected.to_string(),
+                "burned_pico": sim.total_burned.to_string(), "paid_pico": sim.metrics.total_distributed.to_string(),
+                "current_block": sim.current_block, "drawings_held": sim.metrics.drawings_held,
+                "winnings_by_quintile": sim.metrics.winnings_by_quintile}));
+        }
+        assert_eq!(traces[0]["results"][0], traces[1]["results"][0]);
+        let payload = serde_json::json!({"schema": 1, "claim": "synthetic actual-entry behavior and node parity only",
+            "assumptions": "external ordered synthetic candidates/owners, collected fees, emission/reward scheduling and already-derived V2 seeds; not profitability, equilibrium, candidate discovery or seed derivation",
+            "rng": "node/simulator seeded draw; supplied seed is separate from empty-result zero sentinel",
+            "config": {"pool_fraction_permille": 800, "selection_mode": "Uniform", "winners_per_draw": 4,
+                "min_utxo_age": 720, "min_utxo_value_pico": "1000000", "circulation_window": 10000},
+            "traces": traces});
+        if let Some(path) = std::env::var_os("BOTHO_LOTTERY_PARITY_PAYLOAD") {
+            std::fs::write(path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+        }
+    }
+
     #[test]
     fn actual_simulator_reuses_carryover_and_fresh_outputs() {
         let (mut sim, mut block) = fixture(4, 10_000_000);

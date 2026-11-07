@@ -725,21 +725,10 @@ mod cli {
         /// against both failure modes. Does NOT wire anything into consensus.
         SettlementHorizonSweep,
 
-        /// CT-compatible lottery-selection sweep (design-research gate for the
-        /// lottery sub-problem of #902): scores five winner-selection rules
-        /// head-to-head — Uniform, the incumbent ClusterWeighted
-        /// (value×inverse- factor; NOT CT-compatible, included as the
-        /// redistribution yardstick), and three value-free CT-clean
-        /// candidates (FeeInverse, CirculationGated, and their Hybrid).
-        /// Reuses the real ClusterFactorCurve, demurrage_charge,
-        /// LotteryCandidate/SelectionMode weights and the shared
-        /// calculate_gini. Reports each rule's Δgini vs a burn baseline
-        /// (redistribution recovery), its weight-gain under a whale
-        /// splitting attack (Sybil resistance), and
-        /// its CT-compatibility + incremental leakage. Determines whether a
-        /// value-free rule recovers ClusterWeighted's redistribution without
-        /// the ZK weighted-sampling sort. Does NOT wire anything into
-        /// consensus.
+        /// Historical expected-value selection research: annual demurrage
+        /// redistribution and hypothetical ticket/public-fee weights. No RNG
+        /// draws or production transition; imported constants do not establish
+        /// current production neutrality, economics or policy ratification.
         LotterySelectionSweep,
 
         /// CT provenance-factor calibration sweep (design-research gate for
@@ -758,44 +747,21 @@ mod cli {
         /// NOT wire anything into consensus.
         ProvenanceFactorSweep,
 
-        /// Structural Sybil-brake sweep (realized-capture follow-up to #902):
-        /// the sibling `lottery-selection-sweep` proved no value-free WEIGHT
-        /// can be split-invariant, but measured Sybil capture as
-        /// ticket-share in a fixed 100-holder pool (an overstatement).
-        /// This sweep tests whether three value-free / CT-clean
-        /// STRUCTURAL brakes — a last-N-blocks candidate window, a
-        /// fee-denominated eligibility floor, and a per-block payout
-        /// cap — keep the *realized* whale capture bounded,
-        /// against a real organic candidate stream (denominator scales with the
-        /// window) and a rolling window (the whale must re-split forever,
-        /// paying base fees). Reuses the real demurrage_charge,
-        /// ClusterFactorCurve and calculate_gini. Reports realized
-        /// capture, attacker cost/captured ratio, and honest
-        /// redistribution Δgini. Determines whether the structural
-        /// brakes make a value-free rule (Path A/C) viable or leave the
-        /// ZK sort (Path B) required. Does NOT wire anything into consensus.
+        /// Historical expected-value capture/window and annual redistribution
+        /// research. Recurring hypothetical ticket charges are not the enforced
+        /// consensus fee floor. No production payout simulation or
+        /// ratification.
         LotterySybilBrakeSweep,
 
-        /// Reward-cap sweep (Path C ratification gate for #902): validates the
-        /// maintainer's chosen value-free lottery — a uniform draw over the
-        /// last-N circulation window with the reward-cap invariant
-        /// `R = min(actual_fee_pool, ρ·base_fee)`, where ρ counts ALL outputs
-        /// in the window including the whale's own splits. Tests two claims:
-        /// (1) the cap makes splitting net-zero (whale winnings exactly equal
-        /// its base-fee cost at every split factor k) — Sybil-neutral by
-        /// construction; and (2) whether the cap throttles redistribution into
-        /// irrelevance — measures the fraction of demurrage revenue that flows
-        /// through the capped lottery under burn-the-excess vs carry-forward,
-        /// plus the resulting Δgini vs the uncapped windowed lottery and the
-        /// value-weighted incumbent. Reuses the real demurrage_charge,
-        /// ClusterFactorCurve and calculate_gini. Does NOT wire anything into
-        /// consensus.
+        /// Historical rate-based expected-value cap research with annual/lump
+        /// demurrage accounting. Its neutrality result is not evidence about
+        /// current production rules; --faithful selects a separate
+        /// approximation.
         LotteryRewardCapSweep {
-            /// Re-run the whale-splitting experiment against the rules the
-            /// node implements (#1682): window ρ truncated at 10k, the
-            /// block-reward clamp, the real consensus fee floor (1..=16
-            /// outputs, with/without MIN_TX_FEE), free tickets, epochs,
-            /// backlog, plus a remedy decision table. Analysis only.
+            /// Stationary CurrentCode approximation and unimplemented remedies,
+            /// plus synthetic candidate-window Monte Carlo (not payout draws).
+            /// Whale fees sweep both shared modes; organic fees include relay
+            /// minimum. Preserves the #1682/#1761 profitability refutation.
             #[arg(long)]
             faithful: bool,
         },
@@ -5606,15 +5572,24 @@ mod cli {
     ///
     /// Prints the redistribution, Sybil-resistance and CT-compatibility tables
     /// that back `docs/research/ct-compatible-lottery-selection.md`. Does NOT
-    /// wire anything into consensus — the selection-rule decision is ratified
-    /// by the maintainer and carried into the CT spec (anvil:spec
-    /// authoring).
+    /// wire anything into consensus or establish production economic validity.
     fn run_lottery_selection_sweep_cli() {
         use bth_cluster_tax::simulation::lottery_selection_sweep::{
             run_lottery_selection_sweep, to_markdown,
         };
         let report = run_lottery_selection_sweep();
-        println!("# CT-Compatible Lottery-Selection Sweep (issue #902)\n");
+        println!("# Lottery Selection — historical expected-value research\n");
+        println!("Research-Surface: sweep.selection");
+        println!("Research-Command: lottery-selection-sweep");
+        println!("Research-Classification: research");
+        println!(
+            "Research-Method: expected-value annual population redistribution; research policies"
+        );
+        println!("Research-RNG: none; SEED 0xB07A_0902 is documentary, not consumed");
+        println!("Research-Fees: public-fee proxy = hypothetical LOTTERY_BASE_FEE_PICO plus demurrage; annual redistribution of demurrage; no production 800-permille track");
+        println!("Research-Assumptions: analytic population/annual demurrage and weight model; hypothetical per-output ticket charge is not an enforced consensus floor");
+        println!("Research-Policies: research Rule variants listed in formal-drt/sim-divergences.json; no production transition");
+        println!();
         println!("{}", to_markdown(&report));
     }
 
@@ -5651,11 +5626,20 @@ mod cli {
             run_sybil_brake_sweep, to_markdown,
         };
         let report = run_sybil_brake_sweep();
-        println!("# Structural Sybil-Brake Sweep (issue #902 §7)\n");
+        println!("# Sybil Brake — historical expected-value research\n");
+        println!("Research-Surface: sweep.sybil_brake");
+        println!("Research-Command: lottery-sybil-brake-sweep");
+        println!("Research-Classification: research");
+        println!("Research-Method: expected-value stationary capture/window and annual redistribution; research policies");
+        println!("Research-RNG: none; SEED 0xB07A_0902_2 is documentary, not consumed");
+        println!("Research-Fees: capture prices recurring hypothetical LOTTERY_BASE_FEE_PICO ticket refreshes; honest track redistributes annual demurrage; no production 800-permille track");
+        println!("Research-Assumptions: analytic organic stream/window and annual demurrage; hypothetical per-output ticket charge is not an enforced consensus floor");
+        println!("Research-Policies: research HonestPolicy variants listed in formal-drt/sim-divergences.json; no production transition");
+        println!();
         println!("{}", to_markdown(&report));
     }
 
-    /// Reward-cap sweep (Path C ratification gate for #902).
+    /// Historical rate-based reward-cap expected-value study (#902).
     ///
     /// Prints the net-zero (Claim 1) and throughput + Δgini (Claim 2) tables
     /// that back §9 of `docs/research/ct-compatible-lottery-selection.md`. Does
@@ -5665,7 +5649,16 @@ mod cli {
             run_reward_cap_sweep, to_markdown,
         };
         let report = run_reward_cap_sweep();
-        println!("# Reward-Cap Sweep — Path C Ratification Gate (issue #902 §9)\n");
+        println!("# Reward Cap — historical rate-based expected-value research\n");
+        println!("Research-Surface: sweep.reward_cap");
+        println!("Research-Command: lottery-reward-cap-sweep");
+        println!("Research-Classification: research");
+        println!("Research-Method: expected-value rate-based cap and annual/lump accounting; research policies");
+        println!("Research-RNG: none; SEED 0xB07A_0902_3 is documentary, not consumed");
+        println!("Research-Fees: claim1 prices hypothetical LOTTERY_BASE_FEE_PICO per output; throughput uses annual/lump demurrage; no production 800-permille track");
+        println!("Research-Assumptions: rate-based cap and annual/lump demurrage; hypothetical per-output ticket charge is not an enforced consensus floor");
+        println!("Research-Policies: research ExcessPolicy/GiniPolicy variants listed in formal-drt/sim-divergences.json; historical neutrality is not current production evidence");
+        println!();
         println!("{}", to_markdown(&report));
     }
 
@@ -5676,7 +5669,16 @@ mod cli {
             run_faithful_sweep, to_markdown,
         };
         let report = run_faithful_sweep();
-        println!("# Reward-Cap Sweep — faithful to the implemented rules (issue #1682)\n");
+        println!("# Reward Cap — CurrentCode approximation and candidate remedies\n");
+        println!("Research-Surface: sweep.reward_cap.faithful");
+        println!("Research-Command: lottery-reward-cap-sweep --faithful");
+        println!("Research-Classification: research");
+        println!("Research-Method: expected-value stationary economics plus candidate-window Monte Carlo; no production payout transitions");
+        println!("Research-RNG: SplitMix64 synthetic transaction-key ordering and offsets; SEED=0x1682_FA17_0902; mixed seed=SEED ^ ((rho_o as u64) << 32) ^ (k as u64); 400 offsets for each of four settings");
+        println!("Research-Fees: whale scenarios sweep ConsensusOnly (consensus) and ConsensusPlusRelayMin (consensus+relay); organic_tx_fee always ConsensusPlusRelayMin; 800-permille fee pool");
+        println!("Research-Assumptions: default Uniform/four winners/age 720/minimum 1000000 pico/circulation 10000 blocks; truncated 10000-candidate window; free-ticket fixed point; backlog/epoch and ProposerSlot/BlockSize capacity; synthetic ordering is not ledger discovery");
+        println!("Research-Policies: Rules::CurrentCode is an approximation; all other Rules in formal-drt/sim-divergences.json are unimplemented candidate remedies; #1682/#1761 profitability refutation unchanged");
+        println!();
         println!("{}", to_markdown(&report));
     }
 

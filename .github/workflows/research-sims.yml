@@ -17,6 +17,8 @@ on:
       - 'transaction/types/**'
       - 'docs/research/**'
       - 'scripts/research/check_research_tables.py'
+      - 'scripts/research/test_check_research_tables.py'
+      - 'formal-drt/sim-divergences.json'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain'
@@ -28,6 +30,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'true'
   CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'true'
 
@@ -51,7 +54,15 @@ jobs:
         timeout-minutes: 15
         run: |
           cargo test --locked --release -p bth-cluster-tax --lib --no-run
-          cargo build --locked --release -p bth-cluster-tax --features cli --bin cluster-tax-sim
+          python3 - <<'PYBUILD'
+          import sys, os
+          from pathlib import Path
+          sys.path.insert(0, "scripts/research")
+          from check_research_tables import capture_cargo_build
+          capture_cargo_build(["cargo", "build", "--locked", "--release", "-p", "bth-cluster-tax",
+              "--features", "cli", "--bin", "cluster-tax-sim", "--message-format=json-render-diagnostics"],
+              "cluster-tax-sim", Path(os.environ["RUNNER_TEMP"]) / "lottery-research/cli-build.json")
+          PYBUILD
 
       - name: Run cluster-tax lib tests
         timeout-minutes: 10
@@ -62,4 +73,26 @@ jobs:
       # against the report. The script lists the slow generators it skips.
       - name: Regenerate research tables and fail on drift
         timeout-minutes: 5
-        run: python3 scripts/research/check_research_tables.py --bin target/release/cluster-tax-sim
+        run: |
+          python3 -m unittest discover -s scripts/research -p 'test_check_research_tables.py' -v
+          python3 scripts/research/check_research_tables.py --bin target/release/cluster-tax-sim --update \
+            --receipt "$RUNNER_TEMP/lottery-research/update.json" \
+            --build-receipt "$RUNNER_TEMP/lottery-research/cli-build.json"
+          python3 scripts/research/check_research_tables.py --bin target/release/cluster-tax-sim \
+            --receipt "$RUNNER_TEMP/lottery-research/check.json" \
+            --build-receipt "$RUNNER_TEMP/lottery-research/cli-build.json"
+          # --update must never erase the original committed-golden drift gate.
+          git diff --exit-code -- docs/research/generated/
+
+      - name: Retain research build, outputs and receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lottery-research-evidence
+          path: |
+            ${{ runner.temp }}/lottery-research/
+            docs/research/generated/lottery-selection-sweep.txt
+            docs/research/generated/lottery-sybil-brake-sweep.txt
+            docs/research/generated/lottery-reward-cap-sweep.txt
+            docs/research/generated/lottery-reward-cap-sweep-faithful.txt
+          if-no-files-found: warn
