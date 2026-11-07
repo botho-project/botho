@@ -21,6 +21,7 @@ mod gen;
 mod legs;
 mod legs_difficulty;
 mod legs_monetary;
+mod legs_sim;
 mod legs_tags;
 mod legs_timestamps;
 mod model;
@@ -40,6 +41,10 @@ type LegFn = fn(&fixtures::Fixtures, &mut model::Model, &Options) -> Report;
 /// Every leg: `(name, runner)`. To add a leg, implement `legs::Leg` and list
 /// it here.
 const LEGS: &[(&str, LegFn)] = &[
+    (
+        legs_sim::LotterySim::NAME,
+        runner::run::<legs_sim::LotterySim>,
+    ),
     (
         legs_timestamps::Timestamps::NAME,
         runner::run::<legs_timestamps::Timestamps>,

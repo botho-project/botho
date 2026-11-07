@@ -211,8 +211,34 @@ def timestamps (a : Json) : Dec Json := do
     ("ledger_future_candidate", upper t), ("ledger_future_honest", upper h),
     ("ledger_candidate", accepts t), ("ledger_honest", accepts h), ("minting", minting)])
 
+/-- Stateful production-simulation comparison. Snapshots (including prior-award
+references resolved by the independent Rust/node inventory), owners, fee-floor,
+emission and V2 seeds are external assumptions. Only arithmetic carryover is
+advanced here. Both named slots contain this SAME landed model, not two oracles.
+The state slot specifies success for independently checked Rust public state. -/
+def lotterySim (a : Json) : Dec Json := do
+  let cfg : FeeConfig := { poolFractionPermille := 800, draw := DrawConfig.default }
+  let mut carry ← nat a "carryover"
+  let mut results : Array Json := #[]
+  for b in ← arr a "blocks" do
+    let candidates ← decCandidates b "candidates"
+    let height ← nat b "height"
+    let fees ← nat b "total_fees"
+    let cap := rewardCap candidates height (← nat b "block_reward") cfg
+    let accounting := computePoolAccounting fees (← nat b "emission_share") carry cap cfg
+    let draw := drawLotteryWinnersSeeded shaOnly candidates fees accounting height
+      (← bytes b "v2_seed") cfg
+    let paid := draw.winners.foldl (fun total w => total + w.payout) 0
+    carry := accounting.carryoverAfter paid
+    results := results.push (Json.mkObj [("payout_cap", encNat cap),
+      ("accounting", encAccounting accounting), ("draw", encBlockResult draw),
+      ("paid", encNat paid), ("carryover", encNat carry)])
+  pure (Json.mkObj [("node", Json.arr results), ("simulator", Json.arr results),
+    ("simulator_state", Json.mkObj [("ok", Json.bool true), ("failed_checks", Json.arr #[])])])
+
 def dispatch (fn : String) (a : Json) : Dec Json := do
   match fn with
+  | "lottery_sim" => lotterySim a
   | "timestamps" => timestamps a
   | "monetary" => monetary a
   | "demurrage_charge" =>

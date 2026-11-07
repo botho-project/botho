@@ -255,6 +255,41 @@ class Helpers(unittest.TestCase):
             with self.assertRaises(ValueError):
                 n.read_json(path)
 
+    def test_lottery_sim_named_envelope_and_replay_counts(self):
+        self.execute({"lottery_sim": "clean"})
+        report = n.read_json(self.out / "legs/lottery_sim/report.json")
+        meta = n.read_json(self.out / "metadata.json")
+        clean = {"node": [{"paid": "0"}], "simulator": [{"paid": "0"}],
+                 "simulator_state": {"ok": True, "failed_checks": []}}
+        changed = copy.deepcopy(clean)
+        changed["simulator_state"] = {"ok": False, "failed_checks": ["0/total_distributed"]}
+        row = report["legs"][0]
+        row["classes"] = {"sequence/one/state_failed": row["cases"]}
+        row["mismatches"] = [{"input": {"carryover": str(2**128 - 1)},
+                              "lean": clean, "rust": changed}]
+        self.assertEqual(n.validate_report(report, {"exit": 1, "timeout": False}, meta,
+                                          "lottery_sim"), "mismatch")
+        row["mismatches"][0]["rust"] = copy.deepcopy(clean)
+        with self.assertRaisesRegex(ValueError, "equal witness"):
+            n.validate_report(report, {"exit": 1, "timeout": False}, meta, "lottery_sim")
+        row["mismatches"] = []
+        self.assertEqual(n.validate_report(report, {"exit": 0, "timeout": False}, meta,
+                                          "lottery_sim"), "clean")
+        row["cases"] -= 1
+        with self.assertRaises(ValueError):
+            n.validate_report(report, {"exit": 0, "timeout": False}, meta, "lottery_sim")
+        meta["cases"] = report["cases_per_leg"] = row["cases"] = 0
+        row["classes"] = {}
+        self.assertEqual(n.validate_report(report, {"exit": 0, "timeout": False}, meta,
+                                          "lottery_sim"), "clean")
+        row["mismatches"] = [{"input": {}, "lean": clean, "rust": changed,
+                              "replayed_fixture": "lottery_sim.jsonl:1"}]
+        self.assertEqual(n.validate_report(report, {"exit": 1, "timeout": False}, meta,
+                                          "lottery_sim"), "mismatch")
+        row["replayed"] += 1
+        with self.assertRaisesRegex(ValueError, "replay count"):
+            n.validate_report(report, {"exit": 1, "timeout": False}, meta, "lottery_sim")
+
     def test_equal_witness_and_mixed_lean_error_reject_entire_leg(self):
         self.execute({"leg": "mismatch"})
         report = n.read_json(self.out / "legs/leg/report.json")

@@ -24,7 +24,7 @@ randomx-rs = { path = "../vendor/randomx-rs" }
 # leg seeds a real LMDB ledger) and the in-memory DerivationReads double
 # `botho::ledger::formal_drt` (the end-to-end `drawing` leg).
 botho = { path = "../botho", features = ["test-fixtures"] }
-bth-cluster-tax = { path = "../cluster-tax" }
+bth-cluster-tax = { path = "../cluster-tax", features = ["cli"] }
 bth-transaction-types = { path = "../transaction/types" }
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
