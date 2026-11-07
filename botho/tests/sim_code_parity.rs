@@ -288,7 +288,6 @@ mod production_lottery {
         compute_pool_accounting, draw_lottery_winners_seeded, reward_cap, LotteryFeeConfig,
     };
     use bth_cluster_tax::{
-        lottery::{LotteryDrawConfig, SelectionMode},
         simulation::{
             lottery::LotterySimulation,
             lottery_production::{
@@ -296,6 +295,7 @@ mod production_lottery {
             },
             lottery_reward_cap_faithful,
         },
+        LotteryDrawConfig, SelectionMode,
     };
 
     fn canonical() -> LotteryFeeConfig {
