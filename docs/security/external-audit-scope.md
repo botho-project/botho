@@ -37,7 +37,9 @@ redistribution, demurrage, and a deterministic consensus fee floor, enforced
 at block acceptance. The mechanism's *intended* effect, a measurable reduction
 in inequality, is **not demonstrated** at production parameters (mechanism
 ΔGini −0.028 to +0.003 against a 0.05 bar, #1790, #1808), and lottery
-ticket-splitting is currently profitable (#1761, #1682); a sim-only redesign
+ticket-splitting was profitable in #1761's historical stationary model
+(#1682); current quantitative production profitability needs production-mode
+re-run. A sim-only redesign
 is under study (#1801). Audit the mechanism as implemented, not its intended
 outcome. The active transaction format uses CLSAG ring signatures
 and hybrid ML-KEM recipient outputs, but **amounts remain public**.
@@ -106,8 +108,10 @@ floor. Plus:
   Path C work (#955/#980); do not use the historical tilted-selection model
   as a substitute for reading the freeze. Reassess H4's historical accepted
   disposition (#715) against the actual mechanism. Known open issue:
-  per-output ticket-splitting is profitable under the implemented reward cap
-  (#1761, #1682); free coinbase and payout tickets (#1690).
+  per-output ticket-splitting was profitable in the historical expected-value/
+  candidate-window study (#1761, #1682); current profit rates remain unmeasured
+  by production-mode runs. See the [evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation).
+  Free coinbase and payout tickets remain a separate issue (#1690).
 - Demurrage: max-quantile ring age + centroid-floored cluster factor
   (decoy-resistant, #596/#582). `consensus_fee_floor` uses
   `ring_elapsed_quantile` for age, while the factor path still uses

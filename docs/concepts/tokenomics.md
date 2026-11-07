@@ -102,7 +102,7 @@ fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
 | `dynamic_base` | 1-100 picocredits/byte | Adjusts based on network congestion |
 | `tx_size` | ~4-65 KB | Transaction size in bytes |
 | `cluster_factor` | 1x-6x | Progressive multiplier based on sender's cluster wealth |
-| `output_penalty` | quadratic in outputs, capped at 100x | Raises the cost of many-output transactions (does not make lottery ticket-splitting unprofitable; see [Redistribution Status](#redistribution-status)) |
+| `output_penalty` | quadratic in outputs, capped at 100x | Raises the cost of many-output transactions (does not establish lottery split-neutrality; see [Redistribution Status](#redistribution-status)) |
 | `memo_fees` | 100 picocredits/memo | Additional fee for encrypted memos |
 
 #### Fee Destination: Redistribution Lottery + Burn (80/20)
@@ -122,7 +122,7 @@ In addition, **cluster demurrage** levies a small spend-time holding charge on c
 
 - **No measurable Gini reduction.** A code-faithful simulation at production parameters ([M2 at production parameters](../research/m2-production-verdicts.md), #1696 / PR #1790) measured the mechanism's own ΔGini at −0.028 to +0.003 (3-seed means at 10 and 20 years, under the simulation's original candidate rule and under the node's, in which ring-spent outputs stay eligible, #1808) against a 0.05 design bar. Even at 1000x the transaction rate no case clears the bar at both 10 and 20 years.
 - **Why.** Lottery tickets track hashpower and output count, because most eligible outputs are coinbases and payouts; ring-spent outputs stay eligible, so tickets follow output creation rather than current holdings; tag decay and coinbase-lineage clusters bring nearly all value to factor 1, so demurrage stops (and disappears at high transaction density).
-- **Lottery splitting is profitable.** A faithful-to-code re-run (#1761, issue #1682) finds splitting a position into many outputs profitable at all 192 grid points: an extra output costs far less than the ticket share it buys, and the reward cap does not bind as built.
+- **Historical splitting-model result.** The stationary expected-value/candidate-window study (#1761, issue #1682) found splitting a position into many outputs profitable at all 192 grid points: an extra output costs far less than the ticket share it buys, and the reward cap does not bind in the studied regimes. Current quantitative production profitability needs production-mode re-run; [model assumptions and evidence](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation).
 - **Next.** A sim-only redesign study is under way (#1801). No constant or consensus rule moves until a candidate passes the #1790 production-fidelity harness and the #1761 splitting grid.
 
 > **See also**: [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md) (design history; the tilted draw is retired), [Lottery-Based Fee Redistribution](../design/lottery-redistribution.md) (background analysis), and [Entropy-Weighted Decay](../design/entropy-weighted-decay.md) (tag-decay hardening).
@@ -324,7 +324,7 @@ Two properties worth noting:
 
 ### Why Redistribute Most Fees (and Burn the Rest)?
 
-- **Intended Gini reduction (not demonstrated)**: Returning 80% of fees (plus demurrage charges and a height-scheduled emission share) through the lottery was meant to move value toward small, well-circulated holders — burning alone cannot redistribute. At production parameters it does not measurably do so, and lottery splitting is profitable; a redesign is under study (#1801). See [Redistribution Status](#redistribution-status).
+- **Intended Gini reduction (not demonstrated)**: Returning 80% of fees (plus demurrage charges and a height-scheduled emission share) through the lottery was meant to move value toward small, well-circulated holders — burning alone cannot redistribute. At production parameters it does not measurably do so, and the historical #1761 stationary model found profitable lottery splitting; current quantitative production profitability needs production-mode re-run. A redesign is under study (#1801). See [Redistribution Status](#redistribution-status).
 - **Deflationary pressure**: The 20% burn share still offsets part of tail emission.
 - **Predictable**: Net inflation = gross emission − (20% fee burn share).
 - **Grinding bound**: The lottery seed is bound to the parent block's proof of work, and the per-block payout is capped at one block reward with carryover.

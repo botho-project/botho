@@ -270,7 +270,7 @@ holdings.
 - Escape a wealthy ring's demurrage with background-tagged outputs (factor floored at the ring-centroid-implied value — B2)
 
 **Residual levers (open):**
-- Gain lottery tickets by splitting UTXOs: the as-built draw is uniform per eligible output, so splitting is profitable (#1761, #1682)
+- Gain lottery tickets by splitting UTXOs: the as-built draw is uniform per eligible output; the historical #1761 stationary model found profitable splitting (#1682), not a measured current production profit rate
 - Shedding cluster attribution via wash trading (rate-bounded by tag decay, but the single remaining designed lever)
 - Decoy-sourced tag-mass inflation against the C6 guard (**#581**, accepted residual)
 - Permanent parking to defer demurrage (**#314** / "everyone parks" watch item)
@@ -278,8 +278,10 @@ holdings.
 
 **Mitigation level:** Medium for the fee rate, which splitting does not
 lower. **Open for the lottery:** the implemented draw is uniform per eligible
-output, and ticket-splitting is profitable at the implemented fee floor
-(#1761, #1682). The redistribution mechanism is not demonstrated to reduce
+output, and the historical expected-value/candidate-window study found
+profitable ticket-splitting under its fee/cap premises (#1761, #1682).
+Current quantitative production profitability needs production-mode re-run;
+see the [evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation). The redistribution mechanism is not demonstrated to reduce
 inequality at production parameters (#1790; see
 [Tokenomics: Redistribution Status](../concepts/tokenomics.md#redistribution-status));
 a redesign is under study (#1801). The residuals above are explicitly
@@ -692,8 +694,9 @@ For a block B applied at height H by any honest node:
 - Deterministic integer consensus fee floor with `ring_elapsed_quantile@max`
   demurrage clock and ring-centroid-floored factor (C7, #602)
 - Per-block payout cap with carryover; validator re-derivation of the
-  deterministic draw (the as-built draw is uniform per eligible output, so it
-  is *not* split-resistant; open, #1682 / #1761)
+  deterministic draw (uniform per eligible output is not weight-level
+  split-invariant; economic resistance remains open, with the historical
+  #1761 stationary finding scoped in the evidence ledger; #1682)
 - Global (not per-UTXO) cluster wealth as the fee-rate signal
 
 **Limitations (open residuals):**
@@ -715,7 +718,8 @@ rather than by policy — see the
 [design doc](../design/cluster-tilted-redistribution.md). The tilted payout
 was later replaced by a uniform draw (ADR 0009), and at production parameters
 the mechanism is **not demonstrated** to reduce inequality (#1790), while
-lottery ticket-splitting is profitable (#1761, #1682); a redesign is under
+the historical #1761 stationary model finds profitable ticket-splitting
+(#1682), while current quantitative profitability needs production-mode re-run; a redesign is under
 study (#1801). This section enumerates the specific threats and their current
 status against merged code.
 
@@ -728,8 +732,10 @@ gaming — whale 5%→24% in simulation).
 **Status:** **Open** (#1682). The consensus draw is `SelectionMode::Uniform`
 (Path C, ADR 0009): every eligible output is one ticket. Its split resistance
 was meant to come from the Path C reward cap, whose premises the
-implementation does not meet; a faithful-to-code re-run finds splitting
-profitable at all 192 grid points (#1761). Coinbase and payout outputs are
+implementation does not meet; the historical expected-value/candidate-window
+study found splitting profitable at all 192 grid points (#1761). This is a
+stationary-model result, not a stateful production economics run; the
+[evidence ledger](../research/ct-compatible-lottery-selection.md#evidence-and-claim-reconciliation) records its premises and deferred current conclusions. Coinbase and payout outputs are
 also free tickets (#1690). A sim-only redesign is under study (#1801). The
 earlier value-weighted, cluster-tilted weight
 `value × (max_factor − cluster_factor + 1) / max_factor` was split-invariant,
