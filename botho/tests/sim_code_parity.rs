@@ -277,3 +277,289 @@ fn decoy_gamma_blocks_per_day_follows_policy() {
     assert_eq!(privacy::BLOCKS_PER_DAY, privacy_routes::NODE_BLOCKS_PER_DAY);
     assert_eq!(node::MAX_DECOY_AGE_BLOCKS, 2 * 365 * node::BLOCKS_PER_DAY);
 }
+
+/// Actual state transitions, independently composed through the node API.
+/// These bounded cases establish conditional Rust parity, not chain
+/// reachability or the randomized sim/node/Lean DRT reserved for #1969.
+mod production_lottery {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use botho::consensus::lottery::{
+        compute_pool_accounting, draw_lottery_winners_seeded, reward_cap, LotteryFeeConfig,
+    };
+    use bth_cluster_tax::{
+        simulation::{
+            lottery::LotterySimulation,
+            lottery_production::{
+                ProductionBlock, ProductionBlockResult, ProductionOutput, MAX_PRODUCTION_CANDIDATES,
+            },
+            lottery_reward_cap_faithful,
+        },
+        LotteryDrawConfig, SelectionMode,
+    };
+
+    fn canonical() -> LotteryFeeConfig {
+        // Do not use Default: it accepts environment-sensitive test overrides.
+        LotteryFeeConfig {
+            pool_fraction_permille: 800,
+            draw_config: LotteryDrawConfig::default(),
+        }
+    }
+
+    fn fixture(count: u64, carryover: u128) -> (LotterySimulation, ProductionBlock) {
+        let outputs: Vec<_> = (1..=count)
+            .map(|id| {
+                let mut identity = [0; 36];
+                identity[..8].copy_from_slice(&id.to_le_bytes());
+                ProductionOutput {
+                    id: identity,
+                    simulation_id: id,
+                    owner_id: id % 2,
+                    value: 1_000_000,
+                    cluster_factor: 1000 + id * 100,
+                    creation_block: 0,
+                }
+            })
+            .collect();
+        (
+            LotterySimulation::new_production(outputs.clone(), carryover).unwrap(),
+            ProductionBlock {
+                height: 720,
+                total_fees: 0,
+                emission_share: 0,
+                block_reward: u64::MAX,
+                v2_seed: [73; 32],
+                candidates: outputs,
+            },
+        )
+    }
+
+    fn compare(sim: &mut LotterySimulation, block: &ProductionBlock) -> ProductionBlockResult {
+        let config = canonical();
+        let candidates: Vec<_> = block
+            .candidates
+            .iter()
+            .map(ProductionOutput::candidate)
+            .collect();
+        let cap = reward_cap(&candidates, block.height, block.block_reward, &config);
+        let accounting = compute_pool_accounting(
+            block.total_fees,
+            block.emission_share,
+            sim.production_carryover().unwrap(),
+            cap,
+            &config,
+        );
+        let node = draw_lottery_winners_seeded(
+            &candidates,
+            block.total_fees,
+            &accounting,
+            block.height,
+            &block.v2_seed,
+            &config,
+        );
+        let originals = sim.utxos.clone();
+        let owners: BTreeMap<_, _> = sim
+            .owners
+            .iter()
+            .map(|(&id, owner)| {
+                (
+                    id,
+                    (
+                        sim.owner_value(id),
+                        owner.total_winnings,
+                        owner.utxo_ids.clone(),
+                    ),
+                )
+            })
+            .collect();
+        let before_metrics = sim.metrics.clone();
+        let before_burned = sim.total_burned;
+        let before_count = sim.production_outputs().unwrap().len();
+        let result = sim.apply_production_block(block).unwrap();
+        assert_eq!(result.block_height, node.block_height);
+        assert_eq!(result.total_fees, node.total_fees);
+        assert_eq!(result.fee_pool, accounting.fee_pool);
+        assert_eq!(result.burn_amount, accounting.fee_burn);
+        assert_eq!(result.burn_amount, node.burn_amount);
+        assert_eq!(result.emission_share, accounting.emission_share);
+        assert_eq!(result.available, accounting.available);
+        assert_eq!(result.payout_cap, cap);
+        assert_eq!(result.payout, accounting.payout);
+        assert_eq!(result.pool_amount, node.pool_amount);
+        assert_eq!(result.seed, node.seed);
+        assert_eq!(result.paid, node.total_distributed());
+        assert_eq!(
+            result.carryover,
+            accounting.available - node.total_distributed() as u128
+        );
+        assert_eq!(sim.production_carryover(), Some(result.carryover));
+        assert_eq!(
+            result
+                .awards
+                .iter()
+                .map(|a| (a.winner_id, a.output.value))
+                .collect::<Vec<_>>(),
+            node.winners
+                .iter()
+                .map(|w| (w.utxo_id, w.payout))
+                .collect::<Vec<_>>()
+        );
+        for (id, original) in &originals {
+            assert_eq!(format!("{:?}", sim.utxos[id]), format!("{original:?}"));
+        }
+        let mut credits = BTreeMap::<u64, u64>::new();
+        let mut memberships = BTreeMap::<u64, Vec<u64>>::new();
+        let mut ids = BTreeSet::new();
+        let mut quintiles = before_metrics.winnings_by_quintile;
+        let mut wealths: Vec<_> = owners.values().map(|o| o.0).collect();
+        wealths.sort_unstable();
+        for award in &result.awards {
+            let source = block
+                .candidates
+                .iter()
+                .find(|o| o.id == award.winner_id)
+                .unwrap();
+            assert_eq!(award.output.owner_id, source.owner_id);
+            assert_eq!(award.output.creation_block, block.height);
+            assert!(!originals.contains_key(&award.output.simulation_id));
+            assert!(ids.insert(award.output.id));
+            assert_eq!(
+                sim.production_outputs().unwrap()[&award.output.id],
+                award.output
+            );
+            let stored = &sim.utxos[&award.output.simulation_id];
+            assert_eq!(
+                (
+                    stored.value,
+                    stored.owner_id,
+                    stored.creation_block,
+                    stored.demurrage_anchor
+                ),
+                (
+                    award.output.value,
+                    source.owner_id,
+                    block.height,
+                    block.height
+                )
+            );
+            *credits.entry(source.owner_id).or_default() += stored.value;
+            memberships
+                .entry(source.owner_id)
+                .or_default()
+                .push(stored.id);
+            let rank = wealths
+                .iter()
+                .position(|&w| w >= owners[&source.owner_id].0)
+                .unwrap();
+            let quintile = rank * 5 / wealths.len();
+            assert_eq!(award.quintile, quintile);
+            quintiles[quintile] += stored.value;
+        }
+        assert_eq!(
+            sim.production_outputs().unwrap().len(),
+            before_count + node.winners.len()
+        );
+        assert_eq!(sim.utxos.len(), originals.len() + node.winners.len());
+        for (&id, (balance, winnings, old_ids)) in &owners {
+            let credit = credits.get(&id).copied().unwrap_or(0);
+            assert_eq!(sim.owner_value(id), balance + credit);
+            assert_eq!(sim.owners[&id].total_winnings, winnings + credit);
+            let mut expected = old_ids.clone();
+            expected.extend(memberships.get(&id).into_iter().flatten().copied());
+            assert_eq!(sim.owners[&id].utxo_ids, expected);
+            assert_eq!(
+                sim.owners[&id].total_fees_paid, 0,
+                "fees were collected externally"
+            );
+        }
+        assert_eq!(credits.values().sum::<u64>(), node.total_distributed());
+        assert_eq!(
+            sim.metrics.total_distributed,
+            before_metrics.total_distributed + node.total_distributed()
+        );
+        assert_eq!(
+            sim.metrics.total_fees_collected,
+            before_metrics.total_fees_collected + block.total_fees
+        );
+        assert_eq!(sim.total_burned, before_burned + accounting.fee_burn);
+        assert_eq!(
+            sim.metrics.drawings_held,
+            before_metrics.drawings_held + u64::from(node.has_winners())
+        );
+        assert_eq!(sim.metrics.winnings_by_quintile, quintiles);
+        assert_eq!(sim.current_block, block.height);
+        assert_eq!(sim.lottery_pool, 0);
+        result
+    }
+
+    #[test]
+    fn canonical_configuration_and_candidate_bound_match_node() {
+        let config = canonical();
+        assert_eq!(
+            config.pool_fraction_permille,
+            bth_cluster_tax::consensus_fee::LOTTERY_POOL_FRACTION_PERMILLE
+        );
+        assert_eq!(config.draw_config.selection_mode, SelectionMode::Uniform);
+        assert_eq!(config.draw_config.winners_per_draw, 4);
+        assert_eq!(config.draw_config.min_utxo_age, 720);
+        assert_eq!(config.draw_config.min_utxo_value, 1_000_000);
+        assert_eq!(config.draw_config.circulation_window, 10_000);
+        // The node's existing canonical-config guard pins this mirror to its
+        // private MAX_LOTTERY_CANDIDATES without exposing a consensus API.
+        assert_eq!(
+            MAX_PRODUCTION_CANDIDATES,
+            lottery_reward_cap_faithful::MAX_LOTTERY_CANDIDATES
+        );
+    }
+
+    #[test]
+    fn actual_simulator_matches_node_boundaries_and_saturation() {
+        for count in [0, 1, 3, 4, 7] {
+            for pool in [0, 1, 3, 11, 10_000_000_000_000u128] {
+                let (mut sim, block) = fixture(count, pool);
+                compare(&mut sim, &block);
+            }
+        }
+        for height in [719, 720, 10_000, 10_001] {
+            let (mut sim, mut block) = fixture(4, 20);
+            block.height = height;
+            block.total_fees = 7;
+            block.emission_share = 13;
+            compare(&mut sim, &block);
+        }
+        let (mut sim, mut block) = fixture(4, u128::MAX - 1);
+        block.total_fees = u64::MAX;
+        block.emission_share = u64::MAX;
+        block.block_reward = 7;
+        let result = compare(&mut sim, &block);
+        assert_eq!(
+            (result.available, result.carryover),
+            (u128::MAX, u128::MAX - 7)
+        );
+        let (mut sim, mut block) = fixture(4, 10);
+        block.block_reward = 0;
+        block.total_fees = 7;
+        compare(&mut sim, &block);
+    }
+
+    #[test]
+    fn actual_simulator_reuses_carryover_and_fresh_outputs() {
+        let (mut sim, mut block) = fixture(4, 10_000_000);
+        block.block_reward = 4_000_000;
+        let first = compare(&mut sim, &block);
+        assert_eq!(first.carryover, 6_000_000);
+        block.height += 1;
+        block.candidates = sim
+            .production_outputs()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        assert_eq!(compare(&mut sim, &block).carryover, 2_000_000);
+        block.candidates = first.awards.iter().map(|a| a.output.clone()).collect();
+        block.height = 1439;
+        assert!(compare(&mut sim, &block).awards.is_empty());
+        block.height = 1440;
+        assert_eq!(compare(&mut sim, &block).paid, 2_000_000);
+    }
+}
