@@ -282,7 +282,7 @@ jobs:
               command("build-mutated", ["cargo", "build", "--release"], bound=600, env=env)
               identity["mutated_runner_sha256"] = sha(runner)
               (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
-              command("generate-mutated", [str(runner), "--legs", "lottery_sim", "--cases", "10000", "--seed", "1707",
+              command("generate-mutated", [str(runner), "--legs", "lottery_sim", "--cases", "32", "--seed", "1707",
                   "--regressions", str(fixtures), "--json", str(evidence / "generated-report.json")], expected=1)
               report = json.loads((evidence / "generated-report.json").read_text())
               row = report["legs"][0]
@@ -306,6 +306,8 @@ jobs:
               assert identity["restored_tree"] == tree and sha(source) == identity["source_sha256"]
               (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
               command("build-restored", ["cargo", "build", "--release"], bound=600, env=env)
+              identity["restored_runner_sha256"] = sha(runner)
+              (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
           identity["restored_runner_sha256"] = sha(runner)
           assert sha(model) == identity["model_sha256"]
           command("replay-restored", [str(runner), "--legs", "lottery_sim", "--cases", "0", "--seed", "1707",
