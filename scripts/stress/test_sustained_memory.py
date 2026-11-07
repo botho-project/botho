@@ -264,9 +264,21 @@ class SustainedMemoryTests(unittest.TestCase):
         next(
             r
             for r in rows
-            if r["observed_at_unix_s"] == plan["started_at_unix_s"] + 16230
+            if r["observed_at_unix_s"] == plan["started_at_unix_s"] + 16320
         )["mining"] = True
         self.assertEqual(analyze(plan, rows)["status"], "incomplete")
+
+    def test_settling_absorbs_in_flight_mint_block(self):
+        # #1966 (memqual7): mints submitted before the deadline externalized one
+        # more block 45 s after it, inside settling but past the old 30 s window.
+        plan = manifest("minting")
+        mint_until = plan["started_at_unix_s"] + 16200
+        rows = samples(plan)
+        for row in rows:
+            if row["observed_at_unix_s"] >= mint_until + 45:
+                row["chain_height"] += 1
+                row["chain_hash"] = f"{row['chain_height']:064x}"
+        self.assertEqual(analyze(plan, rows)["status"], "passed")
 
     def test_cgroup_move_fails_and_shared_group_manifest_rejected(self):
         self.rows[600]["cgroup_path"] = "/different"
@@ -439,7 +451,7 @@ class CollectorCompletionTests(unittest.TestCase):
         )
 
     def test_expected_ticks_match_the_fixed_profiles(self):
-        self.assertEqual(expected_ticks(self.plan), 18030 // 5 + 1)
+        self.assertEqual(expected_ticks(self.plan), 18120 // 5 + 1)
         self.assertEqual(expected_ticks(manifest("payments")), 19800 // 5 + 1)
         self.assertEqual(expected_ticks(self.plan), len(self.rows))
 

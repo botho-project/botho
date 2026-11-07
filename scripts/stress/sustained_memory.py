@@ -194,7 +194,10 @@ def profile_phases(workload):
     if workload == "minting":
         phases.extend(
             [
-                {"name": "settling", "duration_s": 30},
+                # #1966: at least one 40 s slot plus the proposal tick. Mints
+                # submitted before the deadline stay pending and can land one
+                # more block about a slot later (memqual7: +45 s).
+                {"name": "settling", "duration_s": 120},
                 {"name": "idle", "duration_s": 1800},
             ]
         )
@@ -535,8 +538,8 @@ def inspect_node(plan, node, observations, failures, incomplete):
         ):
             incomplete.add(f"{name}: {phase} boundary coverage missing")
         if plan["workload_kind"] == "minting" and phase != "settling":
-            # Explicit settling absorbs the documented ten-second control tick;
-            # every subsequent idle observation must actually be idle.
+            # Explicit settling absorbs the ten-second control tick and the
+            # last in-flight block (#1966); every idle observation must be idle.
             interior = [r for r in segment if left <= r["observed_at_unix_s"] < right]
             expected_mining = phase != "idle" and node.get("producer", False)
             if any(r.get("mining") is not expected_mining for r in interior):
