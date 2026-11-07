@@ -213,3 +213,122 @@ jobs:
             ${{ runner.temp }}/drt-report.json
           if-no-files-found: ignore
           retention-days: 14
+
+      # Temporary isolated validation branch only; never included in the PR.
+      - name: Actual lottery simulator mutation and replay control
+        timeout-minutes: 30
+        run: |
+          python3 - <<'PYCONTROL'
+          import hashlib, json, os, pathlib, subprocess, time
+          root = pathlib.Path.cwd()
+          crate = root / "formal-drt"
+          evidence = pathlib.Path(os.environ["RUNNER_TEMP"]) / "lottery-sim-control"
+          evidence.mkdir()
+          commands = []
+          def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+          def command(name, argv, expected=0, bound=270, cwd=crate, env=None):
+              start = time.monotonic()
+              with (evidence / (name + ".log")).open("w") as log:
+                  try:
+                      p = subprocess.run(argv, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=bound)
+                      code = p.returncode
+                  except subprocess.TimeoutExpired:
+                      code = 124
+              row = dict(name=name, argv=[str(v) for v in argv], cwd=str(cwd), bound_seconds=bound,
+                         exit=code, expected_exit=expected, seconds=time.monotonic()-start)
+              commands.append(row)
+              (evidence / "commands.json").write_text(json.dumps(commands, indent=2))
+              print(json.dumps(row), flush=True)
+              assert code == expected, row
+          
+          def git(*args): return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
+          def commit(message):
+              env = dict(os.environ, GIT_AUTHOR_NAME="Loom mutation control", GIT_AUTHOR_EMAIL="loom@example.invalid",
+                         GIT_COMMITTER_NAME="Loom mutation control", GIT_COMMITTER_EMAIL="loom@example.invalid")
+              command("commit-" + message, ["git", "commit", "-m", message], cwd=root, env=env)
+              return git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+          source = root / "cluster-tax/src/simulation/lottery_production.rs"
+          original = source.read_bytes()
+          head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+          runner = crate / "target/release/botho-formal-drt"
+          model = crate / "lean/.lake/build/bin/botho-model"
+          identity = dict(checkout_head=head, checkout_tree=tree, github_sha=os.environ["GITHUB_SHA"],
+              run_id=os.environ["GITHUB_RUN_ID"], attempt=os.environ["GITHUB_RUN_ATTEMPT"],
+              source_sha256=sha(source), clean_runner_sha256=sha(runner), model_sha256=sha(model),
+              runner_source_sha256=sha(crate / "src/runner.rs"), leg_source_sha256=sha(crate / "src/legs_sim.rs"))
+          assert head == os.environ["GITHUB_SHA"]
+          (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
+          command("list", [str(runner), "--list"])
+          assert "lottery_sim" in (evidence / "list.log").read_text().splitlines()
+          # The ordinary all-leg 10k seed1707 run above already passed on this source.
+          ordinary = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "drt-report.json").read_text())
+          assert ordinary["seed"] == "1707" and ordinary["cases_per_leg"] == 10000
+          assert all(row["cases"] == 10000 and not row["mismatches"] for row in ordinary["legs"])
+          assert any(row["leg"] == "lottery_sim" and row["replayed"] >= 24 for row in ordinary["legs"])
+          (evidence / "ordinary-report.json").write_text(json.dumps(ordinary, indent=2))
+          old = b"self.metrics.total_distributed = total_distributed;"
+          new = b"self.metrics.total_distributed = total_distributed.saturating_add(1);"
+          assert original.count(old) == 1
+          source.write_bytes(original.replace(old, new))
+          (evidence / "actual-simulator-mutation.patch").write_text(git("diff", "--", str(source.relative_to(root))) + "\n")
+          command("stage-mutation", ["git", "add", str(source.relative_to(root))], cwd=root)
+          identity["mutated_commit"], identity["mutated_tree"] = commit("control-mutate-simulator-state")
+          identity["mutated_source_sha256"] = sha(source)
+          (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
+          fixtures = evidence / "generated"
+          fixtures.mkdir()
+          env = dict(os.environ, CARGO_BUILD_JOBS="2")
+          try:
+              command("build-mutated", ["cargo", "build", "--release"], bound=600, env=env)
+              identity["mutated_runner_sha256"] = sha(runner)
+              (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
+              command("generate-mutated", [str(runner), "--legs", "lottery_sim", "--cases", "10000", "--seed", "1707",
+                  "--regressions", str(fixtures), "--json", str(evidence / "generated-report.json")], expected=1)
+              report = json.loads((evidence / "generated-report.json").read_text())
+              row = report["legs"][0]
+              assert row["cases"] > 0 and row["replayed"] == 0 and row["mismatches"]
+              assert sum(row["classes"].values()) <= row["cases"]
+              for witness in row["mismatches"]:
+                  assert witness["lean"]["node"] == witness["rust"]["node"] == witness["rust"]["simulator"]
+                  assert witness["rust"]["simulator_state"]["ok"] is False
+                  assert any("total_distributed" in c for c in witness["rust"]["simulator_state"]["failed_checks"])
+                  assert "replayed_fixture" not in witness
+              saved = fixtures / "lottery_sim.jsonl"
+              assert saved.is_file() and saved.stat().st_size > 0
+              identity["shrunk_fixture_sha256"] = sha(saved)
+              (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
+              command("replay-mutated", [str(runner), "--legs", "lottery_sim", "--cases", "0", "--seed", "1707",
+                  "--regressions", str(fixtures), "--no-write-regressions", "--json", str(evidence / "replay-mutated.json")], expected=1)
+          finally:
+              source.write_bytes(original)
+              command("stage-restored", ["git", "add", str(source.relative_to(root))], cwd=root)
+              identity["restored_commit"], identity["restored_tree"] = commit("control-restore-simulator-state")
+              assert identity["restored_tree"] == tree and sha(source) == identity["source_sha256"]
+              (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
+              command("build-restored", ["cargo", "build", "--release"], bound=600, env=env)
+          identity["restored_runner_sha256"] = sha(runner)
+          assert sha(model) == identity["model_sha256"]
+          command("replay-restored", [str(runner), "--legs", "lottery_sim", "--cases", "0", "--seed", "1707",
+              "--regressions", str(fixtures), "--no-write-regressions", "--json", str(evidence / "replay-restored.json")])
+          command("fixed-seed-restored", [str(runner), "--legs", "lottery_sim", "--cases", "10000", "--seed", "1707",
+              "--regressions", str(fixtures), "--no-write-regressions", "--json", str(evidence / "fixed-seed-restored.json")])
+          assert sha(saved) == identity["shrunk_fixture_sha256"]
+          for name, cases in [("replay-mutated", 0), ("replay-restored", 0), ("fixed-seed-restored", 10000)]:
+              row = json.loads((evidence / (name + ".json")).read_text())["legs"][0]
+              assert row["cases"] == cases and row["replayed"] == len(saved.read_text().splitlines())
+              assert bool(row["mismatches"]) == (name == "replay-mutated")
+          identity["all_commands_settled"] = True
+          identity["source_restored"] = source.read_bytes() == original
+          (evidence / "identity.json").write_text(json.dumps(identity, indent=2))
+          (evidence / "files-sha256.json").write_text(json.dumps({str(p.relative_to(evidence)): sha(p)
+              for p in evidence.rglob("*") if p.is_file()}, indent=2))
+          print("ACTUAL_SIMULATOR_MUTATION_CONTROL_PASS", flush=True)
+          PYCONTROL
+      - name: Retain actual lottery simulator control evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lottery-sim-mutation-control
+          path: ${{ runner.temp }}/lottery-sim-control/
+          if-no-files-found: ignore
+          retention-days: 14
