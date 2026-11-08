@@ -192,7 +192,7 @@ def check_wrapper(root, errors):
             raise ValueError("expected the reviewed unconditional forwarding expression")
         # Attributes/visibility modifiers attached to this item are unsupported.
         prefix = text[:m.start()].rstrip()
-        if prefix.count("{") != prefix.count("}"):
+        if any(prefix.count(a) != prefix.count(b) for a, b in (("{", "}"), ("(", ")"), ("[", "]"))):
             raise ValueError("wrapper must be a top-level item")
         if prefix and prefix[-1] not in "};":
             raise ValueError("unsupported wrapper prefix")
@@ -485,8 +485,9 @@ def main(argv):
             scan_file(p, "canonical", errors)
         check_wrapper(root, errors)
         gen = regular_lean_files(os.path.join(root, "generated"), errors)
-        if not gen:
-            errors.append("generated/: no .lean files")
+        expected_gen = {os.path.join(root, "generated", name + ".lean") for name in GENERATED_LIBS}
+        if set(gen) != expected_gen:
+            errors.append("generated/: files must be exactly the two reviewed extraction modules")
         proofs = regular_lean_files(os.path.join(root, "BothoAeneas"), errors)
         for name in ("BothoAeneas.lean", "Theorems.lean"):
             p = os.path.join(root, name)

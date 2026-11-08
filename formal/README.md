@@ -95,12 +95,17 @@ Rules:
 |---|---|---|
 | `compute_pool_accounting_permille` | Successful return plus full-record equality (`compute_pool_accounting_permille_model`); `_model_800` and `_no_fail` consequences | Proven equality to `Botho.Lottery.computePoolAccounting` for all typed inputs with `pm.val ≤ 1000`, including `u128` saturation, and arbitrary draw config |
 | `split_fees_permille` | Exact fraction and fee conservation | Used in the pool bridge; no separate canonical equality export |
-| `MonetaryPolicy::halving_reward` | No failure, phases and antitonicity with interval/count bounds | Model plus finite DRT; no canonical equality bridge |
+| `MonetaryPolicy::halving_reward` | No failure, phases and antitonicity with interval/count bounds | Finite `monetary` DRT leg; no canonical equality bridge |
 | `MonetaryPolicy::calculate_tail_reward_u128` | Conditional no failure and exact truncation; positive result needs its width premise | No canonical equality bridge; zero-cast counterexample and mainnet supply bounds remain |
-| `sybil_reward_cap`, `is_eligible_at` | Exact scalar postconditions | Model plus finite DRT; no canonical equality bridge |
-| `lottery_emission_bps`, `lottery_emission_share` | Exact scalar postconditions and share bounds | Model plus finite DRT; no canonical equality bridge |
-| `capitalized_reset_charge` | Only the no-downgrade branch | Full charge correctness remains model plus finite DRT |
-| `count_eligible_in`, `demurrage_charge` | Extracted and axiom-gated, without correctness theorems | Finite DRT is not a proof about these extractions |
+| `sybil_reward_cap`, `is_eligible_at` | Exact scalar postconditions | Finite `sybil_reward_cap` and `is_eligible` DRT legs (the latter calls the candidate wrapper); no canonical equality bridge |
+| `lottery_emission_bps`, `lottery_emission_share` | Exact scalar postconditions and share bounds | Finite `monetary` DRT leg; no canonical equality bridge |
+| `capitalized_reset_charge` | Only the no-downgrade branch | No registered reset-charge model/DRT leg; Rust exact-oracle tests are separate finite evidence; reset/settlement/spend composition remains #1711 |
+| `count_eligible_in`, `demurrage_charge` | Extracted and axiom-gated, without correctness theorems | Finite `count_eligible` wrapper DRT and `demurrage_charge` ↔ `ExactCharge.exactCharge` DRT; neither proves these extractions |
+
+The reset-charge oracle test is
+`cluster-tax/src/demurrage.rs::capitalized_reset_charge_matches_exact_on_grid`.
+It is distinct from the accrued-charge model claims and DRT in
+[DEMURRAGE.md](DEMURRAGE.md); no full reset/composition result is implied.
 
 The bridge reads the five `.val` fields into `Botho.Lottery.Accounting`;
 it does not copy a substitute arithmetic model. Its successful-return

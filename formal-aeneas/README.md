@@ -110,8 +110,12 @@ explicit successful-return consequence of the bridge.
 This is the only canonical-model equality bridge here. The other exports
 above are extraction postconditions, not equality to the corresponding
 `formal/` definitions. The demurrage result is only the no-downgrade branch;
-full charge arithmetic and the eligibility loop remain without correctness
-proofs. Existing tail-reward overflow, truncation and supply hypotheses and
+full charge arithmetic and the eligibility loop remain without extraction
+correctness proofs. The accrued-charge `ExactCharge` model and its
+`demurrage_charge` DRT leg do not cover reset/settlement/spend composition
+(#1711). Reset-charge Rust oracle tests such as
+`capitalized_reset_charge_matches_exact_on_grid` are separate finite evidence,
+not a registered reset-charge Lean DRT leg. Existing tail-reward overflow, truncation and supply hypotheses and
 counterexamples are unchanged.
 
 The bridge alone does not transfer every model theorem to Rust. A transfer

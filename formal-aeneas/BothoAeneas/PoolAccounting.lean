@@ -111,16 +111,21 @@ theorem compute_pool_accounting_permille_model
   obtain ⟨r, hr, hsum, hpool, hemi, havail, hpay⟩ :=
     eq_ok_of_spec (compute_pool_accounting_permille_spec total emission stored cap pm h)
   refine ⟨r, hr, ?_⟩
-  have hsmall : total.val * pm.val / 1000 < 2 ^ 64 := by rw [← hpool]; scalar_tac
-  have hmod := Nat.mod_eq_of_lt hsmall
-  have hmax : U128.max = Botho.Lottery.U128_MAX := by rfl
+  have hmod : r.fee_pool.val % 2 ^ 64 = r.fee_pool.val :=
+    Nat.mod_eq_of_lt (by scalar_tac)
+  have hmax : U128.max = Botho.Lottery.U128_MAX := by
+    simp [U128.max, U128.numBits, Botho.Lottery.U128_MAX]
+  rw [hmax] at havail
+  have hmodelAvail : Botho.Lottery.satAdd Botho.Lottery.U128_MAX
+      (Botho.Lottery.satAdd Botho.Lottery.U128_MAX stored.val emission.val) r.fee_pool.val =
+      r.available.val := by
+    simp only [Botho.Lottery.satAdd]
+    split_ifs <;> omega
   simp only [toModel, Botho.Lottery.computePoolAccounting, Botho.Lottery.splitFees,
-    Botho.Lottery.truncU64, hmod, ← hpool, hemi]
+    Botho.Lottery.truncU64, ← hpool, hmod, hemi, hmodelAvail]
   congr 1
   · simp only [Botho.Lottery.satSub]; split <;> omega
-  · simp only [Botho.Lottery.satAdd] at *; split <;> split <;> rw [hmax] at havail <;> omega
-  · simp only [Botho.Lottery.satAdd, Botho.Lottery.minN]
-    split <;> split <;> split <;> rw [hmax] at havail <;> omega
+  · simp only [Botho.Lottery.minN]; split <;> omega
 
 /-- The ratified 800-permille specialization; every draw configuration and
 all typed inputs, including saturated carryover, remain in the domain. -/

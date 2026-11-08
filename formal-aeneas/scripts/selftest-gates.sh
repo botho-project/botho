@@ -136,6 +136,8 @@ fresh "$d"; mv "$d/../formal" "$d/../formal-copy"; ln -s formal-copy "$d/../form
 expect 'fail:canonical directory must be regular' "canonical directory symlink" scan "$d"
 fresh "$d"; mkdir -p "$d/Botho/Lottery"; cp "$root/../formal/Botho/Lottery/Arith.lean" "$d/Botho/Lottery/"
 expect 'fail:outside the scanned set' "shadow canonical source" scan "$d"
+fresh "$d"; mkdir -p "$d/generated/Botho/Lottery"; cp "$root/../formal/Botho/Lottery/Arith.lean" "$d/generated/Botho/Lottery/"
+expect 'fail:files must be exactly the two reviewed extraction modules' "generated shadow canonical source" scan "$d"
 fresh "$d"; echo leanprover/lean4:v0.0.0 >"$d/../formal/lean-toolchain"
 expect 'fail:canonical Lean toolchain: pins differ' "canonical toolchain mismatch" scan "$d"
 for mutation in layout root glob extra; do
@@ -152,7 +154,7 @@ p.write_text(s)
 PYCONFIG
   expect 'fail:canonical library must use the exact reviewed source closure' "canonical library $mutation" scan "$d"
 done
-for mutation in arguments field conditional duplicate literal unsupported nested; do
+for mutation in arguments field conditional duplicate literal unsupported nested macro; do
   fresh "$d"
   python3 - "$d/../botho/src/consensus/lottery.rs" "$mutation" <<'PYWRAPPER'
 from pathlib import Path
@@ -166,6 +168,7 @@ if kind == "field": new = old.replace('config.pool_fraction_permille,', '800,')
 if kind == "conditional": new = old.replace('    compute_pool_accounting_permille(', '    if total_fees == 0 { panic!("bad") }\n    compute_pool_accounting_permille(')
 if kind == "duplicate": new = old + '\n' + old
 if kind == "literal": new = 'const FAKE: &str = r###"' + old + '"###; /* ' + old + ' */'
+if kind == "macro": new = 'hidden!(fn before() {}\n' + old + ');'
 if kind == "nested": new = '#[cfg(any())] mod hidden { fn before() {}\n' + old + '\n}'
 if kind == "unsupported": new = old.replace('    compute_pool_accounting_permille(', '    return compute_pool_accounting_permille(')
 assert new != old
