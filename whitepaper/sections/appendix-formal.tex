@@ -310,7 +310,7 @@ Tested (DRT) & \path{timestamps}: \path{median_time_past_of}, \path{ChainState::
 \end{tabular}
 \end{center}
 
-These protocol-8 rules persist in protocol 9. Ledger scalar comparisons use full \path{u64}; minting comparison has explicit headroom below \path{U64_MAX} minus the modeled future allowance. Generated windows are bounded. Helpers and scalar predicates do not execute a full validator, PoW or SCP, or prove physical-clock history realizability. The runtime expiry issue \#1958 is separate.
+These protocol-8 rules persist in protocol 9. Ledger scalar comparisons use full \path{u64}; minting comparison requires now at most \path{U64_MAX} minus the modeled future allowance. Generated windows are bounded. Helpers and scalar predicates do not execute a full validator, PoW or SCP, or prove physical-clock history realizability. The runtime expiry issue \#1958 is separate.
 \end{minipage}
 \par\medskip
 
@@ -433,7 +433,7 @@ Namespace: \path{Botho.Supply.Block}.
 Claim & Evidence and premises \\
 \midrule
 Proven (model) & \path{emission_exact} assumes typed height, reward and interval. \path{prepared_payouts} requires successful prepare, including the authenticated award/record/wire domain checks. \path{step_projects} and \path{step_frame} require a well-formed store and successful step; the frame keeps prior retained rows and unaffected unspent lookups. \\
-Conditional invariant & \path{step_invariant} requires prior \path{Invariant} and successful step, and derives no saturation loss. \path{genesis_invariant} establishes the modeled genesis. \path{reachable_invariants} is about \path{Reachable C P keyOf}, using \path{Correspondences} and \path{TrustedInputs}; it is not the set of all Rust-accepted histories. \\
+Conditional invariant & \path{step_invariant} requires prior \path{Invariant} and successful step, and derives no saturation loss. \path{genesis_invariant} establishes the modeled genesis. \path{reachable_invariants} is about \texttt{Reachable C P keyOf}, using \path{Correspondences} and \path{TrustedInputs}; it is not the set of all Rust-accepted histories. \\
 Tested; no family DRT & The finite real-commit/saved-replay accepted-block oracle described in \path{formal/SUPPLY.md} checks a separate boundary. There is no structured-block registration in \path{LEGS}; lottery kernel tests do not supply one. \\
 \bottomrule
 \end{tabular}
