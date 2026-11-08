@@ -87,10 +87,15 @@ IMPORT = re.compile(
 ROOT_PREFIX = "_root_."
 # The lean_libs built from generated/ (one per crate regen.sh extracts).
 GENERATED_LIBS = ("MonetaryKernels", "PoolAccounting")
-CANONICAL_MODULES = tuple("Botho.Lottery." + m for m in
-                          ("Pool", "Draw", "Prims", "Candidate", "Arith"))
-CANONICAL_LIBRARY = {"name": "CanonicalLottery", "srcDir": "../formal",
-                     "roots": list(CANONICAL_MODULES), "globs": list(CANONICAL_MODULES)}
+CANONICAL_MODULES = tuple(
+    "Botho.Lottery." + m for m in ("Pool", "Draw", "Prims", "Candidate", "Arith")
+)
+CANONICAL_LIBRARY = {
+    "name": "CanonicalLottery",
+    "srcDir": "../formal",
+    "roots": list(CANONICAL_MODULES),
+    "globs": list(CANONICAL_MODULES),
+}
 
 
 def canonical_files(root, errors):
@@ -108,7 +113,10 @@ def canonical_files(root, errors):
             errors.append(f"{path}: canonical source must be a regular file")
         else:
             paths.append(path)
-    pins = [os.path.join(root, "lean-toolchain"), os.path.join(parent, "formal/lean-toolchain")]
+    pins = [
+        os.path.join(root, "lean-toolchain"),
+        os.path.join(parent, "formal/lean-toolchain"),
+    ]
     try:
         if any(os.path.islink(p) or not os.path.isfile(p) for p in pins):
             raise ValueError("pins must be regular files")
@@ -144,7 +152,7 @@ def rust_code(src):
             if depth:
                 raise ValueError("unterminated Rust comment")
             out.append(" ")
-        elif (m := re.match(r'(?:b|c)?r(#{0,255})"', src[i:])):
+        elif m := re.match(r'(?:b|c)?r(#{0,255})"', src[i:]):
             end = src.find('"' + m.group(1), i + m.end())
             if end < 0:
                 raise ValueError("unterminated Rust raw string")
@@ -158,7 +166,7 @@ def rust_code(src):
                 raise ValueError("unterminated Rust string")
             i += 1
             out.append(" __LITERAL__ ")
-        elif (m := CHAR_LIT.match(src, i)):
+        elif m := CHAR_LIT.match(src, i):
             i = m.end()
             out.append(" __LITERAL__ ")
         else:
@@ -168,9 +176,12 @@ def rust_code(src):
 
 
 def check_wrapper(root, errors):
-    path = os.path.join(os.path.dirname(os.path.abspath(root)), "botho/src/consensus/lottery.rs")
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(root)), "botho/src/consensus/lottery.rs"
+    )
     try:
         from pathlib import Path
+
         p = Path(path)
         if not p.is_file() or any(x.is_symlink() for x in [p, *list(p.parents)[:3]]):
             raise ValueError("wrapper source must be a regular non-symlink path")
@@ -187,18 +198,25 @@ def check_wrapper(root, errors):
           compute_pool_accounting_permille(total_fees, emission_share,
             stored_pool, payout_cap, config.pool_fraction_permille,)
         }"""
-        tokens = lambda x: re.findall(r"[A-Za-z_][A-Za-z_0-9]*|->|[^\s]", x)
+
+        def tokens(x):
+            return re.findall(r"[A-Za-z_][A-Za-z_0-9]*|->|[^\s]", x)
+
         if m is None or tokens(m.group()) != tokens(expected):
-            raise ValueError("expected the reviewed unconditional forwarding expression")
+            raise ValueError(
+                "expected the reviewed unconditional forwarding expression"
+            )
         # Attributes/visibility modifiers attached to this item are unsupported.
-        prefix = text[:m.start()].rstrip()
-        if any(prefix.count(a) != prefix.count(b) for a, b in (("{", "}"), ("(", ")"), ("[", "]"))):
+        prefix = text[: m.start()].rstrip()
+        if any(
+            prefix.count(a) != prefix.count(b)
+            for a, b in (("{", "}"), ("(", ")"), ("[", "]"))
+        ):
             raise ValueError("wrapper must be a top-level item")
         if prefix and prefix[-1] not in "};":
             raise ValueError("unsupported wrapper prefix")
     except (OSError, ValueError) as e:
         errors.append(f"wrapper source contract: {e}")
-
 
 
 def ident_char(ch):
@@ -422,14 +440,24 @@ def check_lakefile(root, errors):
     libs = cfg.get("lean_lib", [])
     names = sorted(lib.get("name", "") for lib in libs)
     if names != sorted(("BothoAeneas", "CanonicalLottery") + GENERATED_LIBS):
-        errors.append(f"lakefile.toml: libraries must be BothoAeneas, CanonicalLottery, "
-                      f"{', '.join(GENERATED_LIBS)}, got {names}")
-    if cfg.get("defaultTargets") != ["MonetaryKernels", "PoolAccounting", "BothoAeneas"]:
-        errors.append("lakefile.toml: defaultTargets must build all extraction and proof libraries")
+        errors.append(
+            f"lakefile.toml: libraries must be BothoAeneas, CanonicalLottery, "
+            f"{', '.join(GENERATED_LIBS)}, got {names}"
+        )
+    if cfg.get("defaultTargets") != [
+        "MonetaryKernels",
+        "PoolAccounting",
+        "BothoAeneas",
+    ]:
+        errors.append(
+            "lakefile.toml: defaultTargets must build all extraction and proof libraries"
+        )
     for lib in libs:
         if lib.get("name") == "CanonicalLottery":
             if lib != CANONICAL_LIBRARY:
-                errors.append("lakefile.toml: canonical library must use the exact reviewed source closure")
+                errors.append(
+                    "lakefile.toml: canonical library must use the exact reviewed source closure"
+                )
             continue
         extra = set(lib) - {"name", "srcDir"}
         if extra:
@@ -485,9 +513,13 @@ def main(argv):
             scan_file(p, "canonical", errors)
         check_wrapper(root, errors)
         gen = regular_lean_files(os.path.join(root, "generated"), errors)
-        expected_gen = {os.path.join(root, "generated", name + ".lean") for name in GENERATED_LIBS}
+        expected_gen = {
+            os.path.join(root, "generated", name + ".lean") for name in GENERATED_LIBS
+        }
         if set(gen) != expected_gen:
-            errors.append("generated/: files must be exactly the two reviewed extraction modules")
+            errors.append(
+                "generated/: files must be exactly the two reviewed extraction modules"
+            )
         proofs = regular_lean_files(os.path.join(root, "BothoAeneas"), errors)
         for name in ("BothoAeneas.lean", "Theorems.lean"):
             p = os.path.join(root, name)

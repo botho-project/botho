@@ -125,7 +125,6 @@ theorem compute_pool_accounting_permille_model
     Botho.Lottery.truncU64, ← hpool, hmod, hemi, hmodelAvail]
   congr 1
   · simp only [Botho.Lottery.satSub]; split <;> omega
-  · simp only [Botho.Lottery.minN]; split <;> omega
 
 /-- The ratified 800-permille specialization; every draw configuration and
 all typed inputs, including saturated carryover, remain in the domain. -/

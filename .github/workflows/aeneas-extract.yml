@@ -163,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .lake/gate-evidence
-          { git rev-parse HEAD HEAD^{tree}; git status --porcelain; } >.lake/gate-evidence/checkout.txt
+          { git rev-parse HEAD 'HEAD^{tree}'; git status --porcelain; } >.lake/gate-evidence/checkout.txt
           sha256sum ../formal/Botho/Lottery/{Pool,Draw,Prims,Candidate,Arith}.lean \
             ../formal/lean-toolchain ../botho/src/consensus/lottery.rs \
             BothoAeneas/*.lean generated/*.lean Theorems.lean lakefile.toml \
