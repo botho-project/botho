@@ -159,6 +159,16 @@ jobs:
             exit 1
           fi
           df -h "$GITHUB_WORKSPACE"
+      - name: Install pinned Charon tools for disposable proof-chain controls
+        run: |
+          set -euo pipefail
+          set -a; . toolchain.env; set +a
+          rustup toolchain install "$CHARON_RUST_NIGHTLY" --profile minimal -c "$CHARON_RUST_COMPONENTS"
+      - name: Cache pinned extraction release for controls
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/botho-aeneas
+          key: aeneas-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('formal-aeneas/toolchain.env') }}
       - name: Build, sorry gate and axiom gate
         run: |
           set -euo pipefail
@@ -180,10 +190,92 @@ jobs:
         run: |
           set -euo pipefail
           time scripts/selftest-gates.sh 2>&1 | tee .lake/gate-evidence/selftest.log
+      - name: Disposable Rust regeneration and proof-chain controls
+        working-directory: .
+        env:
+          CHARON_TARGET_DIR: ${{ runner.temp }}/charon-control-target
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/issue-1713-control.py" <<'PYCONTROL'
+          """Run only on an authorized disposable CI checkout with pinned tools installed."""
+          from pathlib import Path
+          import subprocess, hashlib, json, os, time, re, difflib, signal
+          root=Path.cwd().resolve(); assert (root/'formal-aeneas').is_dir()
+          evidence=root/'formal-aeneas/.lake/rust-control'; evidence.mkdir(parents=True,exist_ok=True)
+          paths=['botho/src/consensus/lottery.rs','formal-aeneas/generated/PoolAccounting.lean','formal-aeneas/generated/MonetaryKernels.lean']
+          original={p:(root/p).read_bytes() for p in paths}
+          sha=lambda b:hashlib.sha256(b).hexdigest()
+          record={'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),'original':{p:sha(b) for p,b in original.items()},'commands':[]}
+          record['source_hashes']={str(p.relative_to(root)):sha(p.read_bytes()) for p in [
+              *(root/'formal/Botho/Lottery').glob('*.lean'),
+              *(root/'formal-aeneas/BothoAeneas').glob('*.lean'),
+              *(root/'formal-aeneas/scripts').glob('*'),
+              root/'formal-aeneas/toolchain.env',root/'formal-aeneas/lean-toolchain',
+              root/'formal-aeneas/lakefile.toml',root/'.github/workflows/aeneas-extract.yml'] if p.is_file()}
+          lean=Path(subprocess.check_output(['elan','which','lean'],cwd=root/'formal-aeneas',text=True).strip())
+          record['lean_binary']={'path':str(lean),'sha256':sha(lean.read_bytes())}
+          def save(): (evidence/'receipt.json').write_text(json.dumps(record,indent=2)+'\n')
+          def run(name,args,want=0,pattern=None,cap=600):
+           start=time.time(); logfile=evidence/(name+'.log')
+           with logfile.open('w') as f:
+            p=subprocess.Popen(args,cwd=root,stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
+            try: code=p.wait(timeout=cap)
+            except subprocess.TimeoutExpired:
+             os.killpg(p.pid,signal.SIGTERM)
+             try: p.wait(timeout=10)
+             except subprocess.TimeoutExpired: os.killpg(p.pid,signal.SIGKILL);p.wait()
+             code=124
+           text=logfile.read_text(); record['commands'].append({'name':name,'argv':args,'cwd':str(root),'cap_seconds':cap,'elapsed_seconds':time.time()-start,'exit':code,'expected_exit':want,'log_sha256':sha(logfile.read_bytes()),'inputs':{p:sha((root/p).read_bytes()) for p in paths}});save()
+           if code != want or (pattern and pattern not in text): raise RuntimeError(f'{name}: exit {code}, expected {want}; diagnostic {pattern!r}')
+           print(name,'exit',code,flush=True); return text
+          rust=root/paths[0]
+          try:
+           s=rust.read_text(); start=s.index('pub fn compute_pool_accounting_permille(');end=s.index('\n}',start)+2
+           old=s[start:end]; assert old.count('        payout,')==1
+           new=old.replace('        payout,','        payout: 0,')
+           mutant=s[:start]+new+s[end:];rust.write_text(mutant)
+           (evidence/'rust-payout.patch').write_text(''.join(difflib.unified_diff(s.splitlines(True),mutant.splitlines(True),fromfile=paths[0],tofile=paths[0])))
+           record['mutant_rust_sha256']=sha(rust.read_bytes());save()
+           run('regeneration-drift',['formal-aeneas/regen.sh','--check'],1,'formal-aeneas/generated/ is out of date')
+           assert all((root/p).read_bytes()==original[p] for p in paths[1:])
+           run('authentic-regeneration',['formal-aeneas/regen.sh'])
+           for p in paths[1:]: (evidence/Path(p).name).write_bytes((root/p).read_bytes())
+           assert (root/paths[1]).read_bytes()!=original[paths[1]]
+           run('regenerated-source-scan',['python3','-I','formal-aeneas/scripts/gate_scan.py','formal-aeneas'])
+           log=run('semantic-proof-rejection',['formal-aeneas/scripts/check-gates.sh'],1,'FAIL: lake build failed')
+           m=re.search(r'error: (?:[^\n]*?/)?BothoAeneas/PoolAccounting.lean:(\d+):',log)
+           assert m,'missing pool proof diagnostic'
+           source=(root/'formal-aeneas/BothoAeneas/PoolAccounting.lean').read_text().splitlines()
+           names=[re.match(r'theorem (\w+)',line).group(1) for line in source[:int(m.group(1))] if re.match(r'theorem (\w+)',line)]
+           record['first_rejecting_declaration']=names[-1];record['first_rejecting_line']=int(m.group(1));save()
+           assert names[-1] in {'compute_pool_accounting_permille_spec','compute_pool_accounting_permille_model'},names[-1]
+          finally:
+           for p,b in original.items(): (root/p).write_bytes(b)
+           record['restored']={p:sha((root/p).read_bytes()) for p in paths};save()
+          run('restored-regeneration',['formal-aeneas/regen.sh','--check'])
+          run('restored-gates',['formal-aeneas/scripts/check-gates.sh'])
+          try:
+           s=rust.read_text();start=s.index('pub fn compute_pool_accounting(');end=s.index('\n}',start)+2
+           old=s[start:end];new=old.replace('        total_fees,\n        emission_share,','        emission_share,\n        total_fees,');assert old!=new
+           mutant=s[:start]+new+s[end:];rust.write_text(mutant)
+           (evidence/'wrapper.patch').write_text(''.join(difflib.unified_diff(s.splitlines(True),mutant.splitlines(True),fromfile=paths[0],tofile=paths[0])))
+           assert all((root/p).read_bytes()==original[p] for p in paths[1:])
+           run('wrapper-extraction-unchanged',['formal-aeneas/regen.sh','--check'])
+           run('wrapper-rejection',['python3','-I','formal-aeneas/scripts/gate_scan.py','formal-aeneas'],1,'wrapper source contract:')
+          finally:
+           for p,b in original.items(): (root/p).write_bytes(b)
+          run('final-restored-gates',['formal-aeneas/scripts/check-gates.sh'])
+          run('clean-restored-tree',['git','diff','--exit-code'])
+          record['all_commands_settled']=True; record['restored']={p:sha((root/p).read_bytes()) for p in paths};save()
+          print('first rejecting declaration:',record['first_rejecting_declaration'],flush=True)
+          PYCONTROL
+          python3 -u "$RUNNER_TEMP/issue-1713-control.py"
       - name: Retain gate and negative-control evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: aeneas-gate-evidence
-          path: formal-aeneas/.lake/gate-evidence/
+          path: |
+            formal-aeneas/.lake/gate-evidence/
+            formal-aeneas/.lake/rust-control/
           retention-days: 14
