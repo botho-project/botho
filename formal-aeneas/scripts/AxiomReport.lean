@@ -81,7 +81,9 @@ partial def axiomsOf (env : Environment) (c : Name) : StateM Memo (Array Name) :
   return result
 
 def isPkgModule (m : Name) : Bool :=
-  m == `MonetaryKernels || m == `PoolAccounting || (`BothoAeneas).isPrefixOf m
+  m == `MonetaryKernels || m == `PoolAccounting || (`BothoAeneas).isPrefixOf m ||
+    #[`Botho.Lottery.Pool, `Botho.Lottery.Draw, `Botho.Lottery.Prims,
+      `Botho.Lottery.Candidate, `Botho.Lottery.Arith].contains m
 
 def main (args : List String) : IO UInt32 := do
   let out :: names := args

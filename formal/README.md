@@ -74,10 +74,10 @@ Rules:
 - Cite which one you mean: "proven (extraction): `halving_reward` never
   panics when ..." or "proven (model) + tested: ...". Plain "proven" means
   proven (model), as in the table further up.
-- A theorem about the extraction does not upgrade a `formal/` model, and a
-  `formal/` theorem says nothing about `formal-aeneas/generated/`. If both
-  exist for one kernel, keep both labels; agreement between them is not
-  checked by any gate.
+- Keep extraction and model labels distinct. The pool-accounting bridge
+  below proves one precise equality; other extraction postconditions do not
+  establish equality to a canonical model. Transferring a model theorem also
+  requires its own premises and the bridge's representation/domain conditions.
 - Use the extraction where Aeneas can reach the code (pure integer kernels
   in `cluster-tax`, see `formal/aeneas/SPIKE.md`). Use a model + DRT where it
   cannot (floats, hashing, iterator chains, protocol state machines).
@@ -88,6 +88,36 @@ Rules:
   `typecheck`). That job is not a required check and has no separate trusted
   verify step, so its result is evidence from an untrusted build, like the
   `formal/` build job's.
+
+### Extraction coverage by kernel (#1713)
+
+| Rust kernel | Actual extraction claim | Canonical model correspondence |
+|---|---|---|
+| `compute_pool_accounting_permille` | Successful return plus full-record equality (`compute_pool_accounting_permille_model`); `_model_800` and `_no_fail` consequences | Proven equality to `Botho.Lottery.computePoolAccounting` for all typed inputs with `pm.val ≤ 1000`, including `u128` saturation, and arbitrary draw config |
+| `split_fees_permille` | Exact fraction and fee conservation | Used in the pool bridge; no separate canonical equality export |
+| `MonetaryPolicy::halving_reward` | No failure, phases and antitonicity with interval/count bounds | Model plus finite DRT; no canonical equality bridge |
+| `MonetaryPolicy::calculate_tail_reward_u128` | Conditional no failure and exact truncation; positive result needs its width premise | No canonical equality bridge; zero-cast counterexample and mainnet supply bounds remain |
+| `sybil_reward_cap`, `is_eligible_at` | Exact scalar postconditions | Model plus finite DRT; no canonical equality bridge |
+| `lottery_emission_bps`, `lottery_emission_share` | Exact scalar postconditions and share bounds | Model plus finite DRT; no canonical equality bridge |
+| `capitalized_reset_charge` | Only the no-downgrade branch | Full charge correctness remains model plus finite DRT |
+| `count_eligible_in`, `demurrage_charge` | Extracted and axiom-gated, without correctness theorems | Finite DRT is not a proof about these extractions |
+
+The bridge reads the five `.val` fields into `Botho.Lottery.Accounting`;
+it does not copy a substitute arithmetic model. Its successful-return
+conclusion excludes panic and divergence in the extracted semantics. The
+unextracted public config wrapper has a restricted forwarding source check,
+not a semantic proof. See [the exact statements and boundaries](../formal-aeneas/README.md#equality-to-the-canonical-pool-model-1713).
+
+The Aeneas package compiles precisely `Pool`, `Draw`, `Prims`, `Candidate`
+and `Arith` from this directory as sibling **sources**, using matching Lean
+pins and its own `.lake/build` artifacts. It does not consume `formal/.lake`
+or add Aeneas/Mathlib to this package. All five modules are scanned and owned
+by its compiled axiom walk, including unused declarations. Canonical edits
+trigger its separate CI. This source sharing does not merge the trust chains:
+`formal/` retains isolated verification; the extraction gate still runs in
+the same job as its build and trusts the pinned translator and primitive
+library. Whole-node correctness and other kernels are not upgraded by this
+one bridge.
 
 ## Building locally
 

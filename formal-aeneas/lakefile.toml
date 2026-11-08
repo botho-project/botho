@@ -24,3 +24,11 @@ srcDir = "generated"
 # Proofs about the extraction.
 [[lean_lib]]
 name = "BothoAeneas"
+
+# Compile only this reviewed canonical source closure into this package's .lake.
+# These are source paths, never formal/.lake artifacts or a package dependency.
+[[lean_lib]]
+name = "CanonicalLottery"
+srcDir = "../formal"
+roots = ["Botho.Lottery.Pool", "Botho.Lottery.Draw", "Botho.Lottery.Prims", "Botho.Lottery.Candidate", "Botho.Lottery.Arith"]
+globs = ["Botho.Lottery.Pool", "Botho.Lottery.Draw", "Botho.Lottery.Prims", "Botho.Lottery.Candidate", "Botho.Lottery.Arith"]

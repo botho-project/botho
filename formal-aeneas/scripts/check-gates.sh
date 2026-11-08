@@ -108,6 +108,19 @@ commands="$(cat "$tmp/commands")"
 names=()
 while IFS=$'\t' read -r _ name; do names+=("$name"); done <<<"$commands"
 
+# Snapshot the complete owned module inventory before any build code executes.
+expected_modules="$(python3 -I - "$root" <<'PYMODULES'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+modules = {"MonetaryKernels", "PoolAccounting", "BothoAeneas"}
+modules.update("Botho.Lottery." + n for n in ("Pool", "Draw", "Prims", "Candidate", "Arith"))
+modules.update(str(p.relative_to(root).with_suffix("")).replace("/", ".")
+               for p in (root / "BothoAeneas").rglob("*.lean"))
+print("\n".join(sorted(modules)))
+PYMODULES
+)"
+
 echo "== formal-aeneas gate: lake build"
 if ! (cd "$root" && "$lake" build) >"$tmp/build" 2>&1; then
   cat "$tmp/build"
@@ -135,7 +148,7 @@ lean_status=0
 json="$(cd "$root" && "$lake" env lean --json --stdin <<<"$manifest_src" 2>&1)" || lean_status=$?
 
 GATE_LEAN_STATUS="$lean_status" GATE_COMMANDS="$commands" GATE_JSON="$json" GATE_REPORT="$(cat "$tmp/report")" \
-  GATE_ALLOWLIST="$allowlist_src" python3 -I - <<'PY'
+  GATE_MODULES="$expected_modules" GATE_ALLOWLIST="$allowlist_src" python3 -I - <<'PY'
 import json
 import os
 import re
@@ -153,7 +166,7 @@ errors = []
 if os.environ["GATE_LEAN_STATUS"] != "0":
     errors.append(f"Theorems.lean does not compile (lean exit {os.environ['GATE_LEAN_STATUS']})")
 
-walked, own, done = {}, 0, False
+walked, own, done, modules = {}, 0, False, set()
 for row in os.environ["GATE_REPORT"].splitlines():
     parts = row.split("\t")
     kind = parts[0]
@@ -174,10 +187,21 @@ for row in os.environ["GATE_REPORT"].splitlines():
         errors.append(f"{parts[1]}: `opaque` declared in the package")
     elif kind == "UNSAFE":
         errors.append(f"{parts[1]}: `unsafe` or `partial` definition in the package")
+    elif kind == "MODULE":
+        if parts[1] in modules:
+            errors.append(f"duplicate MODULE record: {parts[1]}")
+        modules.add(parts[1])
     elif kind == "DONE":
         done = True
 if not done or own == 0:
     errors.append("axiom walk did not complete (no DONE line or no declarations)")
+
+expected_modules = set(os.environ["GATE_MODULES"].splitlines())
+if modules != expected_modules:
+    errors.append(f"owned MODULE inventory differs: missing={sorted(expected_modules - modules)}, "
+                  f"extra={sorted(modules - expected_modules)}")
+for mod in sorted(modules):
+    print(f"MODULE\t{mod}")
 
 RESULT = re.compile(
     r"'(.+?)' (?:depends on axioms: \[(.*)\]|does not depend on any axioms)\s*", re.S)

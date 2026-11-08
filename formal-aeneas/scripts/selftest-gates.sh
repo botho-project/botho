@@ -27,11 +27,19 @@ root="$(cd "${1:-$here/..}" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fails=0
+evidence="${SELFTEST_EVIDENCE_DIR:-}"
+if [[ -n "$evidence" ]]; then mkdir -p "$evidence"; fi
 
 # Copy the package sources (not .lake) into a fresh directory $1.
 fresh() {
   local d="$1"
-  rm -rf "$d"; mkdir -p "$d"
+  rm -rf "$(dirname "${d:?}")"; mkdir -p "$d" "$d/../formal/Botho/Lottery" "$d/../botho/src/consensus"
+  local module
+  for module in Pool Draw Prims Candidate Arith; do
+    cp "$root/../formal/Botho/Lottery/$module.lean" "$d/../formal/Botho/Lottery/"
+  done
+  cp "$root/../formal/lean-toolchain" "$d/../formal/"
+  cp "$root/../botho/src/consensus/lottery.rs" "$d/../botho/src/consensus/"
   cp -R "$root/generated" "$root/BothoAeneas" "$d/"
   cp "$root/BothoAeneas.lean" "$root/Theorems.lean" "$root/axioms-allowlist.txt" \
      "$root/lakefile.toml" "$root/lake-manifest.json" "$root/lean-toolchain" \
@@ -50,6 +58,9 @@ expect() {
   if [[ "$got" == fail && -n "$pattern" ]] && ! grep -qF -- "$pattern" "$tmp/log"; then
     got="fail without '$pattern'"
   fi
+  if [[ -n "$evidence" ]]; then
+    cp "$tmp/log" "$evidence/$(printf '%s' "$label" | tr -cs '[:alnum:]' '_').log"
+  fi
   if [[ "$got" == "$want" ]]; then
     echo "ok   - $label ($got)"
   else
@@ -63,7 +74,7 @@ gen="generated/MonetaryKernels.lean"
 proof="BothoAeneas/HalvingReward.lean"
 
 echo "== part 1: source scan"
-d="$tmp/s"
+d="$tmp/s/formal-aeneas"
 fresh "$d"; expect pass "clean tree" scan "$d"
 fresh "$d"; printf '\ntheorem t : 1 = 2 := sorry\n' >>"$d/$proof"
 expect 'fail:forbidden token `sorry`' "sorry in a proof" scan "$d"
@@ -107,6 +118,62 @@ expect 'fail:forbidden token `axiom`' "--generated: attribute-prefixed axiom" sc
 cp "$root/$gen" "$g/"; printf '\nopaque F64 : Type\n' >>"$g/MonetaryKernels.lean"
 expect 'fail:forbidden token `opaque`' "--generated: opaque" scan --generated "$g"
 
+echo "== canonical closure and wrapper source controls"
+canonical="../formal/Botho/Lottery"
+for module in Pool Draw Prims Candidate Arith; do
+  fresh "$d"; printf '\naxiom canonical_bad : False\n' >>"$d/$canonical/$module.lean"
+  expect 'fail:forbidden token `axiom`' "canonical axiom: $module" scan "$d"
+done
+fresh "$d"; printf '\nimport Botho.Lottery.Conservation\n' >>"$d/$canonical/Pool.lean"
+expect 'fail:import of `Botho.Lottery.Conservation`' "canonical extra import" scan "$d"
+fresh "$d"; printf '\n@[implemented_by id] def bad (n : Nat) := n\n' >>"$d/$canonical/Arith.lean"
+expect 'fail:forbidden attribute `implemented_by`' "canonical native substitution" scan "$d"
+fresh "$d"; rm "$d/$canonical/Arith.lean"
+expect 'fail:canonical source must be a regular file' "missing canonical source" scan "$d"
+fresh "$d"; mv "$d/$canonical/Arith.lean" "$d/../arith-copy"; ln -s ../../arith-copy "$d/$canonical/Arith.lean"
+expect 'fail:canonical source must be a regular file' "canonical source symlink" scan "$d"
+fresh "$d"; mv "$d/../formal" "$d/../formal-copy"; ln -s formal-copy "$d/../formal"
+expect 'fail:canonical directory must be regular' "canonical directory symlink" scan "$d"
+fresh "$d"; mkdir -p "$d/Botho/Lottery"; cp "$root/../formal/Botho/Lottery/Arith.lean" "$d/Botho/Lottery/"
+expect 'fail:outside the scanned set' "shadow canonical source" scan "$d"
+fresh "$d"; echo leanprover/lean4:v0.0.0 >"$d/../formal/lean-toolchain"
+expect 'fail:canonical Lean toolchain: pins differ' "canonical toolchain mismatch" scan "$d"
+for mutation in layout root glob extra; do
+  fresh "$d"
+  python3 - "$d/lakefile.toml" "$mutation" <<'PYCONFIG'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text(); kind = sys.argv[2]
+if kind == "layout": s = s.replace('srcDir = "../formal"', 'srcDir = "../formal/.lake"')
+if kind == "root": s = s.replace('roots = ["Botho.Lottery.Pool",', 'roots = [')
+if kind == "glob": s = s.replace('globs = ["Botho.Lottery.Pool",', 'globs = ["Botho.Lottery.*",')
+if kind == "extra": s = s.replace('roots = [', 'roots = ["Botho.Basic",')
+p.write_text(s)
+PYCONFIG
+  expect 'fail:canonical library must use the exact reviewed source closure' "canonical library $mutation" scan "$d"
+done
+for mutation in arguments field conditional duplicate literal unsupported nested; do
+  fresh "$d"
+  python3 - "$d/../botho/src/consensus/lottery.rs" "$mutation" <<'PYWRAPPER'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text(); kind = sys.argv[2]
+start = s.index('pub fn compute_pool_accounting(')
+end = s.index('\n}', start) + 2
+old = s[start:end]; new = old
+if kind == "arguments": new = old.replace('        total_fees,\n        emission_share,', '        emission_share,\n        total_fees,')
+if kind == "field": new = old.replace('config.pool_fraction_permille,', '800,')
+if kind == "conditional": new = old.replace('    compute_pool_accounting_permille(', '    if total_fees == 0 { panic!("bad") }\n    compute_pool_accounting_permille(')
+if kind == "duplicate": new = old + '\n' + old
+if kind == "literal": new = 'const FAKE: &str = r###"' + old + '"###; /* ' + old + ' */'
+if kind == "nested": new = '#[cfg(any())] mod hidden { fn before() {}\n' + old + '\n}'
+if kind == "unsupported": new = old.replace('    compute_pool_accounting_permille(', '    return compute_pool_accounting_permille(')
+assert new != old
+p.write_text(s[:start] + new + s[end:])
+PYWRAPPER
+  expect 'fail:wrapper source contract:' "wrapper $mutation" scan "$d"
+done
+
 if [[ "$scan_only" == 0 ]]; then
   echo "== part 2: axiom walk and #print axioms, with the scan off"
   if [[ ! -d "$root/.lake/packages/aeneas" ]]; then
@@ -116,7 +183,7 @@ if [[ "$scan_only" == 0 ]]; then
   # walk_case LABEL PATTERN APPEND_TO_PROOF [MANIFEST_LINE]. The appended text
   # lands after the module's `end`, so its names are top-level.
   walk_case() {
-    local d="$tmp/w"
+    local d="$tmp/w/formal-aeneas"
     fresh "$d"
     mkdir -p "$d/.lake"
     ln -s "$root/.lake/packages" "$d/.lake/packages"
@@ -134,6 +201,53 @@ if [[ "$scan_only" == 0 ]]; then
     '@[simp] axiom selftest_ax2 : (3 : Nat) = 4'
   walk_case "walk: opaque" 'selftest_opaque: `opaque` declared in the package' \
     'opaque selftest_opaque : Nat'
+  # The canonical module is owned even when its new axiom is unused.
+  d="$tmp/canonical-walk/formal-aeneas"; fresh "$d"
+  mkdir -p "$d/.lake"; ln -s "$root/.lake/packages" "$d/.lake/packages"
+  printf '\naxiom canonical_unused : Nat\n' >>"$d/$canonical/Arith.lean"
+  expect 'fail:canonical_unused: `axiom` declared in the package' \
+    "walk: unused canonical axiom" "$here/check-gates.sh" --no-scan "$d"
+
+  # Compile clean sources first, mutate in place (warm artifacts), then restore.
+  # The first actual rejecting declaration must be the new model bridge.
+  for mutation in Pool Arith; do
+    d="$tmp/canonical-proof/formal-aeneas"; fresh "$d"
+    mkdir -p "$d/.lake"; ln -s "$root/.lake/packages" "$d/.lake/packages"
+    expect pass "canonical $mutation warm baseline" "$here/check-gates.sh" "$d"
+    cp "$d/$canonical/$mutation.lean" "$tmp/original.lean"
+    python3 - "$d/$canonical/$mutation.lean" "$mutation" <<'PYMUTATE'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text()
+old, new = (("payout := minN available payoutCap", "payout := minN available payoutCap + 1")
+            if sys.argv[2] == "Pool" else
+            ("if a + b ≤ max then a + b else max", "if a + b ≤ max then a + b else max + 1"))
+assert s.count(old) == 1
+p.write_text(s.replace(old, new))
+PYMUTATE
+    if [[ -n "$evidence" ]]; then
+      diff -u "$tmp/original.lean" "$d/$canonical/$mutation.lean" >"$evidence/$mutation.patch" || true
+      sha256sum "$d/$canonical/$mutation.lean" >"$evidence/$mutation-mutant.sha256"
+    fi
+    expect 'fail:FAIL: lake build failed' "canonical $mutation mutation" "$here/check-gates.sh" "$d"
+    # Fail closed if an unrelated compilation error rejected the mutant.
+    python3 - "$tmp/log" "$d/BothoAeneas/PoolAccounting.lean" <<'PYREJECT' || fails=$((fails + 1))
+from pathlib import Path
+import re, sys
+log, source = Path(sys.argv[1]).read_text(), Path(sys.argv[2]).read_text().splitlines()
+m = re.search(r"error: (?:[^\n]*?/)?BothoAeneas/PoolAccounting.lean:(\d+):", log)
+if not m: raise SystemExit("FAIL: no bridge compiler diagnostic")
+line = int(m.group(1)); declarations = []
+for n, text in enumerate(source[:line], 1):
+    if match := re.match(r"theorem (\w+)", text): declarations.append((n, match.group(1)))
+actual = declarations[-1][1]
+print("first rejecting declaration:", actual, "line", line)
+if actual != "compute_pool_accounting_permille_model": raise SystemExit("FAIL: wrong rejecting declaration")
+PYREJECT
+    cp "$tmp/original.lean" "$d/$canonical/$mutation.lean"
+    cmp "$root/../formal/Botho/Lottery/$mutation.lean" "$d/$canonical/$mutation.lean"
+    expect pass "canonical $mutation restored" "$here/check-gates.sh" "$d"
+  done
   walk_case "walk: manifest names a missing theorem" \
     'no_such_theorem: listed in Theorems.lean but not a declaration' \
     '' '#print axioms BothoAeneas.HalvingReward.no_such_theorem'
