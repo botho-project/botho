@@ -2,6 +2,10 @@
 % Appendix D: Assurance Map
 % ============================================================================
 
+\clearpage
+\begingroup
+\raggedright
+
 \section{Formal Models and Assurance Boundaries}
 \label{appendix:formal}
 
@@ -14,7 +18,7 @@ names are qualified by the namespace stated beside each table. The complete
 statements and their definition closure, rather than a prose paraphrase, govern.
 
 \begin{center}
-\begin{tabular}{@{}p{0.23\textwidth}p{0.71\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.23\textwidth}>{\raggedright\arraybackslash}p{0.71\textwidth}@{}}
 \toprule
 Status & Meaning \\
 \midrule
@@ -72,13 +76,14 @@ changes. Their own CI has its own source identity.
 
 \subsection{Covered Families}
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Scaffold}
 
 Sources: \path{formal/Botho/Basic.lean}.
 Namespace: \path{Botho}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -88,14 +93,17 @@ Proven (model) & \path{transfer_conserves} assumes a successful toy transfer; \p
 \end{center}
 
 No registered DRT leg or production ledger correspondence is claimed. These are toy natural-number helpers, not evidence of consensus conservation.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Lottery primitives, eligibility and seed}
 
 Sources: \path{formal/Botho/Lottery/}: \path{Arith.lean}, \path{Prims.lean}, \path{Seed.lean}, \path{Window.lean}, \path{SeedIndependence.lean}.
 Namespace: \path{Botho.Lottery}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -107,14 +115,17 @@ Tested (DRT) & \path{lottery_seed_v2}: \path{botho::consensus::lottery::lottery_
 \end{center}
 
 Hash parameters and supplied prestates remain explicit. Body independence does not prevent parent-PoW grinding or candidate-set re-rolls. These helper tests do not prove hash security or accepted-chain reachability.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Lottery candidates and drawing}
 
 Sources: \path{formal/Botho/Lottery/}: \path{Candidate.lean}, \path{Draw.lean}, \path{Drawing.lean}, \path{Determinism.lean}.
 Namespace: \path{Botho.Lottery}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -126,14 +137,17 @@ Tested (DRT) & \path{lottery_candidates}: \path{botho::ledger::Ledger::get_lotte
 \end{center}
 
 Correct key ordering and decode-success correspondence are boundaries of the model. The integer model does not cover EntropyWeighted or Hybrid floating-point alpha conversion. Uniform mode is a selection rule; arbitrary opaque hashes and weighted modes are not thereby proved uniform.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Lottery pool and conservation}
 
 Sources: \path{formal/Botho/Lottery/Pool.lean} and \path{Conservation.lean}.
 Namespace: \path{Botho.Lottery}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -145,14 +159,17 @@ Tested (DRT) & \path{sybil_reward_cap}: \path{bth_cluster_tax::sybil_reward_cap}
 \end{center}
 
 The general saturated equation cannot be replaced by its no-loss corollary. Policy values live in \path{FeeConfig}, \path{canonicalConfig}, and \path{DrawConfig.default}; payout arithmetic alone establishes no economic safety claim.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Lottery counterexamples, expectations and simulator}
 
 Sources: \path{formal/Botho/Lottery/Sybil.lean} and \path{SybilExpectation.lean}.
 Namespace: \path{Botho.Lottery}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -164,14 +181,17 @@ Tested (DRT) & \path{lottery_sim} calls \path{LotterySimulation::new_production}
 \end{center}
 
 The simulator adapter supplies ordered candidates, owners, fees, emission, reward and derived seed. It maintains an independent expected inventory; Lean advances its own arithmetic carryover. One Lean composition fills both expected comparison slots; state and synthetic-output identity checks are Rust-only. Sequences contain one through four blocks with at most 10,000 candidates per snapshot; rejected inputs have separate atomicity tests. This is not a third independent model or a reachability/economic proof. Research results and the paired production examples retain the distinct provenance in \path{docs/research/ct-compatible-lottery-selection.md}; \#1837 remains a policy decision.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Quorum intersection and rotation}
 
 Sources: \path{formal/Botho/Quorum/Fbas.lean}.
 Namespace: \path{Botho.Quorum}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -183,14 +203,17 @@ Tested; no DRT leg & \path{botho/src/commands/run.rs}: \path{symmetric_intersect
 \end{center}
 
 The old Crash-mode flag overclaim is historical. Fleet-wide/local-view and mixed-roster limits remain (\#1844); none of these theorems proves SCP message handling, safety/liveness of the entire protocol, peer discovery or federated deployment.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Tag vectors and wallet merge}
 
 Sources: \path{formal/Botho/Tags/Vector.lean}.
 Namespace: \path{Botho.Tags}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -202,14 +225,17 @@ Tested (DRT) & \path{merge_weighted}: \path{bth_transaction_types::ClusterTagVec
 \end{center}
 
 Tags use bounded integer weights with truncation and pruning, not rationals guaranteed to sum to one. Wallet/mempool merging is not a block-validation rule. Research decay variants, complete fee estimation and adversarial wallet behavior are not established by these results.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Tag inheritance, exact wealth and import floor}
 
 Sources: \path{formal/Botho/Tags/Inherit.lean} and \path{EffectiveExact.lean}.
 Namespace: \path{Botho.Tags}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -221,14 +247,17 @@ Tested (DRT) & \path{cluster_tag_inheritance}: \path{first_malformed_output_tags
 \end{center}
 
 Current output validation, fresh epoch-import rules and C6 are distinct checks. The real-ledger \path{cluster_tag_invariant_tests} add finite writer/reader evidence, not a universal import or fee invariant. \path{FeeEnv} parameters and ledger correspondence remain explicit.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Difficulty controller and historical time warp}
 
 Sources: \path{formal/Botho/Difficulty/Step.lean}, \path{Warp.lean}, \path{Vectors.lean}.
 Namespace: \path{Botho.Difficulty}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -240,14 +269,17 @@ Tested (DRT) & \path{difficulty_step}: \path{botho::block::difficulty::EmissionC
 \end{center}
 
 The controller arithmetic remains current; the old timestamp-chain acceptance model does not. A valid controller trajectory does not establish PoW, wall-clock or accepted-chain feasibility. The difficulty numeric convention makes larger values easier PoW.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Node-local slot duration}
 
 Sources: \path{formal/Botho/Consensus/SlotDuration.lean}.
 Namespace: \path{Botho.Consensus}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -258,14 +290,17 @@ Tested (DRT) & \path{slot_duration}: \path{botho::consensus::ConsensusService::c
 \end{center}
 
 This paces a node; it is not consensus validity. The model uses exact integer comparisons. The source argument for correspondence to Rust floating point assumes totals and window time below $2^{53}$ and window time below $5\cdot10^{14}$; that rounding argument is trusted, not a float theorem. Subsecond \path{Duration} behavior, the unused timing fallback and real clock behavior remain outside the model.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Current timestamps}
 
 Sources: \path{formal/Botho/Timestamps.lean}.
 Namespace: \path{Botho.Timestamps}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -276,14 +311,17 @@ Tested (DRT) & \path{timestamps}: \path{median_time_past_of}, \path{ChainState::
 \end{center}
 
 These protocol-8 rules persist in protocol 9. Ledger scalar comparisons use full \path{u64}; minting comparison has explicit headroom below \path{U64_MAX} minus the modeled future allowance. Generated windows are bounded. Helpers and scalar predicates do not execute a full validator, PoW or SCP, or prove physical-clock history realizability. The runtime expiry issue \#1958 is separate.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Exact demurrage charge}
 
 Sources: \path{formal/Botho/Demurrage/Counterexamples.lean} and \path{ExactCharge.lean}.
 Namespace: \path{Botho.Demurrage}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -295,14 +333,17 @@ Tested (DRT) & \path{demurrage_charge}: \path{bth_cluster_tax::demurrage_charge}
 \end{center}
 
 The exact total-Nat model does not itself prove Rust equivalence, Rust panic-freedom, a principal bound, accepted-chain behavior, or the composed \path{consensus_fee_floor}. \#1711 retains reset/settlement/spend, width/fuzz and fee-composition obligations.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Exact centroid and default curve}
 
 Sources: \path{formal/Botho/Demurrage/Exact.lean}; curve definitions in \path{Counterexamples.lean}.
 Namespace: \path{Botho.Demurrage}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -313,14 +354,17 @@ Tested (DRT) & \path{ring_centroid_factor}: \path{bth_cluster_tax::ring_centroid
 \end{center}
 
 The earlier saturating centroid and scale counterexamples describe replaced semantics. Protocol-9 exact arithmetic fixes those instances. The default curve has finite DRT evidence, not a universal composed fee-floor or adversarial-ring/economic theorem; \#1711 remains open.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Monetary emission}
 
 Sources: \path{formal/Botho/Monetary/Emission.lean}.
 Namespace: \path{Botho.Monetary}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -332,14 +376,17 @@ Tested (DRT) & \path{monetary}: \path{bth_cluster_tax::MonetaryPolicy} phase, ha
 \end{center}
 
 Current policy values are declared in this module, not repeated here. Huge synthetic cast-loss/overflow inputs do not establish reachable supply. The tests include safe and cast-loss boundaries; there is no full issuance-controller or net-inflation economic proof.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Supply scalar accounting}
 
 Sources: \path{formal/Botho/Supply/Accounting.lean}.
 Namespace: \path{Botho.Supply}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -350,14 +397,17 @@ Limits; no family DRT & \path{arbitrary_pool_saturates} and \path{oversized_frac
 \end{center}
 
 The conserved quantity uses economic unspent value plus pool plus burned value equal to issuance. Economic unspent value is not the sum of retained append-only records. This conditional scalar accounting result is not accepted Rust block conservation.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Supply ordinary transactions}
 
 Sources: \path{formal/Botho/Supply/Transactions.lean}.
 Namespace: \path{Botho.Supply.Transactions}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -368,14 +418,17 @@ Conditional correspondence & \path{ordinary_step_correspondence} requires a succ
 \end{center}
 
 No whole-transaction registered DRT leg exists. Finite oracle fixtures do not identify real hidden inputs universally or establish complete hidden history. Context, commit, signature binding and key/identity correspondences remain external obligations.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Supply structured block and genesis}
 
 Sources: \path{formal/Botho/Supply/Block.lean}.
 Namespace: \path{Botho.Supply.Block}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -387,14 +440,17 @@ Tested; no family DRT & The finite real-commit/saved-replay accepted-block oracl
 \end{center}
 
 Hash/curve primitives, encoding and shared output identity, policy schedules, stored context and commit correspondence remain premises. Model reachability does not prove universal LMDB atomicity, cryptographic binding, output recoverability or schedule reachability. \#1839, \#1890 and \#1896 retain their integration/campaign obligations.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Aeneas monetary extraction}
 
 Sources: \path{formal-aeneas/BothoAeneas/}: \path{Basic.lean}, \path{HalvingReward.lean}, \path{TailReward.lean}.
 Namespace: \path{BothoAeneas}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -405,14 +461,17 @@ Proven (extraction) & In \path{TailReward}: \path{calculate_tail_reward_u128_spe
 \end{center}
 
 \path{Basic.lean} supplies primitive adapters, not extra consensus guarantees. These are generated-code claims with the translation/library/non-isolated-gate trust described above, not a registered whole-family DRT leg. The handwritten Monetary model and its separate DRT evidence must not be conflated with extraction.
+\end{minipage}
+\par\medskip
 
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Aeneas lottery and pool extraction}
 
 Sources: \path{formal-aeneas/BothoAeneas/LotteryKernels.lean} and \path{PoolAccounting.lean}.
 Namespace: \path{BothoAeneas}.
 
 \begin{center}
-\begin{tabular}{@{}p{0.20\textwidth}p{0.74\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
 \toprule
 Claim & Evidence and premises \\
 \midrule
@@ -423,6 +482,8 @@ Proven (extraction) & In \path{PoolAccounting}: \path{split_fees_permille_spec},
 \end{center}
 
 The manifest also gates extracted \path{count_eligible_in} and \path{demurrage_charge}, without an accompanying exported theorem for them here. Do not promote current exact-charge or composed reset/settlement behavior to extracted proof. No whole-family registered DRT leg exists; \#1713 and translation/gate trust remain explicit.
+\end{minipage}
+\par\medskip
 
 \subsection{What Remains Outside This Map}
 
@@ -447,3 +508,5 @@ The existing \path{scripts/check-stale-doc-literals.py} guard catches only
 four historical literal patterns. Its Appendix D maintenance note does not
 claim generic equality checking between this prose and Lean. A new or
 changed number therefore needs source review even when that lint is green.
+
+\endgroup
