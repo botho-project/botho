@@ -1,490 +1,512 @@
 % ============================================================================
-% Appendix D: Formal Specifications
+% Appendix D: Assurance Map
 % ============================================================================
 
-\section{Formal Specifications}
+\clearpage
+\begingroup
+\raggedright
+
+\section{Formal Models and Assurance Boundaries}
 \label{appendix:formal}
 
-This appendix provides formal state machine specifications for the \Botho
-protocol, suitable for verification and implementation reference.
-
-\subsection{State Definitions}
-
-\subsubsection{Blockchain State}
-
-The blockchain state $\Sigma$ is a tuple:
-
-\begin{equation}
-\Sigma = (\mathcal{U}, \mathcal{I}, \mathcal{C}, h, t)
-\end{equation}
-
-where:
-\begin{itemize}
-  \item $\mathcal{U}$: UTXO set (unspent transaction outputs)
-  \item $\mathcal{I}$: Key image set (spent output identifiers)
-  \item $\mathcal{C}$: Cluster tag database
-  \item $h$: Current block height
-  \item $t$: Latest block timestamp
-\end{itemize}
-
-\textbf{UTXO Structure}:
-\begin{lstlisting}[caption={Formal UTXO definition}]
-UTXO = {
-    outpoint: (block_height, tx_index, output_index),
-    commitment: CompressedPoint,  // Pedersen commitment
-    one_time_key: CompressedPoint,
-    kem_ciphertext: [u8; 1088],
-    cluster_tag: ClusterTag,
-    created_height: u64,
-}
-
-ClusterTag = {
-    weights: Map<ClusterId, Rational>,  // Sum to 1
-}
-\end{lstlisting}
-
-\textbf{Key Image Set}:
-\begin{equation}
-\mathcal{I} = \{ I \in \mathbb{G} : I \text{ has been spent} \}
-\end{equation}
-
-Key images are deterministic: $I = x \cdot \Hp(P)$ where $x$ is the private
-key and $P$ is the one-time public key.
-
-\subsubsection{Consensus State}
-
-The SCP consensus state $\Xi$ for slot $s$ is:
-
-\begin{equation}
-\Xi_s = (\phi_s, \beta_s, M_s, V_s)
-\end{equation}
-
-where:
-\begin{itemize}
-  \item $\phi_s \in \{\text{NOMINATING}, \text{PREPARING}, \text{COMMITTING}, \text{EXTERNALIZED}\}$
-  \item $\beta_s$: Current ballot $(n, v)$ where $n$ is counter, $v$ is value
-  \item $M_s$: Set of received messages
-  \item $V_s$: Set of nominated values
-\end{itemize}
-
-\subsection{State Transition Functions}
-
-\subsubsection{Block Application}
-
-The state transition function $\delta: \Sigma \times B \to \Sigma$ applies
-block $B$ to state $\Sigma$:
-
-\begin{lstlisting}[caption={Block application function}]
-function apply_block(state: State, block: Block) -> Result<State> {
-    // 1. Verify block header
-    require(block.prev_hash == hash(state.latest_block))
-    require(block.height == state.height + 1)
-    require(verify_pow(block.header))
-
-    // 2. Verify minting transaction
-    let reward = compute_block_reward(block.height)
-    require(sum(block.minting_tx.outputs) <= reward)
-    require(verify_mldsa(block.minting_tx.signature))
-
-    // 3. Apply each transaction
-    let new_state = state
-    for tx in block.transactions {
-        new_state = apply_transaction(new_state, tx)?
-    }
-
-    // 4. Add minting outputs to UTXO set
-    for (i, output) in block.minting_tx.outputs.enumerate() {
-        let utxo = create_utxo(block, 0, i, output)
-        new_state.utxo_set.insert(utxo)
-    }
-
-    // 5. Process fee redistribution
-    new_state = process_fees(new_state, block)?
-
-    // 6. Update metadata
-    new_state.height = block.height
-    new_state.timestamp = block.timestamp
-    new_state.latest_block = hash(block)
-
-    Ok(new_state)
-}
-\end{lstlisting}
-
-\subsubsection{Transaction Application}
-
-The transaction application function:
-
-\begin{lstlisting}[caption={Transaction application function}]
-function apply_transaction(
-    state: State,
-    tx: Transaction
-) -> Result<State> {
-    // 1. Validate transaction structure
-    require(1 <= tx.inputs.len() <= 16)
-    require(1 <= tx.outputs.len() <= 16)
-
-    // 2. Check key image uniqueness
-    for input in tx.inputs {
-        require(!state.key_images.contains(input.key_image))
-    }
-
-    // 3. Verify ring signatures
-    for (input, signature) in zip(tx.inputs, tx.signatures) {
-        let ring = get_ring_members(state, input.ring)
-        require(verify_clsag(signature, ring, tx.prefix_hash))
-    }
-
-    // 4. Verify value conservation
-    let input_sum = sum_commitments(get_input_commitments(tx))
-    let output_sum = sum_commitments(tx.outputs.map(|o| o.commitment))
-    let fee_point = tx.fee * H
-    require(input_sum == output_sum + fee_point)
-
-    // 5. Verify range proofs
-    require(verify_bulletproof(tx.bulletproof, tx.outputs))
-
-    // 6. Check minimum fee
-    let cluster_factor = compute_cluster_factor(tx)
-    let min_fee = base_fee * tx.size * cluster_factor
-    require(tx.fee >= min_fee)
-
-    // 7. Apply state changes
-    let mut new_state = state
-
-    // Remove spent outputs (we don't know which, but add key images)
-    for input in tx.inputs {
-        new_state.key_images.insert(input.key_image)
-    }
-
-    // Add new outputs
-    for (i, output) in tx.outputs.enumerate() {
-        let utxo = create_utxo_from_output(tx, i, output)
-        new_state.utxo_set.insert(utxo)
-    }
-
-    Ok(new_state)
-}
-\end{lstlisting}
-
-\subsubsection{Fee Processing}
-
-Fee redistribution follows the 80/20 lottery/burn model with a cumulative,
-emission-fed pool and a per-block payout cap. The pseudocode below mirrors
-the protocol-7.0.0 consensus implementation
-(\path{botho/src/ledger/lottery_v2.rs} \texttt{drawing},
-\path{botho/src/consensus/lottery.rs},
-\path{botho/src/ledger/store/validation.rs} \path{lottery_candidates},
-\path{cluster-tax/src/lottery.rs}); it is the authoritative specification of
-the draw referenced from Sections~\ref{sec:monetary} and \ref{sec:economics}.
-Payout outputs are LotteryV2 records with independently keyed one-time
-targets; that binding is omitted here.
-
-\begin{lstlisting}[caption={Fee processing and lottery draw (protocol 7.0.0)}]
-const WINNERS_PER_DRAW:   usize = 4;
-const MIN_UTXO_AGE:       u64 = 720;               // blocks
-const CIRCULATION_WINDOW: u64 = 10_000;            // blocks (max age)
-const MIN_UTXO_VALUE:     u64 = 1_000_000;         // 1 microBTH, picocredits
-const MAX_CANDIDATES:   usize = 10_000;            // candidate-set cap
-const LOTTERY_BASE_FEE:   u64 = 250_000_000_000;   // 0.25 BTH cap unit (never charged)
-
-function process_fees(state: State, block: Block) -> State {
-    let total_fees = sum(block.transactions.map(|tx| tx.fee))
-    let (fee_pool, burn) = (80% * total_fees, 20% * total_fees) // burn destroyed
-
-    // Seed: PoW fields of the parent (tip) header, never its header hash.
-    let parent = state.tip_header
-    let seed = SHA256("BOTHO_LOTTERY_SEED_V2" || parent.pow_hash()
-                      || parent.prev_block_hash || block.height.le_bytes())
-
-    // Candidates: read from the state AFTER the parent block (see #1689).
-    let candidates = lottery_candidates(state.utxo_set, block.height, seed)
-    let rho = candidates.len()
-
-    // Cap R = min(rho * base_fee, block_reward). rho counts the window (#1682).
-    let cap = min(rho * LOTTERY_BASE_FEE, block.reward)
-
-    // Pool is cumulative (u128) and also fed by the block reward's
-    // height-scheduled emission share (0, then +10%/epoch, cap 50%).
-    let emission_share = lottery_emission_share(block.height, block.reward)
-    let available: u128 = state.pool_carryover + emission_share + fee_pool
-    let payout: u64 = min(available, cap)
-
-    // No draw when payout == 0 or there are no candidates (winners = []).
-    let winners = draw_uniform(candidates, payout, seed)
-    for w in winners {
-        state = apply_lottery_payout(state, w.outpoint, w.payout)
-    }
-    state.pool_carryover = available - sum(winners.map(|w| w.payout))
-    state
-}
-
-// Seed-offset window over the UTXO set, eligibility by age band and dust floor.
-function lottery_candidates(utxos: Set<UTXO>, height: u64, seed: Hash) -> Vec<UTXO> {
-    let start = offset_key(seed, height)               // 36-byte UTXO-id key
-    let mut out = []
-    for u in utxos.iter_from(start).wrap_around() {    // key order, deterministic
-        if out.len() >= MAX_CANDIDATES { break }
-        let age = height - u.created_height
-        if age >= MIN_UTXO_AGE && age <= CIRCULATION_WINDOW
-           && u.value >= MIN_UTXO_VALUE {             // reads the amount
-            out.push(u)                                // coinbase/payouts included (#1690)
-        }
-    }
-    out
-}
-
-// Verifiable uniform selection without replacement (SelectionMode::Uniform).
-function draw_uniform(eligible: Vec<UTXO>, payout: u64, seed: Hash) -> Vec<Winner> {
-    if eligible.is_empty() || payout == 0 { return [] }
-    let n = min(WINNERS_PER_DRAW, eligible.len())
-    let per_winner = payout / n
-    let mut winners = []
-    for i in 0..n {
-        let remaining = eligible.len() - winners.len()
-        let roll = verifiable_random_u128(seed, i) % remaining   // deterministic
-        winners.push(nth_unselected(eligible, roll, exclude=winners))
-    }
-    assign_payouts(winners, per_winner, remainder_to_last=payout - per_winner*n)
-}
-\end{lstlisting}
-
-\subsection{Validity Predicates}
-
-\subsubsection{Transaction Validity}
-
-A transaction $T$ is valid with respect to state $\Sigma$ iff:
-
-\begin{equation}
-\text{Valid}(T, \Sigma) \Leftrightarrow \bigwedge_{i=1}^{8} P_i(T, \Sigma)
-\end{equation}
-
-where predicates $P_i$ are:
-
-\begin{enumerate}
-  \item $P_1$: \textbf{Structure}
-    \[
-    1 \leq |T.\text{inputs}| \leq 16 \land 1 \leq |T.\text{outputs}| \leq 16
-    \]
-
-  \item $P_2$: \textbf{Key Image Freshness}
-    \[
-    \forall I \in T.\text{key\_images}: I \notin \Sigma.\mathcal{I}
-    \]
-
-  \item $P_3$: \textbf{Key Image Uniqueness (intra-tx)}
-    \[
-    |T.\text{key\_images}| = |\{I : I \in T.\text{key\_images}\}|
-    \]
-
-  \item $P_4$: \textbf{Ring Validity}
-    \[
-    \forall r \in T.\text{rings}: |r| = 20 \land \forall o \in r: o \in \Sigma.\mathcal{U}
-    \]
-
-  \item $P_5$: \textbf{Signature Validity}
-    \[
-    \forall (r, \sigma, I) \in \text{zip}(T.\text{rings}, T.\text{sigs}, T.\text{key\_images}):
-    \text{CLSAG.Verify}(r, \sigma, I, T.\text{hash})
-    \]
-
-  \item $P_6$: \textbf{Value Conservation}
-    \[
-    \sum_{i} C_{\text{in}}^{(i)} = \sum_{j} C_{\text{out}}^{(j)} + T.\text{fee} \cdot H
-    \]
-
-  \item $P_7$: \textbf{Range Proofs}
-    \[
-    \text{Bulletproof.Verify}(T.\text{proof}, \{C_{\text{out}}^{(j)}\})
-    \]
-
-  \item $P_8$: \textbf{Fee Sufficiency}
-    \[
-    T.\text{fee} \geq f_{\text{base}} \cdot |T|_{\text{bytes}} \cdot \phi(T)
-    \]
-    where $\phi(T)$ is the cluster factor
-\end{enumerate}
-
-\subsubsection{Block Validity}
-
-A block $B$ is valid with respect to state $\Sigma$ iff:
-
-\begin{equation}
-\text{Valid}(B, \Sigma) \Leftrightarrow \bigwedge_{i=1}^{6} Q_i(B, \Sigma)
-\end{equation}
-
-where predicates $Q_i$ are:
-
-\begin{enumerate}
-  \item $Q_1$: \textbf{Chain Linkage}
-    \[
-    B.\text{prev\_hash} = \Hash(\Sigma.\text{latest\_block})
-    \]
-
-  \item $Q_2$: \textbf{Height Increment}
-    \[
-    B.\text{height} = \Sigma.h + 1
-    \]
-
-  \item $Q_3$: \textbf{Proof of Work}
-    \[
-    \Hash(B.\text{header}) < B.\text{target}
-    \]
-
-  \item $Q_4$: \textbf{Timestamp Validity}
-    \[
-    \Sigma.t < B.t \leq \text{now} + \epsilon
-    \]
-
-  \item $Q_5$: \textbf{Minting Validity}
-    \[
-    \sum B.\text{mint}.\text{outputs} \leq R(B.\text{height}) \land
-    \Hash\bigl(B.\text{mint}.\text{nonce} \| B.\text{prev} \|
-    B.\text{mint}.\pk_{\text{view}} \| B.\text{mint}.\pk_{\text{spend}}\bigr)
-    < B.\text{target}
-    \]
-
-  \item $Q_6$: \textbf{Transaction Validity}
-    \[
-    \forall T \in B.\text{transactions}: \text{Valid}(T, \Sigma')
-    \]
-    where $\Sigma'$ is state after applying preceding transactions
-\end{enumerate}
-
-\subsection{SCP State Machine}
-
-\subsubsection{Message Types}
-
-\begin{lstlisting}[caption={SCP message types}]
-enum SCPMessage {
-    Nominate {
-        slot: u64,
-        voted: Set<Value>,
-        accepted: Set<Value>,
-    },
-    Prepare {
-        slot: u64,
-        ballot: Ballot,
-        prepared: Option<Ballot>,
-        prepared_prime: Option<Ballot>,
-        quorum_set_hash: Hash,
-    },
-    Commit {
-        slot: u64,
-        ballot: Ballot,
-        prepared_counter: u32,
-        quorum_set_hash: Hash,
-    },
-    Externalize {
-        slot: u64,
-        commit: Ballot,
-        quorum_set_hash: Hash,
-    },
-}
-
-struct Ballot {
-    counter: u32,
-    value: Value,  // Block hash
-}
-\end{lstlisting}
-
-\subsubsection{State Transitions}
-
-\begin{lstlisting}[caption={SCP state machine}]
-function process_scp_message(
-    state: SCPState,
-    msg: SCPMessage,
-    sender: NodeId
-) -> SCPState {
-    match msg {
-        Nominate { slot, voted, accepted } => {
-            // Update nomination state
-            for v in voted {
-                if sender in state.quorum_slice {
-                    state.slots[slot].voted.insert(v)
-                }
-            }
-            for v in accepted {
-                if has_blocking_set(state, sender, v) {
-                    state.slots[slot].accepted.insert(v)
-                }
-            }
-
-            // Check if nomination complete
-            if has_quorum(state, state.slots[slot].accepted) {
-                state.slots[slot].phase = PREPARING
-                let value = pick_composite_value(state.slots[slot].accepted)
-                state.slots[slot].ballot = Ballot { counter: 1, value }
-            }
-        },
-
-        Prepare { slot, ballot, .. } => {
-            // Process prepare vote
-            if state.slots[slot].phase >= PREPARING {
-                update_prepare_state(state, slot, ballot, sender)
-
-                // Check for commit transition
-                if can_commit(state, slot) {
-                    state.slots[slot].phase = COMMITTING
-                }
-            }
-        },
-
-        Commit { slot, ballot, .. } => {
-            // Process commit vote
-            if state.slots[slot].phase >= COMMITTING {
-                update_commit_state(state, slot, ballot, sender)
-
-                // Check for externalize
-                if has_quorum_commit(state, slot) {
-                    state.slots[slot].phase = EXTERNALIZED
-                    emit_externalize(state, slot)
-                }
-            }
-        },
-
-        Externalize { slot, commit, .. } => {
-            // Accept externalize from quorum
-            if has_quorum_externalize(state, slot, commit) {
-                state.slots[slot].phase = EXTERNALIZED
-                state.slots[slot].externalized_value = Some(commit.value)
-            }
-        },
-    }
-
-    state
-}
-\end{lstlisting}
-
-\subsection{Invariants}
-
-The following invariants are maintained:
-
-\begin{enumerate}
-  \item \textbf{Key Image Uniqueness}
-    \[
-    \forall I \in \mathcal{I}: |\{T : I \in T.\text{key\_images}\}| = 1
-    \]
-
-  \item \textbf{UTXO Conservation}
-    \[
-    \sum_{U \in \mathcal{U}} \text{value}(U) + \text{burned} = \text{total\_minted}
-    \]
-
-  \item \textbf{Cluster Tag Normalization}
-    \[
-    \forall U \in \mathcal{U}: \sum_{c} U.\text{cluster\_tag}.\text{weights}[c] = 1
-    \]
-
-  \item \textbf{SCP Safety}
-    \[
-    \forall s, v_1, v_2: \text{externalized}(s, v_1) \land \text{externalized}(s, v_2) \Rightarrow v_1 = v_2
-    \]
-
-  \item \textbf{Chain Integrity}
-    \[
-    \forall h > 0: B_h.\text{prev\_hash} = \Hash(B_{h-1})
-    \]
-\end{enumerate}
-
-These invariants can be checked by a model checker or used as assertions in
-implementation testing.
+The executable definitions in \path{formal/} are authoritative for the
+\emph{covered models}. They replace this appendix's former handwritten
+state-machine specification; they do not specify or prove the entire Rust
+node. A definition alone is not a proved property. The tables below identify
+named results, their premises, implementation tests, and gaps. Short theorem
+names are qualified by the namespace stated beside each table. The complete
+statements and their definition closure, rather than a prose paraphrase, govern.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.23\textwidth}>{\raggedright\arraybackslash}p{0.71\textwidth}@{}}
+\toprule
+Status & Meaning \\
+\midrule
+Proven (model) & A named theorem about handwritten Lean definitions, exported
+in \path{formal/Theorems.lean}. Its hypotheses must hold. A counterexample is
+a proved refutation of the specified claim. \\
+Tested & Finite Rust/model agreement or a named Rust/oracle test. Passing DRT
+is evidence of correspondence, never universal Rust equivalence. \\
+Proven (extraction) & A named theorem about generated Lean in
+\path{formal-aeneas/}, with translation and primitive-library trust separate
+from the handwritten model. \\
+Trusted & An explicit premise or opaque dependency: for example cryptographic
+binding, a clock reading, or a storage/encoding correspondence. \\
+Not covered & No applicable proof or test boundary in this map establishes
+the requested property. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A component may have several statuses for different claims. Both axiom
+allowlists currently contain only \path{propext}, \path{Classical.choice},
+and \path{Quot.sound}. There is no custom hash axiom: lottery hashes are
+parameters of \path{Botho.Lottery.Prims}. Quantification over arbitrary
+functions proves only the stated structural properties; it does not prove
+SHA-256, RandomX, or curve security.
+
+The \path{formal-gate} build/verify split checks exported statements,
+definition closures and axioms using the trusted verifier, separately from
+the untrusted build. Lean's kernel and the pinned toolchain remain trusted.
+The Aeneas \path{typecheck} job instead builds and gates together: it is
+\emph{non-isolated}, not the \path{formal-gate} trust boundary. Its claims
+also trust the pinned Charon/Aeneas translation and Aeneas library's Rust
+primitive semantics. The two packages do not share a gate; one package's
+proof does not upgrade the other.
+
+\subsection{Reading the Test Boundary}
+
+The registered DRT leg names below are those in
+\path{formal-drt/src/main.rs}. Their adapters under \path{formal-drt/src/}
+define typed inputs, constructive generators, comparisons and saved replays.
+Tests cover those sampled domains, not all inputs or accepted histories.
+The seed adapter uses a Lean SHA-256 implementation with startup vectors;
+RandomX output is supplied as data, not recomputed or proved in Lean.
+Quorum tests and the accepted-block oracle are separate from registered DRT.
+
+As dated baseline evidence, Formal DRT run
+\href{https://github.com/botho-project/botho/actions/runs/42447672210}{42447672210}
+(job \path{128629947677}) used seed 1707, with 10,000 generated and compared
+cases per registered leg, 166 saved replays, and no mismatches or shrink
+attempts. Its checkout was \path{060aefa539a13af0666da6c0a10d140c029a97b7};
+its tree \path{02f61ad14c1e82b4a1c19247905f87810631a49e} is the documentation
+review baseline. The report and artifact digests are retained with issue
+\#1716. This is historical finite evidence, not a new run of these document
+changes. Their own CI has its own source identity.
+
+\subsection{Covered Families}
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Scaffold}
+
+Sources: \path{formal/Botho/Basic.lean}.
+Namespace: \path{Botho}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{transfer_conserves} assumes a successful toy transfer; \path{transfer_isSome_iff} characterizes success by available funds. \path{satAdd_le_cap} bounds the result; \path{satAdd_eq_add} requires the sum to fit the cap. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+No registered DRT leg or production ledger correspondence is claimed. These are toy natural-number helpers, not evidence of consensus conservation.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Lottery primitives, eligibility and seed}
+
+Sources: \path{formal/Botho/Lottery/}: \path{Arith.lean}, \path{Prims.lean}, \path{Seed.lean}, \path{Window.lean}, \path{SeedIndependence.lean}.
+Namespace: \path{Botho.Lottery}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Model definitions & \path{Arith.lean} specifies saturation, checked addition, narrowing casts and byte order. Policy pointers are \path{DrawConfig.default}, \path{LOTTERY_SEED_V2_DOMAIN}, and \path{lotterySeedV2}; eligibility uses \path{Candidate.isEligible} and \path{countEligible}. \\
+Proven (model) & \path{seed_body_independent} holds at equal height and parent link; \path{seed_reads_tip_only} holds for equal tips. \path{seed_factors} requires successful seed derivation. \path{candidates_of_postState} characterizes successful drawing. \path{winners_ids_independent_of_amounts} fixes rows, tip, height and parent link, requires both drawings to succeed and both payouts to be nonzero, and concludes equal winner IDs, not equal amounts. \\
+Tested (DRT) & \path{lottery_seed_v2}: \path{botho::consensus::lottery::lottery_seed_v2}; \path{is_eligible}: \path{bth_cluster_tax::LotteryCandidate::is_eligible}; \path{count_eligible}: \path{bth_cluster_tax::count_eligible}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Hash parameters and supplied prestates remain explicit. Body independence does not prevent parent-PoW grinding or candidate-set re-rolls. These helper tests do not prove hash security or accepted-chain reachability.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Lottery candidates and drawing}
+
+Sources: \path{formal/Botho/Lottery/}: \path{Candidate.lean}, \path{Draw.lean}, \path{Drawing.lean}, \path{Determinism.lean}.
+Namespace: \path{Botho.Lottery}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Model definitions & \path{lotteryCandidates} scans by seed offset, caps and filters candidates; \path{drawWinnersWithSeed}, \path{drawLotteryWinnersSeeded} and \path{drawing} compose integer drawing and accounting. \\
+Proven (model) & \path{drawing_perm_invariant} sorts both permutations by ID and requires distinct IDs. It does not make raw order irrelevant: \path{draw_order_dependent} and \path{scan_cap_order_dependent} are explicit counterexamples. \\
+Tested (DRT) & \path{lottery_candidates}: \path{botho::ledger::Ledger::get_lottery_validation_candidates}, through the real LMDB reader. \path{draw_winners_with_seed}: \path{bth_cluster_tax::draw_winners_with_seed}; \path{draw_lottery_winners_seeded}: the same-named \path{botho::consensus::lottery} wrapper. \path{drawing}: \path{botho::ledger::lottery_v2::drawing}, through \path{ledger::formal_drt} with an in-memory read double. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Correct key ordering and decode-success correspondence are boundaries of the model. The integer model does not cover EntropyWeighted or Hybrid floating-point alpha conversion. Uniform mode is a selection rule; arbitrary opaque hashes and weighted modes are not thereby proved uniform.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Lottery pool and conservation}
+
+Sources: \path{formal/Botho/Lottery/Pool.lean} and \path{Conservation.lean}.
+Namespace: \path{Botho.Lottery}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{splitFees_conserves} requires a pool fraction no greater than the permille denominator; \path{splitFees_canonical_conserves} instantiates \path{canonicalConfig}. \path{totalPaid_drawEligible} requires success and nonempty winners. \path{drawing_paid} bounds actual payments on successful drawing. \\
+Proven (model) & \path{drawing_conserves} includes saturation loss. \path{drawing_conserves_no_loss} additionally requires stored pool plus emission plus fee pool to fit \path{U128_MAX}. \path{drawing_widths} assumes successful drawing and fee summation, reward/emission/individual fees within \path{U64_MAX}, and stored pool within \path{U128_MAX}. \\
+Tested (DRT) & \path{sybil_reward_cap}: \path{bth_cluster_tax::sybil_reward_cap}. In \path{botho::consensus::lottery}: \path{split_fees} tests \path{LotteryFeeConfig::split_fees}; \path{reward_cap} and \path{compute_pool_accounting} test their namesakes; \path{carryover_after} tests \path{LotteryPoolAccounting::carryover_after}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The general saturated equation cannot be replaced by its no-loss corollary. Policy values live in \path{FeeConfig}, \path{canonicalConfig}, and \path{DrawConfig.default}; payout arithmetic alone establishes no economic safety claim.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Lottery counterexamples, expectations and simulator}
+
+Sources: \path{formal/Botho/Lottery/Sybil.lean} and \path{SybilExpectation.lean}.
+Namespace: \path{Botho.Lottery}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven refutations & \path{sybil_net_zero_refuted} uses the concrete \path{ceReads}/\path{ceBlock} witness, heights in its canonical eligibility window and a per-ticket cost below \path{LOTTERY_BASE_FEE_PICO}. It compares prestates per height, not an accepted multi-block history. \path{rewardCap_inert} requires reward within \path{U128_MAX} and at most eligible count times the base fee. \path{split_never_pays_iff} is stationary algebra with a valid permille fraction; \path{break_even_reference} is a concrete reference instance. \\
+Conditional proofs & \path{Ideal.exact_share} needs a positive draw count no larger than the candidate list, under the ideal path-counting model. \path{Ideal.base_fee_bound} also needs pool no greater than the eligible-count cap. \path{Modulo.u128_iid_bridge} assumes the stated IID path frequencies and at most four draws; it retains modulo-bias slack. \path{Ideal.marginal_cap_only_refuted} refutes a cap-only inference; \path{Ideal.ce2_expected_profit} assumes its \path{Input} domain, 10,000 candidates, positive owned count and per-ticket cost at most 6,250,000 pico; it is not universal profitability. \\
+Tested (DRT) & \path{lottery_sim} calls \path{LotterySimulation::new_production} and \path{apply_production_block}, separately compares node \path{reward_cap}, \path{compute_pool_accounting}, and \path{draw_lottery_winners_seeded}, and checks public simulator state. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The simulator adapter supplies ordered candidates, owners, fees, emission, reward and derived seed. It maintains an independent expected inventory; Lean advances its own arithmetic carryover. One Lean composition fills both expected comparison slots; state and synthetic-output identity checks are Rust-only. Sequences contain one through four blocks with at most 10,000 candidates per snapshot; rejected inputs have separate atomicity tests. This is not a third independent model or a reachability/economic proof. Research results and the paired production examples retain the distinct provenance in \path{docs/research/ct-compatible-lottery-selection.md}; \#1837 remains a policy decision.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Quorum intersection and rotation}
+
+Sources: \path{formal/Botho/Quorum/Fbas.lean}.
+Namespace: \path{Botho.Quorum}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{sym_intersects_iff_pos} requires a positive symmetric threshold; \path{analytic_rule_eq} equates the analytic tests. \path{sym_despite_iff} states intersection after deletion. \path{byzTol_iff_dset} requires at least one faulty and at least two honest nodes. \path{checker_sound} is sufficient for a flat FBAS; \path{checker_complete_sym} is complete only for positive symmetric thresholds. \path{bruteIntersects_iff} concerns the distinct exact enumerator. \\
+Proven (model) & \path{rotation_sound} requires both individual and cross-roster threshold inequalities and the faulty-count bound. \path{rotation_condition_necessary} assumes covering rosters and positive feasible thresholds. \path{recommended_bft_bowtie_fork} and \path{reroster_mixed_fork} refute local-gate sufficiency. The model assigns a roster literally; Rust adds self, so correspondence requires the stated self-listed-node condition. \\
+Tested; no DRT leg & \path{botho/src/commands/run.rs}: \path{symmetric_intersection_matches_lean_closed_form} and \path{lean_rotation_instances_through_real_gate}, plus the Byzantine-tolerance checks. These are finite Rust checks using \path{bth_quorum_sim}, not a registered quorum DRT leg. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The old Crash-mode flag overclaim is historical. Fleet-wide/local-view and mixed-roster limits remain (\#1844); none of these theorems proves SCP message handling, safety/liveness of the entire protocol, peer discovery or federated deployment.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Tag vectors and wallet merge}
+
+Sources: \path{formal/Botho/Tags/Vector.lean}.
+Namespace: \path{Botho.Tags}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (historical model) & \path{mergeWeighted_sub_convex} assumes successful legacy \path{mergeWeighted}; \path{mergeWeighted_mass_le_scale} also bounds each input mass by \path{SCALE}. \path{decayEntry_antitone} requires entry weight within \path{U32_MAX} and ordered decay rates. Truncation/pruning need not preserve unit mass: \path{mergeWeighted_truncation_halves_mass} is a concrete witness. \\
+Historical refutations & \path{mergeWeighted_overflow_panics} and \path{mergeWeighted_decay_not_antitone} describe the old implementation, before \#1863. They are not claims that the current safe function panics or wraps. \\
+Tested (DRT) & \path{merge_weighted}: \path{bth_transaction_types::ClusterTagVector::merge_weighted}, compared with current \path{mergeWeightedSafe}. Legacy theorems do not automatically transfer to that definition. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Tags use bounded integer weights with truncation and pruning, not rationals guaranteed to sum to one. Wallet/mempool merging is not a block-validation rule. Research decay variants, complete fee estimation and adversarial wallet behavior are not established by these results.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Tag inheritance, exact wealth and import floor}
+
+Sources: \path{formal/Botho/Tags/Inherit.lean} and \path{EffectiveExact.lean}.
+Namespace: \path{Botho.Tags}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (historical model) & \path{inheritOk_bound} requires accepted legacy \path{inheritOk} and a cluster present in the input rings. \path{fresh_cluster_credit_unbounded} is the old fresh-cluster counterexample. Current \texttt{inheritOk}\textsubscript{8} adds output well-formedness and fresh-cluster restrictions to the mass check; it has tests, not a new universal inheritance theorem. \\
+Model results and limits & \path{whale_claimed_wealth_exact} compares a concrete exact-wealth witness with the old saturating result. \path{tag_drop_escapes_import_floor} requires an import cluster, positive typed value and both \path{FeeEnv} curve-at-zero and implied factor below the import floor. \path{import_floor_invariant_refuted} uses \path{flatEnv}. Dropping tags remains a distinct limitation; it is not the repaired fresh-mass bug. \\
+Tested (DRT) & \path{cluster_tag_inheritance}: \path{first_malformed_output_tags}, then \path{ValidationReads::verify_cluster_tag_inheritance}. \path{effective_cluster_wealth}: \path{ValidationReads::effective_cluster_wealth_from_outputs}, versus \path{effectiveWealthExact}. \path{import_floor_factor}: \path{ValidationReads::import_floor_factor_from_outputs}. These Rust entries are under \path{botho::ledger::store} and its \path{validation} module. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Current output validation, fresh epoch-import rules and C6 are distinct checks. The real-ledger \path{cluster_tag_invariant_tests} add finite writer/reader evidence, not a universal import or fee invariant. \path{FeeEnv} parameters and ledger correspondence remain explicit.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Difficulty controller and historical time warp}
+
+Sources: \path{formal/Botho/Difficulty/Step.lean}, \path{Warp.lean}, \path{Vectors.lean}.
+Namespace: \path{Botho.Difficulty}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{step_in_bounds} holds for natural inputs. \path{step_no_overflow} assumes current difficulty within \path{U64_MAX}. \path{step_mono_current} and \path{step_mono_observed} require ordered corresponding inputs. \path{run_le_pow} and \path{run_ge_div_pow} bound trajectories from positive difficulty no greater than \path{MAX_DIFFICULTY}. \\
+Historical refutation & \path{time_warp_to_floor_in_55}, with positive parent timestamp and the historical future-bound premise, concerns \path{tsValid}/\path{observedSecs}/\path{applyChain} in \path{Warp.lean} semantics before protocol 8. It does not show acceptance under current timestamps. \\
+Tested (DRT) & \path{difficulty_step}: \path{botho::block::difficulty::EmissionController::compute_time_adjusted_difficulty}; \path{difficulty_run}: \path{EmissionController::record_block}, reached through \path{formal_drt_difficulty}. \path{Botho.Vectors} adds fixed examples; current gap-floor feeds are tested separately. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The controller arithmetic remains current; the old timestamp-chain acceptance model does not. A valid controller trajectory does not establish PoW, wall-clock or accepted-chain feasibility. The difficulty numeric convention makes larger values easier PoW.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Node-local slot duration}
+
+Sources: \path{formal/Botho/Consensus/SlotDuration.lean}.
+Namespace: \path{Botho.Consensus}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{slot_in_tiers} returns a member of \path{TIERS} or the configured whole-second duration. \path{recordBlock} models the bounded activity window. \path{forward_dated_block_forces_idle} is conditional on a nonempty old window, old timestamps no later than now, and its specific forward stamp and transaction-count bound. \\
+Tested (DRT) & \path{slot_duration}: \path{botho::consensus::ConsensusService::current_slot_duration}, via the test-fixture adapter, with additional fixed \path{Botho.Vectors} cases. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This paces a node; it is not consensus validity. The model uses exact integer comparisons. The source argument for correspondence to Rust floating point assumes totals and window time below $2^{53}$ and window time below $5\cdot10^{14}$; that rounding argument is trusted, not a float theorem. Subsecond \path{Duration} behavior, the unused timing fallback and real clock behavior remain outside the model.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Current timestamps}
+
+Sources: \path{formal/Botho/Timestamps.lean}.
+Namespace: \path{Botho.Timestamps}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{short_window_zero} needs a bounded window of length at most five. \path{rolling_mtp_monotone} requires a bounded window, typed new timestamp and a stamp above MTP. \path{honest_stamp_headroom_iff} characterizes acceptance for bounded windows and typed minter/validator times by MTP and minter time relative to \path{futureCap}. \path{zero_skew_counterexample} refutes unconditional honest acceptance even at equal clocks. \path{some_observed_gap_floor} assumes a successful gap result and typed timestamps. \\
+Tested (DRT) & \path{timestamps}: \path{median_time_past_of}, \path{ChainState::next_min_timestamp}, \path{ChainState::rolled_timestamps}, \path{node::minter::minting_timestamp}, \path{block::difficulty::observed_block_time}, and ledger predicates \path{timestamp_after_mtp}, \path{ledger_timestamp_within_future_bound}, \path{minting_timestamp_within_future_bound}, all in \path{botho}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These protocol-8 rules persist in protocol 9. Ledger scalar comparisons use full \path{u64}; minting comparison requires now at most \path{U64_MAX} minus the modeled future allowance. Generated windows are bounded. Helpers and scalar predicates do not execute a full validator, PoW or SCP, or prove physical-clock history realizability. The runtime expiry issue \#1958 is separate.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Exact demurrage charge}
+
+Sources: \path{formal/Botho/Demurrage/Counterexamples.lean} and \path{ExactCharge.lean}.
+Namespace: \path{Botho.Demurrage}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{exactCharge_positive_iff} assumes positive year, rate and elapsed time, and factor above the lower clamp; its conclusion is the exact value threshold. \path{exactCharge_split_loss_bound} needs a nonempty split and positive year. \path{exactCharge_split_rounding} additionally requires the aggregate uncapped quotient to fit \path{U64_MAX}; without that condition \path{exactCharge_split_clipping_counterexample} applies. \\
+Proven (model) & \path{exactCharge_mono_elapsed} and \path{exactCharge_mono_factor} hold on all natural arguments, requiring only order of the changed argument. They include zero divisors, clamp boundaries and cap plateaus; they are not reset-horizon monotonicity. \\
+Tested (DRT) & \path{demurrage_charge}: \path{bth_cluster_tax::demurrage_charge}, compared with \path{exactCharge}. Historical \path{charge}, \path{six_block_dead_zone}, \path{churn_counterexample}, \path{charge_exceeds_value} and \path{saturation_lowers_charge} remain records of replaced arithmetic, not results about current \path{exactCharge}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The exact total-Nat model does not itself prove Rust equivalence, Rust panic-freedom, a principal bound, accepted-chain behavior, or the composed \path{consensus_fee_floor}. \#1711 retains reset/settlement/spend, width/fuzz and fee-composition obligations.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Exact centroid and default curve}
+
+Sources: \path{formal/Botho/Demurrage/Exact.lean}; curve definitions in \path{Counterexamples.lean}.
+Namespace: \path{Botho.Demurrage}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{exactCentroid_homogeneous} assumes positive multiplicity and value, with wealth within \path{U128_MAX}. \path{homogeneous_ring_scale_exact}, \path{homogeneous_centroid_exact}, and \path{exact_versus_saturating_boundary} are concrete homogeneous/boundary witnesses for the repaired exact arithmetic. \\
+Tested (DRT) & \path{ring_centroid_factor}: \path{bth_cluster_tax::ring_centroid_implied_factor}, versus \path{ringFactorExact}. \path{default_cluster_factor}: \path{bth_cluster_tax::ClusterFactorCurve::default_params().factor}, versus \path{defaultFactor}, including its logarithm/interpolation definitions. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The earlier saturating centroid and scale counterexamples describe replaced semantics. Protocol-9 exact arithmetic fixes those instances. The default curve has finite DRT evidence, not a universal composed fee-floor or adversarial-ring/economic theorem; \#1711 remains open.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Monetary emission}
+
+Sources: \path{formal/Botho/Monetary/Emission.lean}.
+Namespace: \path{Botho.Monetary}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{phase_safe} assumes typed height; \path{halving_nonincreasing} orders heights within the halving phase. \path{tail_success_iff} states product/addition bounds and preserves the narrowing cast. \path{tail_safe_domain} assumes supply at most \path{safeSupply}; \path{tail_u64_domain} specializes to \path{U64_MAX}. Arithmetic-safe and lossless-cast domains are different. \\
+Proven (model) & \path{block_reward_safe} needs typed height and safe supply. \path{successor_safe} additionally excludes maximal height and proves one step, not closure of the safe domain. \path{successor_failures} characterizes height and gross-add errors. \path{lottery_emission_bound} binds successful reward calculation to equal typed header/mint heights and safe supply; \path{demurrage_current} pins the rate for every natural height. \path{phase1_exact_sum} excludes zero-reward genesis; \path{first_tail_value} is a concrete boundary result. \path{unrestricted_tail_claims_refuted} retains overflow/zero-cast counterexamples. \\
+Tested (DRT) & \path{monetary}: \path{bth_cluster_tax::MonetaryPolicy} phase, halving, tail, block reward, lottery-emission and demurrage-rate methods, plus \path{botho::block::calculate_block_reward}, using \path{mainnet_policy_mirror}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Current policy values are declared in this module, not repeated here. Huge synthetic cast-loss/overflow inputs do not establish reachable supply. The tests include safe and cast-loss boundaries; there is no full issuance-controller or net-inflation economic proof.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Supply scalar accounting}
+
+Sources: \path{formal/Botho/Supply/Accounting.lean}.
+Namespace: \path{Botho.Supply}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{splitFees_conserves} and \path{splitFees_rounding} assume fees within \path{U64_MAX} and a fraction no greater than the permille denominator. \path{apply_conserves} assumes prior conservation, spend no greater than unspent value, input/output/fee balance, emission no greater than reward, typed fees, valid fraction, mined-plus-reward within \path{U128_MAX}, and distribution no greater than available pool. \\
+Limits; no family DRT & \path{arbitrary_pool_saturates} and \path{oversized_fraction_creates_value} show why premises and loss terms matter. The shared lottery fee/pool kernels have their own DRT legs; there is no whole Supply.Accounting leg. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The conserved quantity uses economic unspent value plus pool plus burned value equal to issuance. Economic unspent value is not the sum of retained append-only records. This conditional scalar accounting result is not accepted Rust block conservation.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Supply ordinary transactions}
+
+Sources: \path{formal/Botho/Supply/Transactions.lean}.
+Namespace: \path{Botho.Supply.Transactions}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{transaction_balance} and \path{batch_balance} require successful checked sums. \path{checked_keys_sources} assumes a well-formed store, successful key checks, \path{CLSAGBinding}, \path{KeyAssociation} and \path{UnspentCorrespondence}; it derives distinct finite spend sources. \path{checked_ordinary_flow} additionally requires batch success and fresh insertion. \\
+Conditional correspondence & \path{ordinary_step_correspondence} requires a successful step and \path{IdentityExtension}. \path{consume_insert_correspondence} states the same boundary through successful consume/insert operations. These preserve the stated ledger predicates; they do not prove the cryptographic premises. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+No whole-transaction registered DRT leg exists. Finite oracle fixtures do not identify real hidden inputs universally or establish complete hidden history. Context, commit, signature binding and key/identity correspondences remain external obligations.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Supply structured block and genesis}
+
+Sources: \path{formal/Botho/Supply/Block.lean}.
+Namespace: \path{Botho.Supply.Block}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (model) & \path{emission_exact} assumes typed height, reward and interval. \path{prepared_payouts} requires successful prepare, including the authenticated award/record/wire domain checks. \path{step_projects} and \path{step_frame} require a well-formed store and successful step; the frame keeps prior retained rows and unaffected unspent lookups. \\
+Conditional invariant & \path{step_invariant} requires prior \path{Invariant} and successful step, and derives no saturation loss. \path{genesis_invariant} establishes the modeled genesis. \path{reachable_invariants} is about \texttt{Reachable C P keyOf}, using \path{Correspondences} and \path{TrustedInputs}; it is not the set of all Rust-accepted histories. \\
+Tested; no family DRT & The finite real-commit/saved-replay accepted-block oracle described in \path{formal/SUPPLY.md} checks a separate boundary. There is no structured-block registration in \path{LEGS}; lottery kernel tests do not supply one. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Hash/curve primitives, encoding and shared output identity, policy schedules, stored context and commit correspondence remain premises. Model reachability does not prove universal LMDB atomicity, cryptographic binding, output recoverability or schedule reachability. \#1839, \#1890 and \#1896 retain their integration/campaign obligations.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Aeneas monetary extraction}
+
+Sources: \path{formal-aeneas/BothoAeneas/}: \path{Basic.lean}, \path{HalvingReward.lean}, \path{TailReward.lean}.
+Namespace: \path{BothoAeneas}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (extraction) & In \path{HalvingReward}: \path{halving_reward_no_fail}, \path{halving_reward_phase1}, \path{halving_reward_phase2}, \path{halving_reward_antitone}, and \path{halving_reward_none_stays} assume the interval/count product fits \path{U64.max} and count is at most 64, with their respective phase, order and successful-result premises. \\
+Proven (extraction) & In \path{TailReward}: \path{calculate_tail_reward_u128_spec} and \path{calculate_tail_reward_u128_no_fail} require positive target time at most \path{secsPerYear}, and supply times the sum of rates within \path{U128.max}. \path{calculate_tail_reward_u128_ge_one} also needs \path{rewardNat} to fit the narrowing width. \path{calculate_tail_reward_u128_mainnet} fixes its stated production-policy fields and requires supply below $2^{91}$; \path{calculate_tail_reward_u128_truncates_to_zero} preserves the explicit cast-loss counterexample. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\path{Basic.lean} supplies primitive adapters, not extra consensus guarantees. These are generated-code claims with the translation/library/non-isolated-gate trust described above, not a registered whole-family DRT leg. The handwritten Monetary model and its separate DRT evidence must not be conflated with extraction.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
+\subsubsection{Aeneas lottery and pool extraction}
+
+Sources: \path{formal-aeneas/BothoAeneas/LotteryKernels.lean} and \path{PoolAccounting.lean}.
+Namespace: \path{BothoAeneas}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Proven (extraction) & In \path{LotteryKernels}: \path{sybil_reward_cap_eq} and \path{is_eligible_at_eq} specify typed cap/window kernels. \path{lottery_emission_bps_spec}, \path{lottery_emission_share_spec}, \path{lottery_emission_share_le_half}, and \path{lottery_emission_share_epoch0} specify the emission split, with the epoch result assuming height below the interval. \path{capitalized_reset_charge_no_downgrade} proves only the case where input factor is no greater than output factor. \\
+Proven (extraction) & In \path{PoolAccounting}: \path{split_fees_permille_spec}, \path{compute_pool_accounting_permille_spec}, and \path{compute_pool_accounting_permille_conserves} require a fraction within the permille denominator. \path{compute_pool_accounting_permille_available} additionally requires stored pool plus emission plus total fees to fit \path{U128.max}, eliminating saturation. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The manifest also gates extracted \path{count_eligible_in} and \path{demurrage_charge}, without an accompanying exported theorem for them here. Do not promote current exact-charge or composed reset/settlement behavior to extracted proof. No whole-family registered DRT leg exists; \#1713 and translation/gate trust remain explicit.
+\end{minipage}
+\par\medskip
+
+\subsection{What Remains Outside This Map}
+
+No row establishes the complete SCP state machine, full transaction/block
+validation, cryptographic security, accepted-chain supply conservation,
+storage atomicity, or economic safety. Model parameters and correspondence
+premises are not implementation proofs. Fee-floor composition, reset and
+settlement horizons, admissible hidden histories and policy/reachability
+questions retain their separate obligations in \#1704, \#1706, \#1711,
+\#1713, \#1839, \#1890, \#1896, \#1683, \#1837 and \#1844.
+
+\subsection{Maintaining This Map}
+
+The tables point to model declarations instead of restating protocol-value
+constants, fee schedules, rational tag normalization or a competing block
+transition. The specific numeric theorem domains, version qualifiers and
+dated evidence above are audited against the cited sources in the \#1716
+review record; they are not new parameter definitions. Future edits must
+repeat that domain/source audit and follow the exact declaration closure.
+
+The existing \path{scripts/check-stale-doc-literals.py} guard catches only
+four historical literal patterns. Its Appendix D maintenance note does not
+claim generic equality checking between this prose and Lean. A new or
+changed number therefore needs source review even when that lint is green.
+
+\endgroup

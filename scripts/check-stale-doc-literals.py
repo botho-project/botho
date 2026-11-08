@@ -5,6 +5,13 @@ Each pattern below was true of an earlier protocol and is wrong now. A doc
 that still states it as current misleads readers. The lint scans tracked
 Markdown and LaTeX files.
 
+Appendix D maintenance (#1716): this guard covers only the four historical
+literal patterns below; it does not prove arbitrary appendix/model numeric
+equality. Prefer specific current Lean declaration pointers to duplicated
+protocol constants. Any retained numeric domain, bound, counterexample or
+version qualifier needs a review inventory of each occurrence, its exact
+source statement and assumptions at the reviewed commit, even if lint passes.
+
 Historical contexts are allowed:
 - whole paths in ALLOWED_PATHS (changelogs, ADRs, audit/review records,
   vendored and tooling docs);
