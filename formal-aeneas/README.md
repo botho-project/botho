@@ -186,9 +186,23 @@ gitignored either way), and set `MATHLIB_CACHE_DIR` for the `.ltar` cache.
 3. the axiom walk over the compiled package (`scripts/AxiomReport.lean`)
    finds no declaration that reaches `sorryAx` or an axiom outside
    `axioms-allowlist.txt`, and no `axiom`, `opaque`, `unsafe` or `partial`
-   declaration in the package, including unused declarations in all five
+   handwritten declaration in the package, including unused declarations in all five
    canonical modules; the complete owned `MODULE` inventory must match; and
 4. `#print axioms` for each line of `Theorems.lean` agrees with the walk.
+
+Lean 4.35 also emits partial `._unsafe_rec` runtime companions for twelve
+reviewed safe recursive definitions in the canonical closure. They remain
+owned and fully axiom-walked. Their separate `COMPILERREC` classification
+requires the exact reviewed parent/module pair, a safe parent in that module,
+matching type/universes, singleton block correspondence, a self-recursive
+companion body, and the parent's compiler recursion tag. The tag is read from
+imported module entries with extension initialization still disabled. A
+suffix or same-typed nonrecursive parent is insufficient. Source references
+to `_unsafe_rec`, source `unsafe`/`partial`, and all other unsafe/partial
+compiled declarations remain rejected. Raw-walk controls cover a forged
+companion of the reviewed `sumN` parent, an orphan, and an ordinary partial
+definition. This recognizes compiler artifacts; it does not prove their
+runtime lowering or strengthen the existing compiler/trust boundary.
 
 The allow-list is `propext`, `Classical.choice` and `Quot.sound`. Running
 `#print axioms` over every exported theorem and over the extracted kernels
