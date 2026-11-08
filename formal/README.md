@@ -30,8 +30,8 @@ model agree.
    determinism, monotonicity) as `theorem`s in the same module. Add each
    exported theorem to `Theorems.lean` (see below).
 3. **DRT.** Compile the model to an executable and run it against the Rust
-   implementation on random and boundary inputs, comparing outputs. A proof
-   only says something about Rust if DRT shows the model and the code agree.
+   implementation on random and boundary inputs, comparing outputs. A model
+   proof and passing finite DRT provide evidence of Rust correspondence; they do not prove universal Rust equivalence.
    The harness is `formal-drt/` (#1706, #1707); see
    [Differential random testing](#differential-random-testing-drt).
 4. **Mirror.** Add the mirrored Rust files to the `pattern` in
@@ -39,17 +39,19 @@ model agree.
 
 ## Labeling rule: proven / tested / trusted
 
-Every claim made about a Rust component carries exactly one of these labels in
-its module docstring, and in any document that cites it:
+Label each claim in its module docstring and any document that cites it.
+A component can have different labels for different claims:
 
 | Label | Meaning |
 |-------|---------|
-| **proven** | A theorem about the Lean model, listed in `Theorems.lean`, whose axioms are only `propext`, `Classical.choice` and `Quot.sound`. Says nothing about Rust unless DRT also passes. |
-| **tested** | The Rust code and the Lean model agree under DRT. This is evidence, not proof, that a proven property holds for the Rust code. |
-| **trusted** | Depends on an allow-listed opaque axiom (for example a `sha256` or `randomx` stand-in), or on an assumption about code outside the model. Name the axiom or assumption next to the claim. |
+| **proven (model)** | A theorem about the Lean model, listed in `Theorems.lean`, using only `propext`, `Classical.choice` and `Quot.sound`. Its stated hypotheses apply; finite DRT does not turn it into a proof about every Rust execution. |
+| **tested** | The Rust code and the Lean model agree on the finite inputs exercised by DRT. This is evidence of correspondence, not universal equivalence. |
+| **trusted** | Depends on an explicit assumption about primitives or code outside the model. Name it beside the claim. The current allowlists contain only the three standard axioms; `Lottery.Prims` supplies hash functions as parameters, not custom hash axioms. |
+| **not covered** | No applicable proof or test boundary establishes this property. |
 
-Never write "verified" on its own. Write "proven (model)", "proven + tested",
-or "trusted (axiom `Botho.sha256`)".
+Never write "verified" on its own. Write "proven (model)", "proven (model) +
+tested (finite DRT)", or "trusted (SHA-256 security assumption)". A theorem
+quantifying over arbitrary hash parameters does not prove their security.
 
 The [block supply accounting note](SUPPLY.md) records the #1839 fee-split
 results and the conditional block accounting theorem, including the ledger
@@ -65,7 +67,7 @@ different label, and the two must not be mixed:
 | Label | Meaning |
 |-------|---------|
 | **proven (extraction)** | A theorem in `formal-aeneas/BothoAeneas/`, listed in `formal-aeneas/Theorems.lean` and passing `formal-aeneas/scripts/check-gates.sh` (only the axioms in `formal-aeneas/axioms-allowlist.txt`, today the same three standard ones; no `sorry`, no `axiom` or `opaque` in the package). It is about the generated Lean, which CI keeps identical to a fresh extraction of the current Rust source, so it says something about the Rust code with no DRT step. What it trusts instead: the Charon + Aeneas translation at the pin in `formal-aeneas/toolchain.env`, the Aeneas library's model of the Rust primitives used (integer arithmetic with panics as `fail`, casts, `max`), and, in CI, a gate result that comes from a non-isolated build (the `typecheck` job compiles and gates in one job, with no separate verify step; see the rules below). An overflow is modelled as a panic, not a wrap, which matches production because release builds keep `overflow-checks = true` (#663). |
-| **proven (model) + tested** | The `formal/` path above: a theorem about a hand-written model, which DRT ties back to the Rust code. |
+| **proven (model) + tested** | The `formal/` path above: a theorem about a hand-written model, with finite DRT evidence of agreement with Rust on the tested inputs. |
 
 Rules:
 
