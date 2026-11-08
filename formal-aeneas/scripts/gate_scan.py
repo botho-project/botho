@@ -59,8 +59,14 @@ sys.setrecursionlimit(10000)
 FORBIDDEN = ("sorry", "sorryAx", "admit", "native_decide")
 FORBIDDEN_KEYWORDS = ("axiom", "opaque", "unsafe", "partial")
 FORBIDDEN_COMPONENTS = (
-    "native", "reduceBool", "reduceNat", "ofReduceBool", "ofReduceNat",
-    "trustCompiler", "skipKernelTC",
+    "native",
+    "reduceBool",
+    "reduceNat",
+    "ofReduceBool",
+    "ofReduceNat",
+    "trustCompiler",
+    "skipKernelTC",
+    "_unsafe_rec",
 )
 FORBIDDEN_COMMANDS = (
     "#eval", "#eval!", "#exit", "#guard_msgs", "run_cmd", "run_elab", "run_meta",

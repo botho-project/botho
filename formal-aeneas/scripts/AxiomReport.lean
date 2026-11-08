@@ -23,11 +23,16 @@ It writes to the file OUT, one tab-separated record per line:
   OPAQUEDECL <decl>            an `opaque` declared in a package module
   UNSAFE <decl>                an `unsafe` or `partial` definition in a
                                package module
+  COMPILERREC <decl> <parent>  authenticated canonical recursion companion
   MODULE <mod>                 each package module that was loaded
   DONE <count>                 last line; <count> package declarations swept
 
 Package modules are `MonetaryKernels`, `PoolAccounting` and `BothoAeneas` /
-`BothoAeneas.*`.
+`BothoAeneas.*`, plus the exact five canonical lottery modules. All owned
+bodies are walked, including compiler recursion companions. The only safety
+classification exception is the pinned compiler's partial companion of one
+of the twelve reviewed safe recursive canonical definitions, checked below.
+It is not a suffix-only or user-written unsafe/partial exemption.
 Every other module (Lean core, Mathlib, Aeneas) is a dependency: its axioms
 show up in the AXIOMS / OWN lists of the package declarations that reach
 them, and the calling script checks those lists against the allow-list.
@@ -85,6 +90,35 @@ def isPkgModule (m : Name) : Bool :=
     #[`Botho.Lottery.Pool, `Botho.Lottery.Draw, `Botho.Lottery.Prims,
       `Botho.Lottery.Candidate, `Botho.Lottery.Arith].contains m
 
+/-- The reviewed recursive declarations in the unchanged canonical closure.
+Adding another one requires explicit gate review; no broad namespace exemption. -/
+def canonicalRecModule? (parent : Name) : Option Name :=
+  if #[`Botho.Lottery.bytesLt, `Botho.Lottery.leBytes, `Botho.Lottery.ofLeBytes,
+       `Botho.Lottery.sumN, `Botho.Lottery.zeros].contains parent then
+    some `Botho.Lottery.Arith
+  else if parent == `Botho.Lottery.countEligible then some `Botho.Lottery.Candidate
+  else if #[`Botho.Lottery.addToLast, `Botho.Lottery.maxValue?, `Botho.Lottery.pickWinners,
+            `Botho.Lottery.remainingTotal, `Botho.Lottery.selectAt,
+            `Botho.Lottery.totalPaid].contains parent then some `Botho.Lottery.Draw
+  else none
+
+/-- Recognize the pinned Lean compiler's recursion artifacts without executing
+imported extensions. `recExt.isTagged` reads the imported module entries, which
+`finalizeImport` installs even with `loadExts := false`. A same-named safe
+nonrecursive parent is insufficient. Keep every body in the axiom walk. -/
+def canonicalRecParent? (env : Environment) (c : Name) (v : DefinitionVal) : Option Name := do
+  let .str parent "_unsafe_rec" := c | none
+  let expectedModule ← canonicalRecModule? parent
+  let idx ← env.getModuleIdxFor? parent
+  let mod ← env.header.moduleNames[idx.toNat]?
+  guard (mod == expectedModule && env.getModuleIdxFor? c == some idx)
+  let some (.defnInfo original) := env.find? parent | none
+  guard (original.safety == .safe && v.safety == .partial)
+  guard (original.type == v.type && original.levelParams == v.levelParams)
+  guard (original.all == [parent] && v.all == [c])
+  guard (Meta.recExt.isTagged env parent && v.value.getUsedConstants.contains c)
+  return parent
+
 def main (args : List String) : IO UInt32 := do
   let out :: names := args
     | IO.eprintln "usage: AxiomReport.lean OUT [NAME ...]"
@@ -121,7 +155,11 @@ def main (args : List String) : IO UInt32 := do
     | .axiomInfo _ => lines := lines.push s!"AXIOMDECL\t{c}"
     | .opaqueInfo _ => lines := lines.push s!"OPAQUEDECL\t{c}"
     | .defnInfo v =>
-        if v.safety != .safe then lines := lines.push s!"UNSAFE\t{c}"
+        if v.safety != .safe then
+          if let some parent := canonicalRecParent? env c v then
+            lines := lines.push s!"COMPILERREC\t{c}\t{parent}"
+          else
+            lines := lines.push s!"UNSAFE\t{c}"
     | _ => pure ()
   for mod in env.header.moduleNames do
     if isPkgModule mod then lines := lines.push s!"MODULE\t{mod}"

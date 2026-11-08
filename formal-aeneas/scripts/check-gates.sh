@@ -3,7 +3,7 @@
 #
 # The package is the Aeneas extraction (generated/, lean_libs MonetaryKernels
 # and PoolAccounting)
-# plus proofs about it (BothoAeneas/, lean_lib BothoAeneas). It depends on the
+# plus proofs about it and the five canonical lottery source modules. It depends on the
 # Aeneas Lean library and Mathlib, so it is kept out of formal/ and its gates.
 # This gate mirrors formal/scripts/ in shape, scaled to what the package needs:
 #
@@ -16,7 +16,9 @@
 #      environment extensions off and walks declaration bodies. Every package
 #      declaration (generated and proofs alike, listed or not) may reach only
 #      the axioms in axioms-allowlist.txt, and none may reach `sorryAx`,
-#      declare an `axiom` or `opaque`, or be `unsafe` / `partial`. Every
+#      declare an `axiom` or `opaque`, or be source `unsafe` / `partial`.
+#      Reviewed compiler recursion companions require the safe parent, matching
+#      type/block/module and imported recursion tag; their bodies are still walked. Every
 #      theorem listed in Theorems.lean must exist.
 #   3. `#print axioms` cross-check: Theorems.lean (only `import` and
 #      `#print axioms NAME` lines) is compiled with `lean --json`; it must
@@ -187,6 +189,8 @@ for row in os.environ["GATE_REPORT"].splitlines():
         errors.append(f"{parts[1]}: `opaque` declared in the package")
     elif kind == "UNSAFE":
         errors.append(f"{parts[1]}: `unsafe` or `partial` definition in the package")
+    elif kind == "COMPILERREC":
+        print(f"COMPILERREC\t{parts[1]}\t{parts[2]}")
     elif kind == "MODULE":
         if parts[1] in modules:
             errors.append(f"duplicate MODULE record: {parts[1]}")

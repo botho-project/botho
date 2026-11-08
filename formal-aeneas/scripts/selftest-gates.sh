@@ -124,6 +124,8 @@ for module in Pool Draw Prims Candidate Arith; do
   fresh "$d"; printf '\naxiom canonical_bad : False\n' >>"$d/$canonical/$module.lean"
   expect 'fail:forbidden token `axiom`' "canonical axiom: $module" scan "$d"
 done
+fresh "$d"; printf '\ndef forged._unsafe_rec : Nat := 0\n' >>"$d/$canonical/Arith.lean"
+expect 'fail:forbidden token `_unsafe_rec`' "explicit compiler companion source" scan "$d"
 fresh "$d"; printf '\nimport Botho.Lottery.Conservation\n' >>"$d/$canonical/Pool.lean"
 expect 'fail:import of `Botho.Lottery.Conservation`' "canonical extra import" scan "$d"
 fresh "$d"; printf '\n@[implemented_by id] def bad (n : Nat) := n\n' >>"$d/$canonical/Arith.lean"
@@ -210,6 +212,44 @@ if [[ "$scan_only" == 0 ]]; then
   printf '\naxiom canonical_unused : Nat\n' >>"$d/$canonical/Arith.lean"
   expect 'fail:canonical_unused: `axiom` declared in the package' \
     "walk: unused canonical axiom" "$here/check-gates.sh" --no-scan "$d"
+
+  # Low-level counterfeit has matching safety/type/universes/block/self-call,
+  # but its reviewed, same-named parent is deliberately nonrecursive. The raw
+  # walk must reject the missing compiler recursion tag even with scanning off.
+  d="$tmp/rec-counterfeit/formal-aeneas"; fresh "$d"
+  mkdir -p "$d/.lake"; ln -s "$root/.lake/packages" "$d/.lake/packages"
+  python3 - "$d/$canonical/Arith.lean" <<'PYCOUNTERFEIT'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text()
+old = "def sumN : List Nat → Nat\n  | [] => 0\n  | x :: xs => x + sumN xs"
+assert s.count(old) == 1
+s = "import Lean\n" + s.replace(old, "def sumN (_xs : List Nat) : Nat := 0")
+s += '''
+run_cmd do
+  let some (.defnInfo parent) := (← Lean.getEnv).find? `Botho.Lottery.sumN
+    | throwError "missing counterfeit parent"
+  let name := `Botho.Lottery.sumN._unsafe_rec
+  Lean.addDecl (.mutualDefnDecl [{
+    name, levelParams := parent.levelParams, type := parent.type,
+    value := Lean.mkConst name (parent.levelParams.map Lean.Level.param),
+    hints := .opaque, safety := .partial, all := [name] }])
+'''
+p.write_text(s)
+PYCOUNTERFEIT
+  expect 'fail:forbidden token `run_cmd`' "source: reviewed-parent counterfeit" scan "$d"
+  expect 'fail:Botho.Lottery.sumN._unsafe_rec: `unsafe` or `partial` definition' \
+    "walk: reviewed-parent counterfeit" "$here/check-gates.sh" --no-scan "$d"
+  d="$tmp/rec-orphan/formal-aeneas"; fresh "$d"
+  mkdir -p "$d/.lake"; ln -s "$root/.lake/packages" "$d/.lake/packages"
+  printf '\nunsafe def Botho.Lottery.orphan._unsafe_rec : Nat := 0\n' >>"$d/$canonical/Arith.lean"
+  expect 'fail:Botho.Lottery.orphan._unsafe_rec: `unsafe` or `partial` definition' \
+    "walk: orphan companion" "$here/check-gates.sh" --no-scan "$d"
+  d="$tmp/rec-partial/formal-aeneas"; fresh "$d"
+  mkdir -p "$d/.lake"; ln -s "$root/.lake/packages" "$d/.lake/packages"
+  printf '\npartial def Botho.Lottery.ordinary_partial (n : Nat) : Nat := ordinary_partial n\n' >>"$d/$canonical/Arith.lean"
+  expect 'fail:Botho.Lottery.ordinary_partial: `opaque` declared' \
+    "walk: ordinary partial definition" "$here/check-gates.sh" --no-scan "$d"
 
   # Compile clean sources first, mutate in place (warm artifacts), then restore.
   # The first actual rejecting declaration must be the new model bridge.
