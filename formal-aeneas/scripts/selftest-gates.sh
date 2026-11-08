@@ -230,7 +230,7 @@ run_cmd do
   let some (.defnInfo parent) := (← Lean.getEnv).find? `Botho.Lottery.sumN
     | throwError "missing counterfeit parent"
   let name := `Botho.Lottery.sumN._unsafe_rec
-  Lean.addDecl (.mutualDefnDecl [{
+  Lean.Elab.Command.liftCoreM <| Lean.addDecl (.mutualDefnDecl [{
     name, levelParams := parent.levelParams, type := parent.type,
     value := Lean.mkConst name (parent.levelParams.map Lean.Level.param),
     hints := .opaque, safety := .partial, all := [name] }])
