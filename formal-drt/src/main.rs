@@ -211,9 +211,11 @@ fn main() -> ExitCode {
         }
         let r = run(&fx, &mut model, &opts);
         println!(
-            "{:<30} {:>9} cases {:>4} replayed {:>3} mismatches {:>8.1}s  ({})",
+            "{:<30} {:>9} generated {:>9} compared {:>3} shrinks {:>4} replayed {:>3} mismatches {:>8.1}s  ({})",
             r.name,
             r.cases,
+            r.compared,
+            r.shrink_attempts,
             r.replayed,
             r.mismatches.len(),
             r.elapsed.as_secs_f64(),
@@ -236,6 +238,8 @@ fn main() -> ExitCode {
                 "leg": r.name,
                 "rust": r.rust,
                 "cases": r.cases,
+                "compared": r.compared,
+                "shrink_attempts": r.shrink_attempts,
                 "replayed": r.replayed,
                 "mismatches": r.mismatches,
                 "classes": r.classes,

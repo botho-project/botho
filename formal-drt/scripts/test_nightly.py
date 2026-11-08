@@ -290,6 +290,54 @@ class Helpers(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "replay count"):
             n.validate_report(report, {"exit": 1, "timeout": False}, meta, "lottery_sim")
 
+    def test_optional_generated_work_accounting(self):
+        self.execute({"leg": "mismatch"})
+        legacy = n.read_json(self.out / "legs/leg/report.json")
+        meta = n.read_json(self.out / "metadata.json")
+        status = {"exit": 1, "timeout": False}
+        self.assertEqual(n.validate_report(legacy, status, meta, "leg"), "mismatch")
+        report = copy.deepcopy(legacy)
+        row = report["legs"][0]
+        row.update(compared=1, shrink_attempts=1, classes={"compared": 1})
+        self.assertEqual(n.validate_report(report, status, meta, "leg"), "mismatch")
+        for field in ("compared", "shrink_attempts"):
+            for value in (None, True, 1.0, -1, 3, "1"):
+                bad = copy.deepcopy(report)
+                bad["legs"][0][field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    n.validate_report(bad, status, meta, "leg")
+            bad = copy.deepcopy(report)
+            del bad["legs"][0][field]
+            with self.assertRaises(ValueError):
+                n.validate_report(bad, status, meta, "leg")
+        for changes in ({"compared": 0}, {"classes": {"too_many": 2}},
+                        {"cases": 11}, {"classes": {"a": 1, "b": 1}}):
+            bad = copy.deepcopy(report)
+            bad["legs"][0].update(changes)
+            with self.assertRaises(ValueError):
+                n.validate_report(bad, status, meta, "leg")
+        row.update(cases=0, compared=0, shrink_attempts=0, classes={})
+        meta["cases"] = report["cases_per_leg"] = 0
+        row["mismatches"][0]["replayed_fixture"] = "leg.jsonl:1"
+        self.assertEqual(n.validate_report(report, status, meta, "leg"), "mismatch")
+        row["mismatches"] = []
+        self.assertEqual(n.validate_report(report, {"exit": 0, "timeout": False}, meta, "leg"), "clean")
+
+    def test_clean_accounting_requires_full_comparisons_and_no_shrinks(self):
+        self.execute({"leg": "clean"})
+        report = n.read_json(self.out / "legs/leg/report.json")
+        meta = n.read_json(self.out / "metadata.json")
+        status = {"exit": 0, "timeout": False}
+        self.assertEqual(n.validate_report(report, status, meta, "leg"), "clean")
+        row = report["legs"][0]
+        row.update(compared=10, shrink_attempts=0)
+        self.assertEqual(n.validate_report(report, status, meta, "leg"), "clean")
+        for changes in ({"compared": 9}, {"shrink_attempts": 1}):
+            bad = copy.deepcopy(report)
+            bad["legs"][0].update(changes)
+            with self.assertRaises(ValueError):
+                n.validate_report(bad, status, meta, "leg")
+
     def test_equal_witness_and_mixed_lean_error_reject_entire_leg(self):
         self.execute({"leg": "mismatch"})
         report = n.read_json(self.out / "legs/leg/report.json")

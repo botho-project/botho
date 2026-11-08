@@ -177,11 +177,20 @@ def validate_report(report, status, meta, leg):
         type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0,
         "invalid duration",
     )
+    # Both absent is the historical report contract, never invented accounting.
+    accounting = "compared" in r or "shrink_attempts" in r
+    if accounting:
+        require(
+            natural(r.get("compared"), r["cases"])
+            and natural(r.get("shrink_attempts"), r["compared"]),
+            "invalid compared/shrink accounting",
+        )
+    class_limit = r["compared"] if accounting else r["cases"]
     classes = r.get("classes")
     require(
         isinstance(classes, dict)
-        and all(natural(v, r["cases"]) for v in classes.values())
-        and sum(classes.values()) <= r["cases"],
+        and all(natural(v, class_limit) for v in classes.values())
+        and sum(classes.values()) <= class_limit,
         "invalid class counts",
     )
     failures = r.get("mismatches")
@@ -214,6 +223,11 @@ def validate_report(report, status, meta, leg):
             not failures and r["cases"] == meta["cases"],
             "incomplete/inconsistent clean report",
         )
+        if accounting:
+            require(
+                r["compared"] == r["cases"] and r["shrink_attempts"] == 0,
+                "incomplete/inconsistent clean comparisons",
+            )
         return "clean"
     require(status["exit"] == 1 and failures, "inconsistent exit/report combination")
     return "mismatch"
