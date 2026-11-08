@@ -648,8 +648,9 @@ cargo run --release -- --list               # leg names
 
 Options: `--cases N` (per leg), `--seed S` or `random`, `--legs a,b`,
 `--batch B`, `--json PATH` (machine-readable report), `--regressions DIR`
-and `--no-write-regressions`. The report prints, per leg, the cases run, the
-fixtures replayed, the mismatches and a histogram of outcome classes (winner
+and `--no-write-regressions`. The report prints, per leg, generated `cases`, `compared` generated inputs,
+`shrink_attempts`, fixtures replayed, unique generated witnesses plus failing
+replays, and a histogram of compared-input outcome classes (winner
 counts, error kinds, saturated or exact sums), which shows which branches the
 cases reached. On macOS the first `drawing` case builds a RandomX light cache
 for each epoch of the parent headers (a few seconds); everything else needs no
@@ -717,9 +718,24 @@ exit 1 and complete unequal Lean/Rust observations; caught `rust_panic` values
 are explicitly identified. `lean_err`, timeouts, model-start/protocol failures
 and other statuses are infrastructure, never semantic-counterexample issues.
 Other independently valid legs are still collected and may be reported.
-Mismatch counts describe generated batches; early stopping can leave part of
-the last batch uncompared. Shrinking has the existing 5,000-step bound and is
-not a claim of global minimality.
+`cases` counts generated batches; early stopping can leave part of the last
+batch uncompared. `compared` excludes fixture replays and shrink probes;
+`shrink_attempts` counts every generated shrink invocation, even when its
+canonical witness duplicates an earlier one. Every stored fixture is replayed
+first. Each failing replay consumes the internal allowance (default five),
+saturating at zero; each generated shrink consumes one remaining attempt before
+deduplication. Exhaustion stops before the next generated Rust comparison.
+Distinct witnesses are still retained, and `--no-write-regressions` changes only
+persistence. `--cases 0` remains replay-only. Each shrink tree retains its
+5,000-check bound, not a claim of global minimality or a process timeout.
+
+Historical reports without either new counter keep their previous contract.
+When either counter is present, both must be natural integers with
+`shrink_attempts <= compared <= cases <= cases_per_leg`; class totals cannot
+exceed `compared`. Clean new reports require the full requested comparisons and
+zero shrink attempts. Partial or inconsistent accounting is infrastructure,
+not a semantic success. These operation bounds do not classify a model hang,
+model error or missing report as a counterexample.
 
 Only the separate reporter job has `issues: write`. It checks out the
 **trusted default-branch helper**, reads artifacts as data, verifies their
