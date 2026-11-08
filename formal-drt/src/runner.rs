@@ -209,3 +209,104 @@ fn append_fixture<I: serde::Serialize>(path: &PathBuf, input: &I, lean: &Value, 
         .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
     writeln!(f, "{line}").expect("write regression fixture");
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use proptest::strategy::{BoxedStrategy, NewTree};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[derive(Debug)]
+    struct OneStep;
+    #[derive(Debug)]
+    struct StepTree(u64);
+    impl Strategy for OneStep {
+        type Tree = StepTree;
+        type Value = u64;
+        fn new_tree(&self, _: &mut TestRunner) -> NewTree<Self> {
+            Ok(StepTree(1))
+        }
+    }
+    impl ValueTree for StepTree {
+        type Value = u64;
+        fn current(&self) -> u64 {
+            self.0
+        }
+        fn simplify(&mut self) -> bool {
+            if self.0 == 1 {
+                self.0 = 0;
+                true
+            } else {
+                false
+            }
+        }
+        fn complicate(&mut self) -> bool {
+            false
+        }
+    }
+    struct Collapse;
+    impl Leg for Collapse {
+        const NAME: &'static str = "budget_test";
+        const RUST: &'static str = "synthetic::identity";
+        type Input = u64;
+        fn strategy() -> BoxedStrategy<u64> {
+            OneStep.boxed()
+        }
+        fn args(_: &Fixtures, input: &u64) -> Value {
+            json!(input)
+        }
+        fn rust(_: &Fixtures, input: &u64) -> Value {
+            json!(input)
+        }
+        fn classify(_: &u64, _: &Value) -> String {
+            "compared".into()
+        }
+    }
+    fn model(dir: &std::path::Path) -> Model {
+        let path = dir.join("model.py");
+        fs::write(
+            &path,
+            "#!/usr/bin/env python3\nimport sys\nfor line in sys.stdin:\n print('{\"ok\": 99}', flush=True)\n",
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        Model::spawn(&path).unwrap()
+    }
+    fn options(dir: &std::path::Path) -> Options {
+        Options {
+            cases: 64,
+            seed: 1707,
+            batch: 16,
+            regressions: dir.join("fixtures"),
+            write_regressions: true,
+            max_mismatches: 5,
+        }
+    }
+    #[test]
+    fn repeated_collapses_consume_the_attempt_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = options(dir.path());
+        let mut model = model(dir.path());
+        let r = run::<Collapse>(&Fixtures::new(), &mut model, &opts);
+        println!(
+            "duplicate-control: generated={} model_calls={} classes={:?} unique={}",
+            r.cases,
+            model.calls,
+            r.classes,
+            r.mismatches.len()
+        );
+        // One generated batch plus exactly five one-step shrink probes.
+        assert_eq!(model.calls, 21);
+        assert_eq!(r.cases, 16);
+        assert_eq!(r.classes["compared"], 5);
+        assert_eq!(r.mismatches.len(), 1);
+        assert_eq!(r.mismatches[0]["input"], json!(0));
+        assert_eq!(
+            fs::read_to_string(fixture_path(&opts, Collapse::NAME))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+}
