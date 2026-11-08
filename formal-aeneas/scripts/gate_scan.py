@@ -15,11 +15,13 @@ call. It is a token scan, so it is a first layer: the axiom gate
    `srcDir = "generated"`) and `BothoAeneas` (no `srcDir`, `roots`, `globs`), no executables, and exactly one
    dependency, `aeneas`. The sources are `generated/*.lean`, `BothoAeneas.lean`,
    `BothoAeneas/**/*.lean` and `Theorems.lean`, all regular files, and no
-   other `.lean` file exists outside `.lake/` and `scripts/`.
+   other `.lean` file exists outside `.lake/` and `scripts/`. The fourth library,
+   CanonicalLottery, compiles exactly five reviewed sibling formal/ modules;
+   its source closure, equal toolchain pin, and regular paths are checked.
 2. Imports. Generated files import only `Aeneas` (`module` and
    `public import`, which Aeneas emits, are accepted there). Proof files
    import only `Aeneas`, `MonetaryKernels`, `PoolAccounting`, `BothoAeneas`
-   and `BothoAeneas.*`;
+   and `BothoAeneas.*`, plus the five exact canonical modules;
    `Theorems.lean` only the last four.
 3. Tokens. Outside comments and string literals, no scanned file contains:
    - an escape hatch: `sorry`, `sorryAx`, `admit`, `native_decide`;
@@ -57,8 +59,14 @@ sys.setrecursionlimit(10000)
 FORBIDDEN = ("sorry", "sorryAx", "admit", "native_decide")
 FORBIDDEN_KEYWORDS = ("axiom", "opaque", "unsafe", "partial")
 FORBIDDEN_COMPONENTS = (
-    "native", "reduceBool", "reduceNat", "ofReduceBool", "ofReduceNat",
-    "trustCompiler", "skipKernelTC",
+    "native",
+    "reduceBool",
+    "reduceNat",
+    "ofReduceBool",
+    "ofReduceNat",
+    "trustCompiler",
+    "skipKernelTC",
+    "_unsafe_rec",
 )
 FORBIDDEN_COMMANDS = (
     "#eval", "#eval!", "#exit", "#guard_msgs", "run_cmd", "run_elab", "run_meta",
@@ -85,6 +93,136 @@ IMPORT = re.compile(
 ROOT_PREFIX = "_root_."
 # The lean_libs built from generated/ (one per crate regen.sh extracts).
 GENERATED_LIBS = ("MonetaryKernels", "PoolAccounting")
+CANONICAL_MODULES = tuple(
+    "Botho.Lottery." + m for m in ("Pool", "Draw", "Prims", "Candidate", "Arith")
+)
+CANONICAL_LIBRARY = {
+    "name": "CanonicalLottery",
+    "srcDir": "../formal",
+    "roots": list(CANONICAL_MODULES),
+    "globs": list(CANONICAL_MODULES),
+}
+
+
+def canonical_files(root, errors):
+    """Only the reviewed sibling source closure; never canonical build artifacts."""
+    paths = []
+    parent = os.path.dirname(os.path.abspath(root))
+    for rel in ("formal", "formal/Botho", "formal/Botho/Lottery"):
+        path = os.path.join(parent, rel)
+        if os.path.islink(path) or not os.path.isdir(path):
+            errors.append(f"{path}: canonical directory must be regular, not a symlink")
+            return paths
+    for mod in CANONICAL_MODULES:
+        path = os.path.join(parent, "formal", mod.replace(".", "/") + ".lean")
+        if os.path.islink(path) or not os.path.isfile(path):
+            errors.append(f"{path}: canonical source must be a regular file")
+        else:
+            paths.append(path)
+    pins = [
+        os.path.join(root, "lean-toolchain"),
+        os.path.join(parent, "formal/lean-toolchain"),
+    ]
+    try:
+        if any(os.path.islink(p) or not os.path.isfile(p) for p in pins):
+            raise ValueError("pins must be regular files")
+        with open(pins[0], "rb") as f, open(pins[1], "rb") as g:
+            if f.read() != g.read():
+                raise ValueError("pins differ")
+    except (OSError, ValueError) as e:
+        errors.append(f"canonical Lean toolchain: {e}")
+    return paths
+
+
+def rust_code(src):
+    """Erase nested Rust comments; literals become tokens, never executable text.
+
+    This is a lexer for a restricted source contract, not a Rust parser or proof.
+    Unsupported wrapper syntax fails the exact token comparison below.
+    """
+    out, i = [], 0
+    while i < len(src):
+        if src.startswith("//", i):
+            end = src.find("\n", i)
+            i = len(src) if end < 0 else end
+            out.append(" ")
+        elif src.startswith("/*", i):
+            depth, i = 1, i + 2
+            while i < len(src) and depth:
+                if src.startswith("/*", i):
+                    depth, i = depth + 1, i + 2
+                elif src.startswith("*/", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            if depth:
+                raise ValueError("unterminated Rust comment")
+            out.append(" ")
+        elif m := re.match(r'(?:b|c)?r(#{0,255})"', src[i:]):
+            end = src.find('"' + m.group(1), i + m.end())
+            if end < 0:
+                raise ValueError("unterminated Rust raw string")
+            i = end + 1 + len(m.group(1))
+            out.append(" __LITERAL__ ")
+        elif src[i] == '"':
+            i += 1
+            while i < len(src) and src[i] != '"':
+                i += 2 if src[i] == "\\" else 1
+            if i >= len(src):
+                raise ValueError("unterminated Rust string")
+            i += 1
+            out.append(" __LITERAL__ ")
+        elif m := CHAR_LIT.match(src, i):
+            i = m.end()
+            out.append(" __LITERAL__ ")
+        else:
+            out.append(src[i])
+            i += 1
+    return "".join(out)
+
+
+def check_wrapper(root, errors):
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(root)), "botho/src/consensus/lottery.rs"
+    )
+    try:
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.is_file() or any(x.is_symlink() for x in [p, *list(p.parents)[:3]]):
+            raise ValueError("wrapper source must be a regular non-symlink path")
+        text = rust_code(p.read_text())
+        starts = list(re.finditer(r"\bfn\s+compute_pool_accounting\b", text))
+        if len(starts) != 1:
+            raise ValueError("expected exactly one wrapper definition")
+        # One public, non-generic function with one unconditional expression.
+        m = re.search(r"\bpub\s+fn\s+compute_pool_accounting\b[^{}]*\{[^{}]*\}", text)
+        expected = """pub fn compute_pool_accounting(
+          total_fees: u64, emission_share: u64, stored_pool: u128,
+          payout_cap: u64, config: &LotteryFeeConfig,
+        ) -> LotteryPoolAccounting {
+          compute_pool_accounting_permille(total_fees, emission_share,
+            stored_pool, payout_cap, config.pool_fraction_permille,)
+        }"""
+
+        def tokens(x):
+            return re.findall(r"[A-Za-z_][A-Za-z_0-9]*|->|[^\s]", x)
+
+        if m is None or tokens(m.group()) != tokens(expected):
+            raise ValueError(
+                "expected the reviewed unconditional forwarding expression"
+            )
+        # Attributes/visibility modifiers attached to this item are unsupported.
+        prefix = text[: m.start()].rstrip()
+        if any(
+            prefix.count(a) != prefix.count(b)
+            for a, b in (("{", "}"), ("(", ")"), ("[", "]"))
+        ):
+            raise ValueError("wrapper must be a top-level item")
+        if prefix and prefix[-1] not in "};":
+            raise ValueError("unsupported wrapper prefix")
+    except (OSError, ValueError) as e:
+        errors.append(f"wrapper source contract: {e}")
 
 
 def ident_char(ch):
@@ -229,9 +367,11 @@ def attr_offenses(text):
 
 
 def allowed_import(kind, mod):
+    if kind == "canonical":
+        return mod in CANONICAL_MODULES
     if kind == "generated":
         return mod == "Aeneas"
-    if kind == "proof" and mod == "Aeneas":
+    if kind == "proof" and (mod == "Aeneas" or mod in CANONICAL_MODULES):
         return True
     return mod in GENERATED_LIBS + ("BothoAeneas",) or mod.startswith("BothoAeneas.")
 
@@ -305,10 +445,26 @@ def check_lakefile(root, errors):
             errors.append(f"lakefile.toml: key `{k}` not allowed")
     libs = cfg.get("lean_lib", [])
     names = sorted(lib.get("name", "") for lib in libs)
-    if names != sorted(("BothoAeneas",) + GENERATED_LIBS):
-        errors.append(f"lakefile.toml: libraries must be BothoAeneas, "
-                      f"{', '.join(GENERATED_LIBS)}, got {names}")
+    if names != sorted(("BothoAeneas", "CanonicalLottery") + GENERATED_LIBS):
+        errors.append(
+            f"lakefile.toml: libraries must be BothoAeneas, CanonicalLottery, "
+            f"{', '.join(GENERATED_LIBS)}, got {names}"
+        )
+    if cfg.get("defaultTargets") != [
+        "MonetaryKernels",
+        "PoolAccounting",
+        "BothoAeneas",
+    ]:
+        errors.append(
+            "lakefile.toml: defaultTargets must build all extraction and proof libraries"
+        )
     for lib in libs:
+        if lib.get("name") == "CanonicalLottery":
+            if lib != CANONICAL_LIBRARY:
+                errors.append(
+                    "lakefile.toml: canonical library must use the exact reviewed source closure"
+                )
+            continue
         extra = set(lib) - {"name", "srcDir"}
         if extra:
             errors.append(f"lakefile.toml: lean_lib {lib.get('name')}: keys {sorted(extra)} not allowed")
@@ -358,9 +514,18 @@ def main(argv):
     elif len(argv) == 2:
         root = argv[1]
         check_lakefile(root, errors)
+        canonical = canonical_files(root, errors)
+        for p in canonical:
+            scan_file(p, "canonical", errors)
+        check_wrapper(root, errors)
         gen = regular_lean_files(os.path.join(root, "generated"), errors)
-        if not gen:
-            errors.append("generated/: no .lean files")
+        expected_gen = {
+            os.path.join(root, "generated", name + ".lean") for name in GENERATED_LIBS
+        }
+        if set(gen) != expected_gen:
+            errors.append(
+                "generated/: files must be exactly the two reviewed extraction modules"
+            )
         proofs = regular_lean_files(os.path.join(root, "BothoAeneas"), errors)
         for name in ("BothoAeneas.lean", "Theorems.lean"):
             p = os.path.join(root, name)
@@ -377,6 +542,7 @@ def main(argv):
             scan_file(manifest, "manifest", errors)
         scanned = gen + [top_proof] + proofs + [manifest]
         known = set(scanned)
+        scanned += canonical
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             if dirpath == root:
                 dirnames[:] = [d for d in dirnames if d not in (".lake", "scripts")]

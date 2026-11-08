@@ -93,6 +93,46 @@ Pool accounting (`BothoAeneas/PoolAccounting.lean`), for
   `min(stored + emission + fee_pool, u128::MAX)` (exact below saturation);
   `payout = min(available, payout_cap)`.
 
+### Equality to the canonical pool model (#1713)
+
+`compute_pool_accounting_permille_model` proves successful return and equality
+of the entire projected result to **the actual**
+`Botho.Lottery.computePoolAccounting` in `formal/Botho/Lottery/Pool.lean`.
+`toModel` only reads the five extracted fields' `.val`: fee pool, fee burn,
+emission share, available balance and payout. It duplicates no arithmetic.
+The domain is every `U64` total, emission and cap, every `U128` stored balance,
+and every `U32` fraction at most 1000, with arbitrary model `DrawConfig`.
+There is no non-saturation assumption. The theorem includes fractions 0,
+800 and 1000, zero and maximum-width inputs, and both capped and saturated
+results. `_model_800` specializes to the ratified fraction; `_no_fail` is an
+explicit successful-return consequence of the bridge.
+
+This is the only canonical-model equality bridge here. The other exports
+above are extraction postconditions, not equality to the corresponding
+`formal/` definitions. The demurrage result is only the no-downgrade branch;
+full charge arithmetic and the eligibility loop remain without extraction
+correctness proofs. The accrued-charge `ExactCharge` model and its
+`demurrage_charge` DRT leg do not cover reset/settlement/spend composition
+(#1711). Reset-charge Rust oracle tests such as
+`capitalized_reset_charge_matches_exact_on_grid` are separate finite evidence,
+not a registered reset-charge Lean DRT leg. Existing tail-reward overflow, truncation and supply hypotheses and
+counterexamples are unchanged.
+
+The bridge alone does not transfer every model theorem to Rust. A transfer
+must match the representation and domain, establish the model theorem's own
+premises, and compose its conclusion with this equality. No accepted-block,
+cryptographic, draw, persistence or whole-node theorem follows automatically.
+Translation correctness and Aeneas' primitive semantics remain trusted.
+
+The public Rust `compute_pool_accounting` config wrapper is **not extracted**:
+its config reaches floating-point draw settings. A narrow source contract in
+`gate_scan.py` checks exactly one top-level public function with the reviewed
+signature and one unconditional forwarding expression, the same ordered
+arguments, and `config.pool_fraction_permille`. Comments/literals cannot fake
+that function; changed arguments, branches, duplicate/nested definitions or
+unsupported syntax fail closed. This is source-shape evidence, not a Rust
+semantic proof or a general parser.
+
 ### The #1820 rewrites
 
 Each is behaviour-preserving and has a differential test in the Rust crate
@@ -134,9 +174,10 @@ gitignored either way), and set `MATHLIB_CACHE_DIR` for the `.ltar` cache.
 `check-gates.sh` fails unless:
 
 1. the source scan passes (`scripts/gate_scan.py`): the lakefile declares
-   only the three libraries and the `aeneas` dependency at `AENEAS_COMMIT`;
+   only the three extraction/proof libraries, `CanonicalLottery`, and the
+   `aeneas` dependency at `AENEAS_COMMIT`;
    imports stay within `Aeneas`, `MonetaryKernels`, `PoolAccounting` and
-   `BothoAeneas`; and no
+   `BothoAeneas` plus the exact canonical closure; and no
    source contains `sorry`, `admit`, `axiom`, `opaque`, `unsafe`,
    `partial`, `native_decide`, kernel-bypass options, code-running commands
    or attributes. Keywords match as tokens anywhere outside comments, so an
@@ -145,13 +186,46 @@ gitignored either way), and set `MATHLIB_CACHE_DIR` for the `.ltar` cache.
 3. the axiom walk over the compiled package (`scripts/AxiomReport.lean`)
    finds no declaration that reaches `sorryAx` or an axiom outside
    `axioms-allowlist.txt`, and no `axiom`, `opaque`, `unsafe` or `partial`
-   declaration in the package; and
+   handwritten declaration in the package, including unused declarations in all five
+   canonical modules; the complete owned `MODULE` inventory must match; and
 4. `#print axioms` for each line of `Theorems.lean` agrees with the walk.
+
+Lean 4.35 also emits partial `._unsafe_rec` runtime companions for twelve
+reviewed safe recursive definitions in the canonical closure. They remain
+owned and fully axiom-walked. Their separate `COMPILERREC` classification
+requires the exact reviewed parent/module pair, a safe parent in that module,
+matching type/universes, singleton block correspondence, a self-recursive
+companion body, and the parent's compiler recursion tag. The tag is read from
+imported module entries with extension initialization still disabled. A
+suffix or same-typed nonrecursive parent is insufficient. Source references
+to `_unsafe_rec`, source `unsafe`/`partial`, and all other unsafe/partial
+compiled declarations remain rejected. Raw-walk controls cover a forged
+companion of the reviewed `sumN` parent, an orphan, and an ordinary partial
+definition. This recognizes compiler artifacts; it does not prove their
+runtime lowering or strengthen the existing compiler/trust boundary.
 
 The allow-list is `propext`, `Classical.choice` and `Quot.sound`. Running
 `#print axioms` over every exported theorem and over the extracted kernels
 listed in `Theorems.lean` shows nothing else: the Aeneas library declares
 axioms for some Rust std items, but the extracted kernels reach none of them.
+
+`CanonicalLottery` has `srcDir = "../formal"` and exact `roots`/`globs` for
+`Botho.Lottery.Pool`, `Draw`, `Prims`, `Candidate` and `Arith`. Lake compiles
+these source files into **formal-aeneas/.lake/build**, alongside the extraction;
+it never reads `formal/.lake`, imports the `Botho` aggregate, or requires the
+formal package. The sibling Lean pins must match. Source scanning rejects
+changed library layout, extra imports, missing/symlinked inputs and local
+shadow copies. The same token/attribute rules cover each canonical file.
+`formal/` remains dependency-free with its own artifacts and isolated gates.
+
+The self-test creates fresh sibling `formal-aeneas/`, `formal/` and Rust
+wrapper source fixtures, sharing only the existing dependency cache. It
+preserves the old gate controls, checks the new source/layout/wrapper cases,
+and demonstrates compiled rejection of an unused canonical axiom. It builds
+a clean fixture before changing the canonical Pool payout or the used Arith
+saturating-add helper, checks the first rejecting declaration is the bridge,
+then restores and rebuilds successfully. Those mutation checks use warm build
+artifacts so dependency invalidation is exercised too.
 
 `regen.sh` runs the same scan (`gate_scan.py --generated`) over every fresh
 extraction, so an unmodelled item cannot enter `generated/` in any spelling.
@@ -163,7 +237,7 @@ extraction, so an unmodelled item cannot enter `generated/` in any spelling.
 
 - `drift` checks that `generated/` matches a fresh extraction. It runs on
   changes to `cluster-tax/**`, `botho/src/consensus/lottery.rs`,
-  `formal-aeneas/**` and the workspace manifests. Extracting
+  `formal-aeneas/**`, `formal/**` and the workspace manifests. Extracting
   `PoolAccounting` runs Charon over the whole `botho` crate graph (metadata
   and MIR only, about 25 s cold on an M-series laptop).
 - `typecheck` checks runner disk space (freeing some if below 15 GB), installs elan and the

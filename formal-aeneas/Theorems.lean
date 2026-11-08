@@ -43,3 +43,8 @@ import BothoAeneas
 #print axioms bth_cluster_tax.demurrage.demurrage_charge
 #print axioms bth_cluster_tax.demurrage.capitalized_reset_charge
 #print axioms botho.consensus.lottery.compute_pool_accounting_permille
+
+-- Equality to the canonical model, including saturated u128 carryover (#1713)
+#print axioms BothoAeneas.PoolAccounting.compute_pool_accounting_permille_model
+#print axioms BothoAeneas.PoolAccounting.compute_pool_accounting_permille_model_800
+#print axioms BothoAeneas.PoolAccounting.compute_pool_accounting_permille_no_fail

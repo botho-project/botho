@@ -26,6 +26,7 @@ on:
       - "cluster-tax/**"
       - "botho/src/consensus/lottery.rs"
       - "formal-aeneas/**"
+      - "formal/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/aeneas-extract.yml"
@@ -35,6 +36,7 @@ on:
       - "cluster-tax/**"
       - "botho/src/consensus/lottery.rs"
       - "formal-aeneas/**"
+      - "formal/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/aeneas-extract.yml"
@@ -158,6 +160,30 @@ jobs:
           fi
           df -h "$GITHUB_WORKSPACE"
       - name: Build, sorry gate and axiom gate
-        run: time scripts/check-gates.sh
+        run: |
+          set -euo pipefail
+          mkdir -p .lake/gate-evidence
+          { git rev-parse HEAD 'HEAD^{tree}'; git status --porcelain; } >.lake/gate-evidence/checkout.txt
+          sha256sum ../formal/Botho/Lottery/{Pool,Draw,Prims,Candidate,Arith}.lean \
+            ../formal/lean-toolchain ../botho/src/consensus/lottery.rs \
+            BothoAeneas/*.lean generated/*.lean Theorems.lean lakefile.toml \
+            scripts/* >.lake/gate-evidence/sources.sha256
+          time scripts/check-gates.sh 2>&1 | tee .lake/gate-evidence/check-gates.log
+          test ! -e ../formal/.lake
+          find .lake/build/lib/lean/Botho/Lottery -type f -print0 | sort -z | \
+            xargs -0 sha256sum >.lake/gate-evidence/canonical-artifacts.sha256
+          echo 'canonical source: ../formal; artifacts: formal-aeneas/.lake/build; formal/.lake absent' \
+            | tee .lake/gate-evidence/artifact-boundary.txt
       - name: Gate self-test
-        run: time scripts/selftest-gates.sh
+        env:
+          SELFTEST_EVIDENCE_DIR: ${{ github.workspace }}/formal-aeneas/.lake/gate-evidence/selftest
+        run: |
+          set -euo pipefail
+          time scripts/selftest-gates.sh 2>&1 | tee .lake/gate-evidence/selftest.log
+      - name: Retain gate and negative-control evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: aeneas-gate-evidence
+          path: formal-aeneas/.lake/gate-evidence/
+          retention-days: 14
