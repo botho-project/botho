@@ -120,10 +120,18 @@ fn should_recheck_minting(mint_requested: bool, minting: bool, balance_paused: b
     mint_requested && !minting && !balance_paused
 }
 
-/// A running bounded producer does not need expensive balance/UTXO scans.
-/// Expiry is enforced before calling this, and normal policy still scans.
-fn balance_scan_required(continuous: bool, minting: bool) -> bool {
-    !(continuous && minting)
+/// Whether a balance tick has a decision for the balance/UTXO scan to feed.
+/// Expiry is enforced before calling this.
+///
+/// - A balance pause needs the scan to decide whether to resume.
+/// - Normal-policy minting needs it to decide whether to pause; a running
+///   bounded producer does not.
+/// - Minting stopped for another reason (quorum loss, sync, never requested)
+///   uses no balance: the pause arm needs minting and the resume arm needs a
+///   balance pause. Scanning there only burned a whole-chain wallet scan per
+///   tick (#1984).
+fn balance_scan_required(continuous: bool, minting: bool, paused: bool) -> bool {
+    paused || (minting && !continuous)
 }
 
 fn unix_seconds() -> Option<u64> {
@@ -1306,6 +1314,11 @@ async fn run_async_with_shutdown(
     if mint_test.as_ref().is_some_and(|hooks| hooks.controlled()) {
         faucet_balance_interval = tokio::time::interval(Duration::from_millis(100));
     }
+    // The tick arm is paused while a balance scan runs (#1984). Restart the
+    // period when it resumes instead of bursting the ticks missed meanwhile,
+    // so a scan slower than the period does not run back to back.
+    faucet_balance_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut balance_scan: Option<BalanceScan> = None;
     // Periodically re-dial bootstrap peers when we have no connections, so a
     // node that lost its only connection right after startup can rejoin
     // (issue #409). Cheap and a no-op once peers are connected.
@@ -2980,9 +2993,14 @@ async fn run_async_with_shutdown(
             }
 
             // Check faucet balance and control minting accordingly
-            _ = faucet_balance_interval.tick() => {
+            // At most one balance scan runs at a time, off the loop (#1984).
+            _ = faucet_balance_interval.tick(), if balance_scan.is_none() => {
                 // Evaluate and enforce expiry BEFORE any fallible balance scan.
                 // A ledger/scan error must not leave override-backed mining alive.
+                // Pausing this arm while a scan is in flight cannot delay an
+                // expiry: a scan only starts on a balance pause or on
+                // normal-policy (non-window) minting, and only the completion
+                // arm below can re-arm minting from a balance pause.
                 #[cfg(test)]
                 let step = if let Some(hooks) = &mut mint_test {
                     hooks.observe("tick", minting_enabled, minting_paused_for_balance, &rpc_state, None);
@@ -3010,139 +3028,138 @@ async fn run_async_with_shutdown(
                 if let Some(hooks) = &mut mint_test {
                     hooks.observe("after_expiry", minting_enabled, minting_paused_for_balance, &rpc_state, None);
                 }
-                if !balance_scan_required(continuous, minting_enabled) {
+                if !balance_scan_required(continuous, minting_enabled, minting_paused_for_balance) {
                     continue;
                 }
                 // Normal policy can resume only after a successful scan and the
                 // existing quorum/sync checks. Failed scans leave mining stopped.
-                // Only check balance if faucet is configured with a wallet
-                if let Some(wallet) = &rpc_state.wallet {
-                    // Get wallet balance by scanning UTXOs
-                    let balance = match rpc_state.ledger.read() {
-                        Ok(ledger) => {
-                            // Context-aware discovery (botho.ledger.2, #1286 P7):
-                            // V2 lottery payouts count, legacy aliased rows do not.
-                            let owned = ledger.unspent_wallet_outputs(wallet);
-                            #[cfg(test)]
-                            let owned = if step.fail_scan {
-                                Err(crate::ledger::LedgerError::Database("injected mint-window scan failure".into()))
-                            } else {
-                                owned
-                            };
-                            match owned {
-                                Ok(owned) => {
-                                    // Unspent on chain; also skip mempool-pending spends.
-                                    let mempool = rpc_state.mempool.read().ok();
-                                    owned
-                                        .iter()
-                                        .filter(|o| {
-                                            !mempool.as_ref().is_some_and(|mp| {
-                                                mp.is_key_image_pending(&o.key_image)
-                                            })
-                                        })
-                                        .map(|o| o.utxo.output.amount)
-                                        .sum::<u64>()
-                                }
-                                Err(e) => {
-                                    warn!("Failed to scan UTXOs for balance check: {}", e);
-                                    #[cfg(test)]
-                                    if let Some(hooks) = &mut mint_test {
-                                        hooks.observe("scan_failed", minting_enabled, minting_paused_for_balance, &rpc_state, None);
-                                    }
-                                    continue;
-                                }
-                            }
+                // Only check balance if faucet is configured with a wallet.
+                if rpc_state.wallet.is_some() {
+                    // The scan discovers every wallet output from genesis; on a
+                    // long chain it outlasts the tick interval, so it runs off
+                    // the loop and the completion arm applies the policy.
+                    balance_scan = Some(spawn_balance_scan(
+                        rpc_state.clone(),
+                        continuous,
+                        #[cfg(test)]
+                        step,
+                    ));
+                    continue;
+                }
+                #[cfg(test)]
+                if let Some(hooks) = &mut mint_test {
+                    hooks.observe("settled", minting_enabled, minting_paused_for_balance, &rpc_state, None);
+                }
+            }
+
+            // Apply the faucet balance policy once the off-loop scan finishes.
+            joined = join_balance_scan(&mut balance_scan), if balance_scan.is_some() => {
+                let Some(scan) = balance_scan.take() else { continue };
+                let continuous = scan.continuous;
+                #[cfg(test)]
+                let step = scan.step;
+                let scanned = joined.map_err(|e| e.to_string()).and_then(|r| r);
+                #[cfg(test)]
+                let scanned = if step.fail_scan {
+                    Err("injected mint-window scan failure".to_string())
+                } else {
+                    scanned
+                };
+                let balance = match scanned {
+                    Ok(balance) => balance,
+                    Err(e) => {
+                        warn!("Failed to scan UTXOs for balance check: {}", e);
+                        #[cfg(test)]
+                        if let Some(hooks) = &mut mint_test {
+                            hooks.observe("scan_failed", minting_enabled, minting_paused_for_balance, &rpc_state, None);
                         }
-                        Err(e) => {
-                            warn!("Failed to read ledger for balance check: {}", e);
-                            continue;
-                        }
-                    };
-
-                    #[cfg(test)]
-                    let balance = step.balance.unwrap_or(balance);
-                    let balance_bth = balance as f64 / 1_000_000_000_000.0;
-
-                    // Number of pending transactions awaiting inclusion in a
-                    // block. The balance-gated pause must never apply while
-                    // there is work to mine, otherwise a sole-minter faucet
-                    // deadlocks the chain (issue #386): a pending dispense can
-                    // never confirm, so the confirmed balance never drops, so
-                    // minting never resumes.
-                    let mempool_len = rpc_state
-                        .mempool
-                        .read()
-                        .map(|mp| mp.len())
-                        .unwrap_or(0);
-
-                    #[cfg(test)]
-                    let mempool_len = step.pending.unwrap_or(mempool_len);
-                    #[cfg(test)]
-                    if let Some(hooks) = &mut mint_test {
-                        hooks.observe("scanned", minting_enabled, minting_paused_for_balance, &rpc_state, Some((balance, mempool_len)));
+                        continue;
                     }
-                    let (pause_for_balance, resume_from_balance) = balance_minting_policy(
-                        balance, FAUCET_BALANCE_HIGH, FAUCET_BALANCE_LOW, mempool_len, continuous,
+                };
+
+                #[cfg(test)]
+                let balance = step.balance.unwrap_or(balance);
+                let balance_bth = balance as f64 / 1_000_000_000_000.0;
+
+                // Number of pending transactions awaiting inclusion in a
+                // block. The balance-gated pause must never apply while
+                // there is work to mine, otherwise a sole-minter faucet
+                // deadlocks the chain (issue #386): a pending dispense can
+                // never confirm, so the confirmed balance never drops, so
+                // minting never resumes.
+                let mempool_len = rpc_state
+                    .mempool
+                    .read()
+                    .map(|mp| mp.len())
+                    .unwrap_or(0);
+
+                #[cfg(test)]
+                let mempool_len = step.pending.unwrap_or(mempool_len);
+                #[cfg(test)]
+                if let Some(hooks) = &mut mint_test {
+                    hooks.observe("scanned", minting_enabled, minting_paused_for_balance, &rpc_state, Some((balance, mempool_len)));
+                }
+                let (pause_for_balance, resume_from_balance) = balance_minting_policy(
+                    balance, FAUCET_BALANCE_HIGH, FAUCET_BALANCE_LOW, mempool_len, continuous,
+                );
+
+                // Check if we should pause minting due to high balance.
+                // Only pause when the mempool is empty (nothing to mine).
+                if minting_enabled
+                    && !minting_paused_for_balance
+                    && pause_for_balance
+                {
+                    info!(
+                        "Faucet balance ({:.2} BTH) exceeds threshold ({:.2} BTH) and mempool is empty - pausing minting",
+                        balance_bth,
+                        FAUCET_BALANCE_HIGH as f64 / 1_000_000_000_000.0
                     );
-
-                    // Check if we should pause minting due to high balance.
-                    // Only pause when the mempool is empty (nothing to mine).
-                    if minting_enabled
-                        && !minting_paused_for_balance
-                        && pause_for_balance
-                    {
-                        info!(
-                            "Faucet balance ({:.2} BTH) exceeds threshold ({:.2} BTH) and mempool is empty - pausing minting",
-                            balance_bth,
-                            FAUCET_BALANCE_HIGH as f64 / 1_000_000_000_000.0
-                        );
-                        node.stop_minting_public();
-                        minting_enabled = false;
-                        minting_paused_for_balance = true;
-                        if let Ok(mut active) = minting_active.write() {
-                            *active = false;
-                        }
-                        metrics_updater.set_minting_active(false);
-                        ws_broadcaster.minting_status(false, 0.0, 0);
+                    node.stop_minting_public();
+                    minting_enabled = false;
+                    minting_paused_for_balance = true;
+                    if let Ok(mut active) = minting_active.write() {
+                        *active = false;
                     }
+                    metrics_updater.set_minting_active(false);
+                    ws_broadcaster.minting_status(false, 0.0, 0);
+                }
 
-                    // Check if we should resume minting. We resume when the
-                    // balance has dropped below the low threshold (original
-                    // hysteresis) OR when there are pending transactions to
-                    // mine (which forces a block even at high balance, breaking
-                    // the sole-minter deadlock).
-                    if minting_paused_for_balance
-                        && resume_from_balance
-                    {
-                        // Check quorum AND initial-sync completion before
-                        // resuming (issue #770): a node still catching up to the
-                        // fleet tip must not resume minting at its stale slot.
-                        let connected = get_connected_peer_ids(&discovery);
-                        let (can_mint, _) = check_minting_eligibility(&config, &connected, mint);
-                        if should_arm_minting(can_mint, initial_sync_complete) {
-                            let reason = if continuous {
-                                "bounded testnet continuous-minting window".to_string()
-                            } else if mempool_len > 0 {
-                                format!("{} pending transaction(s) to mine", mempool_len)
-                            } else {
-                                format!(
-                                    "balance ({:.2} BTH) below threshold ({:.2} BTH)",
-                                    balance_bth,
-                                    FAUCET_BALANCE_LOW as f64 / 1_000_000_000_000.0
-                                )
-                            };
-                            info!("Resuming minting: {}", reason);
-                            if let Err(e) = node.start_minting_public() {
-                                warn!("Failed to resume minting: {}", e);
-                            } else {
-                                minting_enabled = true;
-                                minting_paused_for_balance = false;
-                                if let Ok(mut active) = minting_active.write() {
-                                    *active = true;
-                                }
-                                metrics_updater.set_minting_active(true);
-                                ws_broadcaster.minting_status(true, 0.0, 0);
+                // Check if we should resume minting. We resume when the
+                // balance has dropped below the low threshold (original
+                // hysteresis) OR when there are pending transactions to
+                // mine (which forces a block even at high balance, breaking
+                // the sole-minter deadlock).
+                if minting_paused_for_balance
+                    && resume_from_balance
+                {
+                    // Check quorum AND initial-sync completion before
+                    // resuming (issue #770): a node still catching up to the
+                    // fleet tip must not resume minting at its stale slot.
+                    let connected = get_connected_peer_ids(&discovery);
+                    let (can_mint, _) = check_minting_eligibility(&config, &connected, mint);
+                    if should_arm_minting(can_mint, initial_sync_complete) {
+                        let reason = if continuous {
+                            "bounded testnet continuous-minting window".to_string()
+                        } else if mempool_len > 0 {
+                            format!("{} pending transaction(s) to mine", mempool_len)
+                        } else {
+                            format!(
+                                "balance ({:.2} BTH) below threshold ({:.2} BTH)",
+                                balance_bth,
+                                FAUCET_BALANCE_LOW as f64 / 1_000_000_000_000.0
+                            )
+                        };
+                        info!("Resuming minting: {}", reason);
+                        if let Err(e) = node.start_minting_public() {
+                            warn!("Failed to resume minting: {}", e);
+                        } else {
+                            minting_enabled = true;
+                            minting_paused_for_balance = false;
+                            if let Ok(mut active) = minting_active.write() {
+                                *active = true;
                             }
+                            metrics_updater.set_minting_active(true);
+                            ws_broadcaster.minting_status(true, 0.0, 0);
                         }
                     }
                 }
@@ -4273,6 +4290,75 @@ impl JobOutcome {
     }
 }
 
+/// A faucet balance scan running off the node loop (#1984).
+///
+/// The scan is a whole-chain wallet discovery. On the loop it starved the
+/// swarm once it outlasted the balance interval: a producer that lost quorum
+/// could never rejoin it.
+struct BalanceScan {
+    handle: tokio::task::JoinHandle<std::result::Result<u64, String>>,
+    /// The bounded-window state when the scan started; the policy uses it.
+    continuous: bool,
+    #[cfg(test)]
+    step: mint_window_tests::Step,
+}
+
+/// Start a faucet balance scan on a blocking thread. The balance is the
+/// wallet's unspent outputs, less those a mempool transaction spends.
+fn spawn_balance_scan(
+    state: Arc<RpcState>,
+    continuous: bool,
+    #[cfg(test)] step: mint_window_tests::Step,
+) -> BalanceScan {
+    #[cfg(test)]
+    let delay = step.scan_delay;
+    let handle = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(delay) = delay {
+            std::thread::sleep(delay);
+        }
+        let wallet = state.wallet.as_ref().ok_or("no faucet wallet")?;
+        let ledger = state
+            .ledger
+            .read()
+            .map_err(|e| format!("ledger lock: {e}"))?;
+        // Context-aware discovery (botho.ledger.2, #1286 P7):
+        // V2 lottery payouts count, legacy aliased rows do not.
+        let owned = ledger
+            .unspent_wallet_outputs(wallet)
+            .map_err(|e| e.to_string())?;
+        drop(ledger);
+        // Unspent on chain; also skip mempool-pending spends.
+        let mempool = state.mempool.read().ok();
+        Ok(owned
+            .iter()
+            .filter(|o| {
+                !mempool
+                    .as_ref()
+                    .is_some_and(|mp| mp.is_key_image_pending(&o.key_image))
+            })
+            .map(|o| o.utxo.output.amount)
+            .sum())
+    });
+    BalanceScan {
+        handle,
+        continuous,
+        #[cfg(test)]
+        step,
+    }
+}
+
+/// Await the in-flight balance scan, or never resolve when there is none (the
+/// `select!` arm is also guarded by `is_some()`).
+async fn join_balance_scan(
+    scan: &mut Option<BalanceScan>,
+) -> std::result::Result<std::result::Result<u64, String>, tokio::task::JoinError> {
+    match scan {
+        Some(scan) => (&mut scan.handle).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// The handle of the apply job in flight.
 type ApplyHandle = tokio::task::JoinHandle<JobOutcome>;
 
@@ -5052,11 +5138,22 @@ mod tests {
         let clock = Instant::now();
         let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
         let continuous = window.active(Some(109), clock);
-        assert!(!balance_scan_required(continuous, true));
-        assert!(balance_scan_required(continuous, false));
+        assert!(!balance_scan_required(continuous, true, false));
+        assert!(balance_scan_required(continuous, false, true));
         let continuous = window.active(Some(110), clock);
-        assert!(balance_scan_required(continuous, true));
-        assert!(balance_scan_required(continuous, false));
+        assert!(balance_scan_required(continuous, true, false));
+        assert!(balance_scan_required(continuous, false, true));
+    }
+
+    /// #1984: minting stopped for anything but a balance pause (quorum loss,
+    /// sync, never requested) has no use for the balance, so no tick scans.
+    #[test]
+    fn balance_scan_skipped_when_minting_stopped_without_balance_pause() {
+        for continuous in [false, true] {
+            assert!(!balance_scan_required(continuous, false, false));
+            assert!(balance_scan_required(continuous, false, true));
+        }
+        assert!(balance_scan_required(false, true, false));
     }
 
     // ---- Issue #767: `[minting] enabled = true` must arm minting, not just

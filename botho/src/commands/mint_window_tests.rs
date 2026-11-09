@@ -6,7 +6,10 @@
 use super::*;
 use crate::{
     ledger::{ChainState, Ledger, UtxoSnapshot},
-    rpc::{metrics::MINTING_ACTIVE, websocket::WsEvent},
+    rpc::{
+        metrics::{MINTING_ACTIVE, NODE_LOOP_DELAYED},
+        websocket::WsEvent,
+    },
     transaction::{TxOutput, Utxo, UtxoId},
 };
 use serde::Serialize;
@@ -28,6 +31,8 @@ pub(super) struct Step {
     pub fail_scan: bool,
     pub balance: Option<u64>,
     pub pending: Option<usize>,
+    /// Slept inside the off-loop balance scan before it reads the ledger.
+    pub scan_delay: Option<Duration>,
     synced: Option<bool>,
     quorum: Option<bool>,
 }
@@ -491,6 +496,30 @@ fn controlled_attempt() {
     assert!(stopped.websocket.contains(&false));
     assert_stopped(&controlled.next("scan_failed"));
     assert_eq!(controlled.rpc("minting_getStatus")["active"], false);
+    // #1984: a balance scan slower than the loop-delay threshold runs off
+    // the loop. Before, the loop sat inside it: no swarm polling, so a
+    // producer that had lost quorum could never rejoin.
+    let delayed_before = NODE_LOOP_DELAYED.get();
+    let scan_started = Instant::now();
+    controlled
+        .control
+        .send(Step {
+            scan_delay: Some(Duration::from_secs(6)),
+            ..Step::default()
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    let rpc_started = Instant::now();
+    assert_eq!(controlled.rpc("minting_getStatus")["active"], false);
+    assert!(rpc_started.elapsed() < Duration::from_secs(1));
+    let slow = controlled.next("settled");
+    assert!(scan_started.elapsed() >= Duration::from_secs(6));
+    assert_stopped(&slow);
+    assert_eq!(
+        NODE_LOOP_DELAYED.get(),
+        delayed_before,
+        "balance scan blocked the node loop"
+    );
     assert_stopped(&controlled.step(Step::default(), "settled"));
     assert_stopped(&controlled.step(Step::default(), "settled"));
     // Both gates remain effective despite pending work or low balance.
