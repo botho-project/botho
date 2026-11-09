@@ -246,6 +246,18 @@ def dispatch (fn : String) (a : Json) : Dec Json := do
     -- legacy pre-9.0.0 model its counterexample theorems are about.
     pure (encNat (Botho.Demurrage.exactCharge (← nat a "value") (← nat a "factor")
       (← nat a "elapsed") (← nat a "rate") (← nat a "year")))
+  | "demurrage_composition" =>
+    let value ← nat a "value"
+    let inputFactor ← nat a "input_factor"
+    let outputFactor ← nat a "output_factor"
+    let rate ← nat a "rate"
+    let year ← nat a "year"
+    pure (Json.mkObj [
+      ("reset", encNat (Botho.Demurrage.exactResetCharge value inputFactor outputFactor
+        (← nat a "horizon") rate year)),
+      ("settlement", encNat (Botho.Demurrage.exactSettlementCharge value inputFactor rate year)),
+      ("spend", encNat (Botho.Demurrage.exactSpendCharge value inputFactor outputFactor
+        (← nat a "elapsed") rate year))])
   | "default_cluster_factor" =>
     pure (encNat (Botho.Demurrage.defaultFactor (← nat a "wealth")))
   | "ring_centroid_factor" =>

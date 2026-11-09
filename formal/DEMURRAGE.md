@@ -272,10 +272,78 @@ target/release/botho-formal-drt --cases 100000 --seed 1711 \
 ```
 
 This is a partial #1711 contribution. The unconditional principal bound
-remains refuted. Settlement/reset/spend composition, ring elapsed
-centroid/quantile, monotonicity of other kernels, adversarial dilution,
+remains refuted. Reset/settlement/spend property proofs (the later #1985 model/DRT increment
+is below), ring elapsed centroid/quantile, monotonicity of other kernels, adversarial dilution,
 fee-floor bounds, binary fuzz-corpus replay and reachable transaction/block
 witnesses remain outstanding. Do not mark #1711 complete on these results
 or weaken its targets silently.
 Any arithmetic repair changes consensus outputs and needs its own reviewed
 policy, activation and regression work.
+
+
+## Composition models and DRT (#1985)
+
+Three executable definitions in `Botho/Demurrage/ExactCharge.lean` reuse
+`exactCharge` without changing its definition, proofs or reviewed records:
+
+| Model | Public Rust function in `cluster-tax/src/demurrage.rs` | Composition |
+|---|---|---|
+| `exactResetCharge` | `capitalized_reset_charge` | Raw output factor at least input factor returns zero; otherwise natural subtraction of two separately rounded and separately u64-capped charges |
+| `exactSettlementCharge` | `demurrage_settlement_charge` | Reset to factor 1000 over exactly 31,536,000 blocks, independently of the supplied year |
+| `exactSpendCharge` | `spend_demurrage_charge` | Maximum of accrued charge at supplied elapsed time and reset at the fixed 31,536,000-block horizon |
+
+These are **tested models**, not new theorems. The existing extracted
+`capitalized_reset_charge_no_downgrade` proves only its named branch;
+finite correspondence here does not prove Rust equivalence or panic freedom.
+The parent still owns other composition properties, fee-floor composition,
+adversarial dilution, binary fuzz-corpus replay and ledger reachability.
+
+One stateless `demurrage_composition` leg calls all three real Rust functions
+and the canonical Lean definitions on every case. Value, both factors,
+generic reset horizon, spend elapsed and year are independent u64 inputs;
+rate is u32. Half the generator mixture uses full-width/edge-biased inputs,
+including zero year and years above 368,934,881,474. Half uses ordinary
+positive values/rates, factors 1000..6000 and independent times, preventing
+zero/capped results from dominating all coverage. No typed input is excluded.
+The report records each output's zero/positive/cap class, the number of
+capped generic-reset terms, accrued/reset dominance and year region.
+
+The 32 committed vectors include independently varying zero horizon and
+elapsed, raw factor clamp boundaries, one and two capped terms, zero guards,
+large years and these discriminators:
+
+- Separate floors: value 3000, input/output factors 1002/1001, horizon 1,
+  rate 10000 and year 1 give reset **1**; charging the factor difference
+  would give zero.
+- Fixed horizon: value 1000000, input factor 6000, rate 200 and year 1 give
+  settlement **630720000000**; incorrectly using `5 * year` gives 100000.
+- Distinct fields: value 1000000, factors 6000/3500, generic horizon 6307200,
+  elapsed 63072000, rate 200 and year 6307200 give reset **10000**,
+  settlement **100000**, spend **200000**.
+- Separate caps: value `u64::MAX`, factors 6000/3500, rate 200 and year
+  6307200 give reset **9223372036854775808** at a 50-year generic horizon
+  and **0** at 100 years. These are helper-domain tests, not production
+  five-year or accepted-chain witnesses. They refute an unconditional
+  reset-horizon monotonicity claim; they do not change the fixed horizon.
+
+`composition_live_rust_and_lean_vectors` asserts the live outputs of both
+Rust and the built Lean codec against every vector's explicit `expected`
+values, checks decimal-string input encoding and serialization, and pins the
+three-distinct-field case. Ordinary runner replay reads only `input`, so
+stored output metadata alone would not provide this check. Build the Lean
+DRT executable before running this test, as the existing CI workflow does.
+
+The normal PR tier retains all original 25 legs and registers this as the
+26th: 10,000 generated and compared composition cases check **30,000 function
+results**, plus 32 replays. The full campaign still uses 10,000 cases per
+leg and the five-minute run limit. Nightly discovers the new leg with the
+unchanged 1M-case, four-worker, 3600-second leg and 9600-second collection
+settings; registration and helper checks do not assert a million-case run.
+
+Validation receipts on the implementing PR distinguish the normal campaign
+from temporary actual-wrapper mutations: factor-difference reset, variable
+settlement horizon and max-to-add spend. They retain the rebuilt binary hashes,
+expected numerical mismatches, real generator/shrink/saved-fixture replay,
+and exact restoration. No mutant or control-only workflow is part of the
+normal source. Historical receipts above remain historical; final PR CI
+provides the new composition evidence.

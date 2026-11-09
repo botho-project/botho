@@ -54,6 +54,10 @@ const LEGS: &[(&str, LegFn)] = &[
         runner::run::<legs_monetary::Monetary>,
     ),
     (demurrage::Charge::NAME, runner::run::<demurrage::Charge>),
+    (
+        demurrage::Composition::NAME,
+        runner::run::<demurrage::Composition>,
+    ),
     (demurrage::Factor::NAME, runner::run::<demurrage::Factor>),
     (
         demurrage::RingFactor::NAME,
