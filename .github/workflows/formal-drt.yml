@@ -294,7 +294,7 @@ jobs:
               (OUT/'Age.lean').write_bytes((ROOT/'formal/Botho/Demurrage/Age.lean').read_bytes())
               (OUT/'control.py').write_bytes(Path(__file__).read_bytes())
               (OUT/'vectors.jsonl').write_bytes(VECTORS.read_bytes())
-              run('toolchains', ['bash','-c','rustc --version; cargo --version; lean --version'],cwd=ROOT)
+              run('toolchains', ['bash','-c','rustc --version && cargo --version && lean --version'],cwd=DRT/'lean')
               testlog = run('live-vectors', ['cargo','test','--release','quantile_live_rust_and_lean_vectors','--','--nocapture'], cap=300)
               assert testlog.read_text().count('quantile vector ') == 27
               assert 'vectors=27 transformations=114 implementations=2' in testlog.read_text()
