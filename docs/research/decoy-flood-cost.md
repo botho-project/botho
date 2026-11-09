@@ -199,7 +199,7 @@ The sweep was re-run after these merged to main:
 
 ## Output (`decoy-flood-sweep`, seed 1701)
 
-Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool-enforced since #1780, not by block validation); ring size = 20 (19 decoys); ±5% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
+Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool since #1780, consensus since protocol 10.0.0); ring size = 20 (19 decoys); ±5% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
 
 Node-picker rings per (chain width, age) for the §5 ground-key Monte Carlo: 4000; seed 1701.
 
