@@ -111,12 +111,17 @@ This is the only canonical-model equality bridge here. The other exports
 above are extraction postconditions, not equality to the corresponding
 `formal/` definitions. The demurrage result is only the no-downgrade branch;
 full charge arithmetic and the eligibility loop remain without extraction
-correctness proofs. The accrued-charge `ExactCharge` model and its
-`demurrage_charge` DRT leg do not cover reset/settlement/spend composition
-(#1711). Reset-charge Rust oracle tests such as
-`capitalized_reset_charge_matches_exact_on_grid` are separate finite evidence,
-not a registered reset-charge Lean DRT leg. Existing tail-reward overflow, truncation and supply hypotheses and
-counterexamples are unchanged.
+correctness proofs. The separate canonical `exactResetCharge`,
+`exactSettlementCharge` and `exactSpendCharge` models are compared with all
+three public Rust wrappers by the structured `demurrage_composition` DRT leg
+(#1985). Its live Rust/Lean vectors distinguish separate rounding/caps,
+fixed settlement horizon and max composition; 10,000 generated cases compare
+30,000 function results. This is finite evidence, not a new extraction
+correctness theorem. Rust oracle tests such as
+`capitalized_reset_charge_matches_exact_on_grid` remain separate evidence;
+[remaining composition properties](../formal/DEMURRAGE.md#composition-models-and-drt-1985)
+stay with #1711. Existing tail-reward overflow, truncation and supply
+hypotheses and counterexamples are unchanged.
 
 The bridge alone does not transfer every model theorem to Rust. A transfer
 must match the representation and domain, establish the model theorem's own

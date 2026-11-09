@@ -99,7 +99,7 @@ Rules:
 | `MonetaryPolicy::calculate_tail_reward_u128` | Conditional no failure and exact truncation; positive result needs its width premise | No canonical equality bridge; zero-cast counterexample and mainnet supply bounds remain |
 | `sybil_reward_cap`, `is_eligible_at` | Exact scalar postconditions | Finite `sybil_reward_cap` and `is_eligible` DRT legs (the latter calls the candidate wrapper); no canonical equality bridge |
 | `lottery_emission_bps`, `lottery_emission_share` | Exact scalar postconditions and share bounds | Finite `monetary` DRT leg; no canonical equality bridge |
-| `capitalized_reset_charge` | Only the no-downgrade branch | No registered reset-charge model/DRT leg; Rust exact-oracle tests are separate finite evidence; reset/settlement/spend composition remains #1711 |
+| `capitalized_reset_charge` | Only the no-downgrade branch | Finite `demurrage_composition` DRT compares canonical reset/settlement/spend models with the public Rust wrappers; no extracted arithmetic equality proof; remaining composition properties stay #1711 |
 | `count_eligible_in`, `demurrage_charge` | Extracted and axiom-gated, without correctness theorems | Finite `count_eligible` wrapper DRT and `demurrage_charge` ↔ `ExactCharge.exactCharge` DRT; neither proves these extractions |
 
 The reset-charge oracle test is
@@ -305,6 +305,16 @@ clipping counterexample, and full-Nat elapsed/factor monotonicity. The six exist
 claims are also listed and bound with their original statements. These are
 **proven (model)**; DRT is separate evidence of Rust correspondence. See
 [the theorem domains and checked examples](DEMURRAGE.md#exact-charge-threshold-and-splitting-1916).
+
+`exactResetCharge`, `exactSettlementCharge` and `exactSpendCharge` add
+executable composition models, **tested** by the structured
+`demurrage_composition` leg (#1985). Each case compares all three public Rust
+wrappers: 10,000 cases means 30,000 function results, not 30,000 independent
+cases. Separate rounding/caps, the constant settlement horizon and max
+composition are covered by live Rust/Lean fixture assertions. No new model
+property or Rust-equivalence theorem is claimed; see
+[the composition domain and controls](DEMURRAGE.md#composition-models-and-drt-1985).
+
 
 ## The cluster-tag model
 
@@ -515,6 +525,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
 | `lottery_sim` | Actual `LotterySimulation::apply_production_block` and separate node cap/accounting/draw calls; independent per-step public-state checks | One composed `Drt.lotterySim` result in both expected slots; Lean advances its own arithmetic carryover |
 | `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
+| `demurrage_composition` | `bth_cluster_tax::{capitalized_reset_charge, demurrage_settlement_charge, spend_demurrage_charge}` | `Botho.Demurrage.{exactResetCharge, exactSettlementCharge, exactSpendCharge}`; three results per case, independent typed inputs and fixed production wrapper horizon |
 | `monetary` | Actual mainnet policy phase/halving, both tail wrappers, library and node block reward, lottery bps/share and demurrage | `Botho.Monetary` and `Botho.Supply.Block`; independent u64 inputs and arithmetic-safe wide supply 0..A, including modulo cast loss; see [domain/coverage](MONETARY.md#monetary-drt-domain-and-replay-1922) |
 | `cluster_tag_inheritance` | 8.0.0 (#1870): `first_malformed_output_tags` (Rule 1), then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2, C6) over the in-memory double `botho::ledger::formal_drt_tags`; fixtures include #1870's `rules_golden_vectors` | `Botho.Tags.inheritOk₈`, the import cluster derived from the height in the DRT driver (and the failing rule's numbers) |
 | `effective_cluster_wealth` | 9.0.0 (#1876): `ValidationReads::effective_cluster_wealth_from_outputs` over the same double (exact 256-bit numerator) | `Botho.Tags.effectiveWealthExact` (`effectiveWealth` is the pre-9.0.0 saturating model, kept as the record) |

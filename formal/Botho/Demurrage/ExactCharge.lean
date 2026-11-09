@@ -217,4 +217,23 @@ example : exactCharge 5000 5999 1 10000 1 = 4999 ∧
 example : exactCharge U64_MAX 6000 1 10000 1 = U64_MAX ∧
     exactCharge U64_MAX 6000 2 10000 1 = U64_MAX := by decide
 
+/-- Model of `bth_cluster_tax::capitalized_reset_charge`: each term is rounded
+and capped by `exactCharge` before natural (saturating) subtraction. Tested by
+`demurrage_composition`; no new equivalence or charge-property theorem. -/
+def exactResetCharge (value inputFactor outputFactor horizon rate year : Nat) : Nat :=
+  if outputFactor ≥ inputFactor then 0
+  else exactCharge value inputFactor horizon rate year -
+    exactCharge value outputFactor horizon rate year
+
+/-- Model of `demurrage_settlement_charge`. The production horizon is the
+constant 31,536,000 blocks, not five times the caller's `year` parameter. -/
+def exactSettlementCharge (value inputFactor rate year : Nat) : Nat :=
+  exactResetCharge value inputFactor 1000 31536000 rate year
+
+/-- Model of `spend_demurrage_charge`: the larger obligation, not their sum.
+The accrued elapsed time is independent of the fixed reset horizon. -/
+def exactSpendCharge (value inputFactor outputFactor elapsed rate year : Nat) : Nat :=
+  max (exactCharge value inputFactor elapsed rate year)
+    (exactResetCharge value inputFactor outputFactor 31536000 rate year)
+
 end Botho.Demurrage
