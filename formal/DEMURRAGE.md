@@ -342,7 +342,7 @@ settings; registration and helper checks do not assert a million-case run.
 
 Validation receipts on the implementing PR distinguish the normal campaign
 from temporary actual-wrapper mutations: factor-difference reset, variable
-settlement horizon and max-to-add spend. They retain the rebuilt binaries,
+settlement horizon and max-to-add spend. They retain the rebuilt binary hashes,
 expected numerical mismatches, real generator/shrink/saved-fixture replay,
 and exact restoration. No mutant or control-only workflow is part of the
 normal source. Historical receipts above remain historical; final PR CI
