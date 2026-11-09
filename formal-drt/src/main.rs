@@ -58,6 +58,7 @@ const LEGS: &[(&str, LegFn)] = &[
         demurrage::Composition::NAME,
         runner::run::<demurrage::Composition>,
     ),
+    (demurrage::RingAge::NAME, runner::run::<demurrage::RingAge>),
     (demurrage::Factor::NAME, runner::run::<demurrage::Factor>),
     (
         demurrage::RingFactor::NAME,
