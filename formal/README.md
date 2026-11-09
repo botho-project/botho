@@ -326,6 +326,9 @@ mixed ages/interior ranks. Both production callers currently use 10,000 bps
 This is finite correspondence evidence, with no new listed theorem,
 extraction-equivalence or generic panic/reachability claim; see
 [the quantile domain and controls](DEMURRAGE.md#ring-age-quantile-model-and-drt-1993).
+The linked normal-source receipt at `7eb426d8` completed 270,000 comparisons
+and 225 replays with zero mismatches; final PR CI is separate from that
+historical control-workflow checkout and its captured dependency inputs.
 
 
 ## The cluster-tag model

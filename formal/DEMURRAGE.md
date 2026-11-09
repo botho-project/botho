@@ -400,3 +400,27 @@ result is added. #1711 retains those proof/reachability obligations, the
 separate elapsed-centroid model and its unchecked-u128 accumulator overflow
 lead, dilution, fee-floor composition and binary fuzz-corpus replay. Historical
 receipts above remain historical; final-head receipts are on the child PR.
+
+On 2026-11-09, [formal gates](https://github.com/botho-project/botho/actions/runs/42711257939)
+and the [control/normal campaign](https://github.com/botho-project/botho/actions/runs/42712236451)
+passed at actual normal checkout `7eb426d8c7bcda232a5d8469e4dfd37d5b56a752`
+(tree `d1695f8756607a2a71af4568c0f8c2997e59ce83`). The temporary workflow came
+from control commit `43820316bf8cb7f3febe8952c96a57f21b3598f6`. After exact
+restoration, seed 1707 completed **270,000 generated = compared**, 225 replays,
+zero mismatches, and 70.212 summed leg seconds; quantile contributed 10,000
+comparisons, 27 replays and 2.447 seconds. Its observed classes included all
+65 lengths, 4,642 mixed ages, 7,867 interior q, 6,615 interior ranks and 4,348
+positive outputs (37 at u64 max). The live 27 vectors/114 transformations are
+separate from those campaign counts.
+
+At seed 1993, floor rounding gave Rust 10 versus Lean 20 at q=3334; omitted
+sorting gave Rust 30 versus Lean 10 at q=0. A clean scratch floor campaign
+generated 64 inputs, compared 23, made five shrink attempts and saved five
+numerical failures. The same five inputs failed replay and passed after exact
+restoration/rebuild; both targeted vectors also passed restored replay.
+Original archives, API digests, patches, commands, source/model/runner hashes
+and root/resolved lockfiles are retained in the PR evidence receipt. The
+root/standalone lock hashes differ (1,157/688 packages); unchanged tracked
+source does not establish identical dependency graphs or binaries across
+runs. These receipts precede the documentation-only follow-up; final PR CI
+validates its final checkout separately. No million-case run was performed.
