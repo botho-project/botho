@@ -102,6 +102,10 @@ use super::settlement_horizon_sweep::{
     candidate_horizons, factor_classes, FactorClass, Horizon, BLOCKS_PER_YEAR, RATE_BPS,
 };
 
+/// Adversarial-dilution mode (#1686): candidate ring-floor rules compared on
+/// dilution, honest over-charge, privacy and CT compatibility.
+pub mod dilution;
+
 /// Deterministic seed for this sweep (distinct from the settlement sweep's
 /// `0xB07A_0833`).
 pub const SEED: u64 = 0xB07A_0925;

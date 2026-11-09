@@ -19,8 +19,8 @@ class MetadataTests(unittest.TestCase):
     def output(self, gen):
         return "\n".join(f"Research-{k}: {v}" for k, v in tables.lottery_metadata(gen).items()) + "\n\n| cell |\n| 1913 |\n"
 
-    def test_all_four_valid_and_all_twenty_two_generators_preserved(self):
-        self.assertEqual(len(tables.GENERATORS), 22)
+    def test_all_four_valid_and_all_twenty_three_generators_preserved(self):
+        self.assertEqual(len(tables.GENERATORS), 23)
         self.assertEqual(len(self.generators), 4)
         self.assertEqual({tables.validate_metadata(g, self.output(g))["Surface"] for g in self.generators},
                          set(tables.LOTTERY_METADATA))
