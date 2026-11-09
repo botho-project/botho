@@ -184,6 +184,207 @@ jobs:
       - name: Build the runner
         working-directory: formal-drt
         run: cargo build --release
+      - name: Demurrage composition semantic controls (temporary)
+        timeout-minutes: 30
+        run: |
+          cat > "$RUNNER_TEMP/demurrage-control.py" <<'PYCONTROL'
+          import difflib
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import signal
+          import subprocess
+          import time
+          import traceback
+          
+          ROOT = Path.cwd()
+          OUT = Path(os.environ['RUNNER_TEMP']) / 'demurrage-controls'
+          OUT.mkdir(exist_ok=True)
+          SOURCE = ROOT / 'cluster-tax/src/demurrage.rs'
+          ORIGINAL = SOURCE.read_bytes()
+          DRT = ROOT / 'formal-drt'
+          RUNNER = DRT / 'target/release/botho-formal-drt'
+          MODEL = DRT / 'lean/.lake/build/bin/botho-model'
+          VECTORS = DRT / 'regressions/demurrage_composition.jsonl'
+          NORMAL_HEAD = '31ee51633aed817e5a716c02679b406ed1fc4e95'
+          NORMAL_TREE = 'c0fc6bce55a5e9ed88a3ced9cd99b81c15e3f500'
+          EXPECTED_SOURCES = {'.github/workflows/formal-drt-nightly.yml': '7de68158c97f3deb1d1d7158842959c42f1b2cee6c92d16a496590038fc02343', '.github/workflows/formal.yml': 'd2c6900cfae90c9283e80bbe59cb176b3bee7ca965dd90524675db7e1e4b946a', 'cluster-tax/src/demurrage.rs': '9d1bfeadc16192948529fbc8b5e3ada89d8991e9c0a825fc8e74b53f963fe4f0', 'cluster-tax/src/lib.rs': '7ce7a65667392b1b83b8f0c0cfb6f41a6e120e00a06b415c8aef5650b39261e1', 'formal-aeneas/BothoAeneas/LotteryKernels.lean': '240c32330a60458a5168d5d2e1caa843d282391647df1f084eff111a08ba354b', 'formal-aeneas/README.md': 'b8323c3dec2914313364f19179a09996a69f1a217ff98c40df87b59fcce3a170', 'formal-drt/lean/Drt/Codec.lean': '723efb37e369349b111e3a392d31d376aec799f8f2a5ec8ea68ac4c2734afb16', 'formal-drt/lean/lakefile.toml': '4e86c8a74a7255b4d4f5657a360912e9e5285e0c28bbe93aae08819430718ca8', 'formal-drt/regressions/README.md': '70dc7ad5538df56dfa5e68af55835eb4b788937ec930b291bb817e9ba97acc8d', 'formal-drt/regressions/cluster_tag_inheritance.jsonl': '17014773709a00661e95317af8340f91dba75abb8dd4dfb933271edea02c2237', 'formal-drt/regressions/compute_pool_accounting.jsonl': '0a949113c5f26e98bd522268e678a1a68b1d8240268b7741298f3b91733596e8', 'formal-drt/regressions/count_eligible.jsonl': '3de2ac3d406afba56b82496b142869cd24e434b2d16ab0693e699f4a1c681804', 'formal-drt/regressions/default_cluster_factor.jsonl': '76e37ff9e10d60b2a6e79f39311a33e48977aa634a86e12f225ed41448407925', 'formal-drt/regressions/demurrage_charge.jsonl': '4c2eb32874fae7a1b537d22f3e352c6413d286c0f48cbeb757b85eca2d18b043', 'formal-drt/regressions/demurrage_composition.jsonl': '60d7a45b4674d9abf572cb6bb2df9fb305aa049bf8e1a6a7ddc95ead64ff2233', 'formal-drt/regressions/draw_lottery_winners_seeded.jsonl': '15eca9c4757e7df7af15b6605215d0b9bc75379d9456d6f52bf5b12b48b5e128', 'formal-drt/regressions/draw_winners_with_seed.jsonl': 'b522cba07ce2ac88f3cbf56b7571471a65b6850ba015deafa6e7b7c46685a3c5', 'formal-drt/regressions/drawing.jsonl': '52f79375316eed66bd11cc4744e35078374330d78d1c4634f688fcb5e22b37e0', 'formal-drt/regressions/effective_cluster_wealth.jsonl': 'f66bf297722ea075c16d1cbd72e275a64e5b6aa6bf7555b6a05d644d21adc9d7', 'formal-drt/regressions/is_eligible.jsonl': 'd86dff88c709b31d8108ba476f043e6e2bca75b4ca9bd55ed9734c9f670e9be4', 'formal-drt/regressions/lottery_sim.jsonl': '07095b7bd54f123de016e8768069ee27621bf75a06bb9b46360d2de23aa94b81', 'formal-drt/regressions/merge_weighted.jsonl': '460615343a889334b029bfa1b4687d833e3be03ed2fcc1f5415c673790e59ece', 'formal-drt/regressions/monetary.jsonl': '5912a26350e2171179bf8065ceca089cd0b952fb3fb434a2dae332858139b6f4', 'formal-drt/regressions/reward_cap.jsonl': '49647654007507daebd6f09fa14243bab998be8d152ae931fb3515e802982bb7', 'formal-drt/regressions/ring_centroid_factor.jsonl': '21fb679263bdecdf66f51a1b91bb18beb2fd9a4633b0b6344e7db70d6fa3e103', 'formal-drt/regressions/timestamps.jsonl': 'd87004d01db91a062c34cf316fac0ea35f262b374068f5e0946b738762c8bb8e', 'formal-drt/scripts/nightly.py': 'f0f96aac1027086f0457449606985b6d48e0a048e824182c2ba52788405ae98e', 'formal-drt/src/demurrage.rs': 'c5d5eef94cc244fa678805b68adb9646d3b00ece8ed05fada3086c5700c01cf7', 'formal-drt/src/fixtures.rs': 'fb332d322961c273c65a19dc4d6a9f99c019d77ee8f73e4f983606ec388ba296', 'formal-drt/src/gen.rs': '493de1dd37145e4329e6dda2d3226b3b1ba975e49bb94bc1a8d2ef52e3fc80fa', 'formal-drt/src/legs.rs': '6c0fa75c445295ced5da822b3547b38871bbafb210fcb4ee6742e2f556ebccb0', 'formal-drt/src/legs_monetary.rs': '79883df4ee60d46306c0b21196ab53b7955ae89bf00ad3bc2b01a38377ccdf2e', 'formal-drt/src/main.rs': '4f7a44c29b44b002beeb44d8342ceddd93ff4b6d101443f4922b8f508e7798d4', 'formal-drt/src/model.rs': '4b6ff8a74eaa1f2a69cd5154b7083807e2b2e652a6167a2d51632722a2c26c7d', 'formal-drt/src/runner.rs': '12652205c1837cdb9c28208b1b1dabbea0d74f03982a7a7da043da87f4f2a399', 'formal-drt/src/wire.rs': '4e35bc151f9fc86781d4d213c3f791d3a4e8db1ed80a4818aa0b23f52247556b', 'formal/Botho.lean': '135250387631a3a9ca12f557a989a699da6c0f54e51539a95c4a914d935baceb', 'formal/Botho/Demurrage/Counterexamples.lean': '26a249a6a6b62dd1efcaa29983212c6c76a6116e0e7eda237d74a74cce444286', 'formal/Botho/Demurrage/Exact.lean': 'fc24ad5f5f4082e2f0c89ba43dcabc7fc2041e363b6aafd737c4519fa2eb143d', 'formal/Botho/Demurrage/ExactCharge.lean': '1007ca17f9b35d194f992d3ac4767bc4316fa044495a35dd9a32d4eb42e9f4da', 'formal/DEMURRAGE.md': '4ba5dd70cceec02a956ade9d89d8a2205cf1b2a77c30a52fa6ee95ad761802c3', 'formal/README.md': '70b1798bf8bdb0a3c2f0fcb9c0abb6e71d8c32f029b93493766dcfebcd655214', 'formal/Theorems.lean': '067091e7f60bde9156d9b8ddfc4760acc110ae9a0cfbf17c87ed32cb59abb121', 'formal/axioms-allowlist.txt': 'ab98ab147157e5e66abfc784fbaf92b42ad0d7cb7681ab40776519a0c1619579', 'formal/lakefile.toml': '36021cad02f8677b39d7ebcdc8b7db2fcb358d9c1c19a49fd42463f8d22c0305', 'formal/lean-toolchain': 'ca5f1f601d34c49079e38d7e7041eb0f2a9c227fbc1df0f404820069a052330c', 'formal/statements.txt': 'bb4ad56820cb380c2343cb1f9df9b7cf272ff8b5959f1dc18a212f54d46ea7c6'}
+          
+          def sha(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+          
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          
+          receipt = dict(normal_head=NORMAL_HEAD, normal_tree=NORMAL_TREE,
+                         control_head=git('rev-parse', 'HEAD'), control_tree=git('rev-parse', 'HEAD^{tree}'),
+                         commands=[], controls={}, all_commands_settled=False, status='running')
+          
+          def save():
+              (OUT / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          
+          def run(name, args, expected=0, cap=180, cwd=DRT):
+              log = OUT / (name + '.log')
+              start = time.monotonic()
+              with log.open('wb') as stream:
+                  process = subprocess.Popen(args, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT,
+                                             start_new_session=True)
+                  try:
+                      code = process.wait(timeout=cap)
+                  except subprocess.TimeoutExpired:
+                      os.killpg(process.pid, signal.SIGTERM)
+                      try:
+                          process.wait(timeout=10)
+                      except subprocess.TimeoutExpired:
+                          os.killpg(process.pid, signal.SIGKILL)
+                          process.wait()
+                      code = 124
+              command = dict(name=name, args=list(map(str, args)), cwd=str(cwd), cap_seconds=cap,
+                             expected_exit=expected, exit=code, seconds=time.monotonic()-start,
+                             log=log.name, log_sha256=sha(log))
+              receipt['commands'].append(command)
+              save()
+              assert code == expected, command
+              return log
+          
+          def report(name, directory, cases, expected):
+              path = OUT / (name + '.json')
+              run(name, [str(RUNNER), '--legs', 'demurrage_composition', '--cases', str(cases),
+                         '--seed', '1985', '--regressions', str(directory), '--json', str(path)],
+                  expected=expected)
+              data = json.loads(path.read_text())
+              assert len(data['legs']) == 1
+              leg = data['legs'][0]
+              assert leg['leg'] == 'demurrage_composition'
+              return leg, sha(path)
+          
+          def semantic(leg, field):
+              assert leg['mismatches'], 'expected actual numerical mismatches'
+              for mismatch in leg['mismatches']:
+                  for side in ['lean', 'rust']:
+                      answer = mismatch[side]
+                      assert set(answer) == {'reset', 'settlement', 'spend'}, answer
+                      assert all(isinstance(v, str) and v.isdecimal() for v in answer.values())
+                  assert mismatch['lean'][field] != mismatch['rust'][field], mismatch
+          
+          try:
+              assert ('parent ' + NORMAL_HEAD) in git('cat-file', '-p', 'HEAD').splitlines()
+              actual = {path: sha(ROOT / path) for path in EXPECTED_SOURCES}
+              assert actual == EXPECTED_SOURCES
+              receipt['source_hashes'] = actual
+              receipt['normal_runner_sha256'] = sha(RUNNER)
+              receipt['model_sha256'] = sha(MODEL)
+              receipt['fixture_sha256'] = sha(VECTORS)
+              (OUT / 'workflow.yml').write_bytes((ROOT / '.github/workflows/formal-drt.yml').read_bytes())
+              (OUT / 'control.py').write_bytes(Path(__file__).read_bytes())
+              (OUT / 'vectors.jsonl').write_bytes(VECTORS.read_bytes())
+              vectors = [json.loads(line) for line in VECTORS.read_text().splitlines()]
+              assert len(vectors) == 32
+              testlog = run('live-vectors', ['cargo', 'test', '--release',
+                            'composition_live_rust_and_lean_vectors', '--', '--nocapture'], cap=300)
+              assert testlog.read_text().count('composition vector ') == 32
+              discovery = run('leg-discovery', [str(RUNNER), '--list']).read_text().splitlines()
+              assert len(discovery) == len(set(discovery)) == 26 and 'demurrage_composition' in discovery
+              receipt['discovered_legs'] = discovery
+          
+              for kind, field in [('reset', 'reset'), ('settlement', 'settlement'), ('spend', 'spend')]:
+                  text = ORIGINAL.decode()
+                  if kind == 'reset':
+                      needle = '    at_floor.saturating_sub(at_output)'
+                      replacement = ('    let _ = (at_floor, at_output);\n'
+                          '    demurrage_charge(transfer_value, FACTOR_SCALE.saturating_add(\n'
+                          '        input_floor_factor.saturating_sub(output_factor)),\n'
+                          '        horizon_blocks, rate_bps, blocks_per_year)')
+                      assert text.count(needle) == 1
+                      mutated = text.replace(needle, replacement)
+                  elif kind == 'settlement':
+                      start = text.index('pub fn demurrage_settlement_charge(')
+                      end = text.index('\n}\n', start) + 3
+                      wrapper = text[start:end]
+                      assert wrapper.count('SETTLEMENT_HORIZON_BLOCKS,') == 1
+                      mutated = text[:start] + wrapper.replace('SETTLEMENT_HORIZON_BLOCKS,',
+                                'blocks_per_year.saturating_mul(5),') + text[end:]
+                  else:
+                      needle = '    accrued.max(capitalized)'
+                      assert text.count(needle) == 1
+                      mutated = text.replace(needle, '    accrued.saturating_add(capitalized)')
+                  SOURCE.write_text(mutated)
+                  patch = ''.join(difflib.unified_diff(text.splitlines(True), mutated.splitlines(True),
+                                  fromfile='a/cluster-tax/src/demurrage.rs',
+                                  tofile='b/cluster-tax/src/demurrage.rs'))
+                  (OUT / (kind + '.patch')).write_text(patch)
+                  control = dict(source_sha256=sha(SOURCE), patch_sha256=sha(OUT/(kind+'.patch')))
+                  receipt['controls'][kind] = control
+                  run(kind + '-build', ['cargo', 'build', '--release'], cap=900)
+                  control['runner_sha256'] = sha(RUNNER)
+                  assert sha(MODEL) == receipt['model_sha256']
+                  directory = OUT / (kind + '-fixtures')
+                  directory.mkdir()
+                  if kind != 'spend':
+                      note = ('separate floors, not factor-difference charge' if kind == 'reset'
+                              else 'fixed settlement horizon independent of year')
+                      vector = next(v for v in vectors if v['note'] == note)
+                      (directory/'demurrage_composition.jsonl').write_text(json.dumps(vector)+'\n')
+                      leg, digest = report(kind + '-target', directory, 0, 1)
+                      assert leg['replayed'] == 1 and leg['cases'] == leg['compared'] == 0
+                  else:
+                      assert not list(directory.iterdir())
+                      leg, digest = report('spend-generated', directory, 32, 1)
+                      assert leg['replayed'] == 0 and leg['compared'] > 0
+                      assert leg['shrink_attempts'] > 0
+                      assert all('replayed_fixture' not in m for m in leg['mismatches'])
+                  semantic(leg, field)
+                  control['initial_report_sha256'] = digest
+                  control['initial_counts'] = {k: leg[k] for k in ['cases','compared','shrink_attempts','replayed']}
+                  fixture = directory / 'demurrage_composition.jsonl'
+                  control['fixture_sha256'] = sha(fixture)
+                  control['saved_fixtures'] = len(fixture.read_text().splitlines())
+                  if kind == 'spend':
+                      replay, digest = report('spend-failing-replay', directory, 0, 1)
+                      semantic(replay, field)
+                      assert replay['replayed'] == control['saved_fixtures']
+                      assert sha(fixture) == control['fixture_sha256']
+                      control['failing_replay_sha256'] = digest
+                  SOURCE.write_bytes(ORIGINAL)
+                  control['restored_source_sha256'] = sha(SOURCE)
+                  assert sha(SOURCE) == EXPECTED_SOURCES['cluster-tax/src/demurrage.rs']
+                  save()
+          
+              run('restored-build', ['cargo','build','--release'], cap=900)
+              receipt['restored_runner_sha256'] = sha(RUNNER)
+              for kind in ['reset','settlement','spend']:
+                  directory = OUT / (kind + '-fixtures')
+                  fixture = directory / 'demurrage_composition.jsonl'
+                  before = receipt['controls'][kind]['fixture_sha256']
+                  assert sha(fixture) == before
+                  clean, digest = report(kind + '-restored-replay', directory, 0, 0)
+                  assert not clean['mismatches'] and clean['replayed'] == receipt['controls'][kind]['saved_fixtures']
+                  assert sha(fixture) == before
+                  receipt['controls'][kind]['restored_replay_sha256'] = digest
+              assert {path: sha(ROOT/path) for path in EXPECTED_SOURCES} == EXPECTED_SOURCES
+              assert sha(MODEL) == receipt['model_sha256']
+              run('final-clean-diff', ['git','diff','--exit-code'], cwd=ROOT)
+              receipt['status'] = 'success'
+          except BaseException:
+              receipt['status'] = 'failure'
+              receipt['error'] = traceback.format_exc()
+              raise
+          finally:
+              SOURCE.write_bytes(ORIGINAL)
+              receipt['restored_source_sha256'] = sha(SOURCE)
+              receipt['all_commands_settled'] = True
+              save()
+          PYCONTROL
+          python3 "$RUNNER_TEMP/demurrage-control.py"
+      - name: Retain demurrage semantic-control evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: demurrage-composition-controls
+          path: ${{ runner.temp }}/demurrage-controls/
+          if-no-files-found: error
+          retention-days: 14
       # The per-PR budget is 5 minutes for the run itself (it takes about a
       # minute on a GitHub runner); the build above is not counted.
       - name: DRT (per-PR tier)
