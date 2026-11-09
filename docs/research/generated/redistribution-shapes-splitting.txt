@@ -1,0 +1,52 @@
+# Redistribution shapes (#1987): splitting grid
+
+### Splitting grid for the #1987 shapes (#1761 grid, 192 points)
+
+Whale optimum per grid point, as in the #1801 study's §4 table. "Node" = spent outputs stay candidates; "reveal" = spent outputs leave the draw (#1790's rule). Uniform-ticket shapes have no node/reveal difference. S2 charges 10000 ppm of every transaction's output sum, pooled like any fee. S4 uses a 720..=518400-block window (517681 blocks of eligible life). Value-linear rows: the whale re-spends up to 5000000 BTH per block; organic outputs are worth 10 BTH each.
+
+| shape | profitable (node) | profitable (reveal) | max net*/blk, node (BTH) | max net*/day, node (BTH) | reference net*/blk, node (BTH) | reference whale share, node |
+|---|---:|---:|---:|---:|---:|---:|
+| R0 current rules (reference) | 192/192 | 192/192 | +49.9975 | +863957 | +2.4660 | 98.7% |
+| R3 ticket-price (reference) | 0/192 | 0/192 | +0.0000 | +0 | +0.0000 | 0.0% |
+| S1 factor-price (whale at its factor) | 0/192 | 0/192 | +0.0000 | +0 | +0.0000 | 0.0% |
+| S1 factor-price (whale claims background) | 0/192 | 0/192 | +0.0000 | +0 | +0.0000 | 0.0% |
+| S2 churn-fee, R2 weight, c = 1% | 100/192 | 0/192 | +38.8675 | +671630 | +0.0000 | 0.0% |
+| S3a/S3b (R3 lottery; demurrage side only) | 0/192 | 0/192 | +0.0000 | +0 | +0.0000 | 0.0% |
+| S4a window-30d, uniform | 192/192 | 192/192 | +49.9975 | +863957 | +2.4660 | 98.7% |
+| S4b window-30d, R2 weight | 192/192 | 0/192 | +49.9993 | +863988 | +2.4915 | 99.8% |
+
+### S1: farming the factor subsidy
+
+Profitable points out of 192 (node rule) when a share phi of organic tickets is at 6x and the rest at 1x. The #1761 grid's organic outputs are all 1x (phi = 0). "At its factor" prices the whale's tickets at the grid's whale factor (1x or 6x); "background" lets every whale claim 1x (#1687; the #925 charge on 1e6-pico ticket outputs is negligible).
+
+| phi (6x share of organic tickets) | profitable, whale at its factor | max net*/blk (BTH) | profitable, whale claims background | max net*/blk (BTH) |
+|---:|---:|---:|---:|---:|
+| 0.00 | 0/192 | +0.0000 | 0/192 | +0.0000 |
+| 0.05 | 94/192 | +2.7740 | 188/192 | +2.7740 |
+| 0.20 | 96/192 | +8.5484 | 192/192 | +8.5484 |
+| 0.50 | 96/192 | +15.1257 | 192/192 | +15.1257 |
+
+### S2: churn fee needed to close the churn attack
+
+Profitable points out of 192 under the node rule (spent outputs stay candidates), by ad-valorem fee on every transaction's output sum.
+
+| churn fee (ppm of value moved) | churn fee (%) | R1 value-age | R2 inverse-factor |
+|---:|---:|---:|---:|
+| 0 | 0.00% | 192/192 | 192/192 |
+| 100 | 0.01% | 168/192 | 168/192 |
+| 1000 | 0.10% | 168/192 | 148/192 |
+| 10000 | 1.00% | 128/192 | 100/192 |
+| 30000 | 3.00% | 96/192 | 64/192 |
+| 100000 | 10.00% | 64/192 | 36/192 |
+| 300000 | 30.00% | 16/192 | 8/192 |
+| 750000 | 75.00% | 0/192 | 0/192 |
+
+Largest break-even fee over each epoch's 48 points (R2 weight, node rule):
+
+| epoch | break-even churn fee (ppm) | (%) |
+|---|---:|---:|
+| 0 | 704225 | 70.42% |
+| 1 | 574713 | 57.47% |
+| 3 | 246305 | 24.63% |
+| tail | 109040 | 10.90% |
+

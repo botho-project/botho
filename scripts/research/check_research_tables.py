@@ -70,6 +70,12 @@ GENERATORS = [
     Generator("redistribution-redesign-privacy",
               ("redistribution-redesign", "--part", "privacy"),
               "docs/research/redistribution-redesign-study.md", True),
+    Generator("redistribution-shapes-splitting",
+              ("redistribution-shapes", "--part", "splitting"),
+              "docs/research/redistribution-shapes-study.md", True),
+    Generator("redistribution-shapes-privacy",
+              ("redistribution-shapes", "--part", "privacy"),
+              "docs/research/redistribution-shapes-study.md", True),
     Generator("lottery-selection-sweep", ("lottery-selection-sweep",),
               "docs/research/ct-compatible-lottery-selection.md", False),
     Generator("lottery-sybil-brake-sweep", ("lottery-sybil-brake-sweep",),
@@ -96,6 +102,8 @@ SKIPPED = {
     "m2-production (m2-production-verdicts.md)": "> 200 s per run, several runs",
     "redistribution-redesign --part m2 (redistribution-redesign-study.md)":
         "~2 min per run, 304 runs",
+    "redistribution-shapes --part m2 (redistribution-shapes-study.md)":
+        "~2 min median (max ~11 min) per run, 384 runs",
     "m2-cumulative / m2-decay (consensus-fee-model-sim-verdicts.md)": "~190 s per run",
     "lottery-sweep --seed 1695 (consensus-fee-model-sim-verdicts.md)": "~76 s per fee model",
     "decoy-flood-sweep (decoy-flood-cost.md)": "~49 s; constants pinned by botho/tests/decoy_flood_parity.rs",
