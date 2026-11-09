@@ -86,7 +86,12 @@ use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashSet;
 
 /// Minimum transaction fee in picocredits (0.0001 credits = 100_000_000
-/// picocredits)
+/// picocredits).
+///
+/// Relay/mempool policy, NOT a consensus rule (ADR 0014, #1684): checked by
+/// [`Transaction::is_valid_structure`] at mempool admission only. The
+/// consensus fee rule is the size-based `consensus_fee_floor` in the node's
+/// ledger.
 pub const MIN_TX_FEE: u64 = 100_000_000;
 
 // ============================================================================
@@ -106,10 +111,10 @@ pub enum TransactionStructureError {
     /// Transaction has more than [`bth_transaction_types::MAX_OUTPUTS`]
     /// outputs.
     ///
-    /// Relay/mempool policy only (#1772 Part A): `is_valid_structure` runs at
-    /// mempool admission, not in block validation, so a miner may still
-    /// include a larger transaction in a block until consensus enforcement is
-    /// decided under #1684 (#1772 Part B).
+    /// A consensus rule since protocol 10.0.0 (#1684, #1772 Part B): checked
+    /// by [`Transaction::check_consensus_structure`], which SCP value
+    /// validation and block application both call. Before 10.0.0 it was
+    /// mempool policy only (#1772 Part A).
     TooManyOutputs {
         /// Number of outputs the transaction carries.
         count: usize,
@@ -1551,9 +1556,30 @@ impl Transaction {
             .fold(0u64, |acc, o| acc.saturating_add(o.amount))
     }
 
-    /// Check basic transaction validity (structure only, not signatures or UTXO
-    /// existence)
-    pub fn is_valid_structure(&self) -> Result<(), TransactionStructureError> {
+    /// The structural rules that are CONSENSUS rules (protocol 10.0.0, #1684 /
+    /// #1772, ADR 0014): at least one input, every ring at least
+    /// [`MIN_RING_SIZE`] members, at least one and at most
+    /// [`bth_transaction_types::MAX_OUTPUTS`] outputs, and no output below
+    /// [`DUST_THRESHOLD`] (zero included).
+    ///
+    /// This one predicate is shared by mempool admission (through
+    /// [`Self::is_valid_structure`]), SCP value validation
+    /// (`TransactionValidator::validate_transfer_tx`) and block application
+    /// (`validate_ordinary_body` / `verify_transfer_for_block`), so relay and
+    /// consensus cannot drift. It is a pure function of the transaction, so it
+    /// holds SCP's no-fork (tip-agnostic) invariant.
+    ///
+    /// `MIN_TX_FEE` is deliberately NOT checked here: it is relay policy, and
+    /// the consensus fee rule is the size-based `consensus_fee_floor` (ADR
+    /// 0014).
+    pub fn check_consensus_structure(&self) -> Result<(), TransactionStructureError> {
+        self.check_input_structure()?;
+        self.check_output_structure()
+    }
+
+    /// Input half of [`Self::check_consensus_structure`]: non-empty inputs and
+    /// every ring at least [`MIN_RING_SIZE`] members.
+    fn check_input_structure(&self) -> Result<(), TransactionStructureError> {
         if self.inputs.is_empty() {
             return Err(TransactionStructureError::NoInputs);
         }
@@ -1562,22 +1588,18 @@ impl Transaction {
                 return Err(TransactionStructureError::InsufficientRingSize);
             }
         }
+        Ok(())
+    }
 
-        // Check for duplicate key images within this transaction
-        // (double-spend attempt within a single tx)
-        let key_images = self.key_images();
-        let unique_count = key_images.iter().collect::<HashSet<_>>().len();
-        if unique_count != key_images.len() {
-            return Err(TransactionStructureError::DuplicateKeyImage);
-        }
-
+    /// Output half of [`Self::check_consensus_structure`]: between one and
+    /// [`bth_transaction_types::MAX_OUTPUTS`] outputs, none zero or below
+    /// [`DUST_THRESHOLD`].
+    fn check_output_structure(&self) -> Result<(), TransactionStructureError> {
         if self.outputs.is_empty() {
             return Err(TransactionStructureError::NoOutputs);
         }
-        // Per-transaction output cap (#1772 Part A). Relay policy only: this
-        // function is called at mempool admission, not by block validation,
-        // so block validity is unchanged pending the #1684 decision (#1772
-        // Part B).
+        // Per-transaction output cap (#1772). Mempool policy since Part A,
+        // consensus since protocol 10.0.0 (#1684, Part B).
         if self.outputs.len() as u64 > bth_transaction_types::MAX_OUTPUTS {
             return Err(TransactionStructureError::TooManyOutputs {
                 count: self.outputs.len(),
@@ -1591,6 +1613,31 @@ impl Transaction {
         if self.outputs.iter().any(|o| o.amount < DUST_THRESHOLD) {
             return Err(TransactionStructureError::DustOutput);
         }
+        Ok(())
+    }
+
+    /// Check basic transaction validity for mempool admission (structure
+    /// only, not signatures or UTXO existence).
+    ///
+    /// This is [`Self::check_consensus_structure`] plus two checks that are
+    /// not part of it: duplicate key images within the transaction (enforced
+    /// at block application by key-image recording) and the relay fee policy
+    /// `fee >= MIN_TX_FEE` (relay policy only, ADR 0014). The error order is
+    /// unchanged from before the split.
+    pub fn is_valid_structure(&self) -> Result<(), TransactionStructureError> {
+        self.check_input_structure()?;
+
+        // Check for duplicate key images within this transaction
+        // (double-spend attempt within a single tx)
+        let key_images = self.key_images();
+        let unique_count = key_images.iter().collect::<HashSet<_>>().len();
+        if unique_count != key_images.len() {
+            return Err(TransactionStructureError::DuplicateKeyImage);
+        }
+
+        self.check_output_structure()?;
+        // Relay/mempool policy (ADR 0014): not a consensus rule. Block
+        // validity prices fees with `consensus_fee_floor`.
         if self.fee < MIN_TX_FEE {
             return Err(TransactionStructureError::FeeBelowMinimum);
         }

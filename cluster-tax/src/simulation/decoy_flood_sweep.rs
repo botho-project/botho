@@ -15,8 +15,8 @@
 //! `max(consensus floor, MIN_TX_FEE)` per *transaction*, where the floor is
 //! `1 pico/byte × size × factor × min(n_out, 10)²` (+ demurrage) and
 //! `MIN_TX_FEE` is 1e8 pico. Since #1780 the mempool rejects a transaction
-//! with more than `MAX_OUTPUTS` = 16 outputs (relay policy); block validation
-//! still accepts more (#1772 Part B, pending #1684).
+//! with more than `MAX_OUTPUTS` = 16 outputs, and since protocol 10.0.0 SCP
+//! and block validation reject it too (#1684, #1772 Part B).
 //!
 //! A flood output aged 720..=10,000 blocks is also lottery-eligible, so the
 //! flooder wins back its ticket share of every lottery payout: 80% of all fees

@@ -142,6 +142,14 @@ pub enum ValidationError {
         output: usize,
     },
 
+    // Structural consensus rules (protocol 10.0.0, #1684 / #1772, ADR 0014)
+    /// The transaction breaks a structural consensus rule checked by
+    /// `Transaction::check_consensus_structure` other than the empty-input,
+    /// empty-output and zero-amount cases above: a ring below
+    /// `MIN_RING_SIZE`, more than `MAX_OUTPUTS` outputs, or an output below
+    /// `DUST_THRESHOLD`.
+    InvalidStructure(crate::transaction::TransactionStructureError),
+
     // General errors
     DeserializationFailed(String),
     ChainStateUnavailable,
@@ -187,6 +195,9 @@ impl std::fmt::Display for ValidationError {
                 "Output {} has malformed cluster tags (must satisfy ClusterTagVector::is_valid)",
                 output
             ),
+            Self::InvalidStructure(e) => {
+                write!(f, "Structural consensus rule violated: {}", e)
+            }
             Self::DeserializationFailed(e) => write!(f, "Deserialization failed: {}", e),
             Self::ChainStateUnavailable => write!(f, "Chain state unavailable"),
         }
@@ -433,7 +444,12 @@ impl TransactionValidator {
     /// regardless of which tip it currently holds:
     /// - inputs are non-empty,
     /// - outputs are non-empty,
-    /// - no output has a zero amount.
+    /// - no output has a zero amount,
+    /// - every ring has at least `MIN_RING_SIZE` members, there are at most
+    ///   `MAX_OUTPUTS` outputs and no output is below `DUST_THRESHOLD`
+    ///   (protocol 10.0.0, #1684 / #1772),
+    /// - every output carries a well-shaped ML-KEM ciphertext and well-formed
+    ///   cluster tags.
     ///
     /// The former tip-relative staleness check (`created_at_height + MAX_TX_AGE
     /// < state.height`, removed in #451) is NOT performed here, because
@@ -450,17 +466,25 @@ impl TransactionValidator {
     pub fn validate_transfer_tx(&self, tx: &Transaction) -> Result<(), ValidationError> {
         debug!("Validating transfer transaction (intrinsic / tip-agnostic)");
 
-        // Structural well-formedness only. These are properties of the value
+        // Structural well-formedness. These are properties of the value
         // itself, so all honest nodes agree on them regardless of tip.
-        if tx.inputs.is_empty() {
-            return Err(ValidationError::NoInputs);
-        }
-        if tx.outputs.is_empty() {
-            return Err(ValidationError::NoOutputs);
-        }
-        if tx.outputs.iter().any(|o| o.amount == 0) {
-            return Err(ValidationError::ZeroAmountOutput);
-        }
+        //
+        // Protocol 10.0.0 (#1684 / #1772, ADR 0014): the shared predicate
+        // `check_consensus_structure` adds ring size >= MIN_RING_SIZE, the
+        // MAX_OUTPUTS cap and the dust threshold to the non-empty and
+        // zero-amount checks. Block application (`validate_ordinary_body` C9)
+        // and mempool admission call the same function, so a value nominated
+        // here is never one the block validator rejects for its structure.
+        // MIN_TX_FEE is relay policy and is not checked here.
+        tx.check_consensus_structure().map_err(|e| {
+            use crate::transaction::TransactionStructureError as E;
+            match e {
+                E::NoInputs => ValidationError::NoInputs,
+                E::NoOutputs => ValidationError::NoOutputs,
+                E::ZeroAmountOutput => ValidationError::ZeroAmountOutput,
+                other => ValidationError::InvalidStructure(other),
+            }
+        })?;
 
         // Universal ML-KEM (6.0.0, #958/#973): every value-transfer output must
         // carry a valid hybrid ML-KEM ciphertext. This is a pure structural
@@ -697,7 +721,7 @@ mod tests {
         let validator = TransactionValidator::new(mock_chain_state());
 
         // CLSAG transaction with empty inputs
-        let tx = Transaction::new_clsag(vec![], vec![test_output(1000, 1)], MIN_TX_FEE, 10);
+        let tx = Transaction::new_clsag(vec![], vec![test_output(10_000_000, 1)], MIN_TX_FEE, 10);
         let result = validator.validate_transfer_tx(&tx);
         assert!(matches!(result, Err(ValidationError::NoInputs)));
     }
@@ -717,7 +741,7 @@ mod tests {
         // A well-formed transfer tx created at height 10.
         let tx = Transaction::new_clsag(
             vec![test_clsag_input(1)],
-            vec![test_output(1000, 1)],
+            vec![test_output(10_000_000, 1)],
             MIN_TX_FEE,
             10, // created_at_height
         );
@@ -759,9 +783,9 @@ mod tests {
         use bth_transaction_types::{ClusterId, ClusterTagEntry, TAG_WEIGHT_SCALE};
         let validator = TransactionValidator::new(mock_chain_state());
         let tx_with = |tags: ClusterTagVector| {
-            let mut ok = test_output(1000, 1);
+            let mut ok = test_output(10_000_000, 1);
             ok.cluster_tags = ClusterTagVector::single(ClusterId(7));
-            let mut out = test_output(1000, 2);
+            let mut out = test_output(10_000_000, 2);
             out.cluster_tags = tags;
             Transaction::new_clsag(vec![test_clsag_input(1)], vec![ok, out], MIN_TX_FEE, 10)
         };
@@ -813,7 +837,7 @@ mod tests {
     fn test_transfer_tx_intrinsic_path_tip_agnostic() {
         let tx = Transaction::new_clsag(
             vec![test_clsag_input(2)],
-            vec![test_output(500, 2)],
+            vec![test_output(5_000_000, 2)],
             MIN_TX_FEE,
             5, // created_at_height
         );
@@ -1086,6 +1110,112 @@ mod tests {
         assert!(matches!(result, Err(ValidationError::NoOutputs)));
     }
 
+    /// Protocol 10.0.0 (#1684): a ring of 19 is not a valid SCP value; a ring
+    /// of 20 is.
+    #[test]
+    fn scp_rejects_ring_of_19_and_accepts_ring_of_20() {
+        use crate::transaction::TransactionStructureError;
+        assert_eq!(MIN_RING_SIZE, 20);
+        let validator = TransactionValidator::new(mock_chain_state());
+        let mut input = test_clsag_input(1);
+        input.ring.truncate(MIN_RING_SIZE - 1);
+        let small = Transaction::new_clsag(
+            vec![input],
+            vec![test_output(10_000_000, 1)],
+            MIN_TX_FEE,
+            10,
+        );
+        assert_eq!(
+            validator.validate_transfer_tx(&small),
+            Err(ValidationError::InvalidStructure(
+                TransactionStructureError::InsufficientRingSize
+            ))
+        );
+        // Same verdict through the serialized SCP validity entry point.
+        let bytes = bincode::serialize(&small).unwrap();
+        assert!(matches!(
+            validator.validate_from_bytes_intrinsic(&bytes, false),
+            Err(ValidationError::InvalidStructure(_))
+        ));
+
+        let ok = Transaction::new_clsag(
+            vec![test_clsag_input(1)],
+            vec![test_output(10_000_000, 1)],
+            MIN_TX_FEE,
+            10,
+        );
+        assert_eq!(ok.inputs.clsag()[0].ring.len(), 20);
+        assert_eq!(validator.validate_transfer_tx(&ok), Ok(()));
+    }
+
+    /// Protocol 10.0.0 (#1684 / #1772 Part B): 17 outputs is not a valid SCP
+    /// value; 16 is.
+    #[test]
+    fn scp_rejects_17_outputs_and_accepts_16() {
+        use crate::transaction::TransactionStructureError;
+        let max = bth_transaction_types::MAX_OUTPUTS as usize;
+        assert_eq!(max, 16);
+        let validator = TransactionValidator::new(mock_chain_state());
+        let tx = |n: usize| {
+            Transaction::new_clsag(
+                vec![test_clsag_input(1)],
+                (0..n).map(|i| test_output(10_000_000, i as u8)).collect(),
+                MIN_TX_FEE,
+                10,
+            )
+        };
+        assert_eq!(
+            validator.validate_transfer_tx(&tx(max + 1)),
+            Err(ValidationError::InvalidStructure(
+                TransactionStructureError::TooManyOutputs { count: 17, max: 16 }
+            ))
+        );
+        assert_eq!(validator.validate_transfer_tx(&tx(max)), Ok(()));
+    }
+
+    /// Protocol 10.0.0 (#1684): an output one pico below `DUST_THRESHOLD` is
+    /// not a valid SCP value; one at exactly `DUST_THRESHOLD` is. Zero keeps
+    /// its own error.
+    #[test]
+    fn scp_rejects_output_below_dust_and_accepts_dust_threshold() {
+        use crate::transaction::{TransactionStructureError, DUST_THRESHOLD};
+        let validator = TransactionValidator::new(mock_chain_state());
+        let tx = |amount: u64| {
+            Transaction::new_clsag(
+                vec![test_clsag_input(1)],
+                vec![test_output(10_000_000, 1), test_output(amount, 2)],
+                MIN_TX_FEE,
+                10,
+            )
+        };
+        assert_eq!(
+            validator.validate_transfer_tx(&tx(DUST_THRESHOLD - 1)),
+            Err(ValidationError::InvalidStructure(
+                TransactionStructureError::DustOutput
+            ))
+        );
+        assert_eq!(validator.validate_transfer_tx(&tx(DUST_THRESHOLD)), Ok(()));
+        assert_eq!(
+            validator.validate_transfer_tx(&tx(0)),
+            Err(ValidationError::ZeroAmountOutput)
+        );
+    }
+
+    /// ADR 0014: `MIN_TX_FEE` is relay policy, so SCP value validity does not
+    /// check it (the consensus fee rule is `consensus_fee_floor`, applied at
+    /// block application).
+    #[test]
+    fn scp_does_not_enforce_min_tx_fee() {
+        let validator = TransactionValidator::new(mock_chain_state());
+        let tx = Transaction::new_clsag(
+            vec![test_clsag_input(1)],
+            vec![test_output(10_000_000, 1)],
+            MIN_TX_FEE - 1,
+            10,
+        );
+        assert_eq!(validator.validate_transfer_tx(&tx), Ok(()));
+    }
+
     #[test]
     fn test_validation_error_display() {
         let err = ValidationError::NoInputs;
@@ -1167,7 +1297,7 @@ mod tests {
             let validator = TransactionValidator::new(mock_chain_state());
             let tx = Transaction::new_clsag(
                 vec![test_clsag_input(1)],
-                vec![classical_output(1000, 1)],
+                vec![classical_output(10_000_000, 1)],
                 MIN_TX_FEE,
                 10,
             );
@@ -1182,7 +1312,7 @@ mod tests {
         #[test]
         fn transfer_tx_wrong_length_ciphertext_rejected() {
             let validator = TransactionValidator::new(mock_chain_state());
-            let mut out = test_output(1000, 1);
+            let mut out = test_output(10_000_000, 1);
             out.kem_ciphertext = Some(vec![0u8; ML_KEM_768_CIPHERTEXT_BYTES - 1]);
             let tx = Transaction::new_clsag(vec![test_clsag_input(1)], vec![out], MIN_TX_FEE, 10);
             assert!(matches!(
@@ -1199,7 +1329,7 @@ mod tests {
             let validator = TransactionValidator::new(mock_chain_state());
             let tx = Transaction::new_clsag(
                 vec![test_clsag_input(1)],
-                vec![test_output(1000, 1)],
+                vec![test_output(10_000_000, 1)],
                 MIN_TX_FEE,
                 10,
             );
@@ -1213,7 +1343,7 @@ mod tests {
             let validator = TransactionValidator::new(mock_chain_state());
             let tx = Transaction::new_clsag(
                 vec![test_clsag_input(1)],
-                vec![test_output(1000, 1), classical_output(500, 2)],
+                vec![test_output(10_000_000, 1), classical_output(5_000_000, 2)],
                 MIN_TX_FEE,
                 10,
             );

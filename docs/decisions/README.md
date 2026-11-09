@@ -30,6 +30,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | [0011](0011-metamask-snap-wallet.md) | MetaMask Snap Wallet — Onboard MetaMask Users Without EVM Compromise | Accepted | 2026-07-18 |
 | [0012](0012-solana-squads-pda-mint-execution.md) | Solana wBTH Mint Execution — Squads-PDA `invoke_signed`, Assembly-Only (addendum to 0002) | Accepted | 2026-07-20 |
 | [0013](0013-libcrux-pq-evaluation.md) | libcrux as the ML-KEM-768 Implementation (ML-DSA Deferred) | Proposed | 2026-11-02 |
+| [0014](0014-min-tx-fee-relay-policy.md) | Structural Transaction Limits Are Consensus; `MIN_TX_FEE` Is Relay Policy | Accepted | 2026-11-09 |
 
 ## ADR Statuses
 
