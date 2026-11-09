@@ -104,7 +104,7 @@ axum = { version = "0.8", features = ["json"] }
 # so this adds no new advisory surface.
 
 # Database
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Utilities
 chrono = { workspace = true, features = ["serde"] }
