@@ -84,6 +84,14 @@ on:
       - '.github/workflows/formal-drt-nightly.yml'
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: 'Exact normal source checkout for evidence'
+        required: true
+        default: '7eb426d8c7bcda232a5d8469e4dfd37d5b56a752'
+      quantile_mode:
+        description: 'controls or normal'
+        required: true
+        default: 'controls'
       cases:
         description: 'Cases per leg'
         required: false
@@ -111,6 +119,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.inputs.source_ref }}
       - run: python3 -m unittest discover -s formal-drt/scripts -p 'test_*.py' -v
 
   drt:
@@ -120,6 +129,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.inputs.source_ref }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-06-09
@@ -184,6 +194,199 @@ jobs:
       - name: Build the runner
         working-directory: formal-drt
         run: cargo build --release
+      - name: Quantile numerical controls and provenance (temporary)
+        timeout-minutes: 35
+        env:
+          QUANTILE_MODE: ${{ github.event.inputs.quantile_mode }}
+        run: |
+          cat > "$RUNNER_TEMP/quantile-control.py" <<'PYCONTROL'
+          import difflib
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import signal
+          import subprocess
+          import time
+          import traceback
+
+          ROOT = Path.cwd()
+          OUT = Path(os.environ['RUNNER_TEMP']) / 'quantile-evidence'
+          OUT.mkdir(exist_ok=True)
+          SOURCE = ROOT / 'cluster-tax/src/demurrage.rs'
+          ORIGINAL = SOURCE.read_bytes()
+          DRT = ROOT / 'formal-drt'
+          RUNNER = DRT / 'target/release/botho-formal-drt'
+          MODEL = DRT / 'lean/.lake/build/bin/botho-model'
+          VECTORS = DRT / 'regressions/ring_elapsed_quantile.jsonl'
+          NORMAL_HEAD = '7eb426d8c7bcda232a5d8469e4dfd37d5b56a752'
+          NORMAL_TREE = 'd1695f8756607a2a71af4568c0f8c2997e59ce83'
+          EXPECTED_SOURCES = {'.github/workflows/formal-drt-nightly.yml': '7de68158c97f3deb1d1d7158842959c42f1b2cee6c92d16a496590038fc02343', '.github/workflows/formal.yml': 'd2c6900cfae90c9283e80bbe59cb176b3bee7ca965dd90524675db7e1e4b946a', 'Cargo.lock': '3048931612bd8132f8e5ce412e037de7c3569a86e13cd44dfd0d28093999accc', 'cluster-tax/src/demurrage.rs': '9d1bfeadc16192948529fbc8b5e3ada89d8991e9c0a825fc8e74b53f963fe4f0', 'cluster-tax/src/lib.rs': '7ce7a65667392b1b83b8f0c0cfb6f41a6e120e00a06b415c8aef5650b39261e1', 'formal-drt/.gitignore': '7731fb3ae2d0f9e108e8e176d5323abd998d6a165afa1a5800b475cfc0cfb57b', 'formal-drt/Cargo.toml': '6e5ccb7e6694a1936697e2f1d5b80e3b108e31108164c278b94dee9b9ed348cd', 'formal-drt/lean/Drt/Codec.lean': '1b25f61795cfab47bf2fe32bdaaf5fc5a36a4af7428b3c65109a098bfa8c7991', 'formal-drt/lean/Drt/Sha256.lean': '5768ec5bbe763b7040e3fe83915af1ef082d7d38faf4cc2257481c90f5830d75', 'formal-drt/lean/Drt/Tags.lean': '003dcb3fe3dced7a94a4f947c536a2a45b8a8ace55f3f37f47ccf353e5406d44', 'formal-drt/lean/Main.lean': '34b02c1ed26a955827a70ee9bd91056368f860e74a722e6b72d5a0ff9defd9fb', 'formal-drt/lean/lake-manifest.json': '7002af2aa0f7e02027a48bb10869ce097d1553c851c6512c5bffde956b1f414e', 'formal-drt/lean/lakefile.toml': '4e86c8a74a7255b4d4f5657a360912e9e5285e0c28bbe93aae08819430718ca8', 'formal-drt/lean/lean-toolchain': 'ca5f1f601d34c49079e38d7e7041eb0f2a9c227fbc1df0f404820069a052330c', 'formal-drt/nightly-validation.json': '4d57760ce072c53198251333239c892b4be3c5804e1502119078afd987ded2cc', 'formal-drt/regressions/README.md': '70dc7ad5538df56dfa5e68af55835eb4b788937ec930b291bb817e9ba97acc8d', 'formal-drt/regressions/cluster_tag_inheritance.jsonl': '17014773709a00661e95317af8340f91dba75abb8dd4dfb933271edea02c2237', 'formal-drt/regressions/compute_pool_accounting.jsonl': '0a949113c5f26e98bd522268e678a1a68b1d8240268b7741298f3b91733596e8', 'formal-drt/regressions/count_eligible.jsonl': '3de2ac3d406afba56b82496b142869cd24e434b2d16ab0693e699f4a1c681804', 'formal-drt/regressions/default_cluster_factor.jsonl': '76e37ff9e10d60b2a6e79f39311a33e48977aa634a86e12f225ed41448407925', 'formal-drt/regressions/demurrage_charge.jsonl': '4c2eb32874fae7a1b537d22f3e352c6413d286c0f48cbeb757b85eca2d18b043', 'formal-drt/regressions/demurrage_composition.jsonl': '60d7a45b4674d9abf572cb6bb2df9fb305aa049bf8e1a6a7ddc95ead64ff2233', 'formal-drt/regressions/draw_lottery_winners_seeded.jsonl': '15eca9c4757e7df7af15b6605215d0b9bc75379d9456d6f52bf5b12b48b5e128', 'formal-drt/regressions/draw_winners_with_seed.jsonl': 'b522cba07ce2ac88f3cbf56b7571471a65b6850ba015deafa6e7b7c46685a3c5', 'formal-drt/regressions/drawing.jsonl': '52f79375316eed66bd11cc4744e35078374330d78d1c4634f688fcb5e22b37e0', 'formal-drt/regressions/effective_cluster_wealth.jsonl': 'f66bf297722ea075c16d1cbd72e275a64e5b6aa6bf7555b6a05d644d21adc9d7', 'formal-drt/regressions/is_eligible.jsonl': 'd86dff88c709b31d8108ba476f043e6e2bca75b4ca9bd55ed9734c9f670e9be4', 'formal-drt/regressions/lottery_sim.jsonl': '07095b7bd54f123de016e8768069ee27621bf75a06bb9b46360d2de23aa94b81', 'formal-drt/regressions/merge_weighted.jsonl': '460615343a889334b029bfa1b4687d833e3be03ed2fcc1f5415c673790e59ece', 'formal-drt/regressions/monetary.jsonl': '5912a26350e2171179bf8065ceca089cd0b952fb3fb434a2dae332858139b6f4', 'formal-drt/regressions/reward_cap.jsonl': '49647654007507daebd6f09fa14243bab998be8d152ae931fb3515e802982bb7', 'formal-drt/regressions/ring_centroid_factor.jsonl': '21fb679263bdecdf66f51a1b91bb18beb2fd9a4633b0b6344e7db70d6fa3e103', 'formal-drt/regressions/ring_elapsed_quantile.jsonl': '08e5fa7f6de77132c8d4264445e43b3798d5a913c3c639895c4266d2273475b6', 'formal-drt/regressions/timestamps.jsonl': 'd87004d01db91a062c34cf316fac0ea35f262b374068f5e0946b738762c8bb8e', 'formal-drt/results/accepted-block-oracle-1839.json': '3397183d7329fb756f9d6be6e70898874d7d4d7170c2cbde930d5cd4643f25e5', 'formal-drt/results/demurrage-1711.json': '634d4b15e675611fe73af2b8dd8a0332abf7a0a64a1b17d1289fff80735cf234', 'formal-drt/results/demurrage-1875.json': '48e6a8ea9a71cce2d0b3c58db67bd67623ed02ff03c853c22ca2184672e1aa28', 'formal-drt/results/demurrage-1876.json': '8a32a14c8c9e3e295eaa2d4cb9dc488201fe5122ecc0d8f7a8d76454339f3702', 'formal-drt/results/frame-replay-1893.json': '60df98e26943a7ab05d46a5abd89382d23dc445f0c07eb93e0307ea9cbe94baf', 'formal-drt/results/supply-1839.json': '3cbd1d2fe987bb93afc9acbd858b6c5d75a369700fa71d1ae0637f7a869b4573', 'formal-drt/scripts/nightly.py': 'f0f96aac1027086f0457449606985b6d48e0a048e824182c2ba52788405ae98e', 'formal-drt/scripts/test_nightly.py': '5780fc31e49dd889818e3fc39a9b3f8b393fafb8e3bbe18417f9c339a1d6f0e3', 'formal-drt/sim-divergences.json': '50563e0917cda60f6a460532bc178266f11b6e2b04a53dceee9561e49070be34', 'formal-drt/src/demurrage.rs': '40b887ea28c7349bedd80177678b10c3dca232daad035b3680ae054e9d0f69e5', 'formal-drt/src/fixtures.rs': 'fb332d322961c273c65a19dc4d6a9f99c019d77ee8f73e4f983606ec388ba296', 'formal-drt/src/gen.rs': '493de1dd37145e4329e6dda2d3226b3b1ba975e49bb94bc1a8d2ef52e3fc80fa', 'formal-drt/src/legs.rs': '6c0fa75c445295ced5da822b3547b38871bbafb210fcb4ee6742e2f556ebccb0', 'formal-drt/src/legs_difficulty.rs': 'a46edf8ef1e716f88527a71032f04a17e2803a6e559990cf9e6b7ed63264c8e7', 'formal-drt/src/legs_monetary.rs': '79883df4ee60d46306c0b21196ab53b7955ae89bf00ad3bc2b01a38377ccdf2e', 'formal-drt/src/legs_sim.rs': 'd02d76d1b81518f8d65a05decfd5b58dde4d433faa915f977bc05ae6b88645e0', 'formal-drt/src/legs_tags.rs': '52c511bd4508c8e62009fabe9e3974fd1061a673b9f68e9d31a3a097ff05bddc', 'formal-drt/src/legs_timestamps.rs': '012004fac672545312e890e7688619366b07867a0d258260697ce11a430ba830', 'formal-drt/src/main.rs': '485739690a35b4fdfe0a05bf10dbf946a524e5efe7ca513ddc40d85ef72bfd6a', 'formal-drt/src/model.rs': '4b6ff8a74eaa1f2a69cd5154b7083807e2b2e652a6167a2d51632722a2c26c7d', 'formal-drt/src/runner.rs': '12652205c1837cdb9c28208b1b1dabbea0d74f03982a7a7da043da87f4f2a399', 'formal-drt/src/supply.rs': '39c405d3f493f7a03ee57ff611c49bff630082aaab2d1c0f4164ee7eababec50', 'formal-drt/src/supply_oracle_tests.rs': 'e9a1f868ed3a08f4f2662c245124ac689979aed5228528a8364b60a832a7918a', 'formal-drt/src/wire.rs': '4e35bc151f9fc86781d4d213c3f791d3a4e8db1ed80a4818aa0b23f52247556b', 'formal-drt/tests/runner_cli.rs': '6ba8bb02f4b985b6b5a456897b1d4d914b5277b53a53aaabfad2cc867fde6393', 'formal/Botho.lean': '27132727938b1c506a39d0a81d09b362f9616d49c2fa39d558801daabd4d8b24', 'formal/Botho/Basic.lean': 'a860f8f1839fda391dc1af9e55b377630eb79184290e73ff8612701e28f7b891', 'formal/Botho/Consensus/SlotDuration.lean': 'a92a30623c87a81f58961a76a981264fd1489c4cf8ae703e52d6ba9ae61b59ba', 'formal/Botho/Demurrage/Age.lean': '2223afd278fc12a546b667ece63a92609caad7712c292a54e43a713acd8e2dc2', 'formal/Botho/Demurrage/Counterexamples.lean': '26a249a6a6b62dd1efcaa29983212c6c76a6116e0e7eda237d74a74cce444286', 'formal/Botho/Demurrage/Exact.lean': 'fc24ad5f5f4082e2f0c89ba43dcabc7fc2041e363b6aafd737c4519fa2eb143d', 'formal/Botho/Demurrage/ExactCharge.lean': '1007ca17f9b35d194f992d3ac4767bc4316fa044495a35dd9a32d4eb42e9f4da', 'formal/Botho/Difficulty/Step.lean': '6b5001af832a3ea928cb9bf2fc4829fa9b52dd94c09cb91d3fae5a87b1debcea', 'formal/Botho/Difficulty/Vectors.lean': 'a01f5c4073bbd7042710e2ed041bdf0fb1b3fd02c017d63c76e558dbb3f0fbeb', 'formal/Botho/Difficulty/Warp.lean': '42f7fbddef6bdf2e28ab842f860ee4e85be98dd6e588ebb78fa6c7a42035865a', 'formal/Botho/Lottery/Arith.lean': '86fd230c62286e4bb65803ea94434fe80531b56df9e974201a5f7e13a3bdde59', 'formal/Botho/Lottery/Candidate.lean': 'b46aa1dcf1471265e4464e0bdf88937a96da070cb4c766266a41a3cc47c8ef2c', 'formal/Botho/Lottery/Conservation.lean': '2e5960f213a073c9cc90e5426d2eab0b2ebe3bccbac34d4b537dc43708039c63', 'formal/Botho/Lottery/Determinism.lean': '2be59865fdecba632d6d02c0c45e6fcd78e9a0b4c9cc4fd1e5988bda2f37de3b', 'formal/Botho/Lottery/Draw.lean': '92aaeaffc02b3f63bf25b3a26341d25cbf03c1f99a2a9cd285b8a5a01a34642f', 'formal/Botho/Lottery/Drawing.lean': '5da55c76c431d473c12536579d0fbe834366fe68f55d24324149b40c57a47dbc', 'formal/Botho/Lottery/Pool.lean': 'eec548f77ae263473f8b97951f1a127e7a71d20f3d60268d09504bdecf05552e', 'formal/Botho/Lottery/Prims.lean': '3602594b269c85bf7190bb813e87a0853bec87125df753048e55277bd93db2b7', 'formal/Botho/Lottery/Seed.lean': '7d3c26a9123a9b4e4229221b51225fdb0f9cb4bd920744ae82cce73e084ff2ee', 'formal/Botho/Lottery/SeedIndependence.lean': '104549af85e29fbffc9abc58e153919158bae295bd4b8144bb517a05055d208d', 'formal/Botho/Lottery/Sybil.lean': 'dadf9f84d78c84f3eeceb4c24e3919c31c159d2e9d762709eb8e45bfe413a954', 'formal/Botho/Lottery/SybilExpectation.lean': '5271b3f5ba6a572e47733f2bcafc222a45b23f9387cc933adef81556d126b0df', 'formal/Botho/Lottery/Window.lean': '8369a51dc4557500b2bbf131de86c0c7d866ce568c54a4cff8d2736b45daaa42', 'formal/Botho/Monetary/Emission.lean': '1f8f6060729e4065e9838c0f166670f1d7cc93a8091065cbfd3716456cdae37a', 'formal/Botho/Quorum/Fbas.lean': 'a7139033b93f7590dab01566d2ffc6a7b3542167115d397d7c4c1275d7ce39a2', 'formal/Botho/Supply/Accounting.lean': 'fe455e20d1c7ef240a614d3e771129a2461d147f41affeeb2b8bad31e8277804', 'formal/Botho/Supply/Block.lean': 'bc4eaeec1566ced51c35ce486bd835c27b2bd68e397d1c6e43cfa3163775020e', 'formal/Botho/Supply/Transactions.lean': 'aea12fd8f6e05ac41f0803d4126c5bf75f7501ef05eb630a1d08ada9d1c24f82', 'formal/Botho/Tags/EffectiveExact.lean': '2301db5779bdaa1e1e6919f48c072aaa227546d3db999e6f8d61265beacd81f8', 'formal/Botho/Tags/Inherit.lean': 'ed4832f2b729b41c8fb701f6ddff628dcec6e70dcc52eb076e7eaaaf92ef8d79', 'formal/Botho/Tags/Vector.lean': '1008e3f5c43f9f1505dd995e30f5ddf3915cb2d8fa422bf7f93c8c5f7227ecfa', 'formal/Botho/Timestamps.lean': '7ee0da97051214675363a43bfbb5e6a8d8ac499f114fe065cd44483f4f8df8a4', 'formal/Theorems.lean': '067091e7f60bde9156d9b8ddfc4760acc110ae9a0cfbf17c87ed32cb59abb121', 'formal/axioms-allowlist.txt': 'ab98ab147157e5e66abfc784fbaf92b42ad0d7cb7681ab40776519a0c1619579', 'formal/statements.txt': 'bb4ad56820cb380c2343cb1f9df9b7cf272ff8b5959f1dc18a212f54d46ea7c6'}
+
+          def sha(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+
+          receipt = dict(normal_head=NORMAL_HEAD, normal_tree=NORMAL_TREE,
+                         checkout_head=git('rev-parse', 'HEAD'), checkout_tree=git('rev-parse', 'HEAD^{tree}'),
+                         workflow_head=os.environ['GITHUB_SHA'], workflow_ref=os.environ['GITHUB_REF'],
+                         mode=os.environ['QUANTILE_MODE'], run_id=os.environ['GITHUB_RUN_ID'],
+                         commands=[], controls={}, all_commands_settled=False, status='running')
+
+          def save():
+              (OUT / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+
+          def run(name, args, expected=0, cap=180, cwd=DRT):
+              log = OUT / (name + '.log')
+              start = time.monotonic()
+              with log.open('wb') as stream:
+                  process = subprocess.Popen(args, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT,
+                                             start_new_session=True)
+                  try:
+                      code = process.wait(timeout=cap)
+                  except subprocess.TimeoutExpired:
+                      os.killpg(process.pid, signal.SIGTERM)
+                      try:
+                          process.wait(timeout=10)
+                      except subprocess.TimeoutExpired:
+                          os.killpg(process.pid, signal.SIGKILL)
+                          process.wait()
+                      code = 124
+              command = dict(name=name, args=list(map(str, args)), cwd=str(cwd), cap_seconds=cap,
+                             expected_exit=expected, exit=code, seconds=time.monotonic()-start,
+                             log=log.name, log_sha256=sha(log))
+              receipt['commands'].append(command)
+              save()
+              assert code == expected, command
+              return log
+
+          def report(name, directory, cases, expected):
+              path = OUT / (name + '.json')
+              run(name, [str(RUNNER), '--legs', 'ring_elapsed_quantile', '--cases', str(cases),
+                         '--seed', '1993', '--regressions', str(directory), '--json', str(path)],
+                  expected=expected)
+              data = json.loads(path.read_text())
+              assert len(data['legs']) == 1
+              leg = data['legs'][0]
+              assert leg['leg'] == 'ring_elapsed_quantile'
+              return leg, sha(path)
+
+          def semantic(leg):
+              assert leg['mismatches'], 'expected numerical mismatches'
+              for mismatch in leg['mismatches']:
+                  assert all(isinstance(mismatch[s], str) and mismatch[s].isdecimal() for s in ['rust','lean']), mismatch
+                  assert mismatch['rust'] != mismatch['lean'], mismatch
+
+          try:
+              actual = {path: sha(ROOT / path) for path in EXPECTED_SOURCES}
+              assert actual == EXPECTED_SOURCES
+              receipt['source_hashes'] = actual
+              receipt['normal_runner_sha256'] = sha(RUNNER)
+              receipt['model_sha256'] = sha(MODEL)
+              receipt['fixture_sha256'] = sha(VECTORS)
+              receipt['root_lock_sha256'] = sha(ROOT/'Cargo.lock')
+              receipt['resolved_lock_sha256'] = sha(DRT/'Cargo.lock')
+              (OUT/'root-Cargo.lock').write_bytes((ROOT/'Cargo.lock').read_bytes())
+              (OUT/'resolved-Cargo.lock').write_bytes((DRT/'Cargo.lock').read_bytes())
+              (OUT/'source-original.rs').write_bytes(ORIGINAL)
+              (OUT/'Age.lean').write_bytes((ROOT/'formal/Botho/Demurrage/Age.lean').read_bytes())
+              (OUT/'control.py').write_bytes(Path(__file__).read_bytes())
+              (OUT/'vectors.jsonl').write_bytes(VECTORS.read_bytes())
+              run('toolchains', ['bash','-c','rustc --version; cargo --version; lean --version'],cwd=ROOT)
+              testlog = run('live-vectors', ['cargo','test','--release','quantile_live_rust_and_lean_vectors','--','--nocapture'], cap=300)
+              assert testlog.read_text().count('quantile vector ') == 27
+              assert 'vectors=27 transformations=114 implementations=2' in testlog.read_text()
+              receipt['live_counts'] = dict(vectors=27,transformations=114,implementations=2)
+              discovery = run('leg-discovery', [str(RUNNER),'--list']).read_text().splitlines()
+              assert len(discovery) == len(set(discovery)) == 27 and 'ring_elapsed_quantile' in discovery
+              receipt['discovered_legs'] = discovery
+              run('nightly-helper-tests', ['python3','-m','unittest','discover','-s','formal-drt/scripts','-p','test_*.py','-v'],cwd=ROOT)
+
+              if os.environ['QUANTILE_MODE'] == 'controls':
+                  vectors = [json.loads(line) for line in VECTORS.read_text().splitlines()]
+                  for kind, needle, replacement, note in [
+                      ('floor', '    let rank = (q * n).div_ceil(10_000);', '    let rank = (q * n) / 10_000;', 'unsorted three q=3334'),
+                      ('unsorted', '    ages.sort_unstable();', '    // CONTROL: sorting deliberately omitted.', 'unsorted three q=0'),
+                  ]:
+                      text = ORIGINAL.decode()
+                      assert text.count(needle) == 1
+                      mutated = text.replace(needle, replacement)
+                      SOURCE.write_text(mutated)
+                      patch = ''.join(difflib.unified_diff(text.splitlines(True),mutated.splitlines(True),fromfile='a/cluster-tax/src/demurrage.rs',tofile='b/cluster-tax/src/demurrage.rs'))
+                      (OUT/(kind+'.patch')).write_text(patch)
+                      control = dict(source_sha256=sha(SOURCE),patch_sha256=sha(OUT/(kind+'.patch')))
+                      receipt['controls'][kind] = control
+                      run(kind+'-build',['cargo','build','--release'],cap=900)
+                      control['runner_sha256'] = sha(RUNNER)
+                      assert sha(MODEL) == receipt['model_sha256']
+                      target = OUT/(kind+'-target-fixtures')
+                      target.mkdir()
+                      vector = next(v for v in vectors if v['note'] == note)
+                      (target/'ring_elapsed_quantile.jsonl').write_text(json.dumps(vector)+'\n')
+                      leg,digest = report(kind+'-target',target,0,1)
+                      semantic(leg)
+                      assert leg['replayed'] == 1 and leg['cases'] == leg['compared'] == 0
+                      assert leg['mismatches'][0]['lean'] == vector['expected']
+                      assert leg['mismatches'][0]['rust'] == ('10' if kind == 'floor' else '30')
+                      control['target_report_sha256'] = digest
+                      if kind == 'floor':
+                          directory = OUT/'generated-fixtures'
+                          directory.mkdir()
+                          assert not list(directory.iterdir())
+                          leg,digest = report('floor-generated',directory,64,1)
+                          semantic(leg)
+                          assert leg['replayed'] == 0 and leg['compared'] > 0 and leg['shrink_attempts'] > 0
+                          assert all('replayed_fixture' not in m for m in leg['mismatches'])
+                          fixture = directory/'ring_elapsed_quantile.jsonl'
+                          control['generated_counts'] = {k:leg[k] for k in ['cases','compared','shrink_attempts','replayed']}
+                          control['generated_report_sha256'] = digest
+                          control['saved_fixture_sha256'] = sha(fixture)
+                          control['saved_fixtures'] = len(fixture.read_text().splitlines())
+                          replay,digest = report('floor-generated-failing-replay',directory,0,1)
+                          semantic(replay)
+                          assert replay['replayed'] == control['saved_fixtures']
+                          assert sha(fixture) == control['saved_fixture_sha256']
+                          control['failing_replay_sha256'] = digest
+                      SOURCE.write_bytes(ORIGINAL)
+                      control['restored_source_sha256'] = sha(SOURCE)
+                      assert sha(SOURCE) == EXPECTED_SOURCES['cluster-tax/src/demurrage.rs']
+                      save()
+                  run('restored-build',['cargo','build','--release'],cap=900)
+                  receipt['restored_runner_sha256'] = sha(RUNNER)
+                  for name in ['floor-target','unsorted-target','generated']:
+                      directory = OUT/(name+'-fixtures')
+                      fixture = directory/'ring_elapsed_quantile.jsonl'
+                      before = sha(fixture)
+                      clean,digest = report(name+'-restored-replay',directory,0,0)
+                      assert not clean['mismatches'] and clean['replayed'] == len(fixture.read_text().splitlines())
+                      assert sha(fixture) == before
+                      receipt[name+'-restored'] = dict(report_sha256=digest,fixture_sha256=before,replayed=clean['replayed'])
+              assert {path:sha(ROOT/path) for path in EXPECTED_SOURCES} == EXPECTED_SOURCES
+              assert sha(MODEL) == receipt['model_sha256']
+              assert sha(DRT/'Cargo.lock') == receipt['resolved_lock_sha256']
+              run('final-clean-diff',['git','diff','--exit-code'],cwd=ROOT)
+              receipt['status'] = 'success'
+          except BaseException:
+              receipt['status'] = 'failure'
+              receipt['error'] = traceback.format_exc()
+              raise
+          finally:
+              SOURCE.write_bytes(ORIGINAL)
+              receipt['restored_source_sha256'] = sha(SOURCE)
+              receipt['all_commands_settled'] = True
+              save()
+          PYCONTROL
+          python3 "$RUNNER_TEMP/quantile-control.py"
+      - name: Retain quantile provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quantile-provenance
+          path: ${{ runner.temp }}/quantile-evidence/
+          if-no-files-found: error
+          retention-days: 14
       # The per-PR budget is 5 minutes for the run itself (it takes about a
       # minute on a GitHub runner); the build above is not counted.
       - name: DRT (per-PR tier)
