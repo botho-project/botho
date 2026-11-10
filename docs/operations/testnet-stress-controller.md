@@ -860,6 +860,30 @@ the largest cluster factor the estimate is about 4.4×10^8, below the x-series
 cap of 10^9. At the idle base it is the 10^8 floor. A 16-output batch is 22 to
 24 KB with one or two inputs.
 
+**Node fee quote (#2001).** The local estimate above does not include the
+10.0.0 class-exit charge (#1685) or input import floor (#1687), which depend on
+node-side cluster wealth and the draft's ring. Every grant batch and campaign
+transfer is therefore signed, quoted with RPC `estimateFee` (`tx_hex`), and,
+if the signed fee is below the quote's `settleFee`, moved to `underpaid/`
+(never submitted) and re-signed with the signer's `min_fee` at `resignFee`
+(`fee_quote.sign_priced`, at most 8 passes). The record keeps
+`fee_floor_quote` and `underpaid_drafts`. A quoted fee above
+`max_single_signed_fee_picocredits` holds the run. Large inputs that change
+class can owe a few tenths of a percent of the value moved, so the operator
+must size `max_single_signed_fee_picocredits` (ceiling 1 BTH) and the fee
+budget for the plan.
+
+In the campaign controller the discarded draft goes to `artifacts/expired/`
+and is counted in `expired_unsubmitted`, together with #1635 quarantines. The
+`artifact_quarantined` event's `reason` tells them apart: `underpaid_draft`
+(a draft below the node's quote), `signing_timeout` (signing ran past
+`MAX_SIGNING_SECONDS`), `unprepared_retry` and `unprepared_restart` (a
+leftover never-prepared artifact found before re-signing or at restart). The
+whole pricing loop shares the 120 s signing allowance: a pass can cost a 90 s
+signer run plus a 10 s quote, so 8 passes are not guaranteed to fit, and the
+loop stops before a re-sign that would start past the commit deadline. The
+intent is then skipped, never held.
+
 Why batches: since #1809 an input is spendable only when the thinnest
 random-offset window of its age band holds 19 decoys. A fresh chain has about
 one decoy-eligible output per block, so the first funding input is spendable

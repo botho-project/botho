@@ -24,6 +24,7 @@ enum MobileWalletError {
     "InvalidAddress",
     "InsufficientFunds",
     "InternalError",
+    "FeeAboveApproved",
 };
 
 dictionary WalletAddress {
@@ -99,6 +100,9 @@ interface MobileWallet {
 
     [Async, Throws=MobileWalletError]
     string send_transaction(string to_address, u64 amount_picocredits);
+
+    [Async, Throws=MobileWalletError]
+    string send_transaction_with_max_fee(string to_address, u64 amount_picocredits, u64 max_fee_picocredits);
 
     [Async, Throws=MobileWalletError]
     FaucetResult request_faucet();

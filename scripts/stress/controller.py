@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 from discovery_plan import degrade_opt_in
+from fee_quote import sign_priced
 from plan import expand
 from reporting import legacy_lottery_evidence
 from lottery import (check_lottery_rules, decoy_row, lottery_context, lottery_rows,
@@ -40,6 +41,18 @@ INVENTORY_CHECKPOINT_SECONDS = 300
 # started on time may be prepared and submitted until this long after it
 # became eligible; only a runaway sign past it expires (skipped, not held).
 MAX_SIGNING_SECONDS = 120
+
+# ``artifact_quarantined`` event reasons (#2001 review follow-up 4).
+# An underpaying draft discarded before the fee-floor re-sign (#2001):
+QUARANTINE_UNDERPAID_DRAFT = 'underpaid_draft'
+# Signing ran past MAX_SIGNING_SECONDS; the intent is skipped (#1635):
+QUARANTINE_SIGNING_TIMEOUT = 'signing_timeout'
+# A leftover never-prepared artifact found before re-signing (#1635):
+QUARANTINE_UNPREPARED_RETRY = 'unprepared_retry'
+# A never-prepared artifact found at controller restart (#1635):
+QUARANTINE_UNPREPARED_RESTART = 'unprepared_restart'
+QUARANTINE_REASONS = (QUARANTINE_UNDERPAID_DRAFT, QUARANTINE_SIGNING_TIMEOUT,
+                      QUARANTINE_UNPREPARED_RETRY, QUARANTINE_UNPREPARED_RESTART)
 # Signed artifacts of intents that never reached ``prepared`` (#1635). They
 # cannot be submitted (begin_submit requires ``prepared``) and reserve no
 # inputs; they are kept for audit, never deleted, and are not orphans.
@@ -1304,17 +1317,42 @@ class Controller:
                 raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
             # A previous attempt signed but never prepared (#1635): nothing
             # was reserved and it can never be submitted. Keep it for audit.
-            self.quarantine_artifact(identifier)
+            self.quarantine_artifact(identifier, QUARANTINE_UNPREPARED_RETRY)
         ingress = self.choose_ingress(identifier)
         fee_rate = await self.rpc.call(ingress,'fee_getRate')
         blocks, spent = self.prepare_history(height, selected)
-        info = await self.native({'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
+        request = {'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
             'blocks':blocks,'height':height,'selected':[o['id'] for o in selected],
             'spent':spent,'reserved':[r[0] for r in self.j.db.execute('SELECT input FROM reservations')],
             'recipient':self.wallets[row['recipient']]['address'],
             'allowed_recipients':[w['address'] for w in self.wallets],
             'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact),
-            **({'fee_multiplier':fee_multiplier} if self.plan.get('schema_version') == 2 else {})})
+            **({'fee_multiplier':fee_multiplier} if self.plan.get('schema_version') == 2 else {})}
+
+        # Price against the ingress node's own fee floor (#2001): since
+        # protocol 10.0.0 the class-exit charge (#1685) and the input import
+        # floor (#1687) are owed from block 1 and the signer cannot see them.
+        # Sign, quote the draft, re-sign at the quote; an underpaying draft
+        # is quarantined (never submitted) like an unprepared artifact.
+        async def sign(min_fee):
+            return await self.native({**request, **({'min_fee': min_fee} if min_fee else {})})
+
+        async def quote(tx_hex):
+            return await self.rpc.call(ingress, 'estimateFee', {'tx_hex': tx_hex})
+
+        # The whole pricing loop shares the signing allowance (#2001 review
+        # follow-up 6): it stops before a re-sign that would start past the
+        # commit deadline, and the intent is skipped like a slow signature.
+        try:
+            info = await sign_priced(
+                sign, quote,
+                lambda: self.quarantine_artifact(identifier, QUARANTINE_UNDERPAID_DRAFT), artifact,
+                deadline=self.commit_deadline(row, {'eligible_at': eligible_at}),
+                clock=lambda: time.time())
+        except Expired as error:
+            self.quarantine_artifact(identifier, QUARANTINE_SIGNING_TIMEOUT)
+            self.j.transition(identifier,'skipped',str(error),finished=time.time())
+            return False
         if self.plan.get('schema_version') == 2:
             from fee_evidence import signed_fee_evidence
             info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
@@ -1327,7 +1365,7 @@ class Controller:
         except Expired as error:
             # Signing ran past MAX_SIGNING_SECONDS (#1635). The intent is still
             # ``eligible`` with no reservations: skip it, do not hold.
-            self.quarantine_artifact(identifier)
+            self.quarantine_artifact(identifier, QUARANTINE_SIGNING_TIMEOUT)
             self.j.transition(identifier,'skipped',str(error),finished=time.time())
             return False
         if crash=='prepared' and not self.j.get('crash:prepared'):
@@ -1350,10 +1388,17 @@ class Controller:
             return deadline
         return max(deadline, started+MAX_SIGNING_SECONDS)
 
-    def quarantine_artifact(self, identifier):
+    def quarantine_artifact(self, identifier, reason):
         """Move an unprepared intent's signed artifact (and any ``.partial``)
         to ``artifacts/expired/`` (#1635). Callers must have checked that the
-        intent never reached ``prepared``; the files are never deleted."""
+        intent never reached ``prepared``; the files are never deleted.
+
+        ``reason`` (one of ``QUARANTINE_REASONS``) is journaled on the
+        ``artifact_quarantined`` event so evidence can tell an underpaid fee
+        draft (#2001) from a signing-deadline quarantine (#1635); both are
+        counted in ``expired_unsubmitted``."""
+        if reason not in QUARANTINE_REASONS:
+            raise ValueError('unknown quarantine reason: '+str(reason))
         directory = self.state/'artifacts'
         expired = directory/EXPIRED_ARTIFACTS
         expired.mkdir(mode=0o700, exist_ok=True)
@@ -1373,7 +1418,8 @@ class Controller:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-            self.j.event(identifier,'artifact_quarantined',{'directory':str(expired)})
+            self.j.event(identifier,'artifact_quarantined',
+                         {'directory':str(expired),'reason':reason})
 
     async def submit_prepared(self, identifier):
         row = self.j.intent(identifier)
@@ -1904,7 +1950,7 @@ class Controller:
             row=self.j.intent(artifact.stem)
             if (row and artifact.suffix in ('.bin','.partial') and row['state']=='eligible'
                     and row['prepared'] is None and not artifact.is_symlink()):
-                self.quarantine_artifact(artifact.stem)
+                self.quarantine_artifact(artifact.stem, QUARANTINE_UNPREPARED_RESTART)
                 continue
             if artifact.suffix!='.bin' or not row or not row['prepared']:
                 self.halt('orphaned or partial signed artifact after restart')

@@ -86,5 +86,10 @@
   "setup": {
     "createNew": "Create New",
     "importExisting": "Import Existing"
+  },
+  "feeConsent": {
+    "send": "The node now requires a network fee of {{required}} BTH for this transaction, above the {{approved}} BTH you approved. Nothing has been sent. Send with the higher fee?",
+    "claim": "The node now requires a sweep fee of {{required}} BTH, above the {{approved}} BTH shown. You would receive {{net}} BTH. Nothing has been sent. Claim with the higher fee?",
+    "rejected": "Cancelled: the higher network fee was not approved. Nothing was sent."
   }
 }

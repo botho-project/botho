@@ -30,7 +30,16 @@ use zeroize::Zeroizing;
 // adapter bounded while allowing the controller's independently capped run.
 pub const MAX_REQUEST: u64 = 128 * 1024 * 1024;
 pub const MAX_TX: usize = 256 * 1024;
-pub const MAX_FEE: u64 = 5_000_000_000;
+/// Program bound on one signed fee: 1 BTH (#2001).
+///
+/// Since protocol 10.0.0 a class exit is priced from block 1 (#1685), as is
+/// the import floor read from the inputs (#1687). Both are charged on the
+/// whole value a spend moves (change included), so the floor scales with the
+/// coins spent: a few tenths of a percent of a large prefund input, times the
+/// fee tier. This is only a fat-finger bound; the controller's plan limit
+/// `max_single_signed_fee_picocredits` (ceiling in
+/// `scripts/stress/bounds.py`) is the operative budget.
+pub const MAX_FEE: u64 = 1_000_000_000_000;
 
 fn default_fee_multiplier() -> u64 {
     1
@@ -49,12 +58,17 @@ fn deserialize_fee_multiplier<'de, D: serde::Deserializer<'de>>(
     }
 }
 
-fn bounded_fee(estimate: u64, multiplier: u64) -> Result<(u64, u64)> {
+/// `(baseline, fee)`: the baseline is the local size/cluster `estimate`, the
+/// controller-supplied node quote `min_fee` (the `resignFee` RPC
+/// `estimateFee` returned for a draft of this spend, #2001) and
+/// [`MIN_TX_FEE`], whichever is largest; the fee is the baseline times the
+/// tier multiplier.
+fn bounded_fee(estimate: u64, min_fee: u64, multiplier: u64) -> Result<(u64, u64)> {
     ensure!(
         matches!(multiplier, 1 | 2 | 4),
         "fee_multiplier must be 1, 2, or 4"
     );
-    let baseline = estimate.max(MIN_TX_FEE);
+    let baseline = estimate.max(min_fee).max(MIN_TX_FEE);
     let fee = baseline
         .checked_mul(multiplier)
         .context("fee multiplication overflow")?;
@@ -108,6 +122,12 @@ pub enum Request {
             deserialize_with = "deserialize_fee_multiplier"
         )]
         fee_multiplier: u64,
+        /// The node's quoted fee for a draft of this spend (RPC `estimateFee`
+        /// `resignFee`, #2001); the baseline is at least this. The controller
+        /// signs, quotes the draft, and re-signs with it until the fee
+        /// settles. Absent (0) on the first pass.
+        #[serde(default)]
+        min_fee: u64,
         artifact: String,
     },
     Inspect {
@@ -126,6 +146,9 @@ pub enum Request {
         outputs: Vec<GrantOutput>,
         allowed_recipients: Vec<String>,
         base_rate: u64,
+        /// As for `Prepare` (#2001).
+        #[serde(default)]
+        min_fee: u64,
         artifact: String,
     },
     /// `Inspect` for a `PrepareGrants` artifact: up to `MAX_OUTPUTS` outputs.
@@ -508,6 +531,7 @@ fn prepare_grants(
     grants: Vec<GrantOutput>,
     allowed_recipients: Vec<String>,
     base_rate: u64,
+    min_fee: u64,
     artifact: String,
 ) -> Result<Value> {
     ensure!(
@@ -593,7 +617,7 @@ fn prepare_grants(
     let estimate = FeeEstimator::with_base_rate(base_rate)
         .estimate_fee(&fee_refs, grants.len() + 1)
         .total_fee;
-    let (baseline_fee, fee) = bounded_fee(estimate, 1)?;
+    let (baseline_fee, fee) = bounded_fee(estimate, min_fee, 1)?;
     ensure!(
         principal.checked_add(fee).is_some_and(|need| need <= total),
         "insufficient funds"
@@ -651,6 +675,7 @@ pub fn execute(request: Request) -> Result<Value> {
             outputs,
             allowed_recipients,
             base_rate,
+            min_fee,
             artifact,
         } => prepare_grants(
             wallet,
@@ -662,6 +687,7 @@ pub fn execute(request: Request) -> Result<Value> {
             outputs,
             allowed_recipients,
             base_rate,
+            min_fee,
             artifact,
         ),
         Request::InspectGrants { artifact } => {
@@ -714,6 +740,7 @@ pub fn execute(request: Request) -> Result<Value> {
             amount,
             base_rate,
             fee_multiplier,
+            min_fee,
             artifact,
         } => {
             ensure!(amount >= DUST_THRESHOLD, "amount is below dust");
@@ -791,7 +818,7 @@ pub fn execute(request: Request) -> Result<Value> {
             let estimate = FeeEstimator::with_base_rate(base_rate)
                 .estimate_fee(&fee_refs, 2)
                 .total_fee;
-            let (baseline_fee, fee) = bounded_fee(estimate, fee_multiplier)?;
+            let (baseline_fee, fee) = bounded_fee(estimate, min_fee, fee_multiplier)?;
             ensure!(
                 amount.checked_add(fee).is_some_and(|need| need <= total),
                 "insufficient funds"
@@ -849,18 +876,24 @@ mod tests {
 
     #[test]
     fn fee_tiers_apply_after_floor_and_reject_overflow_or_budget_excess() {
-        assert_eq!(bounded_fee(1, 4).unwrap(), (MIN_TX_FEE, 4 * MIN_TX_FEE));
+        assert_eq!(bounded_fee(1, 0, 4).unwrap(), (MIN_TX_FEE, 4 * MIN_TX_FEE));
         assert_eq!(
-            bounded_fee(2 * MIN_TX_FEE, 2).unwrap(),
+            bounded_fee(2 * MIN_TX_FEE, 0, 2).unwrap(),
             (2 * MIN_TX_FEE, 4 * MIN_TX_FEE)
         );
-        assert_eq!(bounded_fee(MAX_FEE / 4, 4).unwrap().1, MAX_FEE);
-        assert!(bounded_fee(MAX_FEE / 4 + 1, 4).is_err());
-        assert!(bounded_fee(u64::MAX, 4)
+        assert_eq!(bounded_fee(MAX_FEE / 4, 0, 4).unwrap().1, MAX_FEE);
+        assert!(bounded_fee(MAX_FEE / 4 + 1, 0, 4).is_err());
+        assert!(bounded_fee(u64::MAX, 0, 4)
             .unwrap_err()
             .to_string()
             .contains("overflow"));
-        assert!(bounded_fee(MIN_TX_FEE, 3).is_err());
+        assert!(bounded_fee(MIN_TX_FEE, 0, 3).is_err());
+        // #2001: the node quote raises the baseline; tiers multiply it.
+        assert_eq!(
+            bounded_fee(1, 2_062_500_076, 2).unwrap(),
+            (2_062_500_076, 4_125_000_152)
+        );
+        assert!(bounded_fee(1, MAX_FEE / 4 + 1, 4).is_err());
     }
 
     fn prepare_fixture(dir: &Path) -> Value {
@@ -868,6 +901,12 @@ mod tests {
     }
 
     fn prepare_shape_fixture(dir: &Path, input_count: usize) -> Value {
+        prepare_amount_fixture(dir, input_count, 20_000_000_000)
+    }
+
+    /// [`prepare_shape_fixture`] with every history output (inputs and
+    /// decoys) worth `amount`.
+    fn prepare_amount_fixture(dir: &Path, input_count: usize, amount: u64) -> Value {
         use bth_transaction_clsag::TxOutput;
         use bth_transaction_types::ClusterTagVector;
 
@@ -880,7 +919,7 @@ mod tests {
         for index in 0..input_count + MIN_RING_SIZE - 1 {
             let owner = if index < input_count { &keys } else { &sink };
             let out = TxOutput::new_hybrid_to_address(
-                20_000_000_000,
+                amount,
                 &owner.public_address(),
                 index as u32,
                 None,
@@ -1690,16 +1729,21 @@ mod tests {
         assert_eq!(prepared["fee"], 2 * MIN_TX_FEE + DUST_THRESHOLD - 1);
         assert_eq!(prepared["outputs"].as_array().unwrap().len(), 1);
 
-        let mut over_cap_dust = request.clone();
-        over_cap_dust["base_rate"] = json!(MAX_FEE * 100_000 / baseline);
-        over_cap_dust["amount"] = json!(20_000_000_000u64 - MAX_FEE - 1);
+        // A fee at the bound plus absorbed dust change exceeds it. The input
+        // must exceed MAX_FEE; the node quote (`min_fee`, #2001) sets the
+        // baseline to exactly the bound.
+        let big = tempfile::tempdir().unwrap();
+        fs::set_permissions(big.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut over_cap_dust = prepare_amount_fixture(big.path(), 1, 2 * MAX_FEE);
+        over_cap_dust["min_fee"] = json!(MAX_FEE);
+        over_cap_dust["amount"] = json!(MAX_FEE - 1);
         let error = execute(serde_json::from_value(over_cap_dust).unwrap()).unwrap_err();
         assert!(
             error.to_string().contains("fee outside program bounds"),
             "{error:#}"
         );
-        assert!(!dir.path().join("signed.bin").exists());
-        assert!(!dir.path().join("signed.partial").exists());
+        assert!(!big.path().join("signed.bin").exists());
+        assert!(!big.path().join("signed.partial").exists());
 
         let mut excessive = request;
         excessive["base_rate"] = json!(u64::MAX);
