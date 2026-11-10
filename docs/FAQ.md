@@ -215,7 +215,8 @@ Fees are based on **source wealth** — where your coins originated. Coins trace
 Through legitimate economic activity. When you spend coins and they mix with others' coins in transactions, the cluster tags naturally decay. Key factors:
 
 - **Decay**: The standard wallets reduce tag weights by 5% on each transfer
-  (wallet policy; the network itself applies no decay and no rate limit, see #1687)
+  (wallet policy; since protocol 10.0.0 the network enforces this 5% as the most a
+  spend may shed, but applies no decay of its own and no time limit, see #1687)
 - **Mixing**: Combining with coins from different sources dilutes tags
 
 Through sustained real commerce — decay plus blending with counterparties' coins — original cluster attribution becomes negligible.

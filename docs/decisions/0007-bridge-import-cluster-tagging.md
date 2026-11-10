@@ -1,6 +1,6 @@
 # ADR 0007: Bridge-Import Cluster Tagging via Block-Epoch Keys
 
-**Status**: Accepted (ratified 2026-07-14 with `K` = 1 day = 17,280 blocks and `F` = 1.5×, per the #937/#940 calibration). **Re-calibrated on production semantics 2026-10-31 (#1697). The values are unchanged, but several guarantees below do not hold against the node as built. See §Production-semantics re-calibration.**
+**Status**: Accepted (ratified 2026-07-14 with `K` = 1 day = 17,280 blocks and `F` = 1.5×, per the #937/#940 calibration). **Re-calibrated on production semantics 2026-10-31 (#1697). The values are unchanged, but several guarantees below do not hold against the node as built. See §Production-semantics re-calibration.** **Corrected by protocol 10.0.0 (#1687, 2026-11-09): the import floor is read from the inputs and consensus enforces the 5% per-spend decay as a floor. See §Protocol 10.0.0 correction.**
 **Date**: 2026-07-14
 **Decision Makers**: Core Team
 **Related**: ADR 0002 (federation custody), ADR 0003 (factor-1 wrap + demurrage-settlement), ADR 0004 (bridge privacy / amount revelation), ADR 0006 (PQ + confidential-amounts target); issues #831, #925, #902, #904, epic #816
@@ -74,6 +74,25 @@ The #940 sweep modelled this ADR's text. #1697 rebuilt it on what the node runs:
 - **Epoch steering.** Consensus only lower-bounds `created_at_height` (no upper bound, no epoch check), so the epoch id a release carries was the relayer's choice. The honest relayer now derives `created_at_height` from the tip and refuses off-epoch heights (#1740, fixed by #1744; see `bridge/service/src/bth_scan.rs`). A modified relayer can still steer to an epoch with no recorded unwrap, which is not in the import set and so gets no floor. That residual is a consensus question and stays with #1687 / #1683.
 
 `K` and `F` are **not** changed by this re-calibration. No value of either closes the escapes above; they depend on where the floor is enforced (#1687). Whether `K` should be restated in wall-clock terms, given 20–40 s blocks, is open for a human decision.
+
+## Protocol 10.0.0 correction (#1687, 2026-11-09)
+
+The operator ruled on #1687 (options 1 + 4). Protocol 10.0.0 adds three consensus rules. Block validation (`verify_transfer_for_block`, which the block builder and the SCP value check call, and `validate_ordinary_body`) and mempool admission run them through the same functions in `cluster-tax/src/tag_retention.rs` and `botho/src/ledger/store/validation.rs`.
+
+1. **The import floor is read from the inputs.** A ring hides the spent member, but with public amounts the spent member is one of the members whose amount equals the input's pseudo-output amount (C3 and the balance proof bind it there). These are the input's *spend candidates*. Each input's value is priced at the **largest** import share among its candidates, blended with 1× (`import_floor_factor_from_inputs`). The fee floor charges demurrage at the larger of this and the old output-tag blend. Rewriting output tags no longer removes `F`, and a decoy cannot dilute it.
+2. **Retained-weight floor.** Each output must keep at least 95% of every cluster's weight that all spend candidates of a ring carry. The requirement is value-weighted over the inputs, less a rounding slack of `inputs + 1` (`first_tag_retention_violation`). 95% is the 0.95 decay per transfer that the whitepaper (Appendix, Tag Decay) and `docs/design/cluster-tag-decay.md` specify and that the stock wallets apply. No new parameter is introduced. Required weights below `MIN_STORED_WEIGHT` are not checked. An output with 16 entries, each at least the required weight, is excused (honest truncation). Settlements are exempt: they must be background, and they pay the capitalized charge.
+3. **`created_at_height` upper bound (#1740).** A transfer dated after the including block's height is invalid.
+
+What this changes in §Production-semantics re-calibration (numbers from the regenerated `docs/research/bridge-import-calibration.md` §0 and §8):
+
+- **Tag drop:** rejected when the coin is its ring's only candidate (an honest wallet's ring). If the spender adds a decoy of the exact same amount without the import tag, the drop passes the retained-weight floor but is charged at `F` from the inputs: 1.0% of value for the 1,000-BTH entrant, up from 0.06%. The honest wallet now pays less than any accepted drop.
+- **Shedding (weight ÷ 20 per hop):** rejected at the first hop with ordinary decoys. With same-amount decoys it still reaches 1× in 3 spends, but it pays `F` from the inputs while any import weight remains.
+- **Stock-wallet self-churn is unchanged.** 5% per spend is exactly the floor, so 135 self-spends still prune the tag. The floor limits decay per spend, not per unit of time. §Decision 4's "decay only by circulation" still does not hold, and the 720-block age gate of `cluster-tag-decay.md` is still not implemented.
+- **Honest first spend of a lone 1,000-BTH import:** 0.492% of value, up from 0.44%. `F` is now read from the undecayed input (1.500×) instead of the decayed output (1.475×). Whether an honest import spend should pay a downgrade charge at all is still open.
+- **Split game:** 514 epochs for 2M BTH (was 584).
+- **Epoch steering:** unchanged apart from the `created_at_height` upper bound.
+
+Formal status: `Botho.Tags.import_floor_honoured₁₀` (proven, model) says that an accepted 10.0.0 spend whose spent coins are fully import-tagged is charged at least `F`, for every fee curve, ring factor and import set. `tag_shed_rejected₁₀` covers the lone-candidate rejection, and `same_amount_decoy_drop₁₀` is the same-amount-decoy limit. The 7.x–9.x refutation `import_floor_invariant_refuted` stays as the historical record. These rules depend on public amounts. Under confidential amounts (ADR 0006, #902) the spend candidates cannot be identified, and the rule has to be redesigned.
 
 ## Alternatives considered
 

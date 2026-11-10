@@ -1626,6 +1626,18 @@ mod cli {
         println!("Cluster wealth: {wealth_bth} BTH");
         println!("Principal washed: {principal_bth} BTH");
         println!("Decay rate: {decay_pct}% per hop");
+        // Protocol 10.0.0 (#1687): consensus keeps at least 95% of each
+        // cluster's weight per spend (where every spend candidate carries it).
+        let max_decay = TAG_WEIGHT_SCALE - bth_cluster_tax::CONSENSUS_MIN_TAG_RETENTION;
+        println!(
+            "Consensus retained-weight floor: at most {:.1}% decay per hop ({})",
+            max_decay as f64 / TAG_WEIGHT_SCALE as f64 * 100.0,
+            if decay_rate <= max_decay {
+                "this rate is valid"
+            } else {
+                "this rate is REJECTED by consensus unless every decoy has the coin's amount"
+            }
+        );
         println!(
             "Height: {height} (demurrage {} bps/yr at max factor)\n",
             params.demurrage_rate_bps(height)

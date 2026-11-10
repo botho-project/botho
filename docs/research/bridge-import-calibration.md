@@ -1,12 +1,32 @@
 # Calibrating the bridge-import epoch length `K` and floor `F`
 
 **Issues:** [#937](https://github.com/botho-project/botho/issues/937) (original calibration, 2026-07-14), [#1697](https://github.com/botho-project/botho/issues/1697) (re-run on production semantics, 2026-10-31). Part of the design-confidence epic [#1683](https://github.com/botho-project/botho/issues/1683).
-**Status:** `K` = 17,280 blocks and `F` = 1.5× remain the ratified values ([ADR 0007](../decisions/0007-bridge-import-cluster-tagging.md)); this re-run does **not** change them. It shows the original calibration measured the ADR's intent rather than the node, and that against the node the import factor can be shed for well under 1% of value. The decision that follows is about *where the floor is enforced* (#1687, #1686), not about the value of `K` or `F`. One `K` question (block time) is raised for a human decision in §7.
+**Status:** Updated for protocol 10.0.0 (#1687, §0). `K` = 17,280 blocks and `F` = 1.5× remain the ratified values ([ADR 0007](../decisions/0007-bridge-import-cluster-tagging.md)); this re-run does **not** change them. It shows the original calibration measured the ADR's intent rather than the node, and that against the node the import factor can be shed for well under 1% of value. The decision that follows is about *where the floor is enforced* (#1687, #1686), not about the value of `K` or `F`. One `K` question (block time) is raised for a human decision in §7.
 **Reproduce:**
 ```
 cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim -- bridge-import-sweep
 ```
 Sim source: `cluster-tax/src/simulation/bridge_import_sweep.rs`. It is deterministic (no RNG): every number below is printed by that command. §8 reproduces the full output.
+
+---
+
+## 0. Protocol 10.0.0 update (#1687, 2026-11-09)
+
+The operator ruled on #1687 (options 1 + 4). Consensus now:
+
+1. **Reads the import floor from the inputs.** Each input's value (its pseudo-output amount) is priced at the largest import share among its *spend candidates*, the ring members whose amount equals that pseudo-output amount (`import_floor_factor_from_inputs`, `cluster-tax/src/tag_retention.rs`). The output-tag blend is kept as a further `max`. Dropping output tags no longer removes `F`.
+2. **Keeps at least 95% of each cluster's weight per spend** wherever every spend candidate carries the cluster (`first_tag_retention_violation`). 95% is the documented 5% per-transfer decay (whitepaper Appendix "Tag Decay: 0.95 per Transfer", `docs/design/cluster-tag-decay.md`), which the stock wallets already apply. No new constant.
+3. **Bounds `created_at_height` by the including block's height** (§6).
+
+The sweep now runs those rules. Decoys are background outputs of *other* amounts (an honest wallet's draw), and the adversary may instead pick 19 decoys of the coin's exact amount (`DecoyAmounts::Matched`), the one way around rule 2. What changed in §8:
+
+- **Tag drop** (§8, tag-drop adversary): rejected with ordinary decoys. With same-amount decoys it is accepted but charged at `F` or more: 1.0% of value for the 1,000-BTH entrant (was 0.06%), 5.0% for a flood coin. The honest wallet now pays less than any accepted drop.
+- **Max-shed churn** (§8, self-churn): rejected at the first hop with ordinary decoys. With same-amount decoys it still reaches 1× in 3 spends, paying `F` from the inputs while any import weight remains.
+- **Stock-wallet self-churn** is unchanged: 5% per spend is exactly the floor, so 135 self-spends still prune the tag. The floor limits decay per spend, not per unit of time; the 720-block age gate remains unimplemented.
+- **Honest first spend** of a lone 1,000-BTH import: 0.492% (was 0.442%). `F` is now read from the undecayed input (1.500×) instead of the decayed output (1.475×), so the capitalized downgrade charge prices a 0.246× gap instead of 0.221×. Whether an honest import spend should pay a downgrade charge at all is still open (§7).
+- **Split game**: 514 epochs for 2M BTH (was 584). The test is the first spend at which `curve` no longer exceeds the import floor, and the floor is now 1.500× rather than 1.475×.
+
+§1–§7 below are the #1697 analysis of the 9.x rule, kept as the record of why the rule changed; §8 is regenerated under 10.0.0.
 
 ---
 
@@ -27,7 +47,7 @@ Both file:line claims were re-checked against `main` at d5962dab. The F-blend is
 
 The DB-dependent half of the fee floor (claimed wealth, ring-centroid floor, import floor, writer accumulation) is restated over plain data in `cluster-tax/src/fee_floor_inputs.rs`. The golden test `fee_floor_inputs_match_ledger_for_sampled_inputs` (`botho/src/ledger/store.rs`) runs the real ledger and those mirrors over 24 sampled inputs and checks they agree, including the full consensus fee floor. `sim_factor_matches_production_import_factor_for_sampled_wealth` checks that the sim's factor for a fresh unwrap equals `import_cluster_factor(W)` over 200 sampled `W`.
 
-Model assumptions: each input sits in a ring of 20 (`RING_SIZE`) with 19 background decoys of equal value. Fees are priced at the first demurrage-active height. In epoch 0 every demurrage term below is zero (#1685). Spends are two outputs (payment + change).
+Model assumptions (#1697; see §0 for 10.0.0): each input sits in a ring of 20 (`RING_SIZE`) with 19 background decoys of equal value. Fees are priced at the first demurrage-active height. In epoch 0 every demurrage term below is zero (#1685). Spends are two outputs (payment + change).
 
 ---
 
@@ -119,21 +139,21 @@ Ratified constants (imported from `cluster_tax::bridge_import`): K = 17280 block
 
 | K | whale import (BTH) | undiluted factor | epochs to floor | days @ 5 s | days @ 20 s | days @ 40 s |
 |---|---:|---:|---:|---:|---:|---:|
-| 14h (10080 blocks) | 500000 | 4.576x | 146 | 85.2 | 340.7 | 681.3 |
-| 1d (17280 blocks) | 500000 | 4.576x | 146 | 146.0 | 584.0 | 1168.0 |
-| 2d (34560 blocks) | 500000 | 4.576x | 146 | 292.0 | 1168.0 | 2336.0 |
-| 3.5d (60480 blocks) | 500000 | 4.576x | 146 | 511.0 | 2044.0 | 4088.0 |
-| 1wk (120960 blocks) | 500000 | 4.576x | 146 | 1022.0 | 4088.0 | 8176.0 |
-| 14h (10080 blocks) | 2000000 | 5.437x | 584 | 340.7 | 1362.7 | 2725.3 |
-| 1d (17280 blocks) | 2000000 | 5.437x | 584 | 584.0 | 2336.0 | 4672.0 |
-| 2d (34560 blocks) | 2000000 | 5.437x | 584 | 1168.0 | 4672.0 | 9344.0 |
-| 3.5d (60480 blocks) | 2000000 | 5.437x | 584 | 2044.0 | 8176.0 | 16352.0 |
-| 1wk (120960 blocks) | 2000000 | 5.437x | 584 | 4088.0 | 16352.0 | 32704.0 |
-| 14h (10080 blocks) | 10000000 | 5.738x | 2919 | 1702.8 | 6811.0 | 13622.0 |
-| 1d (17280 blocks) | 10000000 | 5.738x | 2919 | 2919.0 | 11676.0 | 23352.0 |
-| 2d (34560 blocks) | 10000000 | 5.738x | 2919 | 5838.0 | 23352.0 | 46704.0 |
-| 3.5d (60480 blocks) | 10000000 | 5.738x | 2919 | 10216.5 | 40866.0 | 81732.0 |
-| 1wk (120960 blocks) | 10000000 | 5.738x | 2919 | 20433.0 | 81732.0 | 163464.0 |
+| 14h (10080 blocks) | 500000 | 4.576x | 129 | 75.2 | 301.0 | 602.0 |
+| 1d (17280 blocks) | 500000 | 4.576x | 129 | 129.0 | 516.0 | 1032.0 |
+| 2d (34560 blocks) | 500000 | 4.576x | 129 | 258.0 | 1032.0 | 2064.0 |
+| 3.5d (60480 blocks) | 500000 | 4.576x | 129 | 451.5 | 1806.0 | 3612.0 |
+| 1wk (120960 blocks) | 500000 | 4.576x | 129 | 903.0 | 3612.0 | 7224.0 |
+| 14h (10080 blocks) | 2000000 | 5.437x | 514 | 299.8 | 1199.3 | 2398.7 |
+| 1d (17280 blocks) | 2000000 | 5.437x | 514 | 514.0 | 2056.0 | 4112.0 |
+| 2d (34560 blocks) | 2000000 | 5.437x | 514 | 1028.0 | 4112.0 | 8224.0 |
+| 3.5d (60480 blocks) | 2000000 | 5.437x | 514 | 1799.0 | 7196.0 | 14392.0 |
+| 1wk (120960 blocks) | 2000000 | 5.437x | 514 | 3598.0 | 14392.0 | 28784.0 |
+| 14h (10080 blocks) | 10000000 | 5.738x | 2570 | 1499.2 | 5996.7 | 11993.3 |
+| 1d (17280 blocks) | 10000000 | 5.738x | 2570 | 2570.0 | 10280.0 | 20560.0 |
+| 2d (34560 blocks) | 10000000 | 5.738x | 2570 | 5140.0 | 20560.0 | 41120.0 |
+| 3.5d (60480 blocks) | 10000000 | 5.738x | 2570 | 8995.0 | 35980.0 | 71960.0 |
+| 1wk (120960 blocks) | 10000000 | 5.738x | 2570 | 17990.0 | 71960.0 | 143920.0 |
 
 ### Small-entrant collateral in a flood epoch, as the flood circulates
 
@@ -141,21 +161,21 @@ A 1000-BTH entrant shares an epoch with a flood. Its factor is measured at its f
 
 | flood regime | flood (BTH) | entrant alone | caught, 0 hops | caught, 5 hops | caught, 20 hops |
 |---|---:|---:|---:|---:|---:|
-| low | 5000 | 1.475x | 1.579x | 2.576x | 3.203x |
-| medium | 100000 | 1.475x | 3.473x | 4.623x | 5.261x |
-| high | 2000000 | 1.475x | 5.437x | 5.746x | 5.906x |
+| low | 5000 | 1.500x | 1.579x | 2.576x | 3.203x |
+| medium | 100000 | 1.500x | 3.473x | 4.623x | 5.261x |
+| high | 2000000 | 1.500x | 5.437x | 5.746x | 5.906x |
 
 ### Floor F sweep: onboarding toll vs the tag-drop escape
 
-A 1000-BTH entrant alone in its epoch. Fees are the consensus floor as a % of value: its first wallet spend after one day and after one year, and the same coin spent once to background outputs (tag drop) after one day.
+A 1000-BTH entrant alone in its epoch. Fees are the consensus floor as a % of value: its first wallet spend after one day and after one year, and the same coin spent once to background outputs (tag drop) after one day. Since protocol 10.0.0 the drop is rejected unless every decoy has the coin's exact amount; the column prices that cheapest accepted drop, which still pays the import floor read from the inputs.
 
 | F | entrant factor | wallet spend @ 1 day | wallet spend @ 1 year | tag-drop spend @ 1 day | residual above background |
 |---|---:|---:|---:|---:|---:|
 | 1.000x | 1.254x | 0.0003% | 0.1016% | 0.0600% | 0.000 |
-| 1.250x | 1.254x | 0.0003% | 0.1016% | 0.0600% | 0.050 |
-| 1.500x | 1.475x | 0.4420% | 0.4420% | 0.0600% | 0.100 |
-| 1.750x | 1.712x | 0.9160% | 0.9160% | 0.0600% | 0.150 |
-| 2.000x | 1.950x | 1.3920% | 1.3920% | 0.0600% | 0.200 |
+| 1.250x | 1.254x | 0.0003% | 0.1016% | 0.5000% | 0.050 |
+| 1.500x | 1.500x | 0.4920% | 0.4920% | 1.0000% | 0.100 |
+| 1.750x | 1.750x | 0.9920% | 0.9920% | 1.5000% | 0.150 |
+| 2.000x | 2.000x | 1.4920% | 1.4920% | 2.0000% | 0.200 |
 
 ### Decay by domestic circulation (production tags and wealth)
 
@@ -187,23 +207,23 @@ A 10000-BTH coin from a 2000000-BTH epoch. Each spend merges it with an equal-va
 
 ### Self-churn adversary (no domestic money)
 
-The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor, so the downgrade charge does not fire. Both are valid at consensus, which rejects only tag inflation.
+The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor. Since protocol 10.0.0 consensus keeps at least 95% of each cluster's weight per spend wherever every spend candidate carries it: the default wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its first hop, and only a spender whose 19 decoys share the coin's exact amount escapes the floor (it still pays the import floor read from the inputs while any import weight remains).
 
 **small entrant (1,000 BTH alone), default wallet**
 
 | spends | import weight | import W (BTH) | next-spend factor | cumulative fee |
 |---:|---:|---:|---:|---:|
-| 0 | 1000000 | 1000 | 1.475x | 0.0000% |
-| 1 | 950000 | 1950 | 1.451x | 0.4420% |
-| 2 | 902500 | 2852 | 1.430x | 0.6160% |
-| 5 | 773780 | 5298 | 1.511x | 0.6160% |
-| 10 | 598735 | 8624 | 1.557x | 0.6160% |
-| 20 | 358482 | 13189 | 1.545x | 0.6160% |
-| 50 | 76937 | 18538 | 1.319x | 0.6160% |
-| 100 | 5911 | 19887 | 1.053x | 0.6160% |
-| 150 | 0 | 19979 | 1.000x | 0.6160% |
+| 0 | 1000000 | 1000 | 1.500x | 0.0000% |
+| 1 | 950000 | 1950 | 1.475x | 0.4920% |
+| 2 | 902500 | 2852 | 1.451x | 0.7140% |
+| 5 | 773780 | 5298 | 1.511x | 0.7560% |
+| 10 | 598735 | 8624 | 1.557x | 0.7560% |
+| 20 | 358482 | 13189 | 1.545x | 0.7560% |
+| 50 | 76937 | 18538 | 1.319x | 0.7560% |
+| 100 | 5911 | 19887 | 1.053x | 0.7560% |
+| 150 | 0 | 19979 | 1.000x | 0.7560% |
 
-Spends to factor ≤ 1.500x: 0; to ≤ 1.100x: 75; to tag pruned: 135 (cumulative fee 0.6160%).
+Spends to factor ≤ 1.500x: 0; to ≤ 1.100x: 75; to tag pruned: 135 (cumulative fee 0.7560%).
 
 **flood coin (10,000 of a 2,000,000-BTH epoch), default wallet**
 
@@ -226,6 +246,16 @@ Spends to factor ≤ 1.500x: 124; to ≤ 1.100x: 134; to tag pruned: 135 (cumula
 | spends | import weight | import W (BTH) | next-spend factor | cumulative fee |
 |---:|---:|---:|---:|---:|
 | 0 | 1000000 | 2000000 | 5.437x | 0.0000% |
+
+Consensus rejects spend 1 (retained-weight floor).
+
+Spends to factor ≤ 1.500x: > 200; to ≤ 1.100x: > 200; to tag pruned: > 200 (cumulative fee n/a).
+
+**flood coin (10,000 of a 2,000,000-BTH epoch), max-shed decay, same-amount decoys**
+
+| spends | import weight | import W (BTH) | next-spend factor | cumulative fee |
+|---:|---:|---:|---:|---:|
+| 0 | 1000000 | 2000000 | 5.437x | 0.0000% |
 | 1 | 50000 | 2000500 | 3.467x | 0.0000% |
 | 2 | 2500 | 2000525 | 1.552x | 0.0000% |
 | 5 | 0 | 2000525 | 1.000x | 0.1540% |
@@ -239,13 +269,13 @@ Spends to factor ≤ 1.500x: 3; to ≤ 1.100x: 3; to tag pruned: 3 (cumulative f
 
 ### Tag-drop adversary (background outputs)
 
-First spend after one day, honest wallet vs background outputs. With background outputs the import floor reads 1× (it is computed from output tags); only the ring-centroid floor remains, and 19 background decoys dilute it.
+First spend after one day, honest wallet vs background outputs (protocol 10.0.0, #1687). With decoys of other amounts the drop is rejected (`drop accepted` = no): the coin is its input's only spend candidate, so the retained-weight floor binds. With 19 background decoys of the coin's exact amount the floor's minimum is zero and the drop is accepted, but the import floor is read from the inputs (the candidates' maximum import share), so the drop is charged at F or more and pays the capitalized downgrade charge on the gap below it.
 
-| coin | honest factor | honest fee | drop factor | drop ring floor | drop fee |
-|---|---:|---:|---:|---:|---:|
-| small entrant (1,000 BTH alone) | 1.475x | 0.4420% | 1.030x | 1.030x | 0.0600% |
-| flood coin (10,000 of 2,000,000) | 5.437x | 0.0049% | 3.500x | 3.500x | 5.0000% |
-| undiluted whale (2,000,000 alone) | 5.437x | 0.0049% | 3.500x | 3.500x | 5.0000% |
+| coin | honest factor | honest fee | drop accepted | same-amount drop factor | its import floor | its ring floor | its fee |
+|---|---:|---:|---|---:|---:|---:|---:|
+| small entrant (1,000 BTH alone) | 1.500x | 0.4920% | no | 1.500x | 1.500x | 1.030x | 1.0000% |
+| flood coin (10,000 of 2,000,000) | 5.437x | 0.0049% | no | 3.500x | 1.500x | 3.500x | 5.0000% |
+| undiluted whale (2,000,000 alone) | 5.437x | 0.0049% | no | 3.500x | 1.500x | 3.500x | 5.0000% |
 
 ### Concentration signal: flood's cheap-money footprint
 

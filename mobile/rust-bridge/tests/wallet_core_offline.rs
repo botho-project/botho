@@ -292,6 +292,7 @@ fn build_and_sign_produces_node_verifiable_tx() {
             kem_ciphertext: input.kem_ciphertext.clone(),
             decoys,
             lottery_context: None,
+            cluster_tags: Vec::new(),
         }],
         recipient: recipient_addr,
         sender_kem_public_key: sender.kem_public_hex.clone(),
@@ -389,6 +390,7 @@ fn build_and_sign_spends_hybrid_output() {
             kem_ciphertext: input.kem_ciphertext.clone(),
             decoys,
             lottery_context: None,
+            cluster_tags: Vec::new(),
         }],
         recipient: recipient_addr,
         sender_kem_public_key: sender.kem_public_hex.clone(),
@@ -446,6 +448,7 @@ fn build_and_sign_rejects_insufficient_inputs() {
             kem_ciphertext: owned[0].kem_ciphertext.clone(),
             decoys,
             lottery_context: None,
+            cluster_tags: Vec::new(),
         }],
         recipient: RecipientAddress {
             view_public_key: hex::encode(recipient.public_address.view_public_key().to_bytes()),

@@ -22,14 +22,21 @@
 //!    or by a self-churner. It is not "Σ unwrap amounts in the epoch".
 //! 2. **The factor is a three-way `max`, evaluated per spend.** The fee floor
 //!    (`consensus_fee_floor`, `validation.rs`) charges demurrage at
-//!    `max(curve(output-tag wealth), ring-centroid factor, F-blend on output
-//!    tags)`. The `F` term is a value-weighted blend of `F` on import-tagged
-//!    output value and 1× on the rest — it is read from the **outputs** the
-//!    spender declares, not from the inputs.
+//!    `max(curve(output-tag wealth), ring-centroid factor, F-blend)`. Before
+//!    protocol 10.0.0 the `F` blend was read from the **outputs** the spender
+//!    declares. Since 10.0.0 (#1687) it is the `max` of that and the same blend
+//!    read from the **inputs**: each input's value at the largest import share
+//!    among its spend candidates (`tag_retention`).
 //! 3. **Tags are the production `ClusterTagVector`.** 16 tags, 0.1% pruning,
 //!    and the wallet's 5% decay per transfer
-//!    (`ClusterTagVector::merge_weighted(inputs, 5%)`). Consensus only rejects
-//!    tag *inflation*; any decay, including dropping every tag, is valid.
+//!    (`ClusterTagVector::merge_weighted(inputs, 5%)`). Before 10.0.0 consensus
+//!    rejected only tag *inflation*. Since 10.0.0 it also keeps at least 95% of
+//!    each cluster's weight per spend wherever every spend candidate carries
+//!    the cluster (`first_tag_retention_violation`), so the wallet's 5% passes
+//!    and faster decay is rejected; [`spend`] reports the verdict and never
+//!    commits a rejected spend. Decoys are background outputs of other amounts
+//!    unless an experiment picks [`DecoyAmounts::Matched`], the adversary's way
+//!    around that floor.
 //! 4. **Block time is a parameter.** `K` is fixed in blocks, so the wall-clock
 //!    cost of an epoch scales with the block time. Split-game cost is reported
 //!    at 5, 20 and 40 s blocks.
@@ -39,9 +46,11 @@
 //!    demurrage, capitalized downgrade charge)`.
 //!
 //! It adds two adversaries the old sweep could not express: a **tag-drop**
-//! spender (declares background outputs, which consensus accepts) and a
-//! **self-churner** (spends to itself; the default wallet's 5% decay strips
-//! the import tag with no domestic money involved).
+//! spender (declares background outputs; rejected since 10.0.0 unless every
+//! decoy has the coin's amount) and a **self-churner** (spends to itself; the
+//! default wallet's 5% decay strips the import tag with no domestic money
+//! involved, which 10.0.0 still allows: the floor limits decay per spend, not
+//! per unit of time).
 //!
 //! Everything is deterministic (no RNG); the doc numbers regenerate
 //! byte-for-byte.
@@ -64,6 +73,7 @@ use crate::{
         output_wealth_contributions, resolve_fee_floor_at, FloorOutput, ResolvedFeeFloor, TagPair,
         WALLET_CLUSTER_DECAY_RATE,
     },
+    tag_retention::{first_tag_retention_violation, RetentionViolation, SpendRing},
     ClusterFactorCurve,
 };
 
@@ -264,15 +274,26 @@ impl ProductionLedger {
     }
 
     /// Resolve the fee-floor inputs for a spend, exactly as the ledger does,
-    /// with import floor `floor_f`.
+    /// with import floor `floor_f`. `rings` holds one entry per input: its
+    /// pseudo-output amount (the real member's value) and every ring member.
     pub fn resolve(
         &self,
-        ring: &[(u64, Vec<TagPair>)],
+        rings: &[SimRing],
         outputs: &[(u64, Vec<TagPair>)],
         floor_f: u64,
     ) -> ResolvedFeeFloor {
-        let ring_refs: Vec<(u64, &[TagPair])> =
-            ring.iter().map(|(v, t)| (*v, t.as_slice())).collect();
+        let member_refs: Vec<Vec<(u64, &[TagPair])>> = rings
+            .iter()
+            .map(|(_, m)| m.iter().map(|(v, t)| (*v, t.as_slice())).collect())
+            .collect();
+        let spend_rings: Vec<SpendRing<'_>> = rings
+            .iter()
+            .zip(&member_refs)
+            .map(|((pseudo, _), members)| SpendRing {
+                pseudo_amount: *pseudo,
+                members,
+            })
+            .collect();
         let outs: Vec<FloorOutput<'_>> = outputs
             .iter()
             .map(|(amount, tags)| FloorOutput {
@@ -282,7 +303,7 @@ impl ProductionLedger {
             .collect();
         resolve_fee_floor_at(
             &outs,
-            &ring_refs,
+            &spend_rings,
             &|c| self.wealth(c),
             &|c| self.is_import(c),
             floor_f,
@@ -290,17 +311,35 @@ impl ProductionLedger {
     }
 }
 
+/// One input of a simulated spend: `(pseudo-output amount, ring members)`.
+pub type SimRing = (u64, Vec<(u64, Vec<TagPair>)>);
+
 /// How the spender declares its output tags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputTagPolicy {
     /// The default wallet: `merge_weighted(inputs, 5%)` on every output.
     Wallet,
-    /// The tag-drop adversary: background (empty) outputs. Valid at consensus
-    /// (`check_cluster_tag_inheritance` rejects only inflation).
+    /// The tag-drop adversary: background (empty) outputs. Since protocol
+    /// 10.0.0 (#1687) the retained-weight floor rejects this whenever every
+    /// spend candidate carries the tag.
     Drop,
     /// A spender-chosen decay rate (parts per TAG_WEIGHT_SCALE) instead of the
-    /// wallet's 5%. Any rate is valid at consensus.
+    /// wallet's 5%. Since 10.0.0 a rate above 5% is rejected under the same
+    /// condition.
     Shed(u32),
+}
+
+/// How the spender picks its `RING_SIZE − 1` background decoys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecoyAmounts {
+    /// Decoys of other amounts (what an honest wallet's random draw gives):
+    /// the real member is the input's only spend candidate.
+    Distinct,
+    /// The adversary's choice: background decoys of exactly the real amount,
+    /// so every member is a spend candidate and the retained-weight floor's
+    /// minimum is zero (#1687). The import floor takes the candidates'
+    /// maximum and still applies.
+    Matched,
 }
 
 /// The decay rate that sheds a coin's tag weight to `1/RING_SIZE` per hop:
@@ -314,6 +353,10 @@ pub fn max_shed_decay_rate() -> u32 {
 /// The result of one priced spend.
 #[derive(Clone, Debug)]
 pub struct SpendResult {
+    /// `Some` when consensus rejects the spend: its outputs keep less tag
+    /// weight than the retained-weight floor requires (protocol 10.0.0,
+    /// #1687). The fee fields are still filled in, for comparison.
+    pub rejected: Option<RetentionViolation>,
     /// The ledger-resolved factor inputs.
     pub resolved: ResolvedFeeFloor,
     /// The consensus fee floor, picocredits.
@@ -333,13 +376,35 @@ impl SpendResult {
 
 /// Spend `inputs` into two outputs (payment + change) carrying the tags the
 /// policy declares. Each input sits in a ring of `RING_SIZE` members: itself
-/// plus `RING_SIZE − 1` background decoys of equal value. The fee is priced
-/// before the outputs are applied (the ledger reads committed state). If
-/// `commit` is false the ledger is left untouched (a probe).
+/// plus `RING_SIZE − 1` background decoys of other amounts
+/// ([`DecoyAmounts::Distinct`]). The fee is priced before the outputs are
+/// applied (the ledger reads committed state). If `commit` is false the ledger
+/// is left untouched (a probe). A spend consensus rejects is never committed.
 pub fn spend(
     ledger: &mut ProductionLedger,
     inputs: &[Coin],
     policy: OutputTagPolicy,
+    floor_f: u64,
+    elapsed: u64,
+    commit: bool,
+) -> SpendResult {
+    spend_with(
+        ledger,
+        inputs,
+        policy,
+        DecoyAmounts::Distinct,
+        floor_f,
+        elapsed,
+        commit,
+    )
+}
+
+/// [`spend`] with an explicit decoy-amount choice.
+pub fn spend_with(
+    ledger: &mut ProductionLedger,
+    inputs: &[Coin],
+    policy: OutputTagPolicy,
+    decoys: DecoyAmounts,
     floor_f: u64,
     elapsed: u64,
     commit: bool,
@@ -360,18 +425,27 @@ pub fn spend(
         OutputTagPolicy::Drop => ClusterTagVector::empty(),
     };
 
-    let mut ring: Vec<(u64, Vec<TagPair>)> = Vec::with_capacity(inputs.len() * RING_SIZE);
-    for c in inputs {
-        ring.push((c.value, pairs(&c.tags)));
-        for _ in 1..RING_SIZE {
-            ring.push((c.value, Vec::new()));
-        }
-    }
+    let rings: Vec<SimRing> = inputs
+        .iter()
+        .map(|c| {
+            let mut members = Vec::with_capacity(RING_SIZE);
+            members.push((c.value, pairs(&c.tags)));
+            for j in 1..RING_SIZE as u64 {
+                let amount = match decoys {
+                    DecoyAmounts::Distinct => c.value.saturating_add(j),
+                    DecoyAmounts::Matched => c.value,
+                };
+                members.push((amount, Vec::new()));
+            }
+            (c.value, members)
+        })
+        .collect();
     let half = value / 2;
     let out_pairs = pairs(&out_tags);
     let outputs = vec![(half, out_pairs.clone()), (value - half, out_pairs)];
 
-    let resolved = ledger.resolve(&ring, &outputs, floor_f);
+    let rejected = retention_violation(&rings, &outputs);
+    let resolved = ledger.resolve(&rings, &outputs, floor_f);
     let params = fee_params();
     let breakdown = consensus_fee_breakdown(
         &ConsensusFeeInputs {
@@ -386,12 +460,13 @@ pub fn spend(
         },
         &params,
     );
-    if commit {
+    if commit && rejected.is_none() {
         for (amount, _) in &outputs {
             ledger.add_output(*amount, &out_tags);
         }
     }
     SpendResult {
+        rejected,
         resolved,
         fee: breakdown.fee,
         demurrage: breakdown.demurrage,
@@ -400,6 +475,28 @@ pub fn spend(
             tags: out_tags,
         },
     }
+}
+
+/// The retained-weight verdict (`first_tag_retention_violation`, the node's
+/// rule) for a simulated spend.
+pub fn retention_violation(
+    rings: &[SimRing],
+    outputs: &[(u64, Vec<TagPair>)],
+) -> Option<RetentionViolation> {
+    let member_refs: Vec<Vec<(u64, &[TagPair])>> = rings
+        .iter()
+        .map(|(_, m)| m.iter().map(|(v, t)| (*v, t.as_slice())).collect())
+        .collect();
+    let spend_rings: Vec<SpendRing<'_>> = rings
+        .iter()
+        .zip(&member_refs)
+        .map(|((pseudo, _), members)| SpendRing {
+            pseudo_amount: *pseudo,
+            members,
+        })
+        .collect();
+    let outs: Vec<&[TagPair]> = outputs.iter().map(|(_, t)| t.as_slice()).collect();
+    first_tag_retention_violation(&spend_rings, &outs)
 }
 
 /// The import-tag weight a coin carries on `cluster`.
@@ -581,16 +678,23 @@ pub struct FloorRow {
     /// Its first wallet spend after one year, fee % of value.
     pub first_spend_1y_pct: f64,
     /// The same coin spent once to background outputs (tag drop) after one
-    /// day, fee % of value.
+    /// day, fee % of value. With decoys of other amounts consensus rejects
+    /// the drop (protocol 10.0.0), so this is the cheapest accepted drop: one
+    /// whose 19 background decoys have the coin's exact amount.
     pub tag_drop_1d_pct: f64,
     /// `(F − 1×) / (6× − 1×)`.
     pub residual_above_background: f64,
 }
 
-fn small_entrant_spend(floor_f: u64, policy: OutputTagPolicy, elapsed: u64) -> SpendResult {
+fn small_entrant_spend(
+    floor_f: u64,
+    policy: OutputTagPolicy,
+    decoys: DecoyAmounts,
+    elapsed: u64,
+) -> SpendResult {
     let mut l = ProductionLedger::new();
     let coin = epoch_with_coin(&mut l, 0, SMALL_ENTRANT_BTH);
-    spend(&mut l, &[coin], policy, floor_f, elapsed, false)
+    spend_with(&mut l, &[coin], policy, decoys, floor_f, elapsed, false)
 }
 
 /// The floor table across candidate `F`.
@@ -598,9 +702,17 @@ pub fn floor_table(floors: &[u64]) -> Vec<FloorRow> {
     floors
         .iter()
         .map(|&f| {
-            let day = small_entrant_spend(f, OutputTagPolicy::Wallet, hold_blocks_one_day());
-            let year = small_entrant_spend(f, OutputTagPolicy::Wallet, MAINNET_BLOCKS_PER_YEAR);
-            let drop = small_entrant_spend(f, OutputTagPolicy::Drop, hold_blocks_one_day());
+            let wallet = |elapsed| {
+                small_entrant_spend(f, OutputTagPolicy::Wallet, DecoyAmounts::Distinct, elapsed)
+            };
+            let day = wallet(hold_blocks_one_day());
+            let year = wallet(MAINNET_BLOCKS_PER_YEAR);
+            let drop = small_entrant_spend(
+                f,
+                OutputTagPolicy::Drop,
+                DecoyAmounts::Matched,
+                hold_blocks_one_day(),
+            );
             let max_gap = ClusterFactorCurve::FACTOR_SCALE * 5;
             FloorRow {
                 floor_scaled: f,
@@ -683,6 +795,11 @@ pub fn decay_by_circulation() -> Vec<TraceRow> {
             hold_blocks_one_day(),
             true,
         );
+        assert!(
+            r.rejected.is_none(),
+            "an honest wallet spend must pass the retained-weight floor: {:?}",
+            r.rejected
+        );
         fees += r.fee as u128;
         let step = r.fee_pct();
         // Two equal outputs: the payment leaves, the change (same merged tags,
@@ -728,6 +845,9 @@ pub struct ChurnTrace {
     pub spends_to_pruned: Option<u64>,
     /// Cumulative fee % at `spends_to_pruned`.
     pub fee_pct_to_pruned: Option<f64>,
+    /// The spend consensus rejects (retained-weight floor, protocol 10.0.0),
+    /// which ends the trace, if any.
+    pub rejected_at: Option<u64>,
 }
 
 fn self_churn(
@@ -735,6 +855,7 @@ fn self_churn(
     other_bth: u64,
     coin_bth: u64,
     policy: OutputTagPolicy,
+    decoys: DecoyAmounts,
 ) -> ChurnTrace {
     let mut l = ProductionLedger::new();
     let mut coin = epoch_with_coin(&mut l, other_bth, coin_bth);
@@ -749,15 +870,21 @@ fn self_churn(
         step_fee_pct: 0.0,
         cumulative_fee_pct: 0.0,
     }];
+    let mut rejected_at = None;
     for s in 1..=CHURN_MAX_SPENDS {
-        let r = spend(
+        let r = spend_with(
             &mut l,
-            &[coin],
+            &[coin.clone()],
             policy,
+            decoys,
             BRIDGE_IMPORT_FACTOR_FLOOR,
             CHURN_SPACING_BLOCKS,
             true,
         );
+        if r.rejected.is_some() {
+            rejected_at = Some(s);
+            break;
+        }
         fees += r.fee as u128;
         let step = r.fee_pct();
         coin = r.out;
@@ -778,12 +905,15 @@ fn self_churn(
         spends_to_1_1x: find(&|r| r.next_spend_factor_scaled <= 1_100),
         spends_to_pruned,
         fee_pct_to_pruned: spends_to_pruned.map(|s| rows[s as usize].cumulative_fee_pct),
+        rejected_at,
         rows,
     }
 }
 
 /// Self-churn traces: a small entrant and a flood-epoch coin under the
-/// default wallet, and the flood coin shedding at [`max_shed_decay_rate`].
+/// default wallet, and the flood coin shedding at [`max_shed_decay_rate`],
+/// with decoys of other amounts (rejected at the first spend since protocol
+/// 10.0.0) and with same-amount decoys (the retained-weight floor's gap).
 pub fn self_churn_traces() -> Vec<ChurnTrace> {
     vec![
         self_churn(
@@ -791,18 +921,28 @@ pub fn self_churn_traces() -> Vec<ChurnTrace> {
             0,
             SMALL_ENTRANT_BTH,
             OutputTagPolicy::Wallet,
+            DecoyAmounts::Distinct,
         ),
         self_churn(
             "flood coin (10,000 of a 2,000,000-BTH epoch), default wallet",
             FLOOD_EPOCH_BTH - FLOOD_COIN_BTH,
             FLOOD_COIN_BTH,
             OutputTagPolicy::Wallet,
+            DecoyAmounts::Distinct,
         ),
         self_churn(
             "flood coin (10,000 of a 2,000,000-BTH epoch), max-shed decay",
             FLOOD_EPOCH_BTH - FLOOD_COIN_BTH,
             FLOOD_COIN_BTH,
             OutputTagPolicy::Shed(max_shed_decay_rate()),
+            DecoyAmounts::Distinct,
+        ),
+        self_churn(
+            "flood coin (10,000 of a 2,000,000-BTH epoch), max-shed decay, same-amount decoys",
+            FLOOD_EPOCH_BTH - FLOOD_COIN_BTH,
+            FLOOD_COIN_BTH,
+            OutputTagPolicy::Shed(max_shed_decay_rate()),
+            DecoyAmounts::Matched,
         ),
     ]
 }
@@ -818,8 +958,13 @@ pub struct TagDropRow {
     /// Honest (wallet) first spend.
     pub honest_factor_scaled: u64,
     pub honest_fee_pct: f64,
-    /// Tag-drop first spend: background outputs.
+    /// Whether consensus accepts the tag drop with decoys of other amounts
+    /// (protocol 10.0.0 rejects it: the retained-weight floor).
+    pub drop_rejected: bool,
+    /// Tag-drop first spend with same-amount background decoys (accepted):
+    /// the demurrage factor, the import floor read from the inputs, and fee.
     pub drop_factor_scaled: u64,
+    pub drop_import_floor_scaled: u64,
     pub drop_ring_floor_scaled: u64,
     pub drop_fee_pct: f64,
 }
@@ -827,23 +972,27 @@ pub struct TagDropRow {
 fn tag_drop_row(label: &'static str, other_bth: u64, coin_bth: u64) -> TagDropRow {
     let mut l = ProductionLedger::new();
     let coin = epoch_with_coin(&mut l, other_bth, coin_bth);
-    let run = |l: &mut ProductionLedger, p| {
-        spend(
+    let run = |l: &mut ProductionLedger, p, d| {
+        spend_with(
             l,
             std::slice::from_ref(&coin),
             p,
+            d,
             BRIDGE_IMPORT_FACTOR_FLOOR,
             hold_blocks_one_day(),
             false,
         )
     };
-    let honest = run(&mut l, OutputTagPolicy::Wallet);
-    let drop = run(&mut l, OutputTagPolicy::Drop);
+    let honest = run(&mut l, OutputTagPolicy::Wallet, DecoyAmounts::Distinct);
+    let plain_drop = run(&mut l, OutputTagPolicy::Drop, DecoyAmounts::Distinct);
+    let drop = run(&mut l, OutputTagPolicy::Drop, DecoyAmounts::Matched);
     TagDropRow {
         label,
         honest_factor_scaled: honest.resolved.demurrage_factor,
         honest_fee_pct: honest.fee_pct(),
+        drop_rejected: plain_drop.rejected.is_some(),
         drop_factor_scaled: drop.resolved.demurrage_factor,
+        drop_import_floor_scaled: drop.resolved.import_floor_inputs,
         drop_ring_floor_scaled: drop.resolved.ring_floor,
         drop_fee_pct: drop.fee_pct(),
     }
@@ -1008,7 +1157,9 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
     s.push_str(&format!(
         "A {SMALL_ENTRANT_BTH}-BTH entrant alone in its epoch. Fees are the consensus floor as a \
          % of value: its first wallet spend after one day and after one year, and the same coin \
-         spent once to background outputs (tag drop) after one day.\n\n"
+         spent once to background outputs (tag drop) after one day. Since protocol 10.0.0 the \
+         drop is rejected unless every decoy has the coin's exact amount; the column prices \
+         that cheapest accepted drop, which still pays the import floor read from the inputs.\n\n"
     ));
     s.push_str("| F | entrant factor | wallet spend @ 1 day | wallet spend @ 1 year | tag-drop spend @ 1 day | residual above background |\n");
     s.push_str("|---|---:|---:|---:|---:|---:|\n");
@@ -1055,8 +1206,12 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
          enters. Under the default wallet the 5% decay alone strips the import tag, and \
          `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares \
          decay {:.1}% per hop (weight ÷ {}), the most it can shed while its claimed wealth stays \
-         at the ring-centroid floor, so the downgrade charge does not fire. Both are valid at \
-         consensus, which rejects only tag inflation.\n\n",
+         at the ring-centroid floor. Since protocol 10.0.0 consensus keeps at least 95% of each \
+         cluster's weight per spend wherever every spend candidate carries it: the default \
+         wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its \
+         first hop, and only a spender whose 19 decoys share the coin's exact amount escapes \
+         the floor (it still pays the import floor read from the inputs while any import \
+         weight remains).\n\n",
         max_shed_decay_rate() as f64 / 10_000.0,
         RING_SIZE,
     ));
@@ -1078,6 +1233,11 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
                 ));
             }
         }
+        if let Some(n) = t.rejected_at {
+            s.push_str(&format!(
+                "\nConsensus rejects spend {n} (retained-weight floor).\n"
+            ));
+        }
         s.push_str(&format!(
             "\nSpends to factor ≤ {f}: {}; to ≤ 1.100x: {}; to tag pruned: {} (cumulative fee {}).\n\n",
             fmt_opt(t.spends_to_floor),
@@ -1092,21 +1252,27 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
     // --- Tag drop ---------------------------------------------------------
     s.push_str("### Tag-drop adversary (background outputs)\n\n");
     s.push_str(
-        "First spend after one day, honest wallet vs background outputs. With background \
-         outputs the import floor reads 1× (it is computed from output tags); only the \
-         ring-centroid floor remains, and 19 background decoys dilute it.\n\n",
+        "First spend after one day, honest wallet vs background outputs (protocol 10.0.0, \
+         #1687). With decoys of other amounts the drop is rejected (`drop accepted` = no): the \
+         coin is its input's only spend candidate, so the retained-weight floor binds. With 19 \
+         background decoys of the coin's exact amount the floor's minimum is zero and the drop \
+         is accepted, but the import floor is read from the inputs (the candidates' maximum \
+         import share), so the drop is charged at F or more and pays the capitalized \
+         downgrade charge on the gap below it.\n\n",
     );
     s.push_str(
-        "| coin | honest factor | honest fee | drop factor | drop ring floor | drop fee |\n",
+        "| coin | honest factor | honest fee | drop accepted | same-amount drop factor | its import floor | its ring floor | its fee |\n",
     );
-    s.push_str("|---|---:|---:|---:|---:|---:|\n");
+    s.push_str("|---|---:|---:|---|---:|---:|---:|---:|\n");
     for r in &report.tag_drop_rows {
         s.push_str(&format!(
-            "| {} | {} | {:.4}% | {} | {} | {:.4}% |\n",
+            "| {} | {} | {:.4}% | {} | {} | {} | {} | {:.4}% |\n",
             r.label,
             fmt_factor(r.honest_factor_scaled),
             r.honest_fee_pct,
+            if r.drop_rejected { "no" } else { "yes" },
             fmt_factor(r.drop_factor_scaled),
+            fmt_factor(r.drop_import_floor_scaled),
             fmt_factor(r.drop_ring_floor_scaled),
             r.drop_fee_pct,
         ));
@@ -1196,29 +1362,60 @@ mod tests {
     }
 
     #[test]
-    fn tag_drop_escapes_the_import_floor() {
-        // The import floor reads output tags, so background outputs read 1x.
+    fn tag_drop_is_rejected_or_pays_the_import_floor() {
+        // Protocol 10.0.0 (#1687). The output-tag blend still reads 1x for
+        // background outputs ...
+        assert_eq!(
+            import_floor_factor_from_outputs(&[], &|_| true),
+            ClusterFactorCurve::FACTOR_SCALE
+        );
         let mut l = ProductionLedger::new();
         let coin = l.unwrap(0, bth(1_000));
+        // ... but with decoys of other amounts the drop is rejected ...
         let r = spend(
             &mut l,
-            &[coin],
+            std::slice::from_ref(&coin),
             OutputTagPolicy::Drop,
             BRIDGE_IMPORT_FACTOR_FLOOR,
             1,
             false,
         );
-        assert_eq!(r.resolved.import_floor, ClusterFactorCurve::FACTOR_SCALE);
-        assert!(r.resolved.demurrage_factor < BRIDGE_IMPORT_FACTOR_FLOOR);
-        assert_eq!(
-            import_floor_factor_from_outputs(&[], &|_| true),
-            ClusterFactorCurve::FACTOR_SCALE
+        assert!(r.rejected.is_some(), "retained-weight floor binds");
+        // ... and with same-amount decoys it is accepted at F or more.
+        let r = spend_with(
+            &mut l,
+            &[coin],
+            OutputTagPolicy::Drop,
+            DecoyAmounts::Matched,
+            BRIDGE_IMPORT_FACTOR_FLOOR,
+            1,
+            false,
         );
+        assert!(r.rejected.is_none());
+        assert_eq!(r.resolved.import_floor_inputs, BRIDGE_IMPORT_FACTOR_FLOOR);
+        assert!(r.resolved.demurrage_factor >= BRIDGE_IMPORT_FACTOR_FLOOR);
+    }
+
+    #[test]
+    fn honest_wallet_spends_pass_the_retained_weight_floor() {
+        for row in decay_by_circulation() {
+            assert!(row.next_spend_factor_scaled >= ClusterFactorCurve::FACTOR_SCALE);
+        }
+        let traces = self_churn_traces();
+        assert_eq!(traces[0].rejected_at, None);
+        assert_eq!(traces[1].rejected_at, None);
+        // The max-shed spender is rejected at its first hop ...
+        assert_eq!(traces[2].rejected_at, Some(1));
+        // ... unless every decoy has the coin's amount.
+        assert_eq!(traces[3].rejected_at, None);
     }
 
     #[test]
     fn self_churn_strips_the_tag_without_domestic_money() {
-        let traces = self_churn_traces();
+        let traces: Vec<ChurnTrace> = self_churn_traces()
+            .into_iter()
+            .filter(|t| t.rejected_at.is_none())
+            .collect();
         for t in &traces {
             assert!(
                 t.spends_to_pruned.is_some(),

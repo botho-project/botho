@@ -3,6 +3,7 @@ Wash Trading Analysis (fee model: consensus)
 Cluster wealth: 100000000 BTH
 Principal washed: 100000000 BTH
 Decay rate: 5% per hop
+Consensus retained-weight floor: at most 5.0% decay per hop (this rate is valid)
 Height: 1 (demurrage 0 bps/yr at max factor)
 
  Hops   InitF  FinalF  HopBase(pico)   Downgrade(BTH)  Total%Princ  Savings/Tx(p)  BreakEven txs BreakEven yr

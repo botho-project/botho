@@ -149,9 +149,12 @@ is designed to create net pressure toward circulation:
 
 Lottery income is per eligible output, not tilted by cluster factor (as
 built, Section~\ref{sec:monetary}). Splitting does not change cluster
-attribution, but shedding attribution is not rate-bounded by consensus: tags
-can be dropped at the cost of the class-downgrade charge (as built, pending
-\#1687, \#1686, \#1685; Section~\ref{sec:tag-decay}).
+attribution. Since protocol 10.0.0 consensus limits shedding to 5\% of a
+cluster's weight per spend where all spend candidates carry the cluster
+(\#1687; Section~\ref{sec:tag-decay}). That is a per-spend bound, not a
+bound per unit of time, and it does not bind with a same-amount decoy that
+lacks the cluster. Shedding further costs the class-downgrade charge (pending
+\#1686, \#1685).
 
 \paragraph{Intuition: why a holding cost, and why a targeted one.}
 A fixed-supply currency in the Bitcoin mold makes hoarding costless, indeed

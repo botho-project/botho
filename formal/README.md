@@ -394,12 +394,15 @@ Not mirrored (no caller outside the simulations): `cluster-tax`'s
 | 2. Mixing is a value-weighted convex combination | wallet | **refuted** exactly; **proven** as a sub-convex bound | `mergeWeighted_truncation_halves_mass`; `mergeWeighted_sub_convex`, `mergeWeighted_mass_le_scale` |
 | 2'. The merge does not panic | wallet, mempool | **proven** for well-formed inputs, **refuted** in general, pre-#1863 (#1858; fixed by #1863) | `mergeWeighted_isSome`; `mergeWeighted_overflow_panics`, `mergeWeighted_no_panic_4294` |
 | 3. Decay is monotone and never raises a weight | wallet | **proven** below `2^32`, **refuted** (in the rate) above it | `decayEntry_le`, `decayEntry_antitone`; `mergeWeighted_decay_not_antitone` |
-| 4. (#1687) No accepted spend drops a tagged input's mass without paying the demurrage owed | C6 + fee floor | **refuted** (still holds in 8.0.0: empty outputs pass Rules 1 and 2) | `inheritOk_of_untagged`, `importFloor_of_untagged`, `tag_drop_demurrage_factor`, `tag_drop_escapes_import_floor` (trusted), `import_floor_invariant_refuted` |
+| 4. (#1687) No accepted spend drops a tagged input's mass without paying the demurrage owed | C6 + fee floor | **refuted** for 7.x-9.x (empty outputs pass C6 and Rules 1 and 2, and the import floor read the outputs) | `inheritOk_of_untagged`, `importFloor_of_untagged`, `tag_drop_demurrage_factor`, `tag_drop_escapes_import_floor` (trusted), `import_floor_invariant_refuted` |
+| 4'. (#1687, protocol 10.0.0) An accepted spend of fully import-tagged coins pays at least `F`; a lone tagged coin keeps at least 95% of its weight | import floor from the inputs + retained-weight floor | **proven** (model), for every fee curve, ring factor and import set; the retained-weight floor does **not** bind when a same-amount decoy lacks the cluster (that drop still pays `F`) | `importFloorIn_full`, `import_floor_honoured₁₀`, `tag_shed_rejected₁₀`, `same_amount_decoy_drop₁₀` (records added; listed in `Theorems.lean` by a follow-up, two-PR rule) |
 
 Every counterexample is also checked end to end, on a real ledger with
 validly signed transactions, in `botho/src/ledger/cluster_tag_invariant_tests.rs`;
 the #1857 and #1858 tests there now assert the rejection
-(`*_rejected_since_1870`, `*_rejected_since_1863`).
+(`*_rejected_since_1870`, `*_rejected_since_1863`), and the #1687 test
+asserts the 10.0.0 rejection, or the import floor where the drop is still
+accepted (`import_tag_drop_is_rejected_or_pays_the_import_floor`).
 
 ## The difficulty and slot models
 

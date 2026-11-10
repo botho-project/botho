@@ -374,10 +374,10 @@ defeats the split because all unwraps in a window \emph{share one accumulating
 cluster}: intra-epoch splitting piles into the same pool and still hits the high
 factor. Diluting requires spreading across \emph{epochs}, which costs wall-clock
 time ($K$ blocks each)---\textbf{time-as-cost replaces provenance-as-cost}. The
-production-semantics calibration (\#1697) finds a 2M-\BTH\ whale needs 584
-separate epochs to drip-dilute to the floor. Because $K$ is counted in blocks,
-that is 584 days at 5\,s blocks and 2{,}336--4{,}672 days at the 20--40\,s blocks
-observed on testnet. The split-game wall holds only while the import tag cannot
+production-semantics calibration (\#1697, re-run under protocol 10.0.0) finds a
+2M-\BTH\ whale needs 514 separate epochs to drip-dilute to the floor. Because
+$K$ is counted in blocks, that is 514 days at 5\,s blocks and
+2{,}056--4{,}112 days at the 20--40\,s blocks observed on testnet. The split-game wall holds only while the import tag cannot
 be shed by other means; see the caveat below.
 
 \subsubsection{Shared fate and decay by circulation}
@@ -398,16 +398,24 @@ import cluster's wealth is cumulative: every downstream output carrying the tag
 adds to it. So the shared-fate collateral keeps growing as the epoch's coins
 circulate.
 
-\paragraph{Caveat: the floor is read from output tags (target-state).} As built, the
-import floor is a blend over the spender's \emph{output} tags, and consensus
-rejects only tag inflation. The stock wallet's 5\% per-transfer decay prunes the
-import tag after 135 self-spends with no domestic money at all. A spender who
-declares weight$\,\div\,20$ per hop sheds a $5.44\times$ flood coin to $1\times$
-in 3 spends for about 0.15\% of value. Until consensus derives the floor from
-inputs (\#1687, \#1686), the guarantees of this subsection hold only for
-compliant wallets that do not churn. The re-calibration
-(\texttt{docs/research/bridge-import-calibration.md}) leaves $K$ and $F$
-unchanged.
+\paragraph{Where the floor is enforced (protocol 10.0.0).} Through protocol 9.x
+the import floor was a blend over the spender's \emph{output} tags and consensus
+rejected only tag inflation, so a spender could drop the import tag in one spend
+and pay 1$\times$ (\#1687). Since 10.0.0 consensus reads the floor from the
+\emph{inputs}. Each input's value is priced at the largest import share among
+its spend candidates, the ring members whose amount equals the input's
+pseudo-output amount. A decoy cannot dilute it, and rewriting output tags does
+not lower it. Consensus also requires every output to keep 95\% of each
+cluster's weight that all candidates carry (Section~\ref{sec:tag-decay}). A
+tag drop or a weight$\,\div\,20$ shed is therefore rejected with an honest
+wallet's ring. With a decoy of the exact same amount it is accepted, but it is
+charged at $F$: 1.0\% of value for a 1{,}000-\BTH\ entrant instead of 0.06\%.
+Two limits remain. The stock wallet's 5\% per-transfer decay still prunes the
+import tag after 135 self-spends with no domestic money, because the floor
+bounds decay per spend, not per unit of time. And an honest first spend of a
+lone 1{,}000-\BTH\ import pays a one-time 0.49\% downgrade charge. The
+re-calibration (\texttt{docs/research/bridge-import-calibration.md}) leaves
+$K$ and $F$ unchanged.
 
 \paragraph{Confidential-amounts-clean by construction.} The epoch cluster's
 wealth is the sum of unwrap amounts, which are \emph{public at the bridge
