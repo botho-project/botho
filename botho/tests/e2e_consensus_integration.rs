@@ -23,8 +23,8 @@ use botho::consensus::split_fees;
 
 use crate::common::{
     confirm_transaction, create_mock_minting_tx, create_signed_transaction,
-    ensure_decoy_availability, get_wallet_balance, mine_block, scan_wallet_utxos, TestNetwork,
-    TestNetworkConfig, DEFAULT_NUM_NODES, INITIAL_BLOCK_REWARD, TEST_RING_SIZE,
+    ensure_decoy_availability, exit_charge, get_wallet_balance, mine_block, scan_wallet_utxos,
+    TestNetwork, TestNetworkConfig, DEFAULT_NUM_NODES, INITIAL_BLOCK_REWARD, TEST_RING_SIZE,
 };
 
 // ============================================================================
@@ -334,15 +334,19 @@ fn test_e2e_5_node_consensus_with_mining_and_transactions() {
     // Fee accounting (audit cycle 6, M4): only the burn share of fees is
     // destroyed; the rest flows to the lottery pool. With four single-fee
     // transfers, each in its own block (the transfers chain, so they cannot
-    // share a block), the destroyed amount is 4 * burn(MIN_TX_FEE).
-    let (_, per_tx_burn) = split_fees(MIN_TX_FEE, &Default::default());
-    let expected_burned = (num_tx_blocks * per_tx_burn) as u128;
+    // share a block), the destroyed amount is the sum of their burn shares.
+    // Each fee is MIN_TX_FEE plus the transfer's class-exit charge, which
+    // applies from block 1 since protocol 10.0.0 (#1685).
+    let expected_burned: u128 = [&tx1, &tx2, &tx3, &tx4]
+        .iter()
+        .map(|tx| split_fees(tx.fee, &Default::default()).1 as u128)
+        .sum();
     assert_eq!(
         final_state.total_fees_burned, expected_burned,
-        "Destroyed fees should be 4 * 20%-of-MIN_TX_FEE = {}, got {}",
+        "Destroyed fees should be the 4 transfers' 20% burn shares = {}, got {}",
         expected_burned, final_state.total_fees_burned
     );
-    assert!(per_tx_burn > 0, "Burn share must be non-zero");
+    assert!(expected_burned > 0, "Burn share must be non-zero");
 
     // Supply conservation. Gross emission must be fully accounted for as:
     //   coins in wallets (UTXOs)
@@ -456,7 +460,7 @@ fn test_private_ring_signature_transaction() {
     // Get current height
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
-    let ledger = node.ledger.read().unwrap();
+    drop(node);
 
     // Create outputs (recipient + change): hybrid ML-KEM outputs at their
     // real indices, since `add_block` enforces the ciphertext shape (#1677).
@@ -464,25 +468,39 @@ fn test_private_ring_signature_transaction() {
         TxOutput::new_hybrid_to_address(value, to, index, None, Default::default())
             .expect("test wallets publish an ML-KEM key")
     };
-    let mut outputs = vec![hybrid(send_amount, &recipient_address, 0)];
-    let change = utxo_amount - send_amount - tx_fee;
-    if change > 0 {
-        outputs.push(hybrid(change, &sender_wallet.default_address(), 1));
-    }
+    let build = |fee: u64| {
+        let mut outputs = vec![hybrid(send_amount, &recipient_address, 0)];
+        let change = utxo_amount - send_amount - fee;
+        if change > 0 {
+            outputs.push(hybrid(change, &sender_wallet.default_address(), 1));
+        }
 
-    // Create private transaction with ring signature
-    let private_tx = sender_wallet
-        .create_private_transaction(
-            &[utxo_to_spend.clone()],
-            outputs,
-            tx_fee,
-            current_height,
-            &ledger,
-        )
-        .expect("Failed to create private transaction");
+        // Create private transaction with ring signature
+        let node = network.get_node(0);
+        let ledger = node.ledger.read().unwrap();
+        sender_wallet
+            .create_private_transaction(
+                &[utxo_to_spend.clone()],
+                outputs,
+                fee,
+                current_height,
+                &ledger,
+            )
+            .expect("Failed to create private transaction")
+    };
 
-    drop(ledger);
-    drop(node);
+    // The wallet decays the inherited tags 5%, so its output claims a lower
+    // class than the ring floor: a class downgrade, which owes the
+    // capitalized exit charge from block 1 since protocol 10.0.0 (#1685).
+    // Re-sign with that charge on top of the fee, plus headroom for the
+    // freshly drawn ring.
+    let probe = build(tx_fee);
+    let charge = exit_charge(&network, &probe);
+    let private_tx = if charge == 0 {
+        probe
+    } else {
+        build(tx_fee + charge + charge / 8)
+    };
 
     // Verify the transaction has CLSAG inputs
     let clsag_inputs = private_tx.inputs.clsag();
@@ -510,7 +528,7 @@ fn test_private_ring_signature_transaction() {
 
     // Only the burn share of the fee is destroyed; the rest flows to the
     // lottery pool (audit cycle 6, M4).
-    let expected_burn = split_fees(tx_fee, &Default::default()).1 as u128;
+    let expected_burn = split_fees(private_tx.fee, &Default::default()).1 as u128;
     assert_eq!(
         final_state.total_fees_burned, expected_burn,
         "Fee burn share should have been destroyed"

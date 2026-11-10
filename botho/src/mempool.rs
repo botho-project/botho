@@ -205,10 +205,11 @@ fn relay_inclusion_height(ledger: &Ledger) -> u64 {
 /// order statistic of ring-member ages, NOT the value-weighted mean. The mean
 /// lets a spender pad the ring with fresh high-value decoys to drag the clock
 /// toward zero; the max is value-independent and surfaces a lone old real
-/// input. #925: the `spend_demurrage_charge = max(accrued, capitalized_reset)`
-/// kernel, `demurrage_factor` (composed input floor) and `claimed_factor`
-/// (declared output) mirror `Ledger::consensus_fee_floor` exactly, so relay
-/// never admits a tx below what block validation requires.
+/// input. #925: the `spend_demurrage_charge_with_exit_rate = max(accrued,
+/// capitalized_reset)` kernel (accrued at the in-class rate, capitalized at
+/// the exit-pricing rate, #1685), `demurrage_factor` (composed input floor)
+/// and `claimed_factor` (declared output) mirror `Ledger::consensus_fee_floor`
+/// exactly, so relay never admits a tx below what block validation requires.
 fn relay_demurrage(
     ledger: &Ledger,
     ring_members: &[(u64, u64)],
@@ -224,12 +225,13 @@ fn relay_demurrage(
         10_000, // quantile_bps = 10000 == max
     );
     let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
-    bth_cluster_tax::spend_demurrage_charge(
+    bth_cluster_tax::spend_demurrage_charge_with_exit_rate(
         output_sum,
         demurrage_factor,
         claimed_factor,
         elapsed,
         policy.demurrage_rate_bps(inclusion_height),
+        policy.exit_pricing_rate_bps(inclusion_height),
         blocks_per_year,
     )
 }
@@ -3072,6 +3074,74 @@ mod tests {
                 .verify_consensus_fee_floor_for_test(&under_tx, inclusion_height)
                 .is_err(),
             "a tx below the consensus floor must be rejected at block validation"
+        );
+    }
+
+    /// #1685: in epoch 0 relay admission prices an exit (young wealthy coin
+    /// spent to background) exactly like block validation: the capitalized
+    /// charge at the exit-pricing rate, not the epoch-0 in-class rate of 0.
+    /// An uncongested relay minimum equals the consensus floor, and both
+    /// carry the charge, so relay and blocks cannot diverge on the holiday.
+    #[test]
+    fn bug_1685_relay_prices_epoch0_downgrade_like_consensus() {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let tip_height = 1_000u64; // epoch 0
+        let policy = crate::monetary::mainnet_policy();
+        assert_eq!(policy.demurrage_rate_bps(tip_height + 1), 0);
+        let wealthy_cluster = 9u64;
+        let ring = seed_ring_via_snapshot(
+            &ledger,
+            &[
+                (100_000_000, tip_height, wealthy_cluster, 82),
+                (100_000_000, tip_height, wealthy_cluster, 83),
+            ],
+            tip_height,
+            &[(wealthy_cluster, 10_000_000_000_000_000_000)],
+        );
+        let tx = Transaction {
+            inputs: TxInputs::new(vec![ClsagRingInput {
+                ring,
+                key_image: [0u8; 32],
+                commitment_key_image: [0u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount: 0,
+            }]),
+            outputs: vec![TxOutput {
+                amount: 90_000_000,
+                target_key: [132; 32],
+                public_key: [133; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
+            }],
+            fee: 0,
+            created_at_height: 0,
+            settlement: None,
+        };
+
+        let fee_config = FeeConfig::default();
+        let inclusion_height = tip_height + 1;
+        let consensus_floor = ledger.consensus_fee_floor(&tx, inclusion_height).unwrap();
+        let base = fee_config.minimum_fee_dynamic_with_outputs(
+            FeeTransactionType::Hidden,
+            tx.estimate_size(),
+            0,
+            1,
+            0,
+            bth_cluster_tax::DynamicFeeBase::default().compute_base(false),
+        );
+        assert!(
+            consensus_floor > base + 1_000_000,
+            "epoch-0 downgrade must carry the capitalized charge (floor {consensus_floor}, base {base})"
+        );
+        let relay_cold =
+            relay_minimum_fee(&tx, &ledger, &fee_config, &DynamicFeeBase::default(), false);
+        assert_eq!(
+            relay_cold, consensus_floor,
+            "uncongested relay minimum must equal the consensus floor in epoch 0"
         );
     }
 

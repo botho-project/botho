@@ -320,7 +320,8 @@ The cluster tag system resists common attacks:
     carry the cluster (Section~\ref{sec:tag-decay}, \#1687). Beyond that per-spend floor (for
     example with a same-amount decoy that lacks the cluster) the binding cost
     is the class-downgrade charge
-    (Section~\ref{sec:demurrage-class-transition}; zero in epoch~0, pending
+    (Section~\ref{sec:demurrage-class-transition}), not time (since protocol
+    10.0.0 that charge applies from block~1,
     \#1685).
   \item \textbf{Mixing through exchanges}: Reduces cluster concentration
     over time, but requires actual economic activity (legitimate use case).
@@ -430,8 +431,7 @@ the inputs and, since protocol 10.0.0, that they keep at least 95\% of the
 weight all spend candidates carry (Section~\ref{sec:tag-decay}, \#1687).
 The theorem and corollary hold for wallets that write inherited tags. A
 modified wallet that adds a same-amount decoy lacking the cluster may still
-write empty tags and pay only the class-downgrade charge (pending \#1686,
-\#1685). The
+write empty tags and pay only the class-downgrade charge (pending \#1686). The
 size-fee model $b \cdot s \cdot \phi$ is the consensus floor; at today's
 constants the flat relay minimum of $10^{8}$ pico-BTH per transaction exceeds
 it for ordinary transactions, so the factor term rarely binds in practice

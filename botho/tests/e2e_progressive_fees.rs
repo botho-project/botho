@@ -37,8 +37,8 @@ use botho::{
 const PICOCREDITS_PER_NANOBTH: u64 = 1_000;
 
 use crate::common::{
-    ensure_decoy_availability, get_wallet_balance, mine_block, scan_wallet_utxos, TestNetwork,
-    TestNetworkConfig, TEST_RING_SIZE,
+    ensure_decoy_availability, exit_charge, get_wallet_balance, mine_block, scan_wallet_utxos,
+    TestNetwork, TestNetworkConfig, TEST_RING_SIZE,
 };
 
 // ============================================================================
@@ -388,10 +388,15 @@ fn test_fee_rejection_below_minimum() {
     assert!(result.is_err(), "Low fee transaction should be rejected");
 
     // Now create transaction with sufficient fee (at least MIN_TX_FEE)
-    let expected_min = compute_expected_min_fee(&tx_low_fee, 0, 1);
+    // The floor also prices the spend's class exit (empty output tags are a
+    // downgrade, charged from block 1 since protocol 10.0.0, #1685), with
+    // 1/32 slack for the size difference between the two signings.
+    let charge = exit_charge(&network, &tx_low_fee);
+    let expected_min = compute_expected_min_fee(&tx_low_fee, 0, 1) + charge + charge / 32;
     println!(
-        "\nExpected minimum fee: {} picocredits (includes MIN_TX_FEE floor)",
-        expected_min
+        "\nExpected minimum fee: {} picocredits (includes MIN_TX_FEE floor and \
+         {} exit charge)",
+        expected_min, charge
     );
 
     let tx_good_fee = create_signed_transaction(
@@ -902,14 +907,30 @@ fn test_e2e_progressive_fee_enforcement() {
         required_fee_pico, MIN_TX_FEE
     );
 
-    // Create transaction with proper fee
-    let tx = create_signed_transaction(
+    // Create transaction with proper fee. The floor also prices the spend's
+    // class exit (empty output tags are a downgrade, charged from block 1
+    // since protocol 10.0.0, #1685): measure it on a probe, then re-sign with
+    // it added (1/32 slack for the size difference).
+    let probe = create_signed_transaction(
         wallet0,
         utxo,
         *subaddr_idx,
         &recipient,
         send_amount,
         required_fee_pico,
+        current_height,
+        &network,
+    )
+    .expect("Failed to create probe transaction");
+    let charge = exit_charge(&network, &probe);
+    println!("  Exit charge: {} picocredits", charge);
+    let tx = create_signed_transaction(
+        wallet0,
+        utxo,
+        *subaddr_idx,
+        &recipient,
+        send_amount,
+        required_fee_pico + charge + charge / 32,
         current_height,
         &network,
     )

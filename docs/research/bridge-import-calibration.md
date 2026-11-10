@@ -21,7 +21,7 @@ The operator ruled on #1687 (options 1 + 4). Consensus now:
 The sweep now runs those rules. Decoys are background outputs of *other* amounts (an honest wallet's draw), and the adversary may instead pick 19 decoys of the coin's exact amount (`DecoyAmounts::Matched`), the one way around rule 2. What changed in §8:
 
 - **Tag drop** (§8, tag-drop adversary): rejected with ordinary decoys. With same-amount decoys it is accepted but charged at `F` or more: 1.0% of value for the 1,000-BTH entrant (was 0.06%), 5.0% for a flood coin. The honest wallet now pays less than any accepted drop.
-- **Max-shed churn** (§8, self-churn): rejected at the first hop with ordinary decoys. With same-amount decoys it still reaches 1× in 3 spends, paying `F` from the inputs while any import weight remains.
+- **Max-shed churn** (§8, self-churn): rejected at the first hop with ordinary decoys. With same-amount decoys it still reaches 1× in 3 spends. Each spend pays the import floor read from the inputs, which scales with the import share they still carry (about 1× after one shed).
 - **Stock-wallet self-churn** is unchanged: 5% per spend is exactly the floor, so 135 self-spends still prune the tag. The floor limits decay per spend, not per unit of time; the 720-block age gate remains unimplemented.
 - **Honest first spend** of a lone 1,000-BTH import: 0.492% (was 0.442%). `F` is now read from the undecayed input (1.500×) instead of the decayed output (1.475×), so the capitalized downgrade charge prices a 0.246× gap instead of 0.221×. Whether an honest import spend should pay a downgrade charge at all is still open (§7).
 - **Split game**: 514 epochs for 2M BTH (was 584). The test is the first spend at which `curve` no longer exceeds the import floor, and the floor is now 1.500× rather than 1.475×.
@@ -47,7 +47,21 @@ Both file:line claims were re-checked against `main` at d5962dab. The F-blend is
 
 The DB-dependent half of the fee floor (claimed wealth, ring-centroid floor, import floor, writer accumulation) is restated over plain data in `cluster-tax/src/fee_floor_inputs.rs`. The golden test `fee_floor_inputs_match_ledger_for_sampled_inputs` (`botho/src/ledger/store.rs`) runs the real ledger and those mirrors over 24 sampled inputs and checks they agree, including the full consensus fee floor. `sim_factor_matches_production_import_factor_for_sampled_wealth` checks that the sim's factor for a fresh unwrap equals `import_cluster_factor(W)` over 200 sampled `W`.
 
-Model assumptions (#1697; see §0 for 10.0.0): each input sits in a ring of 20 (`RING_SIZE`) with 19 background decoys of equal value. Fees are priced at the first demurrage-active height. In epoch 0 every demurrage term below is zero (#1685). Spends are two outputs (payment + change).
+Model assumptions (#1697; see §0 for the #1687 rules): each input sits in a ring of 20 (`RING_SIZE`) with 19 background decoys of equal value. Fees are priced at the first demurrage-active height. Spends are two outputs (payment + change).
+
+**Epoch 0 (#1685, protocol 10.0.0).** Before 10.0.0 every demurrage term below was zero in epoch 0, including the import toll, because the capitalized downgrade charge read the in-class rate (0 for the first 6,307,200 blocks). Since 10.0.0 the toll and every other capitalized downgrade read `MonetaryPolicy::exit_pricing_rate_bps` (200 bps from block 1), and only accrued in-class demurrage keeps the holiday. Re-running the sweep with every spend priced at height 1 instead of the first epoch-1 block (a one-off run; the committed tables stay at epoch 1) changes only accrued-only cells. The capitalized cells, which carry the conclusions, are identical. This comparison was run before the #1687 tag rules (input-read import floor, retained-weight floor) merged, so its tag-drop cells show the old output-read pricing; §0 gives the #1687 values:
+
+| cell (§8) | epoch 1 | height 1 |
+|---|---:|---:|
+| F sweep, F = 1.500×: wallet spend @ 1 day / @ 1 year (the onboarding toll) | 0.4420% / 0.4420% | 0.4420% / 0.4420% |
+| F sweep, any F: tag-drop spend @ 1 day | 0.0600% | 0.0600% |
+| F sweep, F ≤ 1.250× (no toll): wallet spend @ 1 day / @ 1 year (accrued only) | 0.0003% / 0.1016% | 0.0000% / 0.0000% |
+| Tag-drop adversary: whale drop fee | 5.0000% | 5.0000% |
+| Tag-drop adversary: whale honest fee (accrued only) | 0.0049% | 0.0000% |
+| Domestic decay: cumulative fee after 20 spends | 0.1888% | 0.1480% |
+| Self-churn, whale: cumulative fee to tag pruned | 0.1082% | 0.1080% |
+
+The split-game, collateral and factor columns do not depend on the rate and are unchanged.
 
 ---
 
@@ -207,7 +221,7 @@ A 10000-BTH coin from a 2000000-BTH epoch. Each spend merges it with an equal-va
 
 ### Self-churn adversary (no domestic money)
 
-The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor. Since protocol 10.0.0 consensus keeps at least 95% of each cluster's weight per spend wherever every spend candidate carries it: the default wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its first hop, and only a spender whose 19 decoys share the coin's exact amount escapes the floor (it still pays the import floor read from the inputs while any import weight remains).
+The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor. Since protocol 10.0.0 consensus keeps at least 95% of each cluster's weight per spend wherever every spend candidate carries it: the default wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its first hop, and only a spender whose 19 decoys share the coin's exact amount escapes the floor (it still pays the import floor read from the inputs, which scales with the import share they still carry, so about 1x after one shed).
 
 **small entrant (1,000 BTH alone), default wallet**
 

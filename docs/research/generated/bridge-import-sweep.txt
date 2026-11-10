@@ -76,7 +76,7 @@ A 10000-BTH coin from a 2000000-BTH epoch. Each spend merges it with an equal-va
 
 ### Self-churn adversary (no domestic money)
 
-The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor. Since protocol 10.0.0 consensus keeps at least 95% of each cluster's weight per spend wherever every spend candidate carries it: the default wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its first hop, and only a spender whose 19 decoys share the coin's exact amount escapes the floor (it still pays the import floor read from the inputs while any import weight remains).
+The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor. Since protocol 10.0.0 consensus keeps at least 95% of each cluster's weight per spend wherever every spend candidate carries it: the default wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its first hop, and only a spender whose 19 decoys share the coin's exact amount escapes the floor (it still pays the import floor read from the inputs, which scales with the import share they still carry, so about 1x after one shed).
 
 **small entrant (1,000 BTH alone), default wallet**
 

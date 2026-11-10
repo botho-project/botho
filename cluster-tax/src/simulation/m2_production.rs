@@ -696,8 +696,11 @@ impl World {
         let policy = mainnet_monetary_policy();
         let mut fee_params = ConsensusFeeParams::from_policy(&policy, p.fee_mode);
         if !p.mechanism {
-            // Demurrage never activates.
-            fee_params.halving_interval = u64::MAX;
+            // Demurrage never activates. A zero halving interval switches off
+            // BOTH the in-class rate and the exit-pricing rate; `u64::MAX`
+            // only postponed the in-class rate, and since #1685 exit pricing
+            // has no epoch-0 holiday.
+            fee_params.halving_interval = 0;
         }
         let mut draw = LotteryDrawConfig::default();
         if let Some((min_age, max_age)) = p.shapes.window {
@@ -1274,12 +1277,13 @@ impl World {
             return 0;
         }
         let strategic_opt = self.agents[a].strategic && self.p.whale == WhaleStrategy::OptimalDecoy;
-        // #1987 S3 settle on spend starts with demurrage. Under the epoch-0
-        // holiday (#1685, open) the #925 charge is 0, so a settle rule live
-        // in epoch 0 would drop every tag for free; wallets keep the stock
-        // rule until the rate turns on.
+        // #1987 S3 settle on spend is live whenever the #925 charge is
+        // priced. Since protocol 10.0.0 (#1685) that is from block 1 (the
+        // exit-pricing rate has no epoch-0 holiday); only the mechanism-off
+        // counterfactual (`halving_interval = 0`) leaves it at 0, where a
+        // settle rule would drop every tag for free.
         let settle =
-            self.p.shapes.settle_on_spend && self.fee_params.demurrage_rate_bps(height) > 0;
+            self.p.shapes.settle_on_spend && self.fee_params.exit_pricing_rate_bps(height) > 0;
         let in_tags = self.input_tags(a);
         let elapsed = height.saturating_sub(self.agents[a].oldest);
         let n_in = (self.agents[a].coins as usize).clamp(1, 16);
@@ -1772,6 +1776,10 @@ mod tests {
         let off = World::new(short(720, false));
         assert_eq!(off.lottery_share(3 * y, off.reward_at(3 * y)), 0);
         assert_eq!(off.fee_params.demurrage_rate_bps(3 * y), 0);
+        assert_eq!(off.fee_params.exit_pricing_rate_bps(0), 0);
+        assert_eq!(off.fee_params.exit_pricing_rate_bps(3 * y), 0);
+        // #1685: the mechanism world prices exits from block 1.
+        assert_eq!(w.fee_params.exit_pricing_rate_bps(1), 200);
     }
 
     /// Lottery payouts are new outputs: they add to the winner's value and to

@@ -829,8 +829,9 @@ factor.
         the coin's exact amount that lacks the cluster; for bridge imports
         such a spend still pays the import floor, read from the inputs
       \item \textit{Cost}: Transaction fees plus the class-downgrade charge,
-        which is zero in the first halving epoch (pending \#1685) and can be
-        diluted by decoy choice (pending \#1686)
+        which applies from block~1 (the exit-pricing rate has no epoch-0
+        holiday since protocol 10.0.0, \#1685) and can be diluted by decoy
+        choice (pending \#1686)
     \end{itemize}
 
   \item \textbf{Exchange laundering}: Deposit to exchange, withdraw different

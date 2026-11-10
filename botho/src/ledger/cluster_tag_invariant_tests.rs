@@ -364,7 +364,23 @@ fn import_tag_drop_is_rejected_or_pays_the_import_floor() {
     let active = policy.halving_interval;
     assert!(policy.demurrage_rate_bps(active) > 0);
     let floor = |tx: &Transaction, h: u64| ledger.consensus_fee_floor(tx, h).unwrap();
-    let demurrage = |tx: &Transaction| floor(tx, active) - floor(tx, now);
+    // Demurrage = floor − base fee. Since #1685 the import toll is priced in
+    // epoch 0 too, so `floor(now)` is no longer the base fee alone.
+    let base = |tx: &Transaction| {
+        let wealth = ledger
+            .effective_cluster_wealth_from_outputs(&tx.outputs)
+            .unwrap();
+        bth_cluster_tax::FeeConfig::default().minimum_fee_dynamic_with_outputs(
+            bth_cluster_tax::TransactionType::Hidden,
+            tx.estimate_size(),
+            wealth,
+            tx.outputs.len(),
+            tx.outputs.iter().filter(|o| o.has_memo()).count(),
+            1, // CONSENSUS_FEE_BASE
+        )
+    };
+    let demurrage = |tx: &Transaction| floor(tx, active) - base(tx);
+
     let value = gap.outputs[0].amount;
     let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
     let owed_capitalized = capitalized_reset_charge(

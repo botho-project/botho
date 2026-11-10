@@ -1210,8 +1210,8 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
          cluster's weight per spend wherever every spend candidate carries it: the default \
          wallet's 5% decay is at that floor and passes, the max-shed spend is rejected at its \
          first hop, and only a spender whose 19 decoys share the coin's exact amount escapes \
-         the floor (it still pays the import floor read from the inputs while any import \
-         weight remains).\n\n",
+         the floor (it still pays the import floor read from the inputs, which scales with \
+         the import share they still carry, so about 1x after one shed).\n\n",
         max_shed_decay_rate() as f64 / 10_000.0,
         RING_SIZE,
     ));
