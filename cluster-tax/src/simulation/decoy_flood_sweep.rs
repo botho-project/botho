@@ -15,8 +15,8 @@
 //! `max(consensus floor, MIN_TX_FEE)` per *transaction*, where the floor is
 //! `1 pico/byte × size × factor × min(n_out, 10)²` (+ demurrage) and
 //! `MIN_TX_FEE` is 1e8 pico. Since #1780 the mempool rejects a transaction
-//! with more than `MAX_OUTPUTS` = 16 outputs (relay policy); block validation
-//! still accepts more (#1772 Part B, pending #1684).
+//! with more than `MAX_OUTPUTS` = 16 outputs, and since protocol 10.0.0 SCP
+//! and block validation reject it too (#1684, #1772 Part B).
 //!
 //! A flood output aged 720..=10,000 blocks is also lottery-eligible, so the
 //! flooder wins back its ticket share of every lottery payout: 80% of all fees
@@ -49,8 +49,10 @@
 //! ring, not assumed.
 //!
 //! Both modes use 16-output transactions. That is exact for `relay` (the
-//! mempool cap). For `consensus` it is an upper bound on cost: a self-mining
-//! attacker may put more outputs in one block-valid transaction.
+//! mempool cap) and, since protocol 10.0.0 (#1684), for `consensus` too: SCP
+//! and block validation enforce the same cap. Before 10.0.0 the `consensus`
+//! rows were an upper bound on cost, because a self-mining attacker could put
+//! more outputs in one block-valid transaction.
 //!
 //! ## Lottery recapture
 //!
@@ -143,8 +145,9 @@ use super::{
 // ============================================================================
 
 /// `bth_transaction_types::constants::MAX_OUTPUTS`: outputs per transaction.
-/// Enforced by the mempool since #1780 (`Transaction::is_valid_structure`), not
-/// by block validation (#1772 Part B).
+/// Enforced by the mempool since #1780, and by SCP and block validation since
+/// protocol 10.0.0 (`Transaction::check_consensus_structure`, #1684 / #1772
+/// Part B).
 pub const MAX_OUTPUTS_PER_TX: u64 = 16;
 
 /// `pool_fraction_permille` of `LotteryFeeConfig::default()` and of the
@@ -1015,8 +1018,8 @@ pub fn to_markdown(r: &SweepReport) -> String {
     let _ = writeln!(
         s,
         "Code constants: MIN_TX_FEE = {} pico; CONSENSUS_FEE_BASE = {} pico/byte; output \
-         penalty cap = {} outputs; MAX_OUTPUTS = {} (mempool-enforced since #1780, not by block \
-         validation); ring size = {} ({} decoys); ±{}% age band; \
+         penalty cap = {} outputs; MAX_OUTPUTS = {} (mempool since #1780, consensus since \
+         protocol 10.0.0); ring size = {} ({} decoys); ±{}% age band; \
          lottery pool = {}‰ of fees; lottery window = ages {}..={} ({} blocks), dust floor {} \
          pico; MAX_LOTTERY_CANDIDATES = {}; LOTTERY_BASE_FEE_PICO = {}; reward epoch 0 = {} \
          BTH, halving every {} blocks; lottery emission share +10%/epoch from epoch 1.\n",

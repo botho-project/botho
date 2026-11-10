@@ -294,7 +294,7 @@ fn tx_with_key_image(key_image: [u8; 32]) -> BothoTransaction {
 /// Build a real trivial-PoW block against the synthetic snapshot. All fixture
 /// outputs are younger than the default lottery eligibility age, so the pool
 /// carries forward and only the normal fee burn is included in the summary.
-fn signed_test_block(ledger: &Ledger, tx: Transaction) -> Block {
+pub(super) fn signed_test_block(ledger: &Ledger, tx: Transaction) -> Block {
     use bth_account_keys::AccountKey;
     use rand::{rngs::StdRng, SeedableRng};
     let state = ledger.get_chain_state().unwrap();

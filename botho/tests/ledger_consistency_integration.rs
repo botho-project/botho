@@ -1155,6 +1155,17 @@ fn test_c4_block_rejected_when_tx_root_does_not_match_transactions() {
     );
 }
 
+/// `count` fabricated ring members with distinct target keys, to pad a C3
+/// fixture ring to `MIN_RING_SIZE`. C3 resolves members in order, so the
+/// member under test goes first and decides the verdict.
+fn padding_ring_members(count: usize) -> impl Iterator<Item = RingMember> {
+    (0..count).map(|i| RingMember {
+        target_key: [0x40 + i as u8; 32],
+        public_key: [0x80 + i as u8; 32],
+        commitment: [0xC0 + i as u8; 32],
+    })
+}
+
 /// C3: A block containing a transaction whose CLSAG ring references a
 /// `target_key` that is not in the UTXO set must be rejected — otherwise
 /// a producer fabricates a ring member with a key they control and an
@@ -1180,15 +1191,21 @@ fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
         public_key: [0xBB; 32],
         commitment: [0xCC; 32],
     };
+    // A full-size ring (protocol 10.0.0, #1684: ring size is a consensus
+    // rule checked before C3) whose first member is the unresolvable one.
     let fake_input = ClsagRingInput {
-        ring: vec![fake_member],
+        ring: std::iter::once(fake_member)
+            .chain(padding_ring_members(botho::transaction::MIN_RING_SIZE - 1))
+            .collect(),
         key_image: [0xDD; 32],
         commitment_key_image: [0xEE; 32],
         clsag_signature: vec![0u8; 64],
         pseudo_output_amount: 0,
     };
     let fake_output = TxOutput {
-        amount: 1,
+        // At the dust threshold: dust is a consensus rule since protocol
+        // 10.0.0 (#1684), checked before C3.
+        amount: botho::transaction::DUST_THRESHOLD,
         target_key: [0x11; 32],
         public_key: [0x22; 32],
         e_memo: None,
@@ -1247,15 +1264,21 @@ fn test_c3_block_rejected_when_ring_member_commitment_mismatched() {
         public_key: coinbase_public,
         commitment: [0xCC; 32], // not the commitment to the coinbase amount
     };
+    // A full-size ring (protocol 10.0.0, #1684: ring size is a consensus
+    // rule checked before C3) whose first member is the counterfeit one.
     let fake_input = ClsagRingInput {
-        ring: vec![counterfeit_member],
+        ring: std::iter::once(counterfeit_member)
+            .chain(padding_ring_members(botho::transaction::MIN_RING_SIZE - 1))
+            .collect(),
         key_image: [0xDD; 32],
         commitment_key_image: [0xEE; 32],
         clsag_signature: vec![0u8; 64],
         pseudo_output_amount: 0,
     };
     let fake_output = TxOutput {
-        amount: 1,
+        // At the dust threshold: dust is a consensus rule since protocol
+        // 10.0.0 (#1684), checked before C3.
+        amount: botho::transaction::DUST_THRESHOLD,
         target_key: [0x11; 32],
         public_key: [0x22; 32],
         e_memo: None,

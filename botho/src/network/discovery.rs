@@ -185,7 +185,18 @@ use crate::{
 /// (`is_consensus_compatible` is major-only) with
 /// `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 9.0.0 in lockstep; no storage
 /// format change from #1876.
-pub const PROTOCOL_VERSION: &str = "9.0.0";
+/// PROTOCOL 10.0.0 (#1684 / #1772, ADR 0014): fresh chains from genesis. The
+/// structural transaction rules become consensus rules: every ring has at
+/// least `MIN_RING_SIZE` (20) members, a transaction has at most `MAX_OUTPUTS`
+/// (16) outputs, and no output is below `DUST_THRESHOLD`. Block application
+/// (`validate_ordinary_body` C9) and SCP value validation
+/// (`validate_transfer_tx`) now both reject them; 9.x checked them only at
+/// mempool admission, so a 9.x peer accepts small-ring, dust or over-wide
+/// transactions a proposer included that the 10.0.0 chain rejects, and the two
+/// fork. `MIN_TX_FEE` stays relay policy (fees are `consensus_fee_floor`).
+/// MAJOR bump with `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 10.0.0 in
+/// lockstep; no storage format change.
+pub const PROTOCOL_VERSION: &str = "10.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -225,7 +236,12 @@ pub const PROTOCOL_VERSION: &str = "9.0.0";
 /// saturate the ring-centroid and claimed-wealth numerators and accept
 /// whale-scale spends below the 9.0.0 fee floor, so they must be refused at
 /// the identify handshake rather than left to fork.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "9.0.0";
+///
+/// Raised to 10.0.0 for the structural consensus rules (#1684 / #1772): 9.x
+/// peers accept blocks carrying rings below 20, dust outputs or more than 16
+/// outputs per transaction, so they must be refused at the identify handshake
+/// rather than left to fork.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "10.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -3048,9 +3064,13 @@ mod tests {
         // Bumped to 9.0.0 (MAJOR) for the exact fee-floor weighted means
         // (#1876). MAJOR so 8.x (saturating) peers are disconnected rather
         // than left forking.
-        assert_eq!(PROTOCOL_VERSION, "9.0.0");
+        //
+        // Bumped to 10.0.0 (MAJOR) for the structural consensus rules (ring
+        // size, output cap, dust; #1684 / #1772). MAJOR so 9.x (mempool-only)
+        // peers are disconnected rather than left forking.
+        assert_eq!(PROTOCOL_VERSION, "10.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 9);
+        assert_eq!(parsed.major, 10);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
@@ -3071,7 +3091,7 @@ mod tests {
                 Some(peer)
             );
         }
-        let current_peer = ProtocolVersion::parse("9.0.1").unwrap();
+        let current_peer = ProtocolVersion::parse("10.0.1").unwrap();
         assert_eq!(
             ProtocolVersion::consensus_incompatibility(&Some(current_peer), &local),
             None
@@ -3118,6 +3138,25 @@ mod tests {
         }
     }
 
+    /// #1684 / #1772 is a consensus-breaking MAJOR bump (9.x → 10.0.0): 9.x
+    /// peers enforce ring size, the output cap and dust only at mempool
+    /// admission and accept blocks that break them, so they must be
+    /// DISCONNECTED, not merely warned.
+    #[test]
+    fn test_v9_peers_are_consensus_incompatible_after_issue_1684() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let min = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
+        for mempool_only_peer in ["9.0.0", "9.9.9"] {
+            let peer = ProtocolVersion::parse(mempool_only_peer).unwrap();
+            assert!(!peer.is_consensus_compatible(&local));
+            assert!(!peer.is_compatible_with(&min));
+            assert_eq!(
+                ProtocolVersion::consensus_incompatibility(&Some(peer.clone()), &local),
+                Some(peer)
+            );
+        }
+    }
+
     /// #925 is a consensus-breaking MAJOR bump (5.x → 6.0.0): 5.x peers price
     /// only accrued-to-date demurrage and would silently fork the chain that
     /// now charges the capitalized downgrade reset, so they must be
@@ -3149,9 +3188,9 @@ mod tests {
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "9.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "10.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 9);
+        assert_eq!(parsed.major, 10);
         assert_eq!(parsed.minor, 0);
     }
 

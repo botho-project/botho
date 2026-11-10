@@ -10,6 +10,30 @@ still mutable. Within the `0.x` line, a `MINOR` bump (`0.X.0`) signals
 consensus-breaking changes that require a coordinated network reset; `PATCH`
 bumps (`0.X.Y`) are backwards-compatible.
 
+## Protocol 10.0.0 (unreleased, in progress)
+
+Consensus-breaking; fresh chains from genesis (testnet reset).
+`PROTOCOL_VERSION` and `MIN_SUPPORTED_PROTOCOL_VERSION` are both 10.0.0, so 9.x
+peers are refused at the identify handshake. First item of the 10.0.0
+consensus batch (#1683).
+
+- **Structural transaction rules are consensus rules (#1684, #1772).** Ring
+  size at least `MIN_RING_SIZE` (20), at most `MAX_OUTPUTS` (16) outputs per
+  transaction, and no output below `DUST_THRESHOLD` (1,000,000 pico) were
+  checked only at mempool admission, so a validator could include its own
+  small-ring, dust or over-wide transaction in a block. Block application
+  (`validate_ordinary_body`, new check C9, and the per-transaction
+  `verify_transfer_for_block` used by the block builder and the SCP slot
+  check) and SCP value validation (`validate_transfer_tx`) now reject them.
+  All three call one predicate, `Transaction::check_consensus_structure`,
+  which mempool admission also calls, so relay and consensus cannot drift.
+  The constant values are unchanged. Coinbase (`MintingTx`) and lottery
+  payouts are not `Transaction`s and are unaffected.
+- **`MIN_TX_FEE` stays relay policy (ADR 0014).** The consensus fee rule
+  remains the size-based `consensus_fee_floor`; `MIN_TX_FEE` (1e8 pico) is
+  still checked only at mempool admission. See
+  `docs/decisions/0014-min-tx-fee-relay-policy.md`.
+
 ## Protocol 9.0.0 (unreleased, in progress)
 
 Consensus-breaking; fresh chains from genesis (testnet reset).

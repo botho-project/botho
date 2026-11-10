@@ -412,7 +412,7 @@ and pay only the class-downgrade charge (pending \#1687, \#1686, \#1685). The
 size-fee model $b \cdot s \cdot \phi$ is the consensus floor; at today's
 constants the flat relay minimum of $10^{8}$ pico-BTH per transaction exceeds
 it for ordinary transactions, so the factor term rarely binds in practice
-(pending \#1688, \#1684).
+(pending \#1688; the relay minimum is not a consensus rule, ADR 0014).
 
 \subsection{Validation Rules}
 
@@ -452,14 +452,15 @@ A private transaction is valid if and only if:
   \item \textbf{Size}: Total serialized size $\leq$ 100 KB
 \end{enumerate}
 
-\textbf{Relay policy versus consensus (as built).} The 20-member minimum ring
-size, the $10^{6}$ pico-BTH dust floor and the $10^{8}$ pico-BTH minimum fee
-(\path{MIN_TX_FEE}) are checked by \path{is_valid_structure}
-(\path{transaction/clsag/src/lib.rs}), whose only production caller is
-mempool admission (\path{botho/src/mempool.rs}). Block validation does
-not call it, so a block producer can include its own transactions that a
-default node would not relay. These limits are relay policy today, pending
-\#1684.
+\textbf{Relay policy versus consensus (as built).} Since protocol 10.0.0
+the 20-member minimum ring size, the cap of 16 outputs per transaction and
+the $10^{6}$ pico-BTH dust floor are consensus rules. One predicate,
+\path{check_consensus_structure} (\path{transaction/clsag/src/lib.rs}), is
+called by SCP value validation, by block validation and by mempool
+admission, so a block producer cannot include its own transactions that
+break them (\#1684, \#1772). The $10^{8}$ pico-BTH minimum fee
+(\path{MIN_TX_FEE}) stays relay policy, checked only at mempool admission;
+the consensus fee rule is the size-based floor (ADR 0014).
 
 \subsection{Transaction Size Analysis}
 

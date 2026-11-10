@@ -40,6 +40,9 @@ mod ring_admission_tests;
 #[path = "store/snapshot_v2_tests.rs"]
 mod snapshot_v2_tests;
 #[cfg(test)]
+#[path = "store/structure_consensus_tests.rs"]
+mod structure_consensus_tests;
+#[cfg(test)]
 #[path = "store/v2_activation_tests.rs"]
 mod v2_activation_tests;
 #[cfg(test)]

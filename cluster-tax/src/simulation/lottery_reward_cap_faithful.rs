@@ -21,7 +21,7 @@
 //! * No fee rule charges `base_fee`. The consensus floor is the size-based
 //!   `CONSENSUS_FEE_BASE` (1 pico/byte) × size × cluster factor × `min(n_out,
 //!   10)²`, plus demurrage. `MIN_TX_FEE` (1e8 pico) is a relay/mempool rule
-//!   only (#1684).
+//!   only (ADR 0014, #1684).
 //!
 //! This module re-runs the whale-splitting experiment with the implemented
 //! rules and reports the whale's optimal net per block, the break-even
@@ -71,9 +71,10 @@
 //! The whale picks the `k` that maximises its net, subject to a block
 //! capacity: the default proposer slot (`ConsensusConfig::max_txs_per_slot` =
 //! 100, minus the minting tx, × 16 outputs = 1,584 outputs/block), or the
-//! gossip block-size bound (`MAX_BLOCK_SIZE` = 20 MiB). Neither the slot
-//! limit nor the 16-output cap is enforced at block validation (#1684), so the
-//! block-size bound is the honest worst case.
+//! gossip block-size bound (`MAX_BLOCK_SIZE` = 20 MiB). The slot limit is not
+//! enforced at block validation, so the block-size bound is the honest worst
+//! case. (The 16-output cap was not either when this was written; it is a
+//! consensus rule since protocol 10.0.0, #1684.)
 //!
 //! Conservative choices (they understate the whale): organic demurrage is not
 //! added to the pool, and the tail reward is taken from the undiminished
@@ -102,8 +103,8 @@ pub const MAX_LOTTERY_CANDIDATES: usize = 10_000;
 /// imported from the shared [`LOTTERY_POOL_FRACTION_PERMILLE`] (#1702).
 pub const POOL_FRACTION_PERMILLE: u64 = LOTTERY_POOL_FRACTION_PERMILLE as u64;
 
-/// `bth_transaction_types::MAX_OUTPUTS` (mempool-only; #1684), imported
-/// (#1702).
+/// `bth_transaction_types::MAX_OUTPUTS` (a consensus rule since protocol
+/// 10.0.0, #1684; mempool-only before), imported (#1702).
 pub const MAX_OUTPUTS_PER_TX: usize = bth_transaction_types::MAX_OUTPUTS as usize;
 
 /// `ConsensusConfig::default().max_txs_per_slot` — node-local proposer policy,
