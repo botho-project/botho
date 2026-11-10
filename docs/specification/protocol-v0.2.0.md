@@ -252,9 +252,17 @@ struct MaskedAmountV2 {
 
 1. Input count: $1 \leq |\text{inputs}| \leq 16$
 2. Output count: $1 \leq |\text{outputs}| \leq 16$
-3. Ring size: exactly 20
+3. Ring size: at least 20 (`MIN_RING_SIZE`; wallets build exactly 20)
 4. Transaction size: $\leq 100$ KB
 5. Tombstone: $\text{current\_height} < \text{tombstone\_block} \leq \text{current\_height} + 20160$
+6. Output amount: every output $\geq$ `DUST_THRESHOLD` (1,000,000 picocredits)
+
+Since protocol 10.0.0 (#1684, #1772) rules 2, 3 and 6 and the lower bound of
+rule 1 are consensus rules: SCP value validation, block validation and mempool
+admission all call `Transaction::check_consensus_structure`. (The 16-input
+upper bound is not part of that predicate.)
+`MIN_TX_FEE` is relay policy only; the consensus fee rule is
+`consensus_fee_floor` (ADR 0014).
 
 #### 3.3.2 Cryptographic Validation
 
@@ -269,9 +277,9 @@ struct MaskedAmountV2 {
 |-----------|-------|-------|
 | `RING_SIZE` | 20 | Decoy ring members |
 | `MAX_INPUTS` | 16 | Per transaction |
-| `MAX_OUTPUTS` | 16 | Per transaction; relay/mempool policy only — not yet checked by block validation (consensus enforcement pending #1684, see #1772) |
+| `MAX_OUTPUTS` | 16 | Per transaction; consensus rule since protocol 10.0.0 (#1684, #1772) |
 | `MAX_TX_SIZE` | 100 KB | DoS protection |
-| `MIN_TX_FEE` | 100,000,000 | 0.0001 BTH in picocredits |
+| `MIN_TX_FEE` | 100,000,000 | 0.0001 BTH in picocredits; relay/mempool policy, not a consensus rule (ADR 0014) |
 | `MAX_TOMBSTONE_BLOCKS` | 20,160 | ~7 days at 30s blocks |
 
 ---
@@ -772,6 +780,10 @@ reward(height) = base_reward / 2^(height / halving_interval)
 ```
 MIN_TX_FEE = 100,000,000 picocredits = 0.0001 BTH
 ```
+
+`MIN_TX_FEE` is relay/mempool policy: default nodes refuse to admit or relay a
+transaction paying less, but block validity does not check it. The consensus
+fee rule is the size-based `consensus_fee_floor` (ADR 0014).
 
 #### 8.3.2 Fee Calculation
 

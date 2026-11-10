@@ -565,8 +565,8 @@ Transaction Summary:
 \textbf{Fee transparency}: Users see the consensus floor and their cluster
 factor multiplier. At today's constants the flat relay minimum
 (\path{MIN_TX_FEE}, \path{transaction/clsag/src/lib.rs}) exceeds
-the floor, so it sets the fee an ordinary wallet pays (pending \#1688,
-\#1684).
+the floor, so it sets the fee an ordinary wallet pays (pending \#1688;
+\path{MIN_TX_FEE} is relay policy, ADR 0014).
 
 \subsubsection{Error Handling}
 

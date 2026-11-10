@@ -48,7 +48,7 @@ class CheckLotteryRulesTests(unittest.TestCase):
             check_lottery_rules(info, 'h')
 
     def test_rejects_other_protocol_versions(self):
-        for version in ('6.0.0', '7.0.0', '8.0.0', '9.0.1', None, 9):
+        for version in ('6.0.0', '7.0.0', '8.0.0', '9.0.0', '10.0.1', None, 10):
             with self.subTest(version=version):
                 with self.assertRaisesRegex(Gate, 'protocol is not ' + re.escape(PROTOCOL_VERSION)):
                     check_lottery_rules(dict(V2, protocolVersion=version), 'h')

@@ -28,7 +28,7 @@ LOTTERY_RULES = 2
 # Must equal the node's PROTOCOL_VERSION (botho/src/network/discovery.rs);
 # test_lottery_preflight enforces it, so a protocol bump cannot strand the
 # harness (#1933).
-PROTOCOL_VERSION = '9.0.0'
+PROTOCOL_VERSION = '10.0.0'
 _HEX64 = re.compile(r'[0-9a-f]{64}')
 _OUTPOINT = re.compile(r'([0-9a-fA-F]{64}):(0|[1-9][0-9]{0,9})')
 

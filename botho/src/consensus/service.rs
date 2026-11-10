@@ -3949,7 +3949,9 @@ mod tests {
             pseudo_output_amount: 0,
         };
         let output = TxOutput {
-            amount: 1000,
+            // At least DUST_THRESHOLD: since protocol 10.0.0 (#1684) the SCP
+            // validity callback rejects dust outputs.
+            amount: 10 * crate::transaction::DUST_THRESHOLD,
             target_key: [1u8; 32],
             public_key: [2u8; 32],
             e_memo: None,

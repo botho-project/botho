@@ -162,7 +162,8 @@ pub(in crate::ledger) trait ValidationReads {
     /// the transaction's own key images (`add_block` records each input's key
     /// image through its write transaction, so a repeat within one transaction
     /// is a collision there), then the same functions in the same order as the
-    /// block validator: ML-KEM ciphertext shape, C5 staleness, C3 ring
+    /// block validator: ML-KEM ciphertext shape, C9 structure (ring size,
+    /// output cap, dust; protocol 10.0.0), C5 staleness, C3 ring
     /// members, Rule 1 tag shape and C6 tag inheritance, C7 fee floor, C8
     /// settlement structure, then key images and signatures. Every one of
     /// these is a reason `add_block` rejects the block, so their order only
@@ -200,6 +201,7 @@ pub(in crate::ledger) trait ValidationReads {
                 LedgerError::InvalidBlock(format!("output {} ML-KEM ciphertext: {}", out_idx, e))
             })?;
         }
+        check_transfer_structure(tx)?;
         if is_stale_transfer_at(tx, block_height) {
             return Err(LedgerError::InvalidBlock(format!(
                 "stale: created_at_height {} + MAX_TX_AGE {} < block height {}",
@@ -567,7 +569,8 @@ pub(in crate::ledger) trait ValidationReads {
         Ok(())
     }
     /// The ordinary checks after the header prefix: reward, timestamps, the
-    /// body root, output ciphertext shape, fees, staleness, ring members, tag
+    /// body root, output ciphertext shape, C9 structure (ring size, output cap,
+    /// dust), fees, staleness, ring members, tag
     /// inheritance, fee floor and settlements. Callers must have run
     /// [`Self::validate_ordinary_header`] against the same `state` first.
     fn validate_ordinary_body(
@@ -660,6 +663,26 @@ pub(in crate::ledger) trait ValidationReads {
                     ))
                 })?;
             }
+        }
+
+        // C9 (protocol 10.0.0, #1684 / #1772, ADR 0014): structural consensus
+        // rules. Every ring has at least `MIN_RING_SIZE` (20) members, a
+        // transaction has between 1 and `MAX_OUTPUTS` (16) outputs, and no
+        // output is below `DUST_THRESHOLD`. Before 10.0.0 only the mempool
+        // checked these, so a proposer could include its own small-ring, dust
+        // or over-wide transaction. The predicate is the one mempool admission
+        // and SCP value validation call
+        // (`Transaction::check_consensus_structure`), so the three cannot
+        // drift. A pure function of the transaction (no reads), so proposer
+        // and validators agree. `MIN_TX_FEE` is NOT part of it: fees are
+        // priced by C7 (`consensus_fee_floor`).
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            check_transfer_structure(tx).map_err(|e| match e {
+                LedgerError::InvalidBlock(msg) => {
+                    LedgerError::InvalidBlock(format!("Transaction {}: {}", tx_idx, msg))
+                }
+                other => other,
+            })?;
         }
 
         // Fee-sum overflow guard (#599, #663). Per-tx fees are
@@ -824,6 +847,24 @@ impl ValidationReads for Ledger {
         Ledger::is_key_image_spent(self, key)
     }
 }
+/// C9 (protocol 10.0.0, #1684 / #1772, ADR 0014): the structural consensus
+/// rules on one transfer, as a block-validity error.
+///
+/// Delegates to `Transaction::check_consensus_structure`, the predicate SCP
+/// value validation and mempool admission share, so block application,
+/// nomination and relay apply one rule set: ring size >= `MIN_RING_SIZE`,
+/// 1..=`MAX_OUTPUTS` outputs, no output below `DUST_THRESHOLD`. No exemptions:
+/// every `Transaction` in a block body is an ordinary transfer (settlements
+/// included). The coinbase is a `MintingTx` and lottery payouts are derived
+/// records, so neither passes through here.
+pub(in crate::ledger) fn check_transfer_structure(
+    tx: &BothoTransaction,
+) -> Result<(), LedgerError> {
+    tx.check_consensus_structure().map_err(|e| {
+        LedgerError::InvalidBlock(format!("structural consensus rule violated: {}", e))
+    })
+}
+
 fn candidate_record(
     row: Result<(&[u8], &[u8]), heed::Error>,
     policy: ReadPolicy,

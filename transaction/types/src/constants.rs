@@ -156,12 +156,11 @@ pub const MAX_INPUTS: u64 = 16;
 /// Each transaction must contain no more than this many outputs.
 /// Bulletproofs aggregation keeps proof sizes efficient for 16 outputs.
 ///
-/// Enforcement status (#1772): this is currently **relay/mempool policy
-/// only**. `Transaction::is_valid_structure` (bth-transaction-clsag) rejects a
-/// transaction with more outputs at mempool admission, so honest nodes will
-/// neither admit nor relay it, but block validation does not check it — a
-/// miner may still include a larger transaction in a block. Whether this
-/// becomes a consensus rule is decided under #1684 (#1772 Part B).
+/// Enforcement status: a **consensus rule** since protocol 10.0.0 (#1684,
+/// #1772 Part B). `Transaction::check_consensus_structure`
+/// (bth-transaction-clsag) rejects a transaction with more outputs, and SCP
+/// value validation, block application and mempool admission all call it.
+/// Before 10.0.0 it was mempool policy only (#1772 Part A).
 pub const MAX_OUTPUTS: u64 = 16;
 
 /// Maximum number of blocks in the future a transaction's tombstone block can

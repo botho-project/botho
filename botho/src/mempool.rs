@@ -799,7 +799,10 @@ impl Mempool {
             self.evict_lowest_fee();
         }
 
-        // Validate transaction structure
+        // Validate transaction structure: the consensus structural rules
+        // (`check_consensus_structure`: ring size, output cap, dust; consensus
+        // since protocol 10.0.0, #1684) plus the relay-only checks
+        // (`MIN_TX_FEE`, ADR 0014; duplicate key images).
         tx.is_valid_structure()
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
@@ -809,7 +812,8 @@ impl Mempool {
         // consensus rule (#1857 Rule 1: SCP intrinsic validity and block
         // validation both enforce it); this admission check keeps its own
         // message and runs first. Kept here in `add_tx` rather than in
-        // `Transaction::is_valid_structure`, which has block-path callers.
+        // `Transaction::check_consensus_structure`, the predicate the
+        // block-path callers use.
         //
         // Checked before any signature or ledger work, so a malformed spend
         // costs O(outputs * 16) (`is_valid` rejects an over-long vector on
@@ -1939,9 +1943,10 @@ mod tests {
         }
     }
 
-    /// #1772 Part A: a 17-output transaction is rejected at mempool admission
-    /// with the structural `TooManyOutputs` error (relay policy; block
-    /// validation is unchanged pending #1684).
+    /// #1772: a 17-output transaction is rejected at mempool admission with
+    /// the structural `TooManyOutputs` error. Since protocol 10.0.0 (#1684)
+    /// the same predicate (`check_consensus_structure`) also gates SCP value
+    /// validation and block application, so admission and consensus agree.
     #[test]
     fn mempool_rejects_more_than_max_outputs() {
         let dir = tempfile::tempdir().unwrap();
@@ -1961,7 +1966,7 @@ mod tests {
         assert_eq!(mempool.len(), 0);
     }
 
-    /// #1772 Part A: exactly 16 outputs passes the output cap. The fixture
+    /// #1772: exactly 16 outputs passes the output cap. The fixture
     /// carries a dummy ring signature, so admission fails LATER (signature /
     /// ring checks) — the point is that it is not rejected for its output
     /// count.

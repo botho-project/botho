@@ -58,10 +58,15 @@ magnitude. This is a real threat to ring privacy, not a modelling artefact.
 
 The model holds `MAX_OUTPUTS` = 16 outputs per transaction. Since #1780 the
 mempool enforces that (`Transaction::is_valid_structure`, called by
-`Mempool::add_tx`), so the `relay` rows are exact. Block validation still
-accepts more outputs (#1772 Part B, pending #1684), so an attacker that mines
-its own transactions could pack more outputs per transaction than modelled. The
-`consensus` rows are therefore upper bounds on that attacker's cost.
+`Mempool::add_tx`), so the `relay` rows are exact. Before protocol 10.0.0 block
+validation still accepted more outputs, so an attacker that mined its own
+transactions could pack more outputs per transaction than modelled and the
+`consensus` rows were upper bounds on that attacker's cost. Since 10.0.0
+(#1684, #1772 Part B) SCP value validation and block validation enforce the
+same cap through `Transaction::check_consensus_structure`, so a self-mining
+attacker is held to 16 outputs per transaction too. The `consensus` rows still
+price fees with `consensus_fee_floor`, because `MIN_TX_FEE` stays relay policy
+(ADR 0014).
 
 ## Model
 
@@ -194,7 +199,7 @@ The sweep was re-run after these merged to main:
 
 ## Output (`decoy-flood-sweep`, seed 1701)
 
-Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool-enforced since #1780, not by block validation); ring size = 20 (19 decoys); ±5% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
+Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool since #1780, consensus since protocol 10.0.0); ring size = 20 (19 decoys); ±5% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
 
 Node-picker rings per (chain width, age) for the §5 ground-key Monte Carlo: 4000; seed 1701.
 
