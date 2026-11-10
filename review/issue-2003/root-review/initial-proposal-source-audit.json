@@ -1,0 +1,26 @@
+{
+  "head": "c3da7077422cc72bd71273c56f3b98cded305e5d",
+  "tree": "fb54ebf01aa180741ffe650360b6c794d2eb044d",
+  "base": "8e11b2bba132a8c369c7db97d66ef145a230f7f1",
+  "changed_files": [
+    "formal/Botho/Demurrage/Age.lean",
+    "formal/Theorems.lean"
+  ],
+  "canonical_Age_declarations_exact_bytes_preserved": true,
+  "proofs_inserted_before_namespace_end": true,
+  "old_manifest_prefix_preserved": true,
+  "old_records_unchanged": true,
+  "source_sha256": "7169677fd5425485264bf440ac7bdddfe70c2652c835a417b07047c5885dbb0a",
+  "manifest_sha256": "a207b87d13ca57b0f8bd0f923f9ef9b52be77f36f4c6c31d67879b91ec99f87a",
+  "build_gates_workflow_toolchain_all_other_tracked_files_unchanged": true,
+  "source_review": "Four exact full-Nat statements, constructive sum/Perm/division proofs and two private arithmetic lemmas; no build-time code or axiom changes",
+  "compiled_result": "pending; no proof success claimed",
+  "initial_audit_correction": "First script incorrectly required whole Age file prefix including namespace end; corrected to immutable canonical declarations plus intact final namespace end. No source defect.",
+  "at": "2026-11-10T04:13:55.893626+00:00",
+  "root_independent_no_build_scan": {
+    "exit": 0,
+    "stdout": "== sorry gate: source scan (/Users/rwalters/GitHub/botho/.loom/diagnostics/issue-2003-root/proposal-source-c3da7077/formal)\nOK: sorry gate passed (33 files scanned)\n",
+    "stderr": "",
+    "archive_sha256": "bd6eb9fb9ce2d6760f5b437711b2c94f3877776165761c378b2698e5978d86ae"
+  }
+}

@@ -1,0 +1,190 @@
+{
+  "supply-oracle/chain.json": {
+    "size": 4323990,
+    "sha256": "cd18fb1b5724163ad71159a97cb249eae9b4e8110bc49a85c014460d580ab28a"
+  },
+  "supply-oracle/empty_carryover.json": {
+    "size": 652114,
+    "sha256": "44ae6142034d938d21dbe6875c99753e2c921fca0500a3db27d34a8080d01918"
+  },
+  "supply-oracle/empty_no_candidates.json": {
+    "size": 16191,
+    "sha256": "d307bc3b1dabbbb21eb7ed2dc0d7edf3fbf01df86a67a3c80826b0e906d3494f"
+  },
+  "supply-oracle/frame-replay-receipt.json": {
+    "size": 32749,
+    "sha256": "46a2e538983f54b8d70db1665f36e7c11c043ec8db27c6a08b9e8ed01f475f76"
+  },
+  "supply-oracle/late_invalid_signature_balance.json": {
+    "size": 667390,
+    "sha256": "67718c86ccd15c5ceb7c1cc0931ca9491730ba605724f61e9c71c0399c2a9539"
+  },
+  "supply-oracle/late_same_block_duplicate.json": {
+    "size": 682309,
+    "sha256": "1b6b34a8316301d03270a4d7fb93fe3cde5d7fde4d5af765209fe12f5b703b77"
+  },
+  "supply-oracle/payout_binding_rejection.json": {
+    "size": 6589402,
+    "sha256": "0304c667de8b2ffd60d36691c0785e2fe0bc03feeec32da4c32c6202183325d3"
+  },
+  "supply-oracle/real_maturity_payout.json": {
+    "size": 6617023,
+    "sha256": "a6ea231f9df81e03329d9c09b6e0741b3ce0ca9861110615cb2119e87cf04bee"
+  },
+  "supply-oracle/real_payout_signed_spend.json": {
+    "size": 7148111,
+    "sha256": "1ed3a4da511bcca02602bc5021cea7e29eb529124a09de4d72e6776d306260aa"
+  },
+  "supply-oracle/receipt.json": {
+    "size": 7498,
+    "sha256": "3c2b19679db81741c6e584afba47943c7c0268257e211209555b35234dcb0e6d"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/manifest.json": {
+    "size": 357066,
+    "sha256": "b1e2535e12c44436fb32bc861416cb3290316aea9ff79658c5486bef60e48657"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/sample-0-fresh.json": {
+    "size": 667357,
+    "sha256": "00fbc889e0428e49f08de3f141b4945d26a1a52c809601ca1195d2afa96cdf60"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/sample-0-saved.json": {
+    "size": 667343,
+    "sha256": "b1bc0e804eb8a379142e27b99008bab72ade0f4ae0a576005d0bb5ae0a045bc6"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/sample-1-fresh.json": {
+    "size": 667328,
+    "sha256": "8ecfdb7cec9651e28e4ca3fa8e0e7f2b0600a633585407dc1507e1236bca6a63"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/sample-1-saved.json": {
+    "size": 667342,
+    "sha256": "728bddb04f6304ca8ead3d1c17b69b6eae8608b15235f7f5ae3c6e36f9e57b93"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/sample-2-fresh.json": {
+    "size": 667295,
+    "sha256": "b4509042dc2124ce6051c98d81f9b30026b2726b85805fda65eb986e312382f6"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/sample-2-saved.json": {
+    "size": 667343,
+    "sha256": "524028312f2dc7bf642919cf746795e39583b951ac2d3a08e5e5fe14737f699c"
+  },
+  "supply-oracle/replay-late_invalid_signature_balance/store/data.mdb": {
+    "size": 626688,
+    "sha256": "32676824a61a4a174512ed9cc832eb0a70ec414ad7d55e5d1ea3087628e6641e"
+  },
+  "supply-oracle/replay-real_maturity_payout/manifest.json": {
+    "size": 3439099,
+    "sha256": "b46018edc2de166fb7279ab647a0ef9a00dc324bc29bc403b063e1704c110146"
+  },
+  "supply-oracle/replay-real_maturity_payout/sample-0-fresh.json": {
+    "size": 6616968,
+    "sha256": "afae25e1059b90cbf2d68b62d3113d5900ce3c62ec72ca70033f9f68b0c469eb"
+  },
+  "supply-oracle/replay-real_maturity_payout/sample-0-saved.json": {
+    "size": 6616976,
+    "sha256": "8e373ad7814a724b0d72d1080d2e0dba24c483b23473a512357120c38939884b"
+  },
+  "supply-oracle/replay-real_maturity_payout/sample-1-fresh.json": {
+    "size": 6616991,
+    "sha256": "97bdb4973044e938ced49a0558dd2f915ba619398b4e4610712a4e1085c38427"
+  },
+  "supply-oracle/replay-real_maturity_payout/sample-1-saved.json": {
+    "size": 6616976,
+    "sha256": "bc5645e2c28b2e2768524d2f4cf333df186ff61a7ff0fb660b9e738890603d7d"
+  },
+  "supply-oracle/replay-real_maturity_payout/sample-2-fresh.json": {
+    "size": 6617044,
+    "sha256": "78fbc4a5cdc244414209ef6dc36a51deb9757114cc88af930ea1b11bb30f76fc"
+  },
+  "supply-oracle/replay-real_maturity_payout/sample-2-saved.json": {
+    "size": 6616976,
+    "sha256": "e01d7915a154a7fa31a099a12bc98c3bc0e25c4d36b1972e1c8ff27e4ca23066"
+  },
+  "supply-oracle/replay-real_maturity_payout/store/data.mdb": {
+    "size": 3801088,
+    "sha256": "16d7503272a29d3ac926c6a865bf469f11096aeb63885c2c77a947b66212db07"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/manifest.json": {
+    "size": 3706549,
+    "sha256": "543c71f99421a5071d65b69f39a8a6dff777c34a0f4bb4ccbb3ba3a8ff77380e"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/sample-0-fresh.json": {
+    "size": 7147858,
+    "sha256": "8bcaff2450d62f692fc4413c8fde1f8e273be9bcad1ca1248656398541c44005"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/sample-0-saved.json": {
+    "size": 7148064,
+    "sha256": "939f725a1e43ab180bc10e19a90c49506f357ac34dadcbe76a3f514821971a5e"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/sample-1-fresh.json": {
+    "size": 7148027,
+    "sha256": "5747e12ad9755496afc09ad3c04102865ac59a441f85585fc20ed1db38de88bd"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/sample-1-saved.json": {
+    "size": 7148064,
+    "sha256": "670e7bd572d6ab60280931f98e6c19279320901c19075c3b1c914cc356b373b6"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/sample-2-fresh.json": {
+    "size": 7148134,
+    "sha256": "9407ec5ab45cbadee6e4c456889b43301cc2ebd4e4a3d9bdd704f21090974ef1"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/sample-2-saved.json": {
+    "size": 7148064,
+    "sha256": "7176d47b273bbc48ed23bb5cc21898077dbf87235286242933b58029968adc14"
+  },
+  "supply-oracle/replay-real_payout_signed_spend/store/data.mdb": {
+    "size": 4067328,
+    "sha256": "2ca37f303eca2f68dab70e92f2e4e81855834756f62e5d14e5c9f81a55574da9"
+  },
+  "supply-oracle/replay-signed_transfer_0/manifest.json": {
+    "size": 323742,
+    "sha256": "9227b2c324c16579c55d5918841ad6ff9b4a1f0e281f00e474a8e1f110b51a51"
+  },
+  "supply-oracle/replay-signed_transfer_0/sample-0-fresh.json": {
+    "size": 621149,
+    "sha256": "767d3706ada61ad66384f03740fdc6cb7dbba66e9f976e34b550ecf2dab90813"
+  },
+  "supply-oracle/replay-signed_transfer_0/sample-0-saved.json": {
+    "size": 621252,
+    "sha256": "62e96c95af43026dfb7690fb37dcbb58ace008a587bc0d0d0031d5277b3b9dc8"
+  },
+  "supply-oracle/replay-signed_transfer_0/sample-1-fresh.json": {
+    "size": 621319,
+    "sha256": "789805517e1cca4f320f110b98136ab636ea32c57fdc5626373ce08b3c435954"
+  },
+  "supply-oracle/replay-signed_transfer_0/sample-1-saved.json": {
+    "size": 621252,
+    "sha256": "3549d17afe70e989ec1efaaa3762ad58956212d6254f7d1ce9c535352b9f0998"
+  },
+  "supply-oracle/replay-signed_transfer_0/sample-2-fresh.json": {
+    "size": 621411,
+    "sha256": "184dc45a9e2bbe0b57c4967115e7c0421e2f4a917c9d855597579ee33b0b364e"
+  },
+  "supply-oracle/replay-signed_transfer_0/sample-2-saved.json": {
+    "size": 621252,
+    "sha256": "008ad10642aac232b2c71d9800be2b11846dbd580633e1e83fe3432c27f98a38"
+  },
+  "supply-oracle/signed_transfer_0.json": {
+    "size": 621300,
+    "sha256": "21839f0c09f12ada84a2f8416b8dc3c11904a22550d2adefd00bce2667d295a2"
+  },
+  "supply-oracle/replay-signed_transfer_0/store/data.mdb": {
+    "size": 552960,
+    "sha256": "f01c847eb65a11d978da204c9070f721133bc7d7622d9f5e8f80b515095aab75"
+  },
+  "supply-oracle/signed_transfer_1.json": {
+    "size": 639814,
+    "sha256": "f7add1a609f063de80e8cc93dc552b1697d98fa930222a1d1c953bc90f784253"
+  },
+  "supply-oracle/signed_transfer_2.json": {
+    "size": 658230,
+    "sha256": "04e5fa4386f04e23416ea6b84e9ac5b1e4a4274cab53134b2ae655a9a78e5421"
+  },
+  "supply-oracle/spent_key_image_replay.json": {
+    "size": 667146,
+    "sha256": "3dc753fb6657bc8b612228a00f9587a2b26e6e7cf966e64ba9fb4612ae901f49"
+  },
+  "supply-oracle-unit-tests.log": {
+    "size": 77411,
+    "sha256": "e63ff05aa19a5b4077f3232f4ebf94ceeabf34c23a8aa992184e41ce22c692c1"
+  }
+}

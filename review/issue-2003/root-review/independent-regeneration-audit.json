@@ -1,0 +1,38 @@
+{
+  "reviewer": "root orchestrator; did not author proposal source",
+  "AC3": "PASS independent regeneration from reviewed immutable source",
+  "run": 42755505776,
+  "build_job": 129628896419,
+  "head": "c3da7077422cc72bd71273c56f3b98cded305e5d",
+  "tree": "fb54ebf01aa180741ffe650360b6c794d2eb044d",
+  "actual_checkout_log_verified": true,
+  "source_audit": "initial-proposal-source-audit.json",
+  "all249_complete_readable_blocks_and_hashes_identical": true,
+  "old245_blocks_match_base": true,
+  "new4_bytes": 6596,
+  "new4_sha256": "d8d7bdcf126c573ab37e4e9f9e4dcfd0aefdebd52b9b3817be2486fa9406e784",
+  "versions": [
+    "Lean (version 4.35.0, x86_64-unknown-linux-gnu, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)",
+    "Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)"
+  ],
+  "artifact": {
+    "id": 13735531653,
+    "name": "formal-lib",
+    "archive": "13735531653-formal-lib.zip",
+    "sha256": "89324e3cd77ce3dfc226e5476398697e9ee5874e0af9d5e826aae802bacdb232",
+    "api_digest": "sha256:89324e3cd77ce3dfc226e5476398697e9ee5874e0af9d5e826aae802bacdb232"
+  },
+  "original_logs_zip_sha256": "e48bf30c0afe92a4779696fa3fdbbe3e0e1ac92b86c69f456add50221e70e640",
+  "extracted_members_byte_equal": 32,
+  "gates": {
+    "sorry": "success",
+    "axioms": "success",
+    "proposal_generation": "success",
+    "gate_selftest": "success",
+    "verify_selftest": "failure: exactly4missingpendingrecords in real-clean",
+    "isolated_verify": "skipped",
+    "formal_gate": "failure"
+  },
+  "limitations": "This proves independent proposal record regeneration; it is not a green full proposal workflow or proof-on-main claim. Actual records-only PR must pass full normal CI. No inferred cross-run dependency graph or binary equality.",
+  "at": "2026-11-10T04:35:03.080491+00:00"
+}

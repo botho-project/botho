@@ -1,0 +1,118 @@
+{
+  "0_nightly-helper-tests.txt": {
+    "size": 20967,
+    "sha256": "54ae10003814a592dc96f78e099f3fb6ae5ba752aca5ffef0dd3be0d7e436a03"
+  },
+  "nightly-helper-tests/system.txt": {
+    "size": 596,
+    "sha256": "a9cd9789ce501cf2e1d81b278211132b65ce6b7c3b94839f7cc7f9a9e40f4035"
+  },
+  "nightly-helper-tests/1_Set up job.txt": {
+    "size": 1909,
+    "sha256": "fc5ebf908a94d38020a2b0121321fba7b57ccce423f367f8b024d9a5dfeca500"
+  },
+  "nightly-helper-tests/2_Run actions_checkout@v7.txt": {
+    "size": 11763,
+    "sha256": "02dcdee72621ef900065a3efcf3dfc5eafbc809743d0297cac93e3a9787be7b0"
+  },
+  "nightly-helper-tests/3_Run python3 -m unittest discover -s formal-drt_scripts -p 'test_.py' -v.txt": {
+    "size": 5509,
+    "sha256": "7450ce673a5ec86a5bc869cadcdd1a27c3b5a7fae97af4e5063c3aabbe94bb1d"
+  },
+  "nightly-helper-tests/6_Post Run actions_checkout@v7.txt": {
+    "size": 1737,
+    "sha256": "55dccdca3d6ec4fd75b8af3cdf94fd0a16c0ff8c027185d027bc508e65a10511"
+  },
+  "nightly-helper-tests/7_Complete job.txt": {
+    "size": 61,
+    "sha256": "6366c83be0f343f3ec051bdd7e88720af594fbc3bd9bc24226aeba93cacf7678"
+  },
+  "1_drt.txt": {
+    "size": 1771438,
+    "sha256": "7c680ae3d542d7e146a4c8798d57dd1636ecb316075087e6d8c254b4d91c6606"
+  },
+  "drt/system.txt": {
+    "size": 579,
+    "sha256": "ced23ea276f7e0190a54b029dc6682b3430191c5ebf98b40344acaa224793483"
+  },
+  "drt/1_Set up job.txt": {
+    "size": 2409,
+    "sha256": "3ad3bf2c7f3c086c8f5971f5c9152951c9a10310c530a4f12b8bf3155835a262"
+  },
+  "drt/2_Run actions_checkout@v7.txt": {
+    "size": 11763,
+    "sha256": "8415b29e10b0fa4e34cd5d1050e40a6a26fbf3df7904a5bd06831c24d980ec12"
+  },
+  "drt/3_Run dtolnay_rust-toolchain@master.txt": {
+    "size": 16369,
+    "sha256": "ad1baddfcb8002b5ff3c6d392cca2766f14098a4f2af46ad65e206446fb13d0e"
+  },
+  "drt/4_Run Swatinem_rust-cache@v2.txt": {
+    "size": 3896,
+    "sha256": "eca77cfc1cd6feb5af5aeaa47cae5e77f7653f13f9a9d5525b1a7b9e3f1ab6b5"
+  },
+  "drt/5_Cache elan toolchain.txt": {
+    "size": 1829,
+    "sha256": "39e8efc00efc5aa5c1910bba4d03dee2dc2596a139dd10328e0d6d8097e0e1f5"
+  },
+  "drt/6_Install elan.txt": {
+    "size": 1016,
+    "sha256": "adee704a817203e21da0bb47e7dead8e50822e6d4c2416c476b47c91ceb14630"
+  },
+  "drt/7_Build the Lean model executable.txt": {
+    "size": 6435,
+    "sha256": "8caa02d99ba06a811b7a906a4b00d4d3ef0b40f407a5751e7563df518ddb4bfa"
+  },
+  "drt/8_Seed the lockfile from the root workspace.txt": {
+    "size": 568,
+    "sha256": "07c5a386268177220827409fb66f3593a0c95769ae71da5259851127dfa8ed14"
+  },
+  "drt/9_Format.txt": {
+    "size": 578,
+    "sha256": "b744334642bc6a7f937e5e1b7785fa2f524ff8271a39d8f116bc14f03bdc5085"
+  },
+  "drt/10_Clippy (deny warnings).txt": {
+    "size": 31716,
+    "sha256": "302a48ea79d7c5ec28cb3d371d38f7850d9002a2f52cde256e840cd65570ec53"
+  },
+  "drt/11_Unit tests.txt": {
+    "size": 92454,
+    "sha256": "70dd74bba160c503ca0e6c051f2af4e10091d313719e11f8d6995869051c6380"
+  },
+  "drt/12_Upload actual-commit oracle evidence.txt": {
+    "size": 2545,
+    "sha256": "6647128c3672c0d2d0466752d6acd7550b86870a7ecf3e71d1518cf657917adf"
+  },
+  "drt/13_Bounded monetary simulation vectors.txt": {
+    "size": 5199,
+    "sha256": "1842d561fed9fad26a07ae5460e6e8a1f2f80fe47e8cc466c6410598cf67688c"
+  },
+  "drt/14_Build the runner.txt": {
+    "size": 27967,
+    "sha256": "15a16997fce4ff1cc41a6617dc82b54944e4814290d135ff0838f4473900ec74"
+  },
+  "drt/15_DRT (per-PR tier).txt": {
+    "size": 1562680,
+    "sha256": "e6a59a0e74cdc7d0a5aee79d0b00bd0bec3818c69e4e15d33793ec623e92c64f"
+  },
+  "drt/16_Upload clean or failing DRT report.txt": {
+    "size": 1957,
+    "sha256": "24a745ffb0c2c3af1ce45fe577ed3a6625e69e27f80d63fa246f42cd2b240a4c"
+  },
+  "drt/32_Post Cache elan toolchain.txt": {
+    "size": 219,
+    "sha256": "176b69e67dbc6e2ac8dbc7ce9f25fa693b80c2a5651d49950bbdf0778b0c4fc1"
+  },
+  "drt/33_Post Run Swatinem_rust-cache@v2.txt": {
+    "size": 97,
+    "sha256": "57fbc470cb6b6a8b8ce7527d7f7235099b8b99ac21ce8eaf1c383dff58b5c752"
+  },
+  "drt/34_Post Run actions_checkout@v7.txt": {
+    "size": 1737,
+    "sha256": "7680eb548518bfe29413b874fe5b8899cc506c7f4d215004c34c3e5d80ec8cb6"
+  },
+  "drt/35_Complete job.txt": {
+    "size": 61,
+    "sha256": "f683bbb7fcbe817acad959e781d42b854f35068f956273da633c2379f76a973d"
+  }
+}

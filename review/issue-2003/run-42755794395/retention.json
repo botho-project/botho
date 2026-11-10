@@ -1,0 +1,26 @@
+{
+  "run_id": 42755794395,
+  "source_commit": "ec4ce52f1bf051ca1d17fcb02c18b534ee0b85c3",
+  "event": "pull_request",
+  "status": "completed",
+  "conclusion": "success",
+  "logs_sha256": "336414e81a8cd1795164bfcba25fd3d3fab221d55da39170901a6770fbb83028",
+  "artifacts": [
+    {
+      "id": 13735727261,
+      "name": "supply-oracle-evidence",
+      "archive": "artifact-13735727261-supply-oracle-evidence.zip",
+      "sha256": "646a14c76d4a343e6a19a2dc573bcec884f9428c49e89585f5d6647e6098bf4d",
+      "api_digest": "sha256:646a14c76d4a343e6a19a2dc573bcec884f9428c49e89585f5d6647e6098bf4d",
+      "size_in_bytes": 50059228
+    },
+    {
+      "id": 13734894858,
+      "name": "formal-drt-report",
+      "archive": "artifact-13734894858-formal-drt-report.zip",
+      "sha256": "856fa9ada537ca8574ac73721d573e5c6027cf11cccdeade3f64fc72f3db39e7",
+      "api_digest": "sha256:856fa9ada537ca8574ac73721d573e5c6027cf11cccdeade3f64fc72f3db39e7",
+      "size_in_bytes": 40315
+    }
+  ]
+}

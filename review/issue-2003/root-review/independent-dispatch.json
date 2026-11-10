@@ -1,0 +1,14 @@
+{
+  "head": "c3da7077422cc72bd71273c56f3b98cded305e5d",
+  "branch": "feature/issue-2003-proposal",
+  "prior_ids": [
+    42754406833
+  ],
+  "started_at": "2026-11-10T04:22:56.928751+00:00",
+  "source_review": "initial-proposal-source-audit.json",
+  "status": "run bound to exact reviewed proposal",
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "run_id": 42755505776
+}

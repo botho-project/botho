@@ -1,0 +1,114 @@
+{
+  "0_Vendored LRU panic safety.txt": {
+    "size": 56807,
+    "sha256": "1293ba84e61338ca67abdb644a190d98879dae05806a74a2aded217dc665b467"
+  },
+  "Vendored LRU panic safety/system.txt": {
+    "size": 590,
+    "sha256": "b859143735cf63efde5849ae0d7f3ef30bda3ec12f8937ff60806cfabf538d2c"
+  },
+  "Vendored LRU panic safety/1_Set up job.txt": {
+    "size": 2047,
+    "sha256": "6df6f2d18c3a004f9637f93e25f81173dfd7b7074a0228ad2650902a9839b2ac"
+  },
+  "Vendored LRU panic safety/2_Checkout repository.txt": {
+    "size": 8170,
+    "sha256": "8869a9bc12f8cc208cb7c7c02a9e411aeb7b5093dccc27efb9adfda0633d15bd"
+  },
+  "Vendored LRU panic safety/3_Install stable Rust.txt": {
+    "size": 16509,
+    "sha256": "1f7ab10bbbcbece323683457ab79b4c37a934f481831602138ca3ad755572ec9"
+  },
+  "Vendored LRU panic safety/4_Upstream tests and panic-safety regression.txt": {
+    "size": 21137,
+    "sha256": "7d47c5563073eef750295de367deb17c45d286aeadbda5861b485ef7691095c1"
+  },
+  "Vendored LRU panic safety/5_Install Miri.txt": {
+    "size": 1123,
+    "sha256": "f04f3025b8d3b341d58cf2d535fc20da836baeccd20ed32703870c647c70e68a"
+  },
+  "Vendored LRU panic safety/6_Verify the regression under Miri.txt": {
+    "size": 3685,
+    "sha256": "84003ffc4774a6763d4c6f6222dc8e981e419f9df157ac469625bb9ed2b026bd"
+  },
+  "Vendored LRU panic safety/12_Post Checkout repository.txt": {
+    "size": 4096,
+    "sha256": "18ca06f9ea8232598247ed1b2341270fbb2b7d4ca912e21c4aa36f78a445f0d4"
+  },
+  "Vendored LRU panic safety/13_Complete job.txt": {
+    "size": 61,
+    "sha256": "674d4fdc9f45289e29557ed2149aef81e30a2d2442717aa7740c0fb9f7d32cab"
+  },
+  "1_cargo deny.txt": {
+    "size": 1633674,
+    "sha256": "1aa8e0832698e4d857ee064fbd0c6a95b3f36a43ebf9220bad2c8838cd74f80d"
+  },
+  "cargo deny/system.txt": {
+    "size": 584,
+    "sha256": "3f6ff504198d5b08296f6fb59e50d28264a7e90f83ffd580b5729fa2d71479fc"
+  },
+  "cargo deny/1_Set up job.txt": {
+    "size": 2037,
+    "sha256": "ecde4c2d0045fc9b21a25ed95355f10a1e180788fe77ff25126318f9291d21f0"
+  },
+  "cargo deny/2_Build EmbarkStudios_cargo-deny-action@v2.txt": {
+    "size": 9047,
+    "sha256": "7b20d0cbeccfcaa963304e7f6ff993ffa1cb0fb2dbb5deb98c0b01c1b794e0b9"
+  },
+  "cargo deny/3_Checkout repository.txt": {
+    "size": 8033,
+    "sha256": "6f62e24f4d07d9b567b3340c3ca9f351d2882389e5701654e16fa70582402160"
+  },
+  "cargo deny/4_Run cargo-deny.txt": {
+    "size": 1610415,
+    "sha256": "3fba4faf054e55ebf7d78af383aca66ad50b20c6a0a5708fec443773e89b53eb"
+  },
+  "cargo deny/8_Post Checkout repository.txt": {
+    "size": 4096,
+    "sha256": "63a0e72b3c1a63607bf503066256a491a42ccc54e353b59aedf773b33f43c32f"
+  },
+  "cargo deny/9_Complete job.txt": {
+    "size": 61,
+    "sha256": "c4bcd020c3d0164db7f55f575ee5b73649234b6b0a37e233723f4021f554f195"
+  },
+  "2_Vendored GLib iterator safety.txt": {
+    "size": 167479,
+    "sha256": "e9dc37f06d55eae1a155e28d752196f5606c9fbcedc5eed3b1f14f80ac8feefc"
+  },
+  "Vendored GLib iterator safety/system.txt": {
+    "size": 594,
+    "sha256": "fe3887dbefe53bf5f1874d3b5f3aa1946794d99434bb228ea087266ad08fa9c9"
+  },
+  "Vendored GLib iterator safety/1_Set up job.txt": {
+    "size": 2051,
+    "sha256": "bafdf598c27692fea677997ed897045fe59347ebb24f8de40c182004efd5662b"
+  },
+  "Vendored GLib iterator safety/2_Checkout repository.txt": {
+    "size": 8033,
+    "sha256": "7931bf07df8a4898ff4ea32db94ac54f88a1982093506749a9d1a71c9e4224fa"
+  },
+  "Vendored GLib iterator safety/3_Install native GLib dependencies.txt": {
+    "size": 12657,
+    "sha256": "2648ab6314ff7eb263f0d0f994017912284b8b8883361df34ccd6ec995eef7e5"
+  },
+  "Vendored GLib iterator safety/4_Install stable Rust.txt": {
+    "size": 15205,
+    "sha256": "d0cfdf0b49620c181efa66e31c7214dfd95a3bcab092f20050b0f3a0337a1bab"
+  },
+  "Vendored GLib iterator safety/5_Optimized upstream library tests.txt": {
+    "size": 78757,
+    "sha256": "1d8d6fc51b2f036560d41ba5c4a9727396f3dc4ff683fa5a9cb9b25845efdbe8"
+  },
+  "Vendored GLib iterator safety/6_Optimized string iterator regressions.txt": {
+    "size": 46640,
+    "sha256": "f11b6fb875e7a20650ce0068abb761927eab8694e69fc0d0c0f686e68955aea8"
+  },
+  "Vendored GLib iterator safety/12_Post Checkout repository.txt": {
+    "size": 4096,
+    "sha256": "32340afd7d26daeb6211c138f6d1df7308450d2233b2dadb007f42e2a120654c"
+  },
+  "Vendored GLib iterator safety/13_Complete job.txt": {
+    "size": 61,
+    "sha256": "cc09d2b07501d510044dee35f1bbb1fdf801ed53827b9bcff3d2bbbc58b3436b"
+  }
+}
