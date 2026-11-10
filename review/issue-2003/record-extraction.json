@@ -1,0 +1,15 @@
+{
+  "full_blocks": 249,
+  "preserved_blocks": 245,
+  "all_existing_generated_blocks_identical": true,
+  "new_bytes": 6596,
+  "new_sha256": "d8d7bdcf126c573ab37e4e9f9e4dcfd0aefdebd52b9b3817be2486fa9406e784",
+  "full_generated_sha256": "cde72d08f80764aa5c2b9c993f99a3fef6ef9b27c75d7c15c4627c025311eea1",
+  "records": [
+    "theorem Botho.Demurrage.ringElapsedCentroid_perm sha256:91329db44ad64c694c40de50cb23946129a530001f59b2f9787182e4d3c52e0f",
+    "theorem Botho.Demurrage.ringElapsedCentroid_insert_zero sha256:0af78f158c88805e5d391e881bb5d00c9a68529a6157c4b5a85a94dfa24864dc",
+    "theorem Botho.Demurrage.ringElapsedCentroid_scale_values sha256:afe50313a894a93bc4199837de6485790e6f03c80710373135ec47a9f11b1d2d",
+    "theorem Botho.Demurrage.ringElapsedCentroid_le_height sha256:50e743825fb1b8fbb7c3bd360e17c964877be72195af132bb2e7c90c30f12df5"
+  ],
+  "extraction": "Original workflow ZIP / build/11_Propose statement record (for review).txt; removed only timestamp prefixes and trailing output whitespace; complete blocks compared."
+}

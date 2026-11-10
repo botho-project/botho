@@ -1,0 +1,18 @@
+{
+  "run_id": 42754406833,
+  "source_commit": "c3da7077422cc72bd71273c56f3b98cded305e5d",
+  "event": "workflow_dispatch",
+  "status": "completed",
+  "conclusion": "failure",
+  "logs_sha256": "6c0b567b6e1ccc96f5949cdf5e63ed7fa4785f7c0bc70cdb73ab473e5e32a669",
+  "artifacts": [
+    {
+      "id": 13735505367,
+      "name": "formal-lib",
+      "archive": "artifact-13735505367-formal-lib.zip",
+      "sha256": "d77bcfbae00365bc5798058bf5039f34669df5b72c2d307451ffb388f3683789",
+      "api_digest": "sha256:d77bcfbae00365bc5798058bf5039f34669df5b72c2d307451ffb388f3683789",
+      "size_in_bytes": 11224979
+    }
+  ]
+}

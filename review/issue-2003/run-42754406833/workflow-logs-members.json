@@ -1,0 +1,118 @@
+{
+  "0_formal-gate.txt": {
+    "size": 3265,
+    "sha256": "be093c51f00a5fe1131be97e5ade76cac50e85f629ee8595fc0dca0bd3835cdf"
+  },
+  "formal-gate/system.txt": {
+    "size": 600,
+    "sha256": "8cc4204adcbea0d7da12a0bb7d0e13fb9e15ff9b6d858ceada1c0196b6717252"
+  },
+  "formal-gate/1_Set up job.txt": {
+    "size": 1721,
+    "sha256": "8c193a2aea2f7d5cb73810344958502e077b8dff693a4707a304a1fd6f1cf283"
+  },
+  "formal-gate/2_Require build and verify success, or both skipped.txt": {
+    "size": 1489,
+    "sha256": "44d145e3f148727257aa4ead9b7027babba00c44af6eddb1651629f15a55458f"
+  },
+  "formal-gate/3_Complete job.txt": {
+    "size": 61,
+    "sha256": "39a8e62efc27f4538146011a34f9e763ca3dfb17c8d9b11e166b61cc94758a6c"
+  },
+  "2_build.txt": {
+    "size": 7876521,
+    "sha256": "39d209d804e9de0675b28809ba0d6ae0894e0f2a9b8635d4ab739d11d5568d61"
+  },
+  "build/system.txt": {
+    "size": 711,
+    "sha256": "7934deb395a6ab9d6ce78683688687e90e714792dd2f104d365e74a4b74f6dbf"
+  },
+  "build/1_Set up job.txt": {
+    "size": 2146,
+    "sha256": "ef77caa49c071f75e349163f1307794bcbed6d4b49fa6a9e38c99e9a666ef930"
+  },
+  "build/2_Run actions_checkout@v7.txt": {
+    "size": 11317,
+    "sha256": "4f35bad6fc5b29c418411bc735306378f13a5eccc9e58f7676daa10955783a29"
+  },
+  "build/3_Workflow self-test (verify fails closed).txt": {
+    "size": 549,
+    "sha256": "b3959dcf408d494cc1b312cb5175141115ba1666ee7a609b6102ba4d5e8f9053"
+  },
+  "build/4_Cache elan toolchain.txt": {
+    "size": 1549,
+    "sha256": "35c6d91a89cb9f214d43c4875a55ad089cd18d6df5b0a46d100378da16c2b71f"
+  },
+  "build/5_Install elan.txt": {
+    "size": 904,
+    "sha256": "43c5ffd085c13c2a2b8ac17f5045071d9d9eee38afa6d43d4db198d8110aff28"
+  },
+  "build/6_Install pinned toolchain.txt": {
+    "size": 898,
+    "sha256": "34552a705b7109993fbc40983f6bad3ad1b52103ae665aba941d39459cd7339e"
+  },
+  "build/7_Sorry gate.txt": {
+    "size": 3772,
+    "sha256": "fc93fb591907ee02849f82c865aca7691a65e7ffd3173ad27fdd7054c01665d4"
+  },
+  "build/8_Axiom gate.txt": {
+    "size": 25101,
+    "sha256": "20196e1949a164cc94fb3b1d3a7d07a60abd77e7df65722b3e5ee214a9494ffd"
+  },
+  "build/9_Stage compiled library.txt": {
+    "size": 3871,
+    "sha256": "4f3212f7159226a95a54b7376ff842945c86b7795d16474604d24fac36f847e1"
+  },
+  "build/10_Upload compiled library.txt": {
+    "size": 1870,
+    "sha256": "74f4cc403d9dd04204630efb6beb6be2c7610b96518a19d2a499ffbf299299af"
+  },
+  "build/11_Propose statement record (for review).txt": {
+    "size": 7698548,
+    "sha256": "bf573d070ce6bc0af7bfc0f71e4b8aa37c790caf01deefe37f156d20a7557bee"
+  },
+  "build/12_Gate self-test.txt": {
+    "size": 39718,
+    "sha256": "855517c9477103f46e2cb0910531b92833f71850100da9fd79b6f434a8ec1f32"
+  },
+  "build/13_Verify self-test (#1783 review PoCs).txt": {
+    "size": 84522,
+    "sha256": "d5d294f921f96d1a17aec235bce69c82ceab5a358afdad561383a0dc4876e87c"
+  },
+  "build/26_Post Run actions_checkout@v7.txt": {
+    "size": 1737,
+    "sha256": "b6cd68b918d01435c3a2b949e23a74459016d94aaa13ca10b682e16e8a7b748d"
+  },
+  "build/27_Complete job.txt": {
+    "size": 61,
+    "sha256": "861fc08a12ebe291fef92c1d46da38c353fcd08987b21fcae6ed32e5038b6531"
+  },
+  "3_changes.txt": {
+    "size": 21908,
+    "sha256": "9baa96480fd393922d06a95e418eb24e97408f2f8f0a212f38a7744ab5fa461e"
+  },
+  "changes/system.txt": {
+    "size": 597,
+    "sha256": "7134f06c111ef327a6afa1d436eabf3f42aa054bc27e64732e0411d7475cd8d7"
+  },
+  "changes/1_Set up job.txt": {
+    "size": 1894,
+    "sha256": "f8129abfa71aec20d2050b301bfce1dbeae647a879fee3af5520ae8209274ac2"
+  },
+  "changes/2_Run actions_checkout@v7.txt": {
+    "size": 12918,
+    "sha256": "6e3e3ff84dec40eeedb7599aeb95c34e53114c751b2f1243d2678f114dd8b47c"
+  },
+  "changes/3_Detect formal-relevant changes.txt": {
+    "size": 2844,
+    "sha256": "7a842f744d427431072cbdce5fe17211b03340ccd2343d61c44d1cad86423565"
+  },
+  "changes/6_Post Run actions_checkout@v7.txt": {
+    "size": 4096,
+    "sha256": "5dd173312eb765d7af8bd441bbc8f965badaa4428328273526b48fef2a05d837"
+  },
+  "changes/7_Complete job.txt": {
+    "size": 168,
+    "sha256": "7861800699430dfceafdfc7bc99d0759e435b7ef3ba9b62d68e25633749f8572"
+  }
+}

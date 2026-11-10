@@ -1,0 +1,19 @@
+{
+  "base": "8e11b2bba132a8c369c7db97d66ef145a230f7f1",
+  "files": {
+    "formal/Botho/Demurrage/Age.lean": "53d0da2ef3ddb9bc4176558a76d3d713b9a12f53bd29b4ffa5485f205878d635",
+    "formal/Botho/Basic.lean": "a860f8f1839fda391dc1af9e55b377630eb79184290e73ff8612701e28f7b891",
+    "formal/Botho.lean": "27132727938b1c506a39d0a81d09b362f9616d49c2fa39d558801daabd4d8b24",
+    "formal/Theorems.lean": "067091e7f60bde9156d9b8ddfc4760acc110ae9a0cfbf17c87ed32cb59abb121",
+    "formal/statements.txt": "bb4ad56820cb380c2343cb1f9df9b7cf272ff8b5959f1dc18a212f54d46ea7c6",
+    "formal/lean-toolchain": "ca5f1f601d34c49079e38d7e7041eb0f2a9c227fbc1df0f404820069a052330c",
+    "formal/lakefile.toml": "36021cad02f8677b39d7ebcdc8b7db2fcb358d9c1c19a49fd42463f8d22c0305",
+    "formal/axioms-allowlist.txt": "ab98ab147157e5e66abfc784fbaf92b42ad0d7cb7681ab40776519a0c1619579",
+    "formal/scripts/propose-statements.sh": "35bc07ca84ee7e4be03fb9b5f8dd8323f71f3e20a139fd9de27e28b0392bda73",
+    "formal/scripts/AxiomReport.lean": "cec124cfc8d1b50a7fb3b5b6e42a596db6fce1c5bf8d8a803094d4a851d263b4",
+    "formal/scripts/verify-artifacts.sh": "37c730bab5bdc9b4cdac01c2648f05d8fcea1b499f262960f07cc85ab2598572",
+    ".github/workflows/formal.yml": "d2c6900cfae90c9283e80bbe59cb176b3bee7ca965dd90524675db7e1e4b946a"
+  },
+  "manifest_print_axioms_count": 245,
+  "statement_blocks": 245
+}
