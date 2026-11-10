@@ -396,15 +396,15 @@ theorem exactCharge_le_value_of_rate_time
     (value factor elapsed rate year : Nat)
     (h : rate * elapsed ≤ 10000 * year) :
     exactCharge value factor elapsed rate year ≤ value := by
-  have hp : clampN 1000 6000 factor - 1000 ≤ 5000 := by
-    unfold clampN
+  have hp : Botho.Lottery.clampN 1000 6000 factor - 1000 ≤ 5000 := by
+    unfold Botho.Lottery.clampN
     split <;> (try split) <;> omega
-  have hn : value * rate * (clampN 1000 6000 factor - 1000) * elapsed ≤
+  have hn : value * rate * (Botho.Lottery.clampN 1000 6000 factor - 1000) * elapsed ≤
       (10000 * 5000 * year) * value := by
     simpa only [Nat.mul_assoc, Nat.mul_comm, Nat.mul_left_comm] using
       Nat.mul_le_mul_left value (Nat.mul_le_mul h hp)
   have hq := Nat.div_le_of_le_mul hn
-  unfold exactCharge minN
+  unfold exactCharge Botho.Lottery.minN
   split <;> omega
 
 /-- Generic reset retains its caller-supplied horizon. Natural subtraction
@@ -510,7 +510,7 @@ example : exactSpendCharge 1000000 6000 1000 0 200 6307200 ≤ 1000000 ∧
 
 -- Above-u64 principal hits the final cap while satisfying the equality budget.
 example : exactCharge (2 ^ 64) 6000 1 10000 1 ≤ 2 ^ 64 ∧
-    exactCharge (2 ^ 64) 6000 1 10000 1 = U64_MAX := by
+    exactCharge (2 ^ 64) 6000 1 10000 1 = Botho.Lottery.U64_MAX := by
   exact ⟨exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide), by decide⟩
 
 end Botho.Demurrage
