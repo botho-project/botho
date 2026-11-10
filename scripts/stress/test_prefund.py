@@ -876,7 +876,20 @@ class DeadlineFitTests(PrefundBase):
         p = self.prefunder()
         self.assertEqual(self.plan['wallets']['count'] * self.m['grants_per_wallet'], self.TOTAL)
         done = False
-        with contextlib.redirect_stdout(io.StringIO()):  # funding-wait lines
+        # Every funding selection (#2023 review): the eligible coinbases at
+        # that moment and whether the batch spent its own change instead.
+        self.funding_selections = []
+
+        def watched(controller, wallet, height, amount=0, *args, **kwargs):
+            selected, evidence = choose(controller, wallet, height, amount, *args, **kwargs)
+            if amount and wallet == controller.funding:
+                eligible, _ = choose(controller, wallet, height)
+                self.funding_selections.append((
+                    [o['id'] for o in eligible if o['utxo']['coinbase']],
+                    [o['id'] for o in selected if not o['utxo']['coinbase']]))
+            return selected, evidence
+        with contextlib.redirect_stdout(io.StringIO()), \
+                patch.object(prefund, 'choose', watched):  # funding-wait lines
             while not done:
                 self.fleet.mine(1)
                 for _ in range(self.BLOCK_SECONDS // tick_seconds):
@@ -903,6 +916,10 @@ class DeadlineFitTests(PrefundBase):
         # 6 h is 540 blocks; one grant per transaction would need ~2560 more.
         self.assertLess(last * self.BLOCK_SECONDS, 6 * 3600)
         self.assertLessEqual(max(r['fee'] for r in p.records), prefund.batch_fee_cap(self.plan))
+        # A mature coinbase is always eligible at this pace, so no batch ever
+        # spends change: 171 one-hop coinbase clusters (#2023 review).
+        self.assertEqual(set(p.funding_depths().values()), {1})
+        self.assertFalse(any(change for _, change in self.funding_selections))
         state = Path(self.m['state_dir'])
         self.assertEqual(json.loads((state / 'opening_balances.json').read_text()), [self.X2_GRANTS * self.X2_GRANT] * count)
         health = json.loads((state / 'funding-health.json').read_text())
@@ -938,8 +955,58 @@ class DeadlineFitTests(PrefundBase):
         p, first, last = self.run_fresh_chain(4)
         self.assertEqual((p.granted(), len(p.records)), (self.TOTAL, self.BATCHES))
         self.assertLess(last - first, self.BATCHES)
+        # #2023 review: change is spent only when no mature coinbase is
+        # eligible, and never past MAX_FUNDING_DEPTH, so each funding
+        # cluster's wealth stays within payment_shape.ring_bound_bth.
+        spends_change = [s for s in self.funding_selections if s[1]]
+        self.assertTrue(spends_change)  # The recycling path is exercised.
+        self.assertFalse([s for s in spends_change if s[0]])
+        self.assertLessEqual(max(p.funding_depths().values()), prefund.MAX_FUNDING_DEPTH)
         self.assertEqual(json.loads((Path(self.m['state_dir']) / 'funding-health.json').read_text())
                          ['accounting']['difference'], 0)
+
+
+class FundingOrderTests(PrefundBase):
+    """#2023 review: prefund spends fresh coinbases before its own change."""
+
+    def test_never_spends_change_while_a_mature_coinbase_is_available(self):
+        p = self.prefunder()
+        self.tick(p)  # Opening snapshot.
+        self.offer_one(p)
+        first = p.records[0]
+        for _ in range(30):  # Confirm the batch.
+            self.advance()
+            self.tick(p)
+            if p.records[0]['state'] == 'confirmed':
+                break
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        self.advance(20)  # Its change matures, among enough decoys.
+        asyncio.run(p.health(force=True))
+        change_id = '%s:%d' % (first['hash'], len(first['grants']))
+        height = asyncio.run(p.sync(full=True))
+        eligible, _ = choose(p, p.funding, height)
+        ids = {o['id'] for o in eligible}
+        self.assertIn(change_id, ids)
+        # The change (~1e11) is smaller than a 16e11 coinbase and covers a
+        # small need: smallest-cover picks it, the funding order does not.
+        rank = p.funding_rank()
+        coinbases = [o for o in eligible if o['utxo']['coinbase']]
+        self.assertTrue(coinbases)
+        own = {r['hash'] for r in p.records}
+        smallest, _ = choose(p, p.funding, height, 10**9)
+        self.assertEqual([o['id'].split(':')[0] in own for o in smallest], [True])
+        selected, _ = choose(p, p.funding, height, 10**9, rank=rank)
+        self.assertEqual([o['utxo']['coinbase'] for o in selected], [True])
+        # Every batch so far spent a coinbase.
+        self.assertTrue(all(d == 1 for d in p.funding_depths().values()))
+        # With only change left it is spent, one level deeper; change at
+        # MAX_FUNDING_DEPTH never is.
+        only_change = [o for o in eligible if not o['utxo']['coinbase']]
+        self.assertEqual(rank(next(o for o in only_change if o['id'] == change_id)), (1, -next(
+            o for o in only_change if o['id'] == change_id)['utxo']['amount']))
+        with patch.object(p, 'funding_depths', return_value={first['hash']: prefund.MAX_FUNDING_DEPTH}):
+            deep = p.funding_rank()
+            self.assertIsNone(deep(next(o for o in eligible if o['id'] == change_id)))
 
 
 class PinnedShapeTests(PrefundBase):

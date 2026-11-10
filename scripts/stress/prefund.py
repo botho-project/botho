@@ -75,6 +75,13 @@ SIGNER_FIELDS = {
 SIGNER_OPTIONAL = {'prepare': {'min_fee'}, 'prepare_grants': {'min_fee'}}
 # stress.rs MAX_GRANT_OUTPUTS: consensus MAX_OUTPUTS (16) less one change output.
 GRANTS_PER_BATCH = 15
+# Deepest grant batch (#2023 review): a coinbase is depth 0, a batch is one more
+# than its deepest funding input, and its change keeps the batch's depth. The
+# prefunder spends coinbases first and never change at this depth, so one
+# coinbase cluster's cumulative wealth stays at most
+# coinbase x sum((1 - decay)^k, k = 0..MAX_FUNDING_DEPTH) (142.6 BTH), the ring
+# floor payment_shape prices every batch against.
+MAX_FUNDING_DEPTH = 2
 MANIFEST_FIELDS = {
     'schema_version', 'plan_file', 'plan_sha256', 'targets', 'tls_ca_file', 'tls_ca_sha256',
     'signer', 'signer_sha256', 'producer_role', 'funding_wallet', 'wallets',
@@ -484,6 +491,38 @@ class Prefunder(Controller):
     def is_award(output, awards):
         return bool(output['utxo'].get('lottery')) or output['id'] in awards
 
+    def funding_depths(self):
+        """Each grant batch's depth by transaction hash (MAX_FUNDING_DEPTH)."""
+        depths = {}
+        for r in self.records:
+            depths[r['hash']] = 1 + max((depths.get(s['id'].split(':')[0], 0) for s in r['selected']),
+                                        default=0)
+        return depths
+
+    def funding_rank(self):
+        """Funding order (#2023 review): mature coinbases first, then shallower change.
+
+        Largest value first within each. Smallest-cover selection would spend a
+        batch's change (about 4.97e13) before a fresh 50 BTH coinbase and chain
+        one coinbase cluster through batch after batch; cluster wealth only
+        accumulates, and a value-weighted ring floor then prices a fresh
+        coinbase's batch against that wealth. Change at MAX_FUNDING_DEPTH,
+        lottery awards and anything else are never funding inputs.
+        """
+        depths, awards = self.funding_depths(), self.award_ids()
+
+        def rank(output):
+            utxo = output['utxo']
+            if self.is_award(output, awards):
+                return None
+            if utxo.get('coinbase'):
+                return (0, -utxo['amount'])
+            depth = depths.get(bytes(utxo['tx_hash']).hex())
+            if depth is None or depth >= MAX_FUNDING_DEPTH:
+                return None
+            return (depth, -utxo['amount'])
+        return rank
+
     # ---- opening ---------------------------------------------------------
 
     async def opening_snapshot(self):
@@ -563,7 +602,8 @@ class Prefunder(Controller):
         # choose() reserves one max_single_signed_fee; widen it to the batch cap
         # (#2023) so the inputs always cover the batch plus its capped fee.
         headroom = self.max_fee - int(limits['max_single_signed_fee_picocredits'])
-        selected, evidence = choose(self, self.funding, height, amount + max(0, headroom))
+        selected, evidence = choose(self, self.funding, height, amount + max(0, headroom),
+                                    rank=self.funding_rank())
         self.j.set('selection_latest', evidence)
         if not selected:
             return False  # Funding inputs or change are maturing; wait.

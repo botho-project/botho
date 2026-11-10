@@ -17,7 +17,13 @@
 //! - `hop`: one wallet hop, the ring's class at `W` and the outputs declaring
 //!   `W` less the wallet's 5% tag decay (`WALLET_CLUSTER_DECAY_RATE`);
 //! - `exit`: the outputs declaring background (factor 1x) against a ring at
-//!   `W`, the largest downgrade charge the ring can levy.
+//!   `W`, the largest downgrade charge the ring can levy;
+//! - `ring` (prefund-batch shapes only): the outputs declare one wallet hop
+//!   from a fresh coinbase cluster (one coinbase less the 5% decay) while the
+//!   value-weighted ring centroid sits at `W`. A batch that spends a fresh
+//!   coinbase among decoys from deeper funding clusters owes this downgrade
+//!   (`ring_centroid_floored_factor`); `payment_shape.py` gates it at the
+//!   prefunder's cluster-wealth bound (`prefund.MAX_FUNDING_DEPTH`).
 //!
 //! The height is in epoch 0 (in-class demurrage 0, exit pricing on), where an
 //! x-series chain lives. Regenerate after a deliberate fee-function change:
@@ -60,9 +66,15 @@ const MOVED: [u64; 13] = [
     50_000_000_000_000,
     100_000_000_000_000,
 ];
-/// Cluster wealth, BTH.
-const WEALTH_BTH: [u128; 6] = [50, 200, 1_000, 10_000, 100_000, 1_000_000];
-const DEPTHS: [&str; 2] = ["hop", "exit"];
+/// Cluster wealth, BTH. 150 BTH sits just above the prefund batch bound
+/// (one coinbase cluster through `MAX_FUNDING_DEPTH` = 2 batch hops: 142.6).
+const WEALTH_BTH: [u128; 7] = [50, 150, 200, 1_000, 10_000, 100_000, 1_000_000];
+const DEPTHS: [&str; 3] = ["hop", "exit", "ring"];
+
+/// Rows of `depth` exist for this shape: `ring` only for prefund batches.
+fn has_depth(outputs: usize, depth: &str) -> bool {
+    depth != "ring" || outputs == 16
+}
 
 struct Row {
     inputs: usize,
@@ -79,11 +91,13 @@ fn row(inputs: usize, outputs: usize, moved: u64, wealth_bth: u128, depth: &'sta
     let params = ConsensusFeeParams::mainnet(FeeModelMode::ConsensusOnly);
     let config = FeeConfig::default();
     let wealth = wealth_bth * PICO_PER_BTH;
+    let hop = |w: u128| {
+        w * u128::from(TAG_WEIGHT_SCALE - WALLET_CLUSTER_DECAY_RATE) / u128::from(TAG_WEIGHT_SCALE)
+    };
     let claimed = match depth {
-        "hop" => {
-            wealth * u128::from(TAG_WEIGHT_SCALE - WALLET_CLUSTER_DECAY_RATE)
-                / u128::from(TAG_WEIGHT_SCALE)
-        }
+        "hop" => hop(wealth),
+        // A fresh coinbase cluster holds exactly one coinbase.
+        "ring" => hop(u128::from(mainnet_monetary_policy().initial_reward)),
         _ => 0,
     };
     let size = consensus_tx_size_bytes(inputs, outputs, 0);
@@ -131,7 +145,9 @@ fn rows() -> Vec<Row> {
         for &moved in &MOVED {
             for &wealth in &WEALTH_BTH {
                 for depth in DEPTHS {
-                    rows.push(row(inputs, outputs, moved, wealth, depth));
+                    if has_depth(outputs, depth) {
+                        rows.push(row(inputs, outputs, moved, wealth, depth));
+                    }
                 }
             }
         }
@@ -200,7 +216,7 @@ fn floors_are_monotone_in_value_moved() {
     // The plan check prices a shape at the next larger MOVED row.
     for &(inputs, outputs) in &SHAPES {
         for &wealth in &WEALTH_BTH {
-            for depth in DEPTHS {
+            for depth in DEPTHS.into_iter().filter(|d| has_depth(outputs, d)) {
                 let fees: Vec<u64> = MOVED
                     .iter()
                     .map(|&moved| row(inputs, outputs, moved, wealth, depth).resign_fee)
@@ -209,6 +225,48 @@ fn floors_are_monotone_in_value_moved() {
                     fees.windows(2).all(|w| w[0] <= w[1]),
                     "{inputs}x{outputs} at {wealth} BTH {depth}: {fees:?}"
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn ring_floors_are_monotone_in_ring_wealth() {
+    // The plan check prices a batch's ring downgrade at the next larger
+    // WEALTH_BTH row above the prefunder's cluster-wealth bound.
+    for &(inputs, outputs) in SHAPES.iter().filter(|s| has_depth(s.1, "ring")) {
+        for &moved in &MOVED {
+            let fees: Vec<u64> = WEALTH_BTH
+                .iter()
+                .map(|&wealth| row(inputs, outputs, moved, wealth, "ring").resign_fee)
+                .collect();
+            assert!(
+                fees.windows(2).all(|w| w[0] <= w[1]),
+                "{inputs}x{outputs} moving {moved} ring: {fees:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn floors_are_monotone_in_inputs() {
+    // The workload replay accepts a spend that moves no more than a priced
+    // shape with at least as many inputs (and the same outputs).
+    for &(inputs, outputs) in &SHAPES {
+        let Some(&(more, _)) = SHAPES.iter().find(|s| s.1 == outputs && s.0 == inputs + 1) else {
+            continue;
+        };
+        for &moved in &MOVED {
+            for &wealth in &WEALTH_BTH {
+                for depth in DEPTHS.into_iter().filter(|d| has_depth(outputs, d)) {
+                    let fewer = row(inputs, outputs, moved, wealth, depth).resign_fee;
+                    let larger = row(more, outputs, moved, wealth, depth).resign_fee;
+                    assert!(
+                        fewer <= larger,
+                        "{inputs} vs {more} inputs x{outputs} moving {moved} at {wealth} BTH \
+                         {depth}: {fewer} > {larger}"
+                    );
+                }
             }
         }
     }

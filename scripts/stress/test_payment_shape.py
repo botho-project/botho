@@ -4,10 +4,12 @@ import copy
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import payment_shape as ps
 from plan import expand
-from selection import CONSOLIDATE_INPUTS, cover
+import prefund
+from selection import CONSOLIDATE_INPUTS, cover, ranked
 
 HERE = Path(__file__).resolve().parent
 PLAN = json.loads((HERE / "x-series-plan.json").read_text())
@@ -30,7 +32,9 @@ class GoldenTests(unittest.TestCase):
         self.assertIn("stress_fee_shape", GOLDEN["generator"])
         self.assertEqual(GOLDEN["coinbase_picocredits"], 50 * 10**12)
         rows = GOLDEN["rows"]
-        self.assertEqual({r["depth"] for r in rows}, {"hop", "exit"})
+        self.assertEqual({r["depth"] for r in rows}, {"hop", "exit", "ring"})
+        # Ring rows (#2023 review) exist for prefund batches only.
+        self.assertEqual({r["outputs"] for r in rows if r["depth"] == "ring"}, {16})
         self.assertTrue(all(r["consensus_floor"] <= r["relay_floor_max"] <= r["resign_fee"]
                             for r in rows))
         # The review's table (#2019): a full exit of 1 BTH from a 1M BTH
@@ -57,10 +61,33 @@ class FeeCheckTests(unittest.TestCase):
         self.assertEqual({e["tier"] for e in gated if e["shape"] != "prefund batch"}, {1, 2, 4})
         self.assertTrue(all(e["fee"] * ps.FEE_MARGIN <= e["cap"] for e in gated))
         worst = {(s["shape"], s["tier"]): s for s in ps.summarize(report)}
-        # One-input payments of a 2e10 grant pay the relay minimum at a hop,
-        # times the tier, and survive a full exit from a 1k BTH cluster.
+        # One-input payments (up to a four-input probe's change, 8e10) pay
+        # the relay minimum at a hop, times the tier, and survive a full exit
+        # from a 200 BTH cluster at tier 4.
+        self.assertEqual(worst[("payment, one input", 4)]["moved"], 8 * 10**10)
         self.assertEqual(worst[("payment, one input", 4)]["hop_fee"], 4 * 10**8)
-        self.assertGreaterEqual(worst[("payment, one input", 4)]["exit_fits_cap_to_wealth_bth"], 1000)
+        self.assertGreaterEqual(worst[("payment, one input", 4)]["exit_fits_cap_to_wealth_bth"], 200)
+        # The batch is gated at its ring downgrade up to the prefunder's
+        # cluster-wealth bound, 50 x (1 + 0.95 + 0.95^2) BTH, priced at 150.
+        batch = worst[("prefund batch", 1)]
+        self.assertAlmostEqual(batch["ring_bound_bth"], 142.625)
+        self.assertEqual(batch["ring_wealth_bth"], 150)
+        self.assertLessEqual(batch["ring_fee"] * ps.FEE_MARGIN, batch["cap"])
+
+    def test_ring_rows_past_the_bound_are_reported_not_gated(self):
+        report = ps.fee_check(PLAN)
+        ring = [e for e in report if e["depth"] == "ring"]
+        self.assertTrue(ring and all(e["shape"] == "prefund batch" for e in ring))
+        self.assertEqual({e["wealth_bth"] for e in ring if e["gated"]}, {50, 150})
+        # At 1k BTH (unbounded change chaining) the batch would owe ~2.4e11.
+        self.assertTrue(any(e["fee"] > e["cap"] for e in ring if not e["gated"]))
+
+    def test_deeper_funding_chains_fail_the_batch_ring_gate(self):
+        # Ten hops: ~431 BTH, priced at the 1k BTH row, over the 1e11 cap.
+        with patch.object(prefund, "MAX_FUNDING_DEPTH", 10):
+            self.assertGreater(ps.ring_bound_bth(GOLDEN), 400)
+            with self.assertRaisesRegex(ValueError, '"depth": "ring"'):
+                ps.fee_check(PLAN)
 
     def test_whole_bth_grants_fail_at_the_upper_tiers(self):
         # The pre-#2023 shape: every payment moves a whole 1 BTH grant.
@@ -106,8 +133,34 @@ class CoverageTests(unittest.TestCase):
         replay = ps.coverage(PLAN)
         self.assertEqual(replay["uncovered"], 0)
         self.assertEqual(replay["payments"], 21880 + 360)
-        # The four-input probes move the most: four whole grants.
+        # The four-input probes move the most: four whole grants. Their change
+        # (up to 7.68e10) is later spent as one input: the free-shape bound is
+        # the probe's, not 4 x need (#2023 review).
         self.assertEqual(replay["largest_value_moved"], 8 * 10**10)
+        self.assertGreater(replay["largest_value_moved_by_inputs"]["1"], 4 * 11 * 10**9)
+        for inputs, value in replay["largest_value_moved_by_inputs"].items():
+            self.assertLessEqual(value, replay["priced_value_moved_by_inputs"][inputs])
+        self.assertLessEqual(replay["worst_gated_fee"],
+                             int(PLAN["limits"]["max_single_signed_fee_picocredits"]))
+
+    def test_a_replayed_fee_over_the_cap_fails_never_clips(self):
+        golden = copy.deepcopy(GOLDEN)
+        for row in golden["rows"]:
+            if (row["inputs"], row["outputs"]) == (1, 2):
+                row["resign_fee"] *= 10
+        with self.assertRaisesRegex(ValueError, "gated fee .* exceeds max_single"):
+            ps.coverage(PLAN, golden=golden)
+
+    def test_a_replayed_spend_past_the_priced_shapes_fails(self):
+        # Priced as if no spend moved more than 4e10: the probes' 8e10 fails.
+        original = ps.planned_shapes
+
+        def shapes(plan, golden):
+            return [(n, i, o, min(m, 4 * 10**10), t, c, r)
+                    for n, i, o, m, t, c, r in original(plan, golden)]
+        with patch.object(ps, "planned_shapes", shapes):
+            with self.assertRaisesRegex(ValueError, "moves more than any priced shape"):
+                ps.coverage(PLAN)
 
     def test_too_few_grants_leave_payments_uncovered(self):
         replay = ps.coverage(plan(grants_per_wallet=16))
@@ -147,6 +200,27 @@ class CoverTests(unittest.TestCase):
         # Pinned shapes and unpaddable outputs are never padded.
         self.assertEqual(cover([grant] + dust, self.NEED, 1, pad=2)[0], [grant])
         self.assertEqual(cover([grant] + dust, self.NEED, pad=2, paddable=lambda o: False)[0], [grant])
+
+    def test_free_shape_combinations_skip_unpaddable_outputs(self):
+        # #2023 review: a V2 award never joins a free-shape multi-input set.
+        outputs = [out(1, 9 * 10**9), out(2, 2 * 10**9), out(3, 3 * 10**9)]
+        award = lambda o: o["id"] != "0002"
+        self.assertEqual([o["id"] for o in cover(outputs, self.NEED)[0]], ["0001", "0002"])
+        self.assertEqual([o["id"] for o in cover(outputs, self.NEED, paddable=award)[0]],
+                         ["0001", "0003"])
+        # A pinned count may still use it.
+        self.assertEqual([o["id"] for o in cover(outputs, self.NEED, 2, paddable=award)[0]],
+                         ["0001", "0002"])
+
+    def test_ranked_takes_the_first_covering_set_in_rank_order(self):
+        outputs = [out(1, 5 * 10**10), out(2, 4 * 10**10), out(3, 6 * 10**10)]
+        first = {"0002": 0}
+        rank = lambda o: (first.get(o["id"], 1), -o["utxo"]["amount"])
+        self.assertEqual(ranked(outputs, self.NEED, rank)[0], [outputs[1]])
+        # None never spends an output; the rest go largest first.
+        rank = lambda o: None if o["id"] == "0002" else (0, -o["utxo"]["amount"])
+        self.assertEqual(ranked(outputs, self.NEED, rank)[0], [outputs[2]])
+        self.assertEqual(ranked(outputs, 10**12, rank)[0], [])
 
     def test_decoy_check_can_refuse_padding(self):
         dust = [out(10, 10**9)]

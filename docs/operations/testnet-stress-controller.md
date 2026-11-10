@@ -864,11 +864,14 @@ That is consensus `MAX_OUTPUTS` (16). Batch *B* is the main signer's
 prefund-only `prepare_grants` request, checked with `inspect_grants`. Campaign
 transfers keep the one-recipient `prepare` and `inspect`, unchanged; `inspect`
 still refuses more than two outputs. The batch fee follows the same rule as a
-campaign transfer at multiplier 1, for 16 outputs, and must not exceed
-`max_single_signed_fee_picocredits`. At the dynamic base's ceiling (100) and
-the largest cluster factor the estimate is about 4.4×10^8, below the x-series
-cap of 10^9. At the idle base it is the 10^8 floor. A 16-output batch is 22 to
-24 KB with one or two inputs.
+campaign transfer at multiplier 1, for 16 outputs, and must not exceed the
+batch fee cap: the plan's `prefund.max_batch_fee_picocredits` when the plan
+pins a `prefund` block (10^11 for the x-series, #2023), otherwise
+`max_single_signed_fee_picocredits`. Since protocol 10.0.0 the node quote
+(below) prices a batch at about 1.06×10^9 at one hop from a fresh coinbase and
+up to about 3.5×10^10 against the prefunder's worst ring; see "Payment shape
+under protocol 10.0.0". A 16-output batch is 22 to 24 KB with one or two
+inputs.
 
 **Node fee quote (#2001).** The local estimate above does not include the
 10.0.0 class-exit charge (#1685) or input import floor (#1687), which depend on
@@ -877,8 +880,9 @@ transfer is therefore signed, quoted with RPC `estimateFee` (`tx_hex`), and,
 if the signed fee is below the quote's `settleFee`, moved to `underpaid/`
 (never submitted) and re-signed with the signer's `min_fee` at `resignFee`
 (`fee_quote.sign_priced`, at most 8 passes). The record keeps
-`fee_floor_quote` and `underpaid_drafts`. A quoted fee above
-`max_single_signed_fee_picocredits` holds the run. Large inputs that change
+`fee_floor_quote` and `underpaid_drafts`. A quoted fee above the cap holds the
+run: `max_single_signed_fee_picocredits` for a campaign transfer, the batch fee
+cap above for a grant batch. Large inputs that change
 class can owe a few tenths of a percent of the value moved, so the operator
 must size `max_single_signed_fee_picocredits` (ceiling 1 BTH) and the fee
 budget for the plan.
@@ -902,9 +906,25 @@ needed 2048 inputs, about a day; 137 batches fit the window. A batch's 16
 outputs are decoys for each other, so the grant outputs and the change sit in
 dense blocks. The change is spendable again about 20 blocks later.
 
-**Batches and the never-resubmit rule.** Each batch uses `selection.choose()`
-over the funding wallet for the batch principal. The inputs of every
-unconfirmed batch are passed as `reserved`. For each batch, the prefunder:
+**Funding order (#2023 review).** Each batch uses `selection.choose()` over
+the funding wallet for the batch principal plus the batch fee cap, in the
+prefunder's own order (`Prefunder.funding_rank`, never the payments'
+smallest-cover): mature coinbases first, then the change of earlier batches,
+shallowest first, largest value first within each. A coinbase is depth 0, a
+batch is one deeper than its deepest input, and its change keeps the batch's
+depth; change at `MAX_FUNDING_DEPTH` (2) and lottery awards are never funding
+inputs. Smallest-cover would spend a batch's change (about 4.97×10^13) before a
+fresh 50 BTH coinbase and chain one coinbase cluster through batch after batch.
+Cluster wealth only accumulates, so that cluster would reach 262 to 393 BTH,
+and the value-weighted ring floor would price a fresh coinbase's batch against
+it: past the 10^11 cap at about 450 BTH, before the rehearsal could see it.
+With this order each funding cluster holds at most
+50 × (1 + 0.95 + 0.95²) = 142.6 BTH, the ring bound the offline gate prices.
+At the #1937 pace of one batch per block a coinbase is always eligible, so no
+batch spends change at all.
+
+**Batches and the never-resubmit rule.** The inputs of every unconfirmed batch
+are passed as `reserved`. For each batch, the prefunder:
 
 1. inspects the signed artifact;
 2. creates `grants/batch-NNNN.json` exclusively, listing the grants it covers
@@ -991,9 +1011,14 @@ less value:
   covers the amount plus `max_single`, then pads with up to two smaller outputs
   (never V2 awards, never past `max(output, 2 × need)`) so receipts and change
   do not strand the wallet's value in dust. Several inputs are used only when
-  no single output covers, each then below `need`. A free-shape payment
-  therefore moves at most 4.4×10^10; a pinned four-input probe at most four
-  grants, 8×10^10.
+  no single output covers, each then below `need` (and never a V2 award; only
+  `award_input` adds one). A free-shape payment therefore moves at most
+  `max(largest output held, 4 × need)`. The largest output held is not a
+  grant: the pinned 2- and 4-input probes (three of each in the rehearsal and
+  the campaign) leave change up to about 7.7×10^10, which a later one-input
+  payment spends as its smallest covering output. The replay below finds 20
+  such payments moving 7.68×10^10. So every payment shape is priced at
+  8×10^10 (a four-input probe of four grants), not 4.4×10^10.
 - **Prefund batches** spend a whole 50 BTH coinbase, which owes about 1.06×10^9
   to re-sign even at one wallet hop in a 50 BTH cluster: over `max_single`. The
   plan's `prefund.max_batch_fee_picocredits` (10^11) caps batches instead;
@@ -1009,18 +1034,34 @@ less value:
   `consensus_fee_breakdown`, the relay floor at the dynamic base's ceiling and
   `resign_fee`, and pins (CI job `fee-shape-golden`). At every fee tier
   (1/2/4×), `tier × resign_fee` times 2 must fit the cap for every cluster
-  wealth from 50 BTH to 1M BTH at one wallet hop (5% tag decay). Full exits to
-  background are reported (`exit_fits_cap_to_wealth_bth`), not gated. For the
-  pinned plan the gated worst case is 4×10^8 (tier 4, the relay minimum times
-  four, margin 2.5); a one-input payment survives a full exit from a 1k BTH
-  cluster at tier 4; a batch's worst hop fee is 4.24×10^10 (margin 2.36).
+  wealth from 50 BTH to 1M BTH at one wallet hop (5% tag decay). A prefund
+  batch is also gated at its **ring** downgrade: a batch spending a fresh
+  coinbase claims one hop from a 50 BTH cluster (47.5 BTH) while the
+  value-weighted ring centroid sits at the largest funding-cluster wealth the
+  prefunder can build (142.6 BTH, see "Funding order" above; priced at the
+  150 BTH golden row). Full exits to background are reported
+  (`exit_fits_cap_to_wealth_bth`), not gated, as are ring rows past the bound
+  (2.4×10^11 at 1k BTH: why prefund must not chain change). For the pinned
+  plan the gated payment worst case is 4×10^8 (tier 4, the relay minimum times
+  four, margin 2.5), every payment shape priced at 8×10^10 moved; a one-input
+  payment of that size survives a full exit from a 200 BTH cluster at tier 4.
+  A batch's worst hop fee is 4.24×10^10 (margin 2.36) and its ring fee
+  3.51×10^10 (margin 2.85).
 - **Coverage.** The rehearsal and the whole 72 h schedule (22,240 payments)
   are replayed through `selection.cover`, paying twice the gated fee bound and
   holding every output for 3600 s before it is spendable again. Every payment
-  must find inputs; 32 grants per wallet is the least that does.
+  must find inputs; 32 grants per wallet is the least that does. The replay
+  is a gate, not only a drain model: a spend whose gated fee (twice the tier
+  times the hop row, at its own input count and value moved) exceeds
+  `max_single` fails it (never clipped), and so does a spend that moves more
+  than every priced shape with at least as many inputs. For the pinned plan
+  the largest values moved are 7.68×10^10 (one input), 4×10^10 (two),
+  2.2×10^10 (three) and 8×10^10 (four), all within the 8×10^10 priced; the
+  worst replayed gated fee is 8×10^8.
 - **Prefund pace.** The 171 batches at the #1937 fresh-chain pace (first
   funding input at about height 220, then one per 40 s block) must fit 75% of
-  the prefund window `latest_deadline` leaves in an 80.5 h lifetime. Grant
+  the prefund window `latest_deadline` leaves in an 80.5 h lifetime: 391
+  blocks (15,640 s) against 17,775 s, a margin of about 53 blocks (2,135 s). Grant
   batches are 16-output blocks, so grants are decoys for each other: the
   eligible-input rate is the coinbase rate, unchanged from #1937, and the
   ring-20 (19 decoys plus `decoy_headroom`) window rule (#1692) is unchanged
@@ -1036,7 +1077,8 @@ and exit pricing; `baseline_fee` is the node quote.
 99th percentile of the journaled `fee_floor_quote.resignFee` per BTH moved
 (per unit of the selected inputs' value) from the Part A rehearsal on the
 pinned build. Multiplied by 4 (the top tier) and by the shape's moved value
-(2×10^10 one input, 4.4×10^10 free shape, 8×10^10 four-input probe), it must
+(8×10^10 for every payment shape: a one-input payment can spend a probe's
+change, see above), it must
 stay under `max_single_signed_fee_picocredits` with the same factor-2 margin;
 for batches, the p99 batch quote must stay under `max_batch_fee_picocredits`.
 If not, shrink `grant_picocredits` (and re-run `plan.py`) rather than raising

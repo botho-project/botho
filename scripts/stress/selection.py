@@ -40,15 +40,21 @@ def cover(eligible, need, count=None, pool_ok=None, pad=0, paddable=None):
       without this a 72 h wallet ends with its value in dust no four inputs
       can combine into a payment (``payment_shape.coverage``);
     - otherwise ``n`` inputs, ``n = count`` or the fewest of 2..4 that works,
-      from the largest ``CANDIDATE_CAP`` eligible outputs: the covering
+      from the largest ``CANDIDATE_CAP`` eligible outputs (``paddable`` ones
+      only for a free shape, so a V2 award never joins one): the covering
       combination of least total value, ties by ids.
 
     A free-shape selection only reaches several inputs when no single eligible
     output covers ``need``, so each input is below ``need``; a padded single
-    stays within ``max(output, 2 * need)``. No change output therefore
-    outgrows ``max(largest prefunded output, 2 * need)``, and a free-shape
-    selection moves at most that or ``MAX_PAYMENT_INPUTS * need``, the bound
-    ``payment_shape`` prices offline (plus at most one award). ``pool_ok(selected)`` is the complete-set decoy check;
+    stays within ``max(output, 2 * need)``. A free shape therefore moves at
+    most ``max(largest output held, MAX_PAYMENT_INPUTS * need)`` (plus at most
+    one award), where the largest output held is a grant, ``2 * need`` of
+    padded change, or the change of a pinned multi-input probe (``count``):
+    a four-input probe of four grants leaves change up to about 7.7e10 in the
+    x-series plan, which a later one-input payment spends as its smallest
+    covering output. ``payment_shape`` prices that bound offline and its
+    workload replay fails on any spend that moves more or whose fee exceeds
+    the cap. ``pool_ok(selected)`` is the complete-set decoy check;
     ``tried`` counts the selections it was asked about plus the covering
     combinations enumerated. Pure: ``payment_shape``'s workload replay runs
     this same function with ``pool_ok`` always true.
@@ -81,7 +87,8 @@ def cover(eligible, need, count=None, pool_ok=None, pad=0, paddable=None):
                 break  # Single inputs never fail on decoys alone; fall through.
         if count == 1:
             return [], tried
-    candidates = sorted(eligible, key=lambda o: (-_amount(o), o["id"]))[:CANDIDATE_CAP]
+    pool = eligible if count else [o for o in eligible if paddable(o)]
+    candidates = sorted(pool, key=lambda o: (-_amount(o), o["id"]))[:CANDIDATE_CAP]
     for n in [count] if count else range(2, MAX_PAYMENT_INPUTS + 1):
         covering = []
         for selected in combinations(candidates, n):
@@ -92,6 +99,30 @@ def cover(eligible, need, count=None, pool_ok=None, pad=0, paddable=None):
         covering.sort(key=lambda c: (c[0], c[1]))
         for _, _, selected in covering:
             if pool_ok(list(selected)):
+                return list(selected), tried
+    return [], tried
+
+
+def ranked(eligible, need, rank, pool_ok=None):
+    """Funding selection (#2023 review): the first covering set in ``rank`` order.
+
+    The prefunder's order, never a payment's. ``rank(output)`` is a sort key,
+    or None to never spend that output. Sets of 1..MAX_PAYMENT_INPUTS inputs
+    from the first ``CANDIDATE_CAP`` ranked outputs are tried in order, fewest
+    inputs first; the first that covers ``need`` and passes
+    ``pool_ok(selected)`` wins. With ``rank`` largest value first this is the
+    pre-#2023 rule. Returns ``(selected, tried)``.
+    """
+    pool_ok = pool_ok or (lambda selected: True)
+    keyed = [(rank(o), o) for o in eligible]
+    keyed = sorted(((k, o) for k, o in keyed if k is not None),
+                   key=lambda c: (c[0], c[1]["id"]))
+    candidates = [o for _, o in keyed][:CANDIDATE_CAP]
+    tried = 0
+    for n in range(1, MAX_PAYMENT_INPUTS + 1):
+        for selected in combinations(candidates, n):
+            tried += 1
+            if sum(_amount(o) for o in selected) >= need and pool_ok(list(selected)):
                 return list(selected), tried
     return [], tried
 
@@ -138,7 +169,7 @@ def thinnest_window_size(created_heights, height, age, removed=()):
 
 
 def choose(controller, wallet, height, amount=0, count=None, headroom=0,
-           award_input=False):
+           award_input=False, rank=None):
     """Canonical selection; ``award_input`` adds the oldest mature V2 award.
 
     Value selection (``cover``: the smallest sufficient output, #2023) never
@@ -151,7 +182,13 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
     hold. The choice is a pure function of the scanned state, so a replay
     reproduces it, and the award only adds value: the signer returns it as
     change, so exact accounting is unchanged. Pinned shapes and readiness
-    probes (explicit ``count``) are never widened.
+    probes (explicit ``count``) are never widened. A free-shape payment
+    never pads with or combines a V2 award (``cover``'s ``paddable``), so only
+    ``award_input`` adds one to a multi-input payment.
+
+    ``rank`` replaces ``cover`` with ``ranked`` (funding selection, never a
+    payment): the prefunder spends fresh coinbases before its own batch
+    change, so funding clusters stay shallow (#2023 review).
     """
     canonical = controller.canonical_history()
     raw = controller.canonical_inventory(wallet, canonical)
@@ -255,10 +292,13 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
         excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
         return all(pool_ok(o, excluded) for o in selected)
 
-    # Smallest sufficient value first (#2023), see cover().
-    selected, attempted = cover(eligible, amount + fee, count, complete,
-                                CONSOLIDATE_INPUTS,
-                                lambda o: not is_v2_award(canonical, o))
+    if rank is not None:
+        selected, attempted = ranked(eligible, amount + fee, rank, complete)
+    else:
+        # Smallest sufficient value first (#2023), see cover().
+        selected, attempted = cover(eligible, amount + fee, count, complete,
+                                    CONSOLIDATE_INPUTS,
+                                    lambda o: not is_v2_award(canonical, o))
     if selected:
         extra = {**evidence, "combinations": attempted}
         if award_input and count is None:

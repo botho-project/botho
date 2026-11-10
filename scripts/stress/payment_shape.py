@@ -21,9 +21,13 @@ that shape against the plan before anything is staged:
     ``bounded_fee``: the fee is the multiplier times the node's re-sign quote)
     times ``FEE_MARGIN`` must fit the cap, for every golden cluster wealth up
     to 1M BTH, at one wallet hop (``hop``: the outputs keep the ring's class
-    less the wallet's 5% tag decay). Rows that declare background against a
-    wealthy ring (``exit``) are reported, not gated: the operator freezes the
-    plan from the Part A rehearsal's p99 quoted fee per BTH moved instead.
+    less the wallet's 5% tag decay). A prefund batch is also gated at its ring
+    downgrade (``ring``: a fresh coinbase's batch, claiming one hop from a 50
+    BTH cluster, against a value-weighted ring centroid at the largest
+    cluster wealth the prefunder can build, ``ring_bound_bth``). Rows that
+    declare background against a wealthy ring (``exit``) are reported, not
+    gated: the operator freezes the plan from the Part A rehearsal's p99
+    quoted fee per BTH moved instead.
 
 ``coverage``
     Replays the rehearsal and the plan's whole 72 h schedule (``expand``'s
@@ -31,7 +35,9 @@ that shape against the plan before anything is staged:
     ``selection.cover`` (which reserves ``max_single`` per payment), paying
     ``FEE_MARGIN`` times the gated fee bound of each spend, every output,
     change and receipt alike, spendable only ``MATURITY_SECONDS`` after its
-    payment. Every payment must find inputs.
+    payment. Every payment must find inputs, every replayed spend's gated fee
+    must fit ``max_single`` (never clipped), and every replayed spend must move
+    no more than a priced shape with at least as many inputs.
 
 ``prefund_check``
     The batch cap, its fee budget and the funding wallet's opening reserve,
@@ -48,6 +54,10 @@ TIERS = (1, 2, 4)
 # Every gated fee must fit its cap twice over.
 FEE_MARGIN = 2
 GATED_DEPTH = "hop"
+# Gated for prefund batches only, up to ring_bound_bth.
+RING_DEPTH = "ring"
+# Pinned probes (discovery.py, plan.expand): input counts.
+PROBE_INPUTS = (1, 2, 4)
 # prefund.GRANTS_PER_BATCH (stress.rs MAX_GRANT_OUTPUTS): 15 grants and change.
 GRANTS_PER_BATCH = 15
 # Seconds from a payment to its outputs being selectable again. At the
@@ -102,33 +112,74 @@ def batches(plan):
     return -(-plan["wallets"]["count"] * grants // GRANTS_PER_BATCH)
 
 
+def ring_bound_bth(golden):
+    """Largest cumulative wealth of one prefund funding cluster, BTH (#2023 review).
+
+    The prefunder spends mature coinbases first and never change at
+    ``prefund.MAX_FUNDING_DEPTH`` (``Prefunder.funding_rank``). Cluster wealth
+    only accumulates (each output adds its tagged value), and each batch hop
+    carries at most (1 - decay) of the cluster's tagged value on, so one
+    coinbase cluster holds at most coinbase x sum((1 - decay)^k, k = 0..depth).
+    Only the producer mints on an x-series chain and the campaign wallets
+    spend nothing before the prefund ends, so this bounds every ring member's
+    effective wealth, and with it the value-weighted ring centroid, while
+    batches are signed.
+    """
+    from prefund import MAX_FUNDING_DEPTH
+    keep = 1 - golden["wallet_decay_rate"] / golden["tag_weight_scale"]
+    coinbase_bth = golden["coinbase_picocredits"] / golden["pico_per_bth"]
+    return coinbase_bth * sum(keep ** k for k in range(MAX_FUNDING_DEPTH + 1))
+
+
+def largest_output(plan):
+    """The largest output a campaign wallet holds, by construction.
+
+    A grant; a receipt (at most the largest transfer, below ``need``); change
+    of a padded single (below ``max(output, 2 * need)``); or the change of a
+    pinned probe, below the probe's inputs, each at most a grant: the four-input
+    probe's change (up to about 7.7e10) is the largest. The workload replay
+    (``coverage``) checks this against every spend it makes.
+    """
+    _, grant, _ = prefund_shape(plan)
+    wallets = plan["wallets"]
+    need = (max(map(int, wallets["transfer_amounts_picocredits"]))
+            + int(plan["limits"]["max_single_signed_fee_picocredits"]))
+    return max(grant, 2 * need, max(PROBE_INPUTS) * max(grant, need))
+
+
 def planned_shapes(plan, golden):
-    """Every spend shape the plan can sign: (name, inputs, outputs, moved, tiers, cap)."""
+    """Every spend shape the plan can sign: (name, inputs, outputs, moved, tiers, cap, ring).
+
+    ``ring`` is the cluster wealth (BTH) up to which ``ring`` rows are gated,
+    or None for shapes gated at ``hop`` only.
+    """
     _, grant, batch_cap = prefund_shape(plan)
     limits, wallets = plan["limits"], plan["wallets"]
     max_single = int(limits["max_single_signed_fee_picocredits"])
     need = max(map(int, wallets["transfer_amounts_picocredits"])) + max_single
     inputs = wallets["max_payment_inputs"]
-    # The largest output a campaign wallet holds is a grant: a receipt is at
-    # most the largest transfer (below `need`) and change is below its input.
-    largest = max(grant, need)
-    shapes = [("payment, one input", 1, 2, largest, TIERS, max_single),
-              # A free shape spends one covering output padded to at most
-              # max(output, 2 * need), or several outputs each below `need`
-              # (selection.cover); an award input (~1.25e8) rides on the next
-              # golden row up.
+    largest = largest_output(plan)
+    # A one-input payment spends the smallest covering output, which can be
+    # any output up to `largest` (a probe's change included). A free shape
+    # spends one covering output padded to at most max(output, 2 * need), or
+    # several outputs each below `need` (selection.cover); an award input
+    # (~1.25e8) rides on the next golden row up.
+    shapes = [("payment, one input", 1, 2, largest, TIERS, max_single, None),
               ("payment, free shape", inputs, 2, max(largest, inputs * need), TIERS,
-               max_single)]
-    # Pinned rehearsal/correctness probes: (1, 2, 4) inputs at every tier,
-    # each input at most the largest output.
-    for n in (2, 4):
-        shapes.append(("probe, %d inputs" % n, n, 2, n * largest, TIERS, max_single))
+               max_single, None)]
+    # Pinned rehearsal/correctness probes: (1, 2, 4) inputs at every tier; the
+    # least-value covering set of n inputs, each at most a grant while the
+    # wallet holds n grants (the replay checks the value they move).
+    probe_input = max(grant, need)
+    for n in PROBE_INPUTS[1:]:
+        shapes.append(("probe, %d inputs" % n, n, 2, n * probe_input, TIERS, max_single, None))
     # A prefund batch spends one coinbase (or more if 15 grants plus the fee
-    # cap exceed one) at multiplier 1 (stress.rs prepare_grants).
+    # cap exceed one) at multiplier 1 (stress.rs prepare_grants), among decoys
+    # up to the prefunder's cluster-wealth bound.
     coinbase = golden["coinbase_picocredits"]
     batch_inputs = -(-(GRANTS_PER_BATCH * grant + batch_cap) // coinbase)
     shapes.append(("prefund batch", batch_inputs, GRANTS_PER_BATCH + 1,
-                   batch_inputs * coinbase, (1,), batch_cap))
+                   batch_inputs * coinbase, (1,), batch_cap, ring_bound_bth(golden)))
     return shapes
 
 
@@ -143,20 +194,42 @@ def price(golden, inputs, outputs, moved):
     return [r for r in rows if r["moved"] == above[0]]
 
 
+def ring_wealth_row(golden, bound):
+    """The golden wealth row a ring bound is priced at: the next one up."""
+    above = sorted({r["wealth_bth"] for r in golden["rows"] if r["depth"] == RING_DEPTH
+                    and r["wealth_bth"] >= bound})
+    require(above, "ring bound %.1f BTH exceeds the golden grid: extend WEALTH_BTH in "
+            "cluster-tax/tests/stress_fee_shape.rs" % bound)
+    return above[0]
+
+
 def fee_check(plan, golden=None):
     """Gate every planned shape at every tier; returns the report rows."""
     golden = golden or load_golden()
     report, failures = [], []
-    for name, inputs, outputs, moved, tiers, cap in planned_shapes(plan, golden):
-        for row in price(golden, inputs, outputs, moved):
+    for name, inputs, outputs, moved, tiers, cap, ring in planned_shapes(plan, golden):
+        rows = price(golden, inputs, outputs, moved)
+        ring_row = None
+        if ring is not None:
+            require(any(r["depth"] == RING_DEPTH for r in rows),
+                    "no golden ring rows for %d inputs and %d outputs" % (inputs, outputs))
+            ring_row = ring_wealth_row(golden, ring)
+        for row in rows:
+            gated = (row["depth"] == GATED_DEPTH
+                     or (ring_row is not None and row["depth"] == RING_DEPTH
+                         and row["wealth_bth"] <= ring_row))
+            if row["depth"] == RING_DEPTH and ring_row is None:
+                continue
             for tier in tiers:
                 fee = tier * row["resign_fee"]
                 entry = {"shape": name, "inputs": inputs, "outputs": outputs, "moved": moved,
                          "priced_at_moved": row["moved"], "wealth_bth": row["wealth_bth"],
                          "depth": row["depth"], "tier": tier, "fee": fee, "cap": cap,
-                         "margin": round(cap / fee, 2)}
+                         "margin": round(cap / fee, 2), "gated": gated}
+                if ring_row is not None:
+                    entry["ring_bound_bth"] = round(ring, 3)
                 report.append(entry)
-                if row["depth"] == GATED_DEPTH and fee * FEE_MARGIN > cap:
+                if gated and fee * FEE_MARGIN > cap:
                     failures.append(entry)
     if failures:
         raise ValueError("planned shape over its fee cap with margin %d: %s" % (
@@ -171,12 +244,18 @@ def summarize(report):
         key = (entry["shape"], entry["tier"])
         slot = worst.setdefault(key, {"shape": entry["shape"], "tier": entry["tier"],
                                       "cap": entry["cap"], "moved": entry["moved"]})
-        for depth in ("hop", "exit"):
+        for depth in ("hop", "exit", "ring"):
+            if depth == "ring" and not entry["gated"]:
+                continue  # Ring rows past the prefunder's bound are unreachable.
             if entry["depth"] == depth and entry["fee"] > slot.get(depth + "_fee", -1):
                 slot[depth + "_fee"] = entry["fee"]
                 slot[depth + "_wealth_bth"] = entry["wealth_bth"]
+            if entry["depth"] == depth == "ring":
+                slot["ring_bound_bth"] = entry["ring_bound_bth"]
     for slot in worst.values():
         slot["hop_margin"] = round(slot["cap"] / slot["hop_fee"], 2)
+        if "ring_fee" in slot:
+            slot["ring_margin"] = round(slot["cap"] / slot["ring_fee"], 2)
         # Largest cluster wealth whose full exit still fits the cap.
         fits = [e["wealth_bth"] for e in report if e["shape"] == slot["shape"]
                 and e["tier"] == slot["tier"] and e["depth"] == "exit" and e["fee"] <= slot["cap"]]
@@ -206,7 +285,12 @@ def gated_fee(golden, inputs, moved, tier):
 
 
 def coverage(plan, events=None, golden=None):
-    """Replay the rehearsal and campaign through selection.cover; returns evidence."""
+    """Replay the rehearsal and campaign through selection.cover; returns evidence.
+
+    Raises ValueError on the first replayed spend whose gated fee (times
+    ``FEE_MARGIN`` and its tier) exceeds ``max_single``, or that moves more
+    than every planned shape with at least as many inputs is priced at.
+    """
     from plan import expand
     from selection import CONSOLIDATE_INPUTS, cover
 
@@ -222,8 +306,14 @@ def coverage(plan, events=None, golden=None):
         serial[0] += 1
         return {"id": "%012d" % serial[0], "mature": mature, "utxo": {"amount": amount}}
 
+    # The value moved each input count is priced at: the largest planned
+    # shape with at least that many inputs.
+    shapes = planned_shapes(plan, golden)
+    priced = {k: max((s[3] for s in shapes if s[6] is None and s[1] >= k), default=0)
+              for k in range(1, plan["wallets"]["max_payment_inputs"] + 1)}
     wallets = [[output(grant, float("-inf")) for _ in range(grants)] for _ in range(count)]
     failures, multi, moved, spends, fees = [], 0, 0, 0, 0
+    moved_by_inputs, worst_fee = {}, 0
     for event in sorted(rehearsal_events(plan) + list(events), key=lambda e: e["offset_seconds"]):
         at = event["offset_seconds"]
         sender = int(event["sender"].split("-")[1]) - 1
@@ -241,11 +331,20 @@ def coverage(plan, events=None, golden=None):
         multi += len(selected) > 1
         total = sum(o["utxo"]["amount"] for o in selected)
         moved = max(moved, total)
+        moved_by_inputs[len(selected)] = max(moved_by_inputs.get(len(selected), 0), total)
+        spend = {"at": at, "sender": event["sender"], "inputs": len(selected), "moved": total,
+                 "count": event.get("input_count"), "tier": event["fee_multiplier"]}
+        require(total <= priced.get(len(selected), 0),
+                "replayed spend moves more than any priced shape: " + json.dumps(spend, sort_keys=True))
         chosen = {o["id"] for o in selected}
         wallets[sender] = [o for o in wallets[sender] if o["id"] not in chosen]
         # Selection reserves max_single; the replay pays the gated fee bound
-        # twice over, so the drain is FEE_MARGIN x the planned worst case.
-        fee = min(max_single, gated_fee(golden, len(selected), total, event["fee_multiplier"]))
+        # twice over, so the drain is FEE_MARGIN x the planned worst case. A
+        # spend over the cap fails the gate: it is never clipped (#2023 review).
+        fee = gated_fee(golden, len(selected), total, event["fee_multiplier"])
+        require(fee <= max_single, "replayed spend's gated fee %d exceeds max_single %d: %s"
+                % (fee, max_single, json.dumps(spend, sort_keys=True)))
+        worst_fee = max(worst_fee, fee)
         fees += fee
         change = total - amount - fee
         if change > 0:
@@ -255,6 +354,9 @@ def coverage(plan, events=None, golden=None):
     return {"payments": spends + len(failures), "covered": spends, "uncovered": len(failures),
             "first_uncovered": failures[0] if failures else None,
             "several_inputs": multi, "largest_value_moved": moved,
+            "largest_value_moved_by_inputs": {str(k): v for k, v in sorted(moved_by_inputs.items())},
+            "priced_value_moved_by_inputs": {str(k): v for k, v in sorted(priced.items())},
+            "worst_gated_fee": worst_fee,
             "min_closing_balance": min(balances), "maturity_seconds": MATURITY_SECONDS,
             "replayed_fees": fees}
 
@@ -305,6 +407,7 @@ def preflight(plan):
                          + json.dumps(replay["first_uncovered"], sort_keys=True))
     return {"prefund": prefund, "fees": summarize(report), "coverage": replay,
             "fee_margin": FEE_MARGIN, "gated_depth": GATED_DEPTH,
+            "ring_gated_to_bth": round(ring_bound_bth(golden), 3),
             "note": "exit rows are reported, not gated: freeze the plan from the Part A "
                     "rehearsal's p99 quoted fee per BTH moved on the pinned build"}
 
