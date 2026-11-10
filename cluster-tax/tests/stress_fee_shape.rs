@@ -21,8 +21,8 @@
 //! - `ring` (prefund-batch shapes only): the outputs declare one wallet hop
 //!   from a fresh coinbase cluster (one coinbase less the 5% decay) while the
 //!   ring-floor wealth sits at `W`. The floor takes each input's maximum
-//!   effective wealth among members matching its pseudo amount (all members
-//!   if none match), then a pseudo-amount-weighted mean across inputs before
+//!   effective wealth among members matching its pseudo amount (all members if
+//!   none match), then a pseudo-amount-weighted mean across inputs before
 //!   applying the curve (`amount_matched_ring_floor_factor`). The prefunder's
 //!   bound on every member also bounds this mean; `payment_shape.py` gates the
 //!   downgrade at that bound (`prefund.MAX_FUNDING_DEPTH`).
