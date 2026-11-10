@@ -533,6 +533,14 @@ export { deriveV2Address, decodeV2Address, deriveKemPublicKey, mnemonicToSeedHex
 
 export {
   buildSendTransaction,
+  quoteDraftFeeVia,
+  parseDraftFeeQuote,
+  MAX_FEE_PASSES,
+  MAX_FEE_RECONFIRMS,
+  FEE_ABOVE_APPROVED,
+  FeeAboveApprovedError,
+  isFeeAboveApprovedError,
+  buildWithFeeConsent,
   buildOwnedHistory,
   netOwnedHistory,
   spendableBalance,
@@ -540,6 +548,7 @@ export {
   ownedOutputTargetKeys,
   type BuildSendParams,
   type BuildSendResult,
+  type DraftFeeQuote,
   type ChainOutputWithMeta,
   type HistoryEntry,
   type NettedHistoryEntry,

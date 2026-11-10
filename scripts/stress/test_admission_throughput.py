@@ -44,6 +44,15 @@ def x_series():
 ATTEMPT_B_INTERVAL = 2
 
 
+
+def settling_quote(fee):
+    """An ``estimateFee`` draft quote (#2001) that a draft signed at ``fee``
+    settles against: floors at the relay minimum, settle/re-sign at ``fee``."""
+    floor = min(fee, 10**8)
+    return {"minimumFee": floor, "consensusFeeFloor": floor, "relayFeeFloor": floor,
+            "settleFee": fee, "resignFee": fee, "txFee": fee, "feeSettles": True}
+
+
 class Clock:
     def __init__(self):
         self.now = 0.0
@@ -130,6 +139,10 @@ class Fleet:
     async def rpc(self, host, method, params=None, **_):
         if method == "fee_getRate":
             return {"baseRate": 1}
+        if method == "estimateFee":
+            # #2001: the node quotes the draft; this fleet's fee settles.
+            fee = self.signed[bytes.fromhex(params["tx_hex"]).decode()]["fee"]
+            return settling_quote(fee)
         if method == "getTransactionStatus":
             return {"status": "unknown"}
         if method == "tx_submit":

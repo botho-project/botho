@@ -585,8 +585,64 @@ pub fn format_fee_estimate(estimate: &FeeEstimate, picocredits_per_cad: u64) -> 
     lines.join("\n")
 }
 
+/// The node's quote for a signed draft: RPC `estimateFee` with `tx_hex`
+/// (#2001).
+///
+/// The node prices the draft with `Ledger::consensus_fee_floor` (and the same
+/// function at its congestion base for relay), so the quote includes the
+/// demurrage, the class-exit charge (#1685) and the import floor read from the
+/// inputs (#1687). [`FeeEstimator`] cannot: those terms depend on the draft's
+/// ring members and on node-side cluster wealth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftFeeQuote {
+    /// `max(relayFeeFloor, MIN_TX_FEE)`: the least fee the node admits.
+    pub minimum_fee: u64,
+    /// The block-validity floor at the next height.
+    pub consensus_fee_floor: u64,
+    /// The relay admission floor (>= the consensus floor).
+    pub relay_fee_floor: u64,
+    /// A draft whose fee is at least this is priced.
+    pub settle_fee: u64,
+    /// The fee to re-sign at when the draft does not settle.
+    pub resign_fee: u64,
+}
+
+/// Most sign-quote passes a send makes before giving up: each pass draws a
+/// fresh ring, so the floor moves; the `botho send` and faucet loops use 8.
+pub const MAX_FEE_PASSES: usize = 8;
+
+/// One pricing pass: `None` when a draft signed at `fee` settles against
+/// `quote`, else `Some(fee to re-sign at)` (#2001).
+pub fn next_fee_pass(fee: u64, quote: &DraftFeeQuote) -> Option<u64> {
+    if fee >= quote.settle_fee {
+        None
+    } else {
+        Some(quote.resign_fee.max(fee.saturating_add(1)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn draft_fee_quote_parses_estimate_fee_json_and_prices_passes() {
+        // The tx_hex form of `estimateFee` (botho/src/rpc/mod.rs).
+        let quote: DraftFeeQuote = serde_json::from_value(serde_json::json!({
+            "minimumFee": 2_000_000_074u64, "consensusFeeFloor": 2_000_000_074u64,
+            "relayFeeFloor": 2_000_000_074u64, "settleFee": 2_031_250_075u64,
+            "resignFee": 2_062_500_076u64, "recommendedFee": 2_062_500_076u64,
+            "feeSettles": false, "txFee": 100_000_000u64, "inclusionHeight": 7u64,
+        }))
+        .unwrap();
+        assert_eq!(quote.settle_fee, 2_031_250_075);
+        assert_eq!(next_fee_pass(100_000_000, &quote), Some(2_062_500_076));
+        assert_eq!(
+            next_fee_pass(quote.settle_fee - 1, &quote),
+            Some(quote.resign_fee)
+        );
+        assert_eq!(next_fee_pass(quote.settle_fee, &quote), None);
+    }
     use super::*;
 
     #[test]

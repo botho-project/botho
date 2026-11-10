@@ -105,6 +105,59 @@ export function sendConfirmContent(view: SendConfirmView, locale: Locale): JSXEl
   });
 }
 
+/** A send or sweep whose node-required fee exceeds the approved one (#2001). */
+export interface FeeRaisedView {
+  /** The fee the user approved earlier. */
+  approvedFeePicocredits: bigint;
+  /** The fee the node now requires (nothing is signed above it until approved). */
+  requiredFeePicocredits: bigint;
+  /** What the recipient output carries at the required fee. */
+  amountPicocredits: bigint;
+  /** Shown in full so the user re-verifies who is paid (send only). */
+  recipientAddress?: string;
+  rpcUrl: string;
+}
+
+/**
+ * Fee re-confirmation dialog (#2001): the node's fee floor for this send is
+ * above the fee the user approved, so the snap stopped before signing at it.
+ * Shows the approved and the required fee, the amount and total at the new
+ * fee, and the node; the send continues only on approval.
+ */
+export function feeRaisedContent(view: FeeRaisedView, locale: Locale): JSXElement {
+  const rows: JSXElement[] = [
+    Heading({ children: t('fee.raisedHeading', locale) }),
+    Text({ children: t('fee.raisedBody', locale) }),
+    Row({
+      label: t('fee.approved', locale),
+      children: Text({ children: formatBTHWithUnit(view.approvedFeePicocredits) }),
+    }),
+    Row({
+      label: t('fee.required', locale),
+      children: Text({ children: formatBTHWithUnit(view.requiredFeePicocredits) }),
+    }),
+    Row({
+      label: t('send.amount', locale),
+      children: Text({ children: formatBTHWithUnit(view.amountPicocredits) }),
+    }),
+    Row({
+      label: t('send.total', locale),
+      children: Text({
+        children: formatBTHWithUnit(view.amountPicocredits + view.requiredFeePicocredits),
+      }),
+    }),
+    Divider({}),
+  ];
+  if (view.recipientAddress !== undefined) {
+    rows.push(Text({ children: t('send.recipient', locale) }));
+    rows.push(Copyable({ value: view.recipientAddress }));
+  }
+  rows.push(
+    Row({ label: t('common.node', locale), children: Text({ children: hostOf(view.rpcUrl) }) }),
+  );
+  return Box({ children: rows });
+}
+
 /**
  * Transaction-history dialog: the wallet's receive history, newest first, each
  * entry annotated with its live spent/received direction and its finality depth

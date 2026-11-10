@@ -390,6 +390,16 @@ impl RpcPool {
         Ok(result.recommended_fee)
     }
 
+    /// Quote a signed draft (bincode hex, as for `tx_submit`) with RPC
+    /// `estimateFee` (#2001): the fee the node's consensus and relay floors
+    /// require of it. See [`crate::fee_estimation::DraftFeeQuote`].
+    pub async fn quote_draft_fee(
+        &mut self,
+        tx_hex: &str,
+    ) -> Result<crate::fee_estimation::DraftFeeQuote> {
+        self.call("estimateFee", json!({ "tx_hex": tx_hex })).await
+    }
+
     /// Get current network fee rate.
     ///
     /// Returns the dynamic base fee rate from the network, including congestion

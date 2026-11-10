@@ -40,6 +40,13 @@ vi.mock('@botho/wasm-signer', () => ({
   // Captured so the #1037 send-channel test can assert what the signer received.
   // Returns a valid-hex tx so `hexToBytes(txHex)` in `send()` succeeds.
   buildSendTransaction: vi.fn().mockResolvedValue({ txHex: 'ab' }),
+  // Fee consent (#2001): build once at the approved fee (no re-ask needed).
+  buildWithFeeConsent: vi.fn(
+    async (o: { approvedFee: bigint; build: (fee: bigint) => Promise<unknown> }) => ({
+      result: await o.build(o.approvedFee),
+      fee: o.approvedFee,
+    }),
+  ),
   // Sender's own ML-KEM key for change encapsulation (#978); stubbed.
   deriveKemPublicKey: vi.fn().mockResolvedValue('00'.repeat(1184)),
 }))
@@ -725,6 +732,8 @@ describe('WalletContext', () => {
       expect(buildSendTransaction).toHaveBeenCalledTimes(1)
       const arg = vi.mocked(buildSendTransaction).mock.calls[0][0]
       expect(arg.bridgeDepositMemo).toBeUndefined()
+      // #2001: the send is bounded by the approved fee; it never signs above it.
+      expect(arg.maxFee).toBe(arg.fee)
     })
 
     it('the bridge deposit memo IS threaded on-chain (64-byte hex)', async () => {

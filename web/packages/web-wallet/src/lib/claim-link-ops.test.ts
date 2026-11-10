@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { setSigner, resetSigner, type WasmSigner } from '@botho/wasm-signer'
+import { isFeeAboveApprovedError, setSigner, resetSigner, type WasmSigner } from '@botho/wasm-signer'
 import {
   deriveDefaultSubaddressPublicKeys,
   formatAddress,
@@ -63,6 +63,8 @@ interface StubOpts {
   spentKeyImages?: Set<string>
   submitOk?: boolean
   connected?: boolean
+  /** The node's fee floor for every draft (`estimateFee` tx_hex, #2001). */
+  nodeFloor?: bigint
 }
 
 function stubAdapter(opts: StubOpts = {}): RemoteNodeAdapter {
@@ -71,11 +73,23 @@ function stubAdapter(opts: StubOpts = {}): RemoteNodeAdapter {
     spentKeyImages = new Set(),
     submitOk = true,
     connected = true,
+    nodeFloor = 0n,
   } = opts
+  const headroom = nodeFloor / 64n
+  const atLeastMin = (fee: bigint) => (fee > MIN_TX_FEE ? fee : MIN_TX_FEE)
   return {
     isConnected: () => connected,
     getBlockHeight: async () => 100,
     estimateFee: async () => ({ fee: MIN_TX_FEE, clusterFactorDisplay: '1.00x' }),
+    // The fake signer's tx hex does not encode its fee, so the quote omits
+    // `txFee` and the orchestrator compares its own signed fee.
+    estimateDraftFee: async () => ({
+      minimumFee: String(atLeastMin(nodeFloor)),
+      consensusFeeFloor: String(nodeFloor),
+      relayFeeFloor: String(nodeFloor),
+      settleFee: String(atLeastMin(nodeFloor + headroom)),
+      resignFee: String(atLeastMin(nodeFloor + 2n * headroom)),
+    }),
     getRawOutputs: async () => outputs,
     areKeyImagesSpent: async (keyImages: string[]) =>
       keyImages.map((keyImage) => ({
@@ -148,6 +162,55 @@ describe('sweepEphemeral', () => {
     const result = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST)
     expect(result.txHash).toBe('sweeptx123')
     expect(result.net).toBe(gross - MIN_TX_FEE)
+  })
+
+  /** A link whose node fee floor (2e9) is far above the scanned fee (#2001). */
+  function floorAdapter() {
+    const gross = 5_000_000_000_000n + SWEEP_FEE_RESERVE
+    const nodeFloor = 2_000_000_074n
+    const adapter = stubAdapter({
+      outputs: [
+        { targetKey: 'eph-1', publicKey: 'pk1', amount: gross, height: 50 },
+        { targetKey: 'decoy-1', publicKey: 'pk2', amount: 1n, height: 50 },
+        { targetKey: 'decoy-2', publicKey: 'pk3', amount: 1n, height: 50 },
+      ],
+      nodeFloor,
+    })
+    return { adapter, gross, required: nodeFloor + 2n * (nodeFloor / 64n) }
+  }
+
+  it('refuses a node fee floor above the shown fee without a prompt; nothing submitted (#2001)', async () => {
+    setSigner(fakeSigner())
+    const { adapter, required } = floorAdapter()
+    const err = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST).catch((e: unknown) => e)
+    expect(isFeeAboveApprovedError(err)).toBe(true)
+    expect((err as { requiredFee: bigint }).requiredFee).toBe(required)
+    expect(adapter.submitTransaction).not.toHaveBeenCalled()
+  })
+
+  it('re-asks with the required fee and sweeps the rest on approval (#2001)', async () => {
+    setSigner(fakeSigner())
+    const { adapter, gross, required } = floorAdapter()
+    const confirmFee = vi.fn(async () => true)
+    const result = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST, {
+      approvedFee: MIN_TX_FEE,
+      confirmFee,
+    })
+    expect(confirmFee).toHaveBeenCalledWith(required, MIN_TX_FEE)
+    expect(result.net).toBe(gross - required)
+    expect(adapter.submitTransaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('a declined re-confirmation submits nothing (#2001)', async () => {
+    setSigner(fakeSigner())
+    const { adapter } = floorAdapter()
+    await expect(
+      sweepEphemeral(adapter, EPH_MNEMONIC, DEST, {
+        confirmFee: async () => false,
+        onReject: () => new Error('fee not approved'),
+      }),
+    ).rejects.toThrow('fee not approved')
+    expect(adapter.submitTransaction).not.toHaveBeenCalled()
   })
 
   it('throws "nothing to claim" when the link is empty / already claimed', async () => {

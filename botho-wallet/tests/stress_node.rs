@@ -69,6 +69,84 @@ fn adapter(value: Value) -> Value {
     execute(serde_json::from_value::<Request>(value).unwrap()).unwrap()
 }
 
+/// JSON-RPC call that returns the error object instead of panicking.
+async fn rpc_result(url: &str, method: &str, params: Value) -> Result<Value, Value> {
+    let body: Value = reqwest::Client::new()
+        .post(url)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    match body.get("error") {
+        Some(error) => Err(error.clone()),
+        None => Ok(body["result"].clone()),
+    }
+}
+
+/// What [`prepare_priced`] did.
+struct Priced {
+    /// The settled adapter response (its `artifact` is the settled draft).
+    prepared: Value,
+    /// Underpaying drafts the node rejected before the fee settled.
+    rejected: usize,
+}
+
+/// Sign with the offline adapter, quote each draft with RPC `estimateFee`
+/// (`tx_hex`), and re-sign at the quoted `resignFee` until the fee settles,
+/// as the stress controller does (#2001). Each underpaying draft is first
+/// submitted and must be refused as `Fee too low`, so a pass proves both
+/// sides: the estimated fee is accepted, an underpaid spend is not.
+/// `sign(request)` runs the adapter (callers add their own retries).
+async fn prepare_priced(url: &str, request: Value, mut sign: impl FnMut(Value) -> Value) -> Priced {
+    let base = std::path::PathBuf::from(request["artifact"].as_str().unwrap());
+    let mut min_fee = 0u64;
+    let mut rejected = 0;
+    for pass in 0..botho_wallet::fee_estimation::MAX_FEE_PASSES {
+        let mut request = request.clone();
+        let artifact = base.with_extension(format!("pass{pass}.bin"));
+        request["artifact"] = json!(artifact);
+        if min_fee > 0 {
+            request["min_fee"] = json!(min_fee);
+        }
+        let prepared = sign(request);
+        let tx_hex = hex::encode(std::fs::read(&artifact).unwrap());
+        let quote = rpc_once(url, "estimateFee", json!({"tx_hex": tx_hex})).await;
+        let fee = prepared["fee"].as_u64().unwrap();
+        assert_eq!(quote["txFee"].as_u64(), Some(fee));
+        assert!(quote["minimumFee"].as_u64().unwrap() >= bth_transaction_clsag::MIN_TX_FEE);
+        assert!(
+            quote["relayFeeFloor"].as_u64() >= quote["consensusFeeFloor"].as_u64(),
+            "{quote}"
+        );
+        let quote: botho_wallet::fee_estimation::DraftFeeQuote =
+            serde_json::from_value(quote).unwrap();
+        match botho_wallet::fee_estimation::next_fee_pass(fee, &quote) {
+            None => return Priced { prepared, rejected },
+            Some(next) => {
+                if fee < quote.minimum_fee {
+                    let error = rpc_result(url, "tx_submit", json!({"tx_hex": tx_hex}))
+                        .await
+                        .expect_err("an underpaying draft must be refused");
+                    assert!(
+                        error["message"].as_str().unwrap().contains("Fee too low"),
+                        "{error}"
+                    );
+                    rejected += 1;
+                }
+                min_fee = next;
+            }
+        }
+    }
+    panic!(
+        "fee did not settle after {} passes",
+        botho_wallet::fee_estimation::MAX_FEE_PASSES
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn receive_prepare_submit_restore_and_respend() {
     // The real 720-block lottery maturity fixture needs headroom on CI runners.
@@ -175,10 +253,12 @@ async fn receive_prepare_submit_restore_and_respend() {
                 "blocks":blocks,"expected_address":scan["address"]}));
             assert_eq!(check,scan);
             let artifact=dir.path().join(format!("payment-{round}.bin"));
-            let prepared=adapter(json!({"operation":"prepare","wallet":restored,"blocks":blocks,
+            let prepared=prepare_priced(&url,json!({"operation":"prepare","wallet":restored,"blocks":blocks,
                 "height":height,"selected":[owned[0]["id"]],"spent":spent,"reserved":[],
                 "recipient":recipient,"allowed_recipients":[address_a,address_b],
-                "amount":if round==0 {30_000_000_000u64} else {10_000_000_000u64},"base_rate":1,"artifact":artifact}));
+                "amount":if round==0 {30_000_000_000u64} else {10_000_000_000u64},"base_rate":1,"artifact":artifact}),
+                adapter).await.prepared;
+            let artifact=prepared["artifact"].as_str().unwrap().to_owned();
             let bytes=std::fs::read(&artifact).unwrap();
             let inspected=adapter(json!({"operation":"inspect","artifact":artifact}));
             assert_eq!(inspected["hash"],prepared["hash"]);
@@ -442,13 +522,16 @@ async fn v2_payout_round_trip(source: ContextSource) {
                 // past genesis and holds fewer than 19 outputs; the CLI has no
                 // nearest-age fill, so a redraw is how it recovers.
                 let mut redraws = 0;
-                let prepared = loop {
-                    let request = json!({"operation":"prepare","wallet":a,"blocks":blocks,
-                        "height":height,"selected":[owned["id"]],"spent":spent,"reserved":[],
-                        "recipient":address_b,"allowed_recipients":[address_b],"amount":amount,
-                        "base_rate":rate,"fee_multiplier":if max_fee {4} else {1},
-                        "artifact":artifact});
-                    match execute(serde_json::from_value::<Request>(request).unwrap()) {
+                let request = json!({"operation":"prepare","wallet":a,"blocks":blocks,
+                    "height":height,"selected":[owned["id"]],"spent":spent,"reserved":[],
+                    "recipient":address_b,"allowed_recipients":[address_b],"amount":amount,
+                    "base_rate":rate,"fee_multiplier":if max_fee {4} else {1},
+                    "artifact":artifact});
+                // Priced against the node's 10.0.0 floor (#2001): sign, quote
+                // the draft, re-sign at the quote.
+                let priced = prepare_priced(&url, request, |mut request| loop {
+                    request["base_rate"] = json!(rate);
+                    match execute(serde_json::from_value::<Request>(request.clone()).unwrap()) {
                         Ok(prepared) => break prepared,
                         Err(error) if rate > 1 && error.to_string().contains("bound") => rate /= 2,
                         Err(error)
@@ -459,8 +542,11 @@ async fn v2_payout_round_trip(source: ContextSource) {
                         }
                         Err(error) => panic!("{label} prepare: {error:#}"),
                     }
-                };
-                let bytes = std::fs::read(&artifact).unwrap();
+                })
+                .await;
+                let mut prepared = priced.prepared;
+                prepared["rejected_underpaid"] = json!(priced.rejected);
+                let bytes = std::fs::read(prepared["artifact"].as_str().unwrap()).unwrap();
                 let tx: botho::transaction::Transaction = bincode::deserialize(&bytes).unwrap();
                 let submitted = rpc(&url, "tx_submit", json!({"tx_hex":hex::encode(bytes)})).await;
                 assert_eq!(submitted["txHash"], prepared["hash"]);
@@ -598,6 +684,23 @@ async fn v2_payout_round_trip(source: ContextSource) {
         let blocks = outputs(height()).await;
         let respent = spend(source.clone(), blocks, 10_000_000_000, false, "source").await;
         assert_eq!(respent["key_images"], json!([source["key_image"]]));
+        // #2001: since protocol 10.0.0 these spends owe the epoch-0 class-exit
+        // charge (#1685), far above MIN_TX_FEE. A draft signed at the local
+        // estimate was refused as `Fee too low`; the node-quoted re-sign was
+        // accepted and mined.
+        for spend in [&paid, &respent] {
+            eprintln!(
+                "#2001 spend fee {} after {} refused draft(s)",
+                spend["fee"], spend["rejected_underpaid"]
+            );
+        }
+        assert!(
+            [&paid, &respent]
+                .iter()
+                .any(|p| p["rejected_underpaid"].as_u64().unwrap() >= 1
+                    && p["fee"].as_u64().unwrap() > bth_transaction_clsag::MIN_TX_FEE),
+            "an underpaying draft must have been refused and re-signed: {paid} {respent}"
+        );
         let spent = rpc(
             &url,
             "chain_areKeyImagesSpent",

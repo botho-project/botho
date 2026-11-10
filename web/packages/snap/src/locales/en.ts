@@ -32,6 +32,13 @@ export const en = {
   'send.networkFee': 'Network fee',
   'send.total': 'Total',
   'send.recipient': 'Recipient',
+  // Fee re-confirmation (#2001): the node requires more than the approved fee.
+  'fee.raisedHeading': 'Higher network fee',
+  'fee.raisedBody':
+    'The node requires a higher fee for this transaction than you approved. ' +
+    'Nothing has been sent. Approve the new fee to continue.',
+  'fee.approved': 'Approved fee',
+  'fee.required': 'Required fee',
 
   // Transaction-history dialog
   'history.heading': 'Transaction history',
@@ -81,4 +88,5 @@ export const en = {
   'error.rejectMnemonic': 'User declined to reveal the recovery phrase.',
   'error.rejectSend': 'User rejected the send.',
   'error.rejectClaim': 'User rejected the claim.',
+  'error.rejectFee': 'User rejected the higher network fee. Nothing was sent.',
 } as const;
