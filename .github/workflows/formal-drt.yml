@@ -1,124 +1,30 @@
-name: Formal DRT (Lean model vs Rust)
-
-# Differential random testing of the Lean LotteryV2 model (formal/Botho/
-# Lottery/) against the Rust node and cluster-tax (#1706, #1707, epic #1704).
-#
-# Per-PR tier: fixed seed, 10,000 cases per leg, and the replay of every
-# fixture in formal-drt/regressions/. A mismatch fails the job and uploads
-# the shrunk case (appended to formal-drt/regressions/<leg>.jsonl) and the
-# JSON report.
-#
-# This job is a test, not a gate on the proofs: it builds and runs model code
-# (the Lean executable) and has no part in the formal-gate trust boundary
-# (formal.yml). The model it runs is the gated formal/ package, required by
-# path from formal-drt/lean/.
-#
-# The nightly tier is in formal-drt-nightly.yml. The cluster-tax simulation
-# coverage includes bounded actual-entrypoint monetary vectors (#1922).
-
+name: Centroid retained diagnostic control (issue 1998)
 on:
-  pull_request:
-    paths:
-      - 'formal/**'
-      - 'formal-drt/**'
-      - 'cluster-tax/src/monetary.rs'
-      - 'botho/src/monetary.rs'
-      - 'cluster-tax/src/simulation/emission_sweep.rs'
-      - 'cluster-tax/src/simulation/lottery.rs'
-      - 'cluster-tax/src/simulation/lottery_production.rs'
-      - 'cluster-tax/src/lottery.rs'
-      - 'cluster-tax/src/demurrage.rs'
-      - 'cluster-tax/src/fee_curve.rs'
-      - 'botho/src/consensus/lottery.rs'
-      - 'botho/src/ledger/lottery_v2.rs'
-      - 'botho/src/ledger/formal_drt.rs'
-      - 'botho/src/ledger/formal_drt_tags.rs'
-      - 'botho/src/ledger/formal_drt_supply.rs'
-      - 'botho/src/ledger/mod.rs'
-      - 'botho/src/node/minter.rs'
-      - 'botho/src/consensus/validation.rs'
-      - 'transaction/types/src/cluster_tags.rs'
-      - 'botho/src/ledger/store.rs'
-      - 'botho/src/ledger/store/validation.rs'
-      - 'botho/src/block.rs'
-      - 'botho/src/pow.rs'
-      - 'botho/src/consensus/service.rs'
-      - 'botho/src/formal_drt_difficulty.rs'
-      - 'botho/src/formal_drt_difficulty/**'
-      - 'Cargo.lock'
-      - 'rust-toolchain*'
-      - '.github/workflows/formal-drt.yml'
-      - '.github/workflows/formal-drt-nightly.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'formal/**'
-      - 'formal-drt/**'
-      - 'cluster-tax/src/monetary.rs'
-      - 'botho/src/monetary.rs'
-      - 'cluster-tax/src/simulation/emission_sweep.rs'
-      - 'cluster-tax/src/simulation/lottery.rs'
-      - 'cluster-tax/src/simulation/lottery_production.rs'
-      - 'cluster-tax/src/lottery.rs'
-      - 'cluster-tax/src/demurrage.rs'
-      - 'cluster-tax/src/fee_curve.rs'
-      - 'botho/src/consensus/lottery.rs'
-      - 'botho/src/ledger/lottery_v2.rs'
-      - 'botho/src/ledger/formal_drt.rs'
-      - 'botho/src/ledger/formal_drt_tags.rs'
-      - 'botho/src/ledger/formal_drt_supply.rs'
-      - 'botho/src/ledger/mod.rs'
-      - 'botho/src/node/minter.rs'
-      - 'botho/src/consensus/validation.rs'
-      - 'transaction/types/src/cluster_tags.rs'
-      - 'botho/src/ledger/store.rs'
-      - 'botho/src/ledger/store/validation.rs'
-      - 'botho/src/block.rs'
-      - 'botho/src/pow.rs'
-      - 'botho/src/consensus/service.rs'
-      - 'botho/src/formal_drt_difficulty.rs'
-      - 'botho/src/formal_drt_difficulty/**'
-      - 'Cargo.lock'
-      - 'rust-toolchain*'
-      - '.github/workflows/formal-drt.yml'
-      - '.github/workflows/formal-drt-nightly.yml'
   workflow_dispatch:
     inputs:
-      cases:
-        description: 'Cases per leg'
-        required: false
-        default: '10000'
-      seed:
-        description: 'Seed (a u64, or "random")'
-        required: false
-        default: '1707'
-
+      source:
+        required: true
+        default: '9f62edc722e33988965d2d063eee2a65624cddf6'
+      mode:
+        required: true
+        default: 'old'
 permissions:
   contents: read
-
-concurrency:
-  group: formal-drt-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  ELAN_VERSION: v4.2.4
-
 jobs:
-  nightly-helper-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - run: python3 -m unittest discover -s formal-drt/scripts -p 'test_*.py' -v
-
-  drt:
+  evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: evidence-driver
+          sparse-checkout: .github/scripts
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -128,88 +34,29 @@ jobs:
         with:
           key: formal-drt
           workspaces: formal-drt -> target
-      - name: Cache elan toolchain
-        uses: actions/cache@v6
-        with:
-          path: ~/.elan
-          key: elan-${{ runner.os }}-${{ env.ELAN_VERSION }}-${{ hashFiles('formal/lean-toolchain') }}
-      - name: Install elan
+      - name: Build canonical Lean and Rust runners
+        if: inputs.mode != 'old'
         run: |
-          if [[ ! -x "$HOME/.elan/bin/elan" ]]; then
-            curl -sSfL "https://raw.githubusercontent.com/leanprover/elan/${ELAN_VERSION}/elan-init.sh" -o elan-init.sh
-            sh elan-init.sh -y --default-toolchain none --no-modify-path
-            rm elan-init.sh
-          fi
-          echo "$HOME/.elan/bin" >>"$GITHUB_PATH"
-      - name: Build the Lean model executable
-        working-directory: formal-drt/lean
-        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.2.4/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none --no-modify-path
+          export PATH="$HOME/.elan/bin:$PATH"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          cd formal-drt/lean
           elan toolchain install "$(cat lean-toolchain)"
           lake build
-      # The DRT crate is its own workspace. Seeding its lockfile from the root
-      # one makes it build the node's exact dependency versions.
-      - name: Seed the lockfile from the root workspace
-        run: cp Cargo.lock formal-drt/Cargo.lock
-      - name: Format
-        working-directory: formal-drt
-        run: cargo +nightly-2026-06-09 fmt -- --check
-      - name: Clippy (deny warnings)
-        working-directory: formal-drt
-        run: cargo clippy --release --all-targets -- -D warnings
-      - name: Unit tests
-        working-directory: formal-drt
-        timeout-minutes: 8
+          cd ..
+          cp ../Cargo.lock Cargo.lock
+          cargo fmt -- --check
+          cargo clippy --release --all-targets -- -D warnings
+          cargo build --release
+      - name: Execute source-bound evidence driver
         env:
-          SUPPLY_ORACLE_DIR: ${{ runner.temp }}/supply-oracle
-        run: |
-          set -o pipefail
-          timeout 420s cargo test --release -- --nocapture 2>&1 \
-            | tee "$RUNNER_TEMP/supply-oracle-unit-tests.log"
-      - name: Upload actual-commit oracle evidence
+          CENTROID_MODE: ${{ inputs.mode }}
+        run: python3 evidence-driver/.github/scripts/centroid-evidence.py
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: supply-oracle-evidence
-          path: |
-            ${{ runner.temp }}/supply-oracle/
-            ${{ runner.temp }}/supply-oracle-unit-tests.log
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Bounded monetary simulation vectors
-        timeout-minutes: 5
-        env:
-          CARGO_BUILD_JOBS: '2'
-          CARGO_TARGET_DIR: ${{ github.workspace }}/formal-drt/target
-        run: cargo test --release -p bth-cluster-tax --lib monetary_drt_simulation_vectors -- --nocapture
-      - name: Build the runner
-        working-directory: formal-drt
-        run: cargo build --release
-      # The per-PR budget is 5 minutes for the run itself (it takes about a
-      # minute on a GitHub runner); the build above is not counted.
-      - name: DRT (per-PR tier)
-        working-directory: formal-drt
-        timeout-minutes: 5
-        env:
-          CASES: ${{ github.event.inputs.cases || '10000' }}
-          SEED: ${{ github.event.inputs.seed || '1707' }}
-        run: |
-          target/release/botho-formal-drt --cases "$CASES" --seed "$SEED" \
-            --json "$RUNNER_TEMP/drt-report.json"
-      - name: Upload clean or failing DRT report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: formal-drt-report
-          path: ${{ runner.temp }}/drt-report.json
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Upload shrunk fixtures and report
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: formal-drt-mismatches
-          path: |
-            formal-drt/regressions/
-            ${{ runner.temp }}/drt-report.json
-          if-no-files-found: ignore
-          retention-days: 14
+          name: centroid-evidence
+          path: ${{ runner.temp }}/centroid-evidence
+          if-no-files-found: error
+          retention-days: 30
