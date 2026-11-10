@@ -86,7 +86,7 @@ The operator ruled on #1687 (options 1 + 4). Protocol 10.0.0 adds three consensu
 What this changes in §Production-semantics re-calibration (numbers from the regenerated `docs/research/bridge-import-calibration.md` §0 and §8):
 
 - **Tag drop:** rejected when the coin is its ring's only candidate (an honest wallet's ring). If the spender adds a decoy of the exact same amount without the import tag, the drop passes the retained-weight floor but is charged at `F` from the inputs: 1.0% of value for the 1,000-BTH entrant, up from 0.06%. The honest wallet now pays less than any accepted drop.
-- **Shedding (weight ÷ 20 per hop):** rejected at the first hop with ordinary decoys. With same-amount decoys it still reaches 1× in 3 spends, but it pays `F` from the inputs while any import weight remains.
+- **Shedding (weight ÷ 20 per hop):** rejected at the first hop with ordinary decoys. With same-amount decoys it still reaches 1× in 3 spends. Each spend pays the import floor read from the inputs, which scales with the import share the inputs still carry, so after one shed (weight ÷ 20) the floor is already about 1×.
 - **Stock-wallet self-churn is unchanged.** 5% per spend is exactly the floor, so 135 self-spends still prune the tag. The floor limits decay per spend, not per unit of time. §Decision 4's "decay only by circulation" still does not hold, and the 720-block age gate of `cluster-tag-decay.md` is still not implemented.
 - **Honest first spend of a lone 1,000-BTH import:** 0.492% of value, up from 0.44%. `F` is now read from the undecayed input (1.500×) instead of the decayed output (1.475×). Whether an honest import spend should pay a downgrade charge at all is still open.
 - **Split game:** 514 epochs for 2M BTH (was 584).

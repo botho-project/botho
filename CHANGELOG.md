@@ -29,7 +29,9 @@ consensus batch (#1683).
   which mempool admission also calls, so relay and consensus cannot drift.
   The constant values are unchanged. Coinbase (`MintingTx`) and lottery
   payouts are not `Transaction`s and are unaffected.
-- **Bridge-import tag drop closed (#1687, #1740).** Under 7.x-9.x a spender
+- **Bridge-import tag drop priced (#1687, #1740).** The drop now pays `F`
+  once, read from the inputs. The retention floor does not stop it when the
+  ring holds a same-amount decoy without the tag (see below). Under 7.x-9.x a spender
   could rewrite an import-tagged coin's output tags to nothing: C6 only
   rejected tag *inflation*, and the ADR-0007 import floor `F` = 1.5x was read
   from the output tags, so the spend was charged at 1x (Lean
