@@ -10,6 +10,90 @@ ZERO_KEY = "0" * 64
 
 
 MAX_PAYMENT_INPUTS = 4
+# Multi-input selection searches combinations of the largest this-many
+# eligible outputs: <=2516 combinations, bounded irrespective of wallet history.
+CANDIDATE_CAP = 16
+# Extra small inputs a free-shape single-input payment consolidates (#2023),
+# leaving MAX_PAYMENT_INPUTS' last slot for an ``award_input``.
+CONSOLIDATE_INPUTS = MAX_PAYMENT_INPUTS - 2
+
+
+def _amount(output):
+    return output["utxo"]["amount"]
+
+
+def cover(eligible, need, count=None, pool_ok=None, pad=0, paddable=None):
+    """Value order of a payment selection (#2023); returns ``(selected, tried)``.
+
+    Since protocol 10.0.0 the fee floor prices the class-exit charge on the
+    whole value a spend moves, change included (#1685), so a payment moves as
+    little value as covers it:
+
+    - one input (free shape, or ``count == 1``): the smallest eligible output
+      of at least ``need``, ties by id. Every output is considered, not only
+      the largest sixteen: only the smallest covering one is checked. A
+      free-shape payment then also spends up to ``pad`` of the smallest
+      ``paddable`` outputs below ``need``, smallest first, each only if the
+      total stays within ``max(output, 2 * need)`` and the complete set's
+      decoy pools still hold. Spending the smallest sufficient
+      output leaves every receipt and change below ``need`` unspent, and
+      without this a 72 h wallet ends with its value in dust no four inputs
+      can combine into a payment (``payment_shape.coverage``);
+    - otherwise ``n`` inputs, ``n = count`` or the fewest of 2..4 that works,
+      from the largest ``CANDIDATE_CAP`` eligible outputs: the covering
+      combination of least total value, ties by ids.
+
+    A free-shape selection only reaches several inputs when no single eligible
+    output covers ``need``, so each input is below ``need``; a padded single
+    stays within ``max(output, 2 * need)``. No change output therefore
+    outgrows ``max(largest prefunded output, 2 * need)``, and a free-shape
+    selection moves at most that or ``MAX_PAYMENT_INPUTS * need``, the bound
+    ``payment_shape`` prices offline (plus at most one award). ``pool_ok(selected)`` is the complete-set decoy check;
+    ``tried`` counts the selections it was asked about plus the covering
+    combinations enumerated. Pure: ``payment_shape``'s workload replay runs
+    this same function with ``pool_ok`` always true.
+    """
+    pool_ok = pool_ok or (lambda selected: True)
+    paddable = paddable or (lambda output: True)
+    tried = 0
+    if count in (None, 1):
+        ordered = sorted(eligible, key=lambda o: (_amount(o), o["id"]))
+        for output in ordered:
+            if _amount(output) < need:
+                continue
+            tried += 1
+            if pool_ok([output]):
+                selected = [output]
+                # Padding keeps the total within max(output, 2 * need), so
+                # change never outgrows that and moved value stays bounded.
+                limit = max(_amount(output), 2 * need)
+                if count is None:
+                    for small in ordered:
+                        if len(selected) > pad or _amount(small) >= need:
+                            break
+                        total = sum(_amount(o) for o in selected) + _amount(small)
+                        if total <= limit and paddable(small):
+                            tried += 1
+                            if pool_ok(selected + [small]):
+                                selected.append(small)
+                return selected, tried
+            if count is None:
+                break  # Single inputs never fail on decoys alone; fall through.
+        if count == 1:
+            return [], tried
+    candidates = sorted(eligible, key=lambda o: (-_amount(o), o["id"]))[:CANDIDATE_CAP]
+    for n in [count] if count else range(2, MAX_PAYMENT_INPUTS + 1):
+        covering = []
+        for selected in combinations(candidates, n):
+            tried += 1
+            total = sum(_amount(o) for o in selected)
+            if total >= need:
+                covering.append((total, [o["id"] for o in selected], selected))
+        covering.sort(key=lambda c: (c[0], c[1]))
+        for _, _, selected in covering:
+            if pool_ok(list(selected)):
+                return list(selected), tried
+    return [], tried
 
 
 def is_v2_award(canonical, output):
@@ -57,8 +141,9 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
            award_input=False):
     """Canonical selection; ``award_input`` adds the oldest mature V2 award.
 
-    Largest-value-first never reaches a V2 payout (~1.25e8 picocredits next
-    to ~1e10 principal outputs), so without ``award_input`` a campaign
+    Value selection (``cover``: the smallest sufficient output, #2023) never
+    reaches a V2 payout (~1.25e8 picocredits, below every payment plus the
+    fee headroom), so without ``award_input`` a campaign
     discovers awards but never spends one (#1681). With it, a free-shape
     payment (``count`` None) whose value selection leaves room under
     MAX_PAYMENT_INPUTS also spends the sender's oldest eligible V2 award
@@ -165,24 +250,22 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
     if not amount:
         return eligible, evidence
     fee = controller.j.limits["max_single_signed_fee_picocredits"]
-    # Take the largest sixteen candidates: <=2516 complete selections, bounded
-    # irrespective of wallet history. Missing alternatives are generator limits.
-    candidates = eligible[:16]
-    shapes = [count] if count else range(1, 5)
-    attempted = 0
-    for n in shapes:
-        for selected in combinations(candidates, n):
-            attempted += 1
-            if sum(o["utxo"]["amount"] for o in selected) < amount + fee:
-                continue
+
+    def complete(selected):
+        excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
+        return all(pool_ok(o, excluded) for o in selected)
+
+    # Smallest sufficient value first (#2023), see cover().
+    selected, attempted = cover(eligible, amount + fee, count, complete,
+                                CONSOLIDATE_INPUTS,
+                                lambda o: not is_v2_award(canonical, o))
+    if selected:
+        extra = {**evidence, "combinations": attempted}
+        if award_input and count is None:
             excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
-            if all(pool_ok(o, excluded) for o in selected):
-                selected = list(selected)
-                extra = {**evidence, "combinations": attempted}
-                if award_input and count is None:
-                    award = add_award(selected, excluded)
-                    extra["award_input"] = award["id"] if award else None
-                return selected, extra
+            award = add_award(selected, excluded)
+            extra["award_input"] = award["id"] if award else None
+        return selected, extra
     reason = (
         "reservation_or_spent"
         if raw and not unspent
@@ -196,5 +279,5 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
         **evidence,
         "reason": reason,
         "combinations": attempted,
-        "candidate_cap": 16,
+        "candidate_cap": CANDIDATE_CAP,
     }

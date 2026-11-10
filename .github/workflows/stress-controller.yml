@@ -6,6 +6,9 @@ on:
       - '.github/workflows/stress-controller.yml'
       # lottery.PROTOCOL_VERSION must track the node constant (#1933).
       - 'botho/src/network/discovery.rs'
+      # The fee function behind fixtures/fee-shape-golden.json (#2023).
+      - 'cluster-tax/src/**'
+      - 'cluster-tax/tests/stress_fee_shape.rs'
   push:
     branches: [main]
     paths:
@@ -13,6 +16,9 @@ on:
       - '.github/workflows/stress-controller.yml'
       # lottery.PROTOCOL_VERSION must track the node constant (#1933).
       - 'botho/src/network/discovery.rs'
+      # The fee function behind fixtures/fee-shape-golden.json (#2023).
+      - 'cluster-tax/src/**'
+      - 'cluster-tax/tests/stress_fee_shape.rs'
 permissions:
   contents: read
 jobs:
@@ -27,3 +33,18 @@ jobs:
       - run: python3 -m unittest discover -s scripts/stress -p 'test_*.py'
       - run: python3 scripts/stress/plan.py --plan scripts/stress/testnet-discovery-v2.json
       - run: python3 scripts/stress/plan.py --plan scripts/stress/x-series-plan.json
+  fee-shape-golden:
+    # scripts/stress/fixtures/fee-shape-golden.json is the 10.0.0 fee function's
+    # output for the planned payment shapes (#2023); plan.py gates the x-series
+    # plan on it. Fails when the fee function changes until it is regenerated.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-09
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: stress-fee-shape
+      - run: cargo test --locked -p bth-cluster-tax --test stress_fee_shape

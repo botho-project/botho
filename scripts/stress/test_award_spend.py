@@ -74,10 +74,11 @@ class AwardSelectionTests(unittest.TestCase):
         self.c.spent.append({"keyImage": output["key_image"], "spent": False, "pending": False})
         return output
 
-    def test_without_the_policy_largest_first_never_reaches_an_award(self):
+    def test_without_the_policy_value_selection_never_reaches_an_award(self):
+        # Smallest sufficient first (#2023): the 2e10 principal, never the award.
         self.own(40, AWARD, award=True)
         selected, evidence = choose(self.c, 0, 170, 10**9)
-        self.assertEqual(selected, [self.principal[0]])
+        self.assertEqual(selected, [self.principal[2]])
         self.assertNotIn("award_input", evidence)
 
     def decoy_block(self, height, tags):
@@ -93,7 +94,7 @@ class AwardSelectionTests(unittest.TestCase):
         newer = self.own(41, 2 * AWARD, height=104, award=True)
         older = self.own(40, AWARD, height=97, award=True)
         selected, evidence = choose(self.c, 0, 170, 10**9, award_input=True)
-        self.assertEqual(selected, [self.principal[0], older])
+        self.assertEqual(selected, [self.principal[2], older])
         self.assertEqual(evidence["award_input"], older["id"])
         # Deterministic: a replay over the same state picks the same set,
         # whatever the inventory order.
@@ -103,12 +104,12 @@ class AwardSelectionTests(unittest.TestCase):
         # Once the older one is spent the next oldest follows.
         next(s for s in self.c.spent if s["keyImage"] == older["key_image"])["spent"] = True
         selected, _ = choose(self.c, 0, 170, 10**9, award_input=True)
-        self.assertEqual(selected, [self.principal[0], newer])
+        self.assertEqual(selected, [self.principal[2], newer])
 
     def test_immature_award_is_not_added(self):
         self.own(40, AWARD, height=165, award=True)
         selected, evidence = choose(self.c, 0, 170, 10**9, award_input=True)
-        self.assertEqual(selected, [self.principal[0]])
+        self.assertEqual(selected, [self.principal[2]])
         self.assertIsNone(evidence["award_input"])
 
     def test_pinned_shapes_and_probes_are_never_widened(self):
@@ -141,7 +142,7 @@ class AwardSelectionTests(unittest.TestCase):
         # sit at exactly 19 while the principal ring stays complete.
         # - Award: 16 decoys at age 76 are in every window. Windows from 74
         #   and 75 also hold the three principal keys (age 80): exactly 19,
-        #   so selecting principal[0] leaves 18. Windows from 70..73 hold three
+        #   so selecting principal[2] leaves 18. Windows from 70..73 hold three
         #   decoys at age 73 instead; the window from 76 holds the age-82 ones.
         # - Principal: 17 decoys at age 82 plus keys 2 and 3 fill windows from
         #   77..80 (19); the windows from 72..76 also hold the age-76 decoys.
@@ -155,17 +156,18 @@ class AwardSelectionTests(unittest.TestCase):
         ]
         award = self.own(40, AWARD, height=104, award=True)
         selected, evidence = choose(self.c, 0, 180, 10**9, award_input=True)
-        self.assertEqual(selected, [self.principal[0]])
+        self.assertEqual(selected, [self.principal[2]])
         self.assertIsNone(evidence["award_input"])
         # One more decoy at the award's age: the complete set holds.
         next(b for b in self.c.blocks if b["height"] == 104)["outputs"].append(decoy(166, 104))
         selected, evidence = choose(self.c, 0, 180, 10**9, award_input=True)
-        self.assertEqual(selected, [self.principal[0], award])
+        self.assertEqual(selected, [self.principal[2], award])
         self.assertEqual(evidence["award_input"], award["id"])
 
     def test_award_already_selected_by_value_is_not_doubled(self):
         big = self.own(40, PRINCIPAL * 9, award=True)
-        selected, evidence = choose(self.c, 0, 170, 10**9, award_input=True)
+        # Only the award covers 5e10 plus the fee headroom (#2023 value order).
+        selected, evidence = choose(self.c, 0, 170, PRINCIPAL * 5, award_input=True)
         self.assertEqual(selected, [big])
         self.assertIsNone(evidence["award_input"])
 
@@ -176,7 +178,7 @@ class AwardSelectionTests(unittest.TestCase):
         recorded = {}
         self.c.__class__ = DiscoveryController
         self.c.j.set = recorded.__setitem__
-        self.assertEqual(self.c.spendable(0, 170, 10**9), [self.principal[0], award])
+        self.assertEqual(self.c.spendable(0, 170, 10**9), [self.principal[2], award])
         self.assertEqual(recorded["selection_latest"]["award_input"], award["id"])
         self.assertEqual(len(self.c.spendable(0, 170, 10**9, 1)), 1)
 

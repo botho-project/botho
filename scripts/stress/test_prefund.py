@@ -853,20 +853,28 @@ class DeadlineFitTests(PrefundBase):
     #1809 random-offset window needs 19 decoys in its thinnest window, and
     the rehearsal saw the first grant at height 221). One input per grant
     then needs 2048 eligible inputs, about 24 h at one per block; batches
-    need 137.
+    need 137. Since #2023 the plan pins 40 grants of 2e10 per wallet (2560
+    grants, 171 batches) so a payment moves little value under the 10.0.0
+    exit charge.
     """
     PLAN = 'x-series-plan.json'
     BLOCK_SECONDS = 40
-    X2_GRANT = 5 * 10**10
+    X2_GRANT = 2 * 10**10
+    X2_GRANTS = 40
+    TOTAL = 64 * X2_GRANTS
+    BATCHES = -(-TOTAL // 15)
 
     def run_fresh_chain(self, tick_seconds):
-        """Prefund 2048 grants from height 0; returns the prefunder and first/last batch heights."""
+        """Prefund the plan's grants from height 0; returns the prefunder and first/last batch heights."""
         self.fleet = Fleet(self.plan, self.fleet.addresses)
         self.fleet.coinbase_to = self.m['funding_wallet']['address']
         self.fleet.fillers, self.fleet.coinbase_every, self.fleet.coinbase_amount = 0, 1, 5 * 10**13
-        self.m.update(grants_per_wallet=32, grant_picocredits=self.X2_GRANT, deadline=self.now + 6 * 3600)
+        self.assertEqual(self.plan['prefund'], {'grants_per_wallet': self.X2_GRANTS,
+                         'grant_picocredits': str(self.X2_GRANT), 'max_batch_fee_picocredits': '100000000000'})
+        self.m.update(grants_per_wallet=self.X2_GRANTS, grant_picocredits=self.X2_GRANT,
+                      deadline=self.now + 6 * 3600)
         p = self.prefunder()
-        self.assertEqual(self.plan['wallets']['count'] * self.m['grants_per_wallet'], 2048)
+        self.assertEqual(self.plan['wallets']['count'] * self.m['grants_per_wallet'], self.TOTAL)
         done = False
         with contextlib.redirect_stdout(io.StringIO()):  # funding-wait lines
             while not done:
@@ -889,19 +897,19 @@ class DeadlineFitTests(PrefundBase):
         p, first, last = self.run_fresh_chain(self.BLOCK_SECONDS)
         count = self.plan['wallets']['count']
         self.assertGreater(first, 200)  # Decoy-starved until then (#1809).
-        self.assertEqual((p.granted(), len(p.records)), (2048, 137))  # ceil(2048 / 15)
-        self.assertEqual(len(set(self.fleet.submits)), 137)
-        self.assertLessEqual(last - first, 137)
-        # 6 h is 540 blocks; one grant per transaction would need ~2048 more.
+        self.assertEqual((p.granted(), len(p.records)), (self.TOTAL, self.BATCHES))  # ceil(2560 / 15)
+        self.assertEqual(len(set(self.fleet.submits)), self.BATCHES)
+        self.assertLessEqual(last - first, self.BATCHES)
+        # 6 h is 540 blocks; one grant per transaction would need ~2560 more.
         self.assertLess(last * self.BLOCK_SECONDS, 6 * 3600)
-        self.assertLessEqual(max(r['fee'] for r in p.records),
-                             int(self.plan['limits']['max_single_signed_fee_picocredits']))
+        self.assertLessEqual(max(r['fee'] for r in p.records), prefund.batch_fee_cap(self.plan))
         state = Path(self.m['state_dir'])
-        self.assertEqual(json.loads((state / 'opening_balances.json').read_text()), [32 * self.X2_GRANT] * count)
+        self.assertEqual(json.loads((state / 'opening_balances.json').read_text()), [self.X2_GRANTS * self.X2_GRANT] * count)
         health = json.loads((state / 'funding-health.json').read_text())
         self.assertEqual(health['accounting']['difference'], 0)
-        self.assertEqual(health['grants'], 2048)
-        self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [32] * count)
+        self.assertEqual(health['grants'], self.TOTAL)
+        self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']],
+                         [self.X2_GRANTS] * count)
         # Activation. latest_deadline() reserves MATURITY_SECONDS for output
         # maturity, staging and activation. At the earliest activation, one
         # such slack after completion with the chain back to one coinbase per
@@ -928,10 +936,34 @@ class DeadlineFitTests(PrefundBase):
         # Ticking every 4 s, a batch's change (in a 16-output block) is
         # itself spendable ~20 blocks later, so several batches land per block.
         p, first, last = self.run_fresh_chain(4)
-        self.assertEqual((p.granted(), len(p.records)), (2048, 137))
-        self.assertLess(last - first, 137)
+        self.assertEqual((p.granted(), len(p.records)), (self.TOTAL, self.BATCHES))
+        self.assertLess(last - first, self.BATCHES)
         self.assertEqual(json.loads((Path(self.m['state_dir']) / 'funding-health.json').read_text())
                          ['accounting']['difference'], 0)
+
+
+class PinnedShapeTests(PrefundBase):
+    """#2023: an x-series plan pins the prefund shape it was fee-checked for."""
+    PLAN = 'x-series-plan.json'
+
+    def test_manifest_must_match_the_plan_prefund_block(self):
+        pinned = self.plan['prefund']
+        with self.assertRaisesRegex(Gate, 'plan prefund block'):
+            load_manifest(self.manifest_file())  # 16 grants of 1e11
+        m = {**self.m, 'grants_per_wallet': pinned['grants_per_wallet'],
+             'grant_picocredits': int(pinned['grant_picocredits'])}
+        with self.assertRaisesRegex(Gate, 'plan prefund block'):
+            load_manifest(self.manifest_file({**m, 'grants_per_wallet': pinned['grants_per_wallet'] + 1}))
+        _, plan = load_manifest(self.manifest_file(m))
+        # Batches are capped by the plan's batch cap, not the campaign's max_single.
+        self.assertEqual(prefund.batch_fee_cap(plan), int(pinned['max_batch_fee_picocredits']))
+        self.assertGreater(prefund.batch_fee_cap(plan),
+                           int(plan['limits']['max_single_signed_fee_picocredits']))
+
+    def test_plans_without_the_block_cap_batches_at_max_single(self):
+        plan = json.loads(Path(__file__).with_name('testnet-discovery-v2.json').read_text())
+        self.assertEqual(prefund.batch_fee_cap(plan),
+                         int(plan['limits']['max_single_signed_fee_picocredits']))
 
 
 class ReconcileTests(PrefundBase):
