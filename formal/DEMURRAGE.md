@@ -396,12 +396,13 @@ transformations. The five-minute PR campaign and nightly 1M/leg, four-worker,
 3600-second leg and 9600-second collection budgets are unchanged; discovery
 and nightly-helper checks are not a million-case execution claim.
 
-No theorem, extraction equivalence, universal permutation/value-independence,
-generic overflow/allocation/panic freedom or accepted-chain reachability
-result is added. #1711 retains those proof/reachability obligations, the
-other elapsed-centroid obligations beyond the four full-Nat properties proved
-in #2004 below, dilution, fee-floor composition and binary fuzz-corpus replay. Historical
-receipts above remain historical; final-head receipts are on the child PR.
+The #1993 increment added no property theorem; its campaigns remain finite
+**tested** correspondence evidence. The later #2008 increment proves the four
+model properties below. Universal Rust/extraction equivalence, generic
+overflow/allocation/panic freedom and accepted-chain reachability remain open,
+as do the other #1711 kernel/composition properties, dilution, full fee-floor
+behavior and binary fuzz-corpus replay. Historical receipts above retain their
+original scope; each child PR records its own final-head checks.
 
 On 2026-11-09, [formal gates](https://github.com/botho-project/botho/actions/runs/42711257939)
 and the [control/normal campaign](https://github.com/botho-project/botho/actions/runs/42712236451)
@@ -426,6 +427,52 @@ root/standalone lock hashes differ (1,157/688 packages); unchanged tracked
 source does not establish identical dependency graphs or binaries across
 runs. These receipts precede the documentation-only follow-up; final PR CI
 validates its final checkout separately. No million-case run was performed.
+
+### Proven elapsed-quantile model properties (#2008)
+
+Four claims about the unchanged canonical `ringElapsedQuantile` are
+**proven (model)** and listed in `Theorems.lean`:
+
+| Theorem | Full-Nat contract |
+| --- | --- |
+| `ringElapsedQuantile_value_independent` | Equal creation-height sequences give equal results, with arbitrary independent changes to each value. |
+| `ringElapsedQuantile_perm` | Any permutation of complete `(value, creationHeight)` pairs preserves the result and multiplicities. |
+| `ringElapsedQuantile_mono_quantile` | Increasing quantile from `q1` to `q2` cannot lower the result, assuming solely `q1 ≤ q2`. |
+| `ringElapsedQuantile_le_height` | The result is at most current height, unconditionally. |
+
+The domain is all natural values, heights and quantiles, and arbitrary finite
+lists. No nonempty, positive-value, u64-width, nonoverflow or 64-member premise
+is added. Natural subtraction still saturates future creation heights to zero;
+the quantile still clamps at 10,000 bps. Zero-valued members count, so an
+all-zero-value ring can have a positive quantile, unlike the zero-total centroid.
+Equal old values may receive different replacement values. The unnamed
+kernel-checked examples include those cases, values beyond u64, empty input,
+zero current height, future births, reordered duplicate pairs, q=0/10,000/20,000,
+and the 3333/3334 and 6666/6667 thresholds for three unsorted mixed ages.
+
+The four complete records were approved first in [PR #2009](https://github.com/botho-project/botho/pull/2009),
+merged at `21417a368d4cea3c9db66b5f9c2ad0052c514a2e`; all 253 records remain
+unchanged here. The genuine proposal source is
+`bb70f0c0ad932ecf497ba35bfc1e0589f14c5a8f` (tree
+`fd5b7ab7aa293a89f30fd44f7453665f97cf9085`). Its original
+[run 42770787453](https://github.com/botho-project/botho/actions/runs/42770787453)
+and independent [run 42771140251](https://github.com/botho-project/botho/actions/runs/42771140251)
+compiled the proofs and generated matching complete blocks. Both proposal
+workflows failed the expected missing-record self-test and skipped isolated
+verification; neither is a green full workflow. The implementing PR retains
+its own final-head build, kernel replay and isolated binding of all 253 claims
+to the records-bearing base, with original artifact/log archives and API digests.
+
+The finite Rust/Lean campaigns above remain **tested**, separate from these
+universal model proofs. The canonical quantile, centroid and existing centroid
+proofs are unchanged, as are Rust/DRT sources, fixtures and campaign budgets.
+Source identity alone does not establish equal resolved dependencies or binaries
+across runs. These claims do not prove universal Rust/extraction equivalence,
+width/overflow/panic/allocation/cardinality safety, accepted/genesis reachability,
+fee behavior, a principal bound or privacy economics. Other #1711 kernel,
+composition and factor properties, the false unconditional principal-bound
+disposition, dilution, full fee-floor/no-saturation and binary fuzz replay remain
+separate obligations.
 
 ## Exact elapsed-age centroid (#1998)
 
@@ -536,4 +583,4 @@ Rust/extraction equivalence or machine-width/panic/allocation/cardinality/
 reachability proof follows from these properties. The height bound concerns
 the elapsed centroid only; neither it nor positive scaling proves accepted-chain
 fee behavior, a principal bound or general factor dilution resistance.
-Quantile properties and the remaining #1711 obligations stay separate.
+The four quantile properties above and the remaining #1711 obligations stay separate.
