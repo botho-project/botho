@@ -812,7 +812,8 @@ impl Mempool {
         // consensus rule (#1857 Rule 1: SCP intrinsic validity and block
         // validation both enforce it); this admission check keeps its own
         // message and runs first. Kept here in `add_tx` rather than in
-        // `Transaction::is_valid_structure`, which has block-path callers.
+        // `Transaction::check_consensus_structure`, the predicate the
+        // block-path callers use.
         //
         // Checked before any signature or ledger work, so a malformed spend
         // costs O(outputs * 16) (`is_valid` rejects an over-long vector on

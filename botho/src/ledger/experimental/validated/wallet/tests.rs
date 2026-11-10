@@ -210,48 +210,57 @@ fn native_wallet_accepted_repeated_nested_payout_spends() {
         );
         let mut txs = vec![];
         if next == 40 {
-            let inputs = [
-                owned(&store, &wallet, coinbases[0]),
-                owned(&store, &wallet, coinbases[1]),
-            ];
-            let amount = inputs
-                .iter()
-                .try_fold(0u64, |sum, o| sum.checked_add(o.utxo.output.amount))
-                .expect("funding amount fits");
+            // Consensus caps a transaction at MAX_OUTPUTS = 16 outputs, change
+            // included (#1684). Fund the families with three ordinary wallet
+            // payments of 15 hybrid outputs plus change, each spending two
+            // coinbases. Original indices 5..=15 of every payment give
+            // nonzero-index hybrid sources (classical outputs are invalid
+            // since #1677).
+            const FUNDING_PAYMENTS: usize = 3;
+            const OUTPUTS_PER_PAYMENT: u32 = bth_transaction_types::MAX_OUTPUTS as u32 - 1;
             let output_value = 2 * COIN;
-            let change = amount
-                .checked_sub(32 * output_value)
-                .and_then(|v| v.checked_sub(FUNDING_FEE))
-                .expect("actual funding covers outputs and fee");
-            // Ordinary actual wallet payment: 32 hybrid outputs at nonzero
-            // original indices (classical outputs are invalid since #1677).
-            let mut outputs: Vec<_> = (0..32)
-                .map(|i| {
+            for k in 0..FUNDING_PAYMENTS {
+                let inputs = [
+                    owned(&store, &wallet, coinbases[2 * k]),
+                    owned(&store, &wallet, coinbases[2 * k + 1]),
+                ];
+                let amount = inputs
+                    .iter()
+                    .try_fold(0u64, |sum, o| sum.checked_add(o.utxo.output.amount))
+                    .expect("funding amount fits");
+                let change = amount
+                    .checked_sub(OUTPUTS_PER_PAYMENT as u64 * output_value)
+                    .and_then(|v| v.checked_sub(FUNDING_FEE))
+                    .expect("actual funding covers outputs and fee");
+                let mut outputs: Vec<_> = (0..OUTPUTS_PER_PAYMENT)
+                    .map(|i| {
+                        TxOutput::new_hybrid_to_address(
+                            output_value,
+                            &wallet.quantum_safe_address(),
+                            i,
+                            None,
+                            Default::default(),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                outputs.push(
                     TxOutput::new_hybrid_to_address(
-                        output_value,
+                        change,
                         &wallet.quantum_safe_address(),
-                        i,
+                        OUTPUTS_PER_PAYMENT,
                         None,
                         Default::default(),
                     )
-                    .unwrap()
-                })
-                .collect();
-            outputs.push(
-                TxOutput::new_hybrid_to_address(
-                    change,
-                    &wallet.quantum_safe_address(),
-                    32,
-                    None,
-                    Default::default(),
-                )
-                .unwrap(),
-            );
-            txs.push(
-                store
-                    .wallet_transaction(&wallet, &inputs, outputs, FUNDING_FEE)
                     .unwrap(),
-            );
+                );
+                assert!(outputs.len() <= bth_transaction_types::MAX_OUTPUTS as usize);
+                txs.push(
+                    store
+                        .wallet_transaction(&wallet, &inputs, outputs, FUNDING_FEE)
+                        .unwrap(),
+                );
+            }
         } else if next >= 721 && (next % 10 == 1 || next >= 1441) {
             // Recent mature coinbases cannot yet win the lottery; keep the
             // older source/payout families unspent during acquisition.
