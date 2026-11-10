@@ -602,8 +602,10 @@ The four quantile properties above and the remaining #1711 obligations stay sepa
 The six claims below are **proven (model)** in `ExactCharge.lean`, listed in
 `Theorems.lean`, and bound to the complete approved records merged by
 [PR #2018](https://github.com/botho-project/botho/pull/2018), commit
-`940cff20db5bb1d53bc227057ea466b2aa8b372c`. All 259 approved records are
-unchanged, including the original 253 claims. The private subtraction helper
+`940cff20db5bb1d53bc227057ea466b2aa8b372c`. All 259 records reviewed for this child are
+unchanged, including the original 253 claims. The integrated base also holds
+four pending tag-retention records from external PR #2000; they are not
+added to this child's 259-claim manifest. The private subtraction helper
 and six proof bodies retain the reviewed proposal at
 `771c7b682af3aa1633508a9cee329617136576a8` byte-for-byte.
 

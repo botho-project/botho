@@ -322,7 +322,7 @@ The raw guard, separate floors/caps, fixed 31,536,000-block settlement/reset
 horizon and `max` composition remain unchanged. Fifteen unnamed kernel-checked
 examples supplement the proofs, including zero inputs, clamp/cap plateaus,
 separate rounding, spend crossover and the decreasing generic-reset horizon
-witness. All 259 approved records remain byte-identical. Rust correspondence
+witness. The 259 approved records for these listed claims remain byte-identical. Rust correspondence
 stays **tested**; the epoch-0 two-rate path, universal Rust/extraction equality,
 width/panic/allocation/cardinality safety, accepted/genesis reachability,
 principal bounds, full fee-floor policy and privacy/economic guarantees are
