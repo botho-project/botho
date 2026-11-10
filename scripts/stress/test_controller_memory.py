@@ -215,6 +215,8 @@ class CompactInventoryTests(Scenario):
 def reference_choose(controller, wallet, height, amount=0, count=None, headroom=0):
     """selection.choose before #1633: one materialized decoy-pool set per input.
 
+    Value order as since #2023 (smallest sufficient).
+
     Since #1692 a pool must fill the thinnest random-offset window the signer
     can draw, checked here by brute force over every offset."""
     from itertools import combinations
@@ -242,14 +244,42 @@ def reference_choose(controller, wallet, height, amount=0, count=None, headroom=
     eligible.sort(key=lambda o: (-o["utxo"]["amount"], o["id"]))
     if not amount:
         return eligible
-    fee = controller.j.limits["max_single_signed_fee_picocredits"]
-    for n in ([count] if count else range(1, 5)):
-        for selected in combinations(eligible[:16], n):
-            if sum(o["utxo"]["amount"] for o in selected) < amount + fee:
-                continue
-            excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
-            if all(thinnest(pools[o["id"]][0], pools[o["id"]][1] - excluded) >= 19 + headroom
-                   for o in selected):
+    need = amount + controller.j.limits["max_single_signed_fee_picocredits"]
+
+    def complete(selected):
+        excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
+        return all(thinnest(pools[o["id"]][0], pools[o["id"]][1] - excluded) >= 19 + headroom
+                   for o in selected)
+    # #2023 value order: the smallest covering single input, else the
+    # least-value covering combination of the fewest inputs from the largest 16.
+    if count in (None, 1):
+        singles = sorted((o for o in eligible if o["utxo"]["amount"] >= need),
+                         key=lambda o: (o["utxo"]["amount"], o["id"]))
+        for o in singles:
+            if complete([o]):
+                selected = [o]
+                if count is None:
+                    # Consolidation: up to two smaller outputs below `need`,
+                    # within max(o, 2 * need), smallest first.
+                    limit = max(o["utxo"]["amount"], 2 * need)
+                    for small in sorted(eligible, key=lambda x: (x["utxo"]["amount"], x["id"])):
+                        if len(selected) == 3 or small["utxo"]["amount"] >= need:
+                            break
+                        if (sum(x["utxo"]["amount"] for x in selected) + small["utxo"]["amount"]
+                                <= limit and complete(selected + [small])):
+                            selected.append(small)
+                return selected
+            if count is None:
+                break
+        if count == 1:
+            return []
+    for n in ([count] if count else range(2, 5)):
+        covering = sorted(
+            (c for c in combinations(eligible[:16], n)
+             if sum(o["utxo"]["amount"] for o in c) >= need),
+            key=lambda c: (sum(o["utxo"]["amount"] for o in c), [o["id"] for o in c]))
+        for selected in covering:
+            if complete(selected):
                 return list(selected)
     return []
 

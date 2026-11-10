@@ -43,6 +43,11 @@
     "faucet_fees": "record_separately; faucet_request cannot impose a caller fee limit",
     "mode": "prefunded_isolated"
   },
+  "prefund": {
+    "grants_per_wallet": 40,
+    "grant_picocredits": "20000000000",
+    "max_batch_fee_picocredits": "100000000000"
+  },
   "limits": {
     "max_unique_chain_writes": 30000,
     "max_signed_fee_picocredits": "100000000000000",

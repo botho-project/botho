@@ -115,8 +115,12 @@ class DegradePlanTests(unittest.TestCase):
         base, plan = load("testnet-discovery-v2.json"), self.plan()
         for key in set(base) | set(plan):
             if key not in ("faults", "phases", "degrade", "limits", "rehearsal", "wallets",
-                           "lottery_v2"):
+                           "lottery_v2", "prefund"):
                 self.assertEqual(plan[key], base[key], key)
+        # #2023: x-series pins its prefund shape for the 10.0.0 fee floor.
+        self.assertNotIn("prefund", base)
+        self.assertEqual(set(plan["prefund"]), {"grants_per_wallet", "grant_picocredits",
+                                                "max_batch_fee_picocredits"})
         # #1681: x-series pins the V2 award-spend threshold; the reference
         # plan keeps its golden digest and the default.
         self.assertNotIn("lottery_v2", base)

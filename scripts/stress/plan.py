@@ -166,6 +166,15 @@ def main():
         summary, events = expand(json.loads(args.plan.read_text()))
     except (ValueError, KeyError, TypeError) as error:
         parser.error(str(error))
+    plan = json.loads(args.plan.read_text())
+    if "prefund" in plan:
+        # #2023: the pinned prefund and payment shape against the 10.0.0 fee
+        # floor (golden rows from cluster-tax) and the 72 h workload replay.
+        from payment_shape import preflight
+        try:
+            summary["payment_shape"] = preflight(plan)
+        except (ValueError, KeyError, TypeError) as error:
+            parser.error("payment shape: " + str(error))
     if args.output:
         args.output.mkdir(parents=True, exist_ok=True)
         (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
