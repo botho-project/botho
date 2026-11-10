@@ -237,3 +237,153 @@ def exactSpendCharge (value inputFactor outputFactor elapsed rate year : Nat) : 
     (exactResetCharge value inputFactor outputFactor 31536000 rate year)
 
 end Botho.Demurrage
+
+namespace Botho.Demurrage
+
+-- Proposal for the six full-Nat composition contracts in #2014/#2015.
+-- These are properties of the canonical models, independently of Rust DRT.
+private theorem exactResetCharge_eq_sub
+    (value inputFactor outputFactor horizon rate year : Nat) :
+    exactResetCharge value inputFactor outputFactor horizon rate year =
+      exactCharge value inputFactor horizon rate year -
+        exactCharge value outputFactor horizon rate year := by
+  unfold exactResetCharge
+  split
+  next h =>
+    have hc := exactCharge_mono_factor value inputFactor outputFactor horizon rate year h
+    omega
+  next => rfl
+
+/-- Reset is monotone in the raw input factor, including either guard branch. -/
+theorem exactResetCharge_mono_input_factor
+    (value outputFactor horizon rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactResetCharge value f1 outputFactor horizon rate year ≤
+      exactResetCharge value f2 outputFactor horizon rate year := by
+  rw [exactResetCharge_eq_sub, exactResetCharge_eq_sub]
+  have h := exactCharge_mono_factor value f1 f2 horizon rate year hf
+  omega
+
+/-- Reset is antitone in the raw output factor, including both clamp plateaus. -/
+theorem exactResetCharge_antitone_output_factor
+    (value inputFactor horizon rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactResetCharge value inputFactor f2 horizon rate year ≤
+      exactResetCharge value inputFactor f1 horizon rate year := by
+  rw [exactResetCharge_eq_sub, exactResetCharge_eq_sub]
+  have h := exactCharge_mono_factor value f1 f2 horizon rate year hf
+  omega
+
+/-- Settlement inherits input-factor monotonicity at its fixed production horizon. -/
+theorem exactSettlementCharge_mono_input_factor
+    (value rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactSettlementCharge value f1 rate year ≤
+      exactSettlementCharge value f2 rate year := by
+  exact exactResetCharge_mono_input_factor value 1000 31536000 rate year f1 f2 hf
+
+/-- Both obligations in spend are monotone in the input factor. -/
+theorem exactSpendCharge_mono_input_factor
+    (value outputFactor elapsed rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactSpendCharge value f1 outputFactor elapsed rate year ≤
+      exactSpendCharge value f2 outputFactor elapsed rate year := by
+  have ha := exactCharge_mono_factor value f1 f2 elapsed rate year hf
+  have hr := exactResetCharge_mono_input_factor value outputFactor 31536000 rate year f1 f2 hf
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> split <;> omega
+
+/-- Raising the output factor can only lower spend's reset obligation. -/
+theorem exactSpendCharge_antitone_output_factor
+    (value inputFactor elapsed rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactSpendCharge value inputFactor f2 elapsed rate year ≤
+      exactSpendCharge value inputFactor f1 elapsed rate year := by
+  have hr := exactResetCharge_antitone_output_factor value inputFactor 31536000 rate year f1 f2 hf
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> split <;> omega
+
+/-- Accrued elapsed time is monotone; the reset horizon remains fixed. -/
+theorem exactSpendCharge_mono_elapsed
+    (value inputFactor outputFactor rate year t1 t2 : Nat) (ht : t1 ≤ t2) :
+    exactSpendCharge value inputFactor outputFactor t1 rate year ≤
+      exactSpendCharge value inputFactor outputFactor t2 rate year := by
+  have ha := exactCharge_mono_elapsed value inputFactor t1 t2 rate year ht
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> split <;> omega
+
+end Botho.Demurrage
+
+namespace Botho.Demurrage
+
+/- The six composition properties above are now proven (model), listed and
+statement-bound (#2015), extending the tested definitions introduced in #1985.
+They hold on all Nat inputs with only the respective ordering premise.
+The single-rate model does not prove the epoch-0 two-rate path, Rust/extraction
+correspondence, width/panic/allocation/cardinality safety, accepted/genesis
+reachability, principal bounds, fee-floor policy or privacy/economic guarantees.
+
+These unnamed kernel-checked examples use demurrage_composition.jsonl inputs.
+They supplement the universal proofs without adding manifest claims. -/
+
+-- The raw guard checks equality and an increase before either factor clamp.
+example : exactResetCharge 1000000 6000 6000 31536000 200 6307200 = 0 ∧
+    exactResetCharge 1000000 6000 6001 31536000 200 6307200 = 0 := by decide
+
+-- Zero value, rate and year each annihilate all three compositions.
+example : exactResetCharge 0 6000 1000 31536000 200 6307200 = 0 ∧
+    exactSettlementCharge 0 6000 200 6307200 = 0 ∧
+    exactSpendCharge 0 6000 1000 6307200 200 6307200 = 0 := by decide
+example : exactResetCharge 1000000 6000 1000 31536000 0 6307200 = 0 ∧
+    exactSettlementCharge 1000000 6000 0 6307200 = 0 ∧
+    exactSpendCharge 1000000 6000 1000 6307200 0 6307200 = 0 := by decide
+example : exactResetCharge 1000000 6000 1000 31536000 200 0 = 0 ∧
+    exactSettlementCharge 1000000 6000 200 0 = 0 ∧
+    exactSpendCharge 1000000 6000 1000 6307200 200 0 = 0 := by decide
+
+-- Input factor boundaries below, at and above each clamp endpoint.
+example : exactSettlementCharge 1000000 999 200 6307200 = 0 ∧
+    exactSettlementCharge 1000000 1000 200 6307200 = 0 ∧
+    exactSettlementCharge 1000000 1001 200 6307200 = 20 := by decide
+example : exactSettlementCharge 1000000 5999 200 6307200 = 99980 ∧
+    exactSettlementCharge 1000000 6000 200 6307200 = 100000 ∧
+    exactSettlementCharge 1000000 6001 200 6307200 = 100000 := by decide
+
+-- Output factor boundaries lower reset while the accrued obligation remains.
+example : exactResetCharge 1000000 6000 999 31536000 200 6307200 = 100000 ∧
+    exactResetCharge 1000000 6000 1000 31536000 200 6307200 = 100000 ∧
+    exactResetCharge 1000000 6000 1001 31536000 200 6307200 = 99980 := by decide
+example : exactSpendCharge 1000000 6000 5999 6307200 200 6307200 = 20000 ∧
+    exactSpendCharge 1000000 6000 6000 6307200 200 6307200 = 20000 ∧
+    exactSpendCharge 1000000 6000 6001 6307200 200 6307200 = 20000 := by decide
+
+-- A strict raw downgrade can still lie entirely on the upper clamp plateau.
+example : exactResetCharge 18446744073709551615 7000 6500 31536000 200 6307200 = 0 := by
+  decide
+
+-- Subtract the two floors, not the floor of a factor-difference charge.
+example : exactResetCharge 3000 1002 1001 1 10000 1 = 1 := by decide
+
+-- The settlement horizon is 31,536,000 even when the caller's year is 1.
+example : exactSettlementCharge 1000000 6000 200 1 = 630720000000 := by decide
+
+-- Reset dominates at zero/positive elapsed, ties accrual, then is overtaken.
+example : exactSpendCharge 1000000 6000 1000 0 200 6307200 = 100000 ∧
+    exactSpendCharge 1000000 6000 1000 6307200 200 6307200 = 100000 ∧
+    exactSpendCharge 1000000 6000 1000 31536000 200 6307200 = 100000 ∧
+    exactSpendCharge 1000000 6000 1000 63072000 200 6307200 = 200000 := by decide
+
+-- Separately capped reset terms can cancel while settlement/spend stay capped.
+example : exactResetCharge 18446744073709551615 6000 3500 2 10000 1 = 0 ∧
+    exactSettlementCharge 18446744073709551615 6000 10000 1 = 18446744073709551615 ∧
+    exactSpendCharge 18446744073709551615 6000 3500 6307200 10000 1 =
+      18446744073709551615 := by decide
+
+-- Adjacent wide-year inputs both land on the final cap plateau.
+example : exactSpendCharge 18446744073709551615 6000 1000 18446744073709551615
+      200 368934881474 = 18446744073709551615 ∧
+    exactSpendCharge 18446744073709551615 6000 1000 18446744073709551615
+      200 368934881475 = 18446744073709551615 := by decide
+
+-- Generic reset DECREASES from 50 to 100 years: no horizon monotonicity claim.
+-- Spend's elapsed theorem keeps its reset horizon fixed and is unaffected.
+example : exactResetCharge 18446744073709551615 6000 3500 315360000 200 6307200 =
+      9223372036854775808 ∧
+    exactResetCharge 18446744073709551615 6000 3500 630720000 200 6307200 = 0 := by decide
+
+end Botho.Demurrage

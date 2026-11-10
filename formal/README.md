@@ -311,9 +311,22 @@ executable composition models, **tested** by the structured
 `demurrage_composition` leg (#1985). Each case compares all three public Rust
 wrappers: 10,000 cases means 30,000 function results, not 30,000 independent
 cases. Separate rounding/caps, the constant settlement horizon and max
-composition are covered by live Rust/Lean fixture assertions. No new model
-property or Rust-equivalence theorem is claimed; see
+composition are covered by live Rust/Lean fixture assertions; see
 [the composition domain and controls](DEMURRAGE.md#composition-models-and-drt-1985).
+
+The #2015 increment adds six **proven (model)** full-Nat composition claims:
+reset is monotone in input factor and antitone in output factor; settlement is
+monotone in input factor; spend is monotone in input factor and elapsed, and
+antitone in output factor. Each uses only the respective ordering premise.
+The raw guard, separate floors/caps, fixed 31,536,000-block settlement/reset
+horizon and `max` composition remain unchanged. Fifteen unnamed kernel-checked
+examples supplement the proofs, including zero inputs, clamp/cap plateaus,
+separate rounding, spend crossover and the decreasing generic-reset horizon
+witness. The 259 approved records for these listed claims remain byte-identical. Rust correspondence
+stays **tested**; the epoch-0 two-rate path, universal Rust/extraction equality,
+width/panic/allocation/cardinality safety, accepted/genesis reachability,
+principal bounds, full fee-floor policy and privacy/economic guarantees are
+separate obligations. See [the six contracts and assurance boundary](DEMURRAGE.md#proven-composition-model-properties-2015).
 
 
 `Botho.Demurrage.ringElapsedQuantile` (`Botho/Demurrage/Age.lean`, #1993)

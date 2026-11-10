@@ -304,11 +304,13 @@ Since protocol 10.0.0 (#1685) the consensus fee floor calls
 `exactSpendCharge` covers every epoch-1+ spend. The epoch-0 shape (accrual 0,
 reset 200) has no Lean model or DRT leg yet.
 
-These are **tested models**, not new theorems. The existing extracted
-`capitalized_reset_charge_no_downgrade` proves only its named branch;
-finite correspondence here does not prove Rust equivalence or panic freedom.
-The parent still owns other composition properties, fee-floor composition,
-adversarial dilution, binary fuzz-corpus replay and ledger reachability.
+These models have finite **tested** Rust correspondence from #1985 and six
+**proven (model)** composition properties from #2015, detailed below. The
+existing extracted `capitalized_reset_charge_no_downgrade` proves only its
+named branch; neither the model proofs nor finite correspondence prove
+universal Rust equality or panic freedom. The parent still owns other
+composition properties, fee-floor composition, adversarial dilution,
+binary fuzz-corpus replay and ledger reachability.
 
 One stateless `demurrage_composition` leg calls all three real Rust functions
 and the canonical Lean definitions on every case. Value, both factors,
@@ -593,3 +595,57 @@ reachability proof follows from these properties. The height bound concerns
 the elapsed centroid only; neither it nor positive scaling proves accepted-chain
 fee behavior, a principal bound or general factor dilution resistance.
 The four quantile properties above and the remaining #1711 obligations stay separate.
+
+
+## Proven composition model properties (#2015)
+
+The six claims below are **proven (model)** in `ExactCharge.lean`, listed in
+`Theorems.lean`, and bound to the complete approved records merged by
+[PR #2018](https://github.com/botho-project/botho/pull/2018), commit
+`940cff20db5bb1d53bc227057ea466b2aa8b372c`. All 259 records reviewed for this child are
+unchanged, including the original 253 claims. The integrated base also holds
+four pending tag-retention records from external PR #2000; they are not
+added to this child's 259-claim manifest. The private subtraction helper
+and six proof bodies retain the reviewed proposal at
+`771c7b682af3aa1633508a9cee329617136576a8` byte-for-byte.
+
+| Claim in `Botho.Demurrage` | Sole premise | Conclusion |
+|---|---|---|
+| `exactResetCharge_mono_input_factor` | `f1 ≤ f2` | Reset at input `f1` is at most reset at input `f2` |
+| `exactResetCharge_antitone_output_factor` | `f1 ≤ f2` | Reset at output `f2` is at most reset at output `f1` |
+| `exactSettlementCharge_mono_input_factor` | `f1 ≤ f2` | Settlement at input `f1` is at most settlement at input `f2` |
+| `exactSpendCharge_mono_input_factor` | `f1 ≤ f2` | Spend at input `f1` is at most spend at input `f2` |
+| `exactSpendCharge_antitone_output_factor` | `f1 ≤ f2` | Spend at output `f2` is at most spend at output `f1` |
+| `exactSpendCharge_mono_elapsed` | `t1 ≤ t2` | Spend at elapsed `t1` is at most spend at elapsed `t2` |
+
+All other arguments stay fixed. Every argument ranges over all `Nat`, including
+zero year/value/rate/elapsed, values beyond Rust widths, both factor clamp
+regions and final-cap plateaus. The canonical definitions are unchanged.
+Factor monotonicity makes natural subtraction zero in the raw no-downgrade
+branch, so a private helper equates guarded reset with that subtraction.
+Subtraction monotonicity/antitonicity gives the reset claims; settlement fixes
+output 1000 and horizon 31,536,000; `max` composes the reset/accrued bounds.
+The spend elapsed claim leaves the reset horizon fixed independently of both
+elapsed and the caller's year.
+
+Fifteen unnamed kernel-checked examples use the existing composition regression
+inputs: equality/no-downgrade; zero value/rate/year; both input/output clamp
+boundaries; separate rounding (`3000, 1002 → 1001` gives 1); capped terms;
+and year-1 settlement 630720000000. At value 1000000, factors 6000 → 1000,
+rate 200 and year 6307200, spend is 100000 at elapsed 0, 6307200 and
+31536000, then 200000 at 63072000. These concrete checks supplement the
+universal proofs. The generic-reset witness still decreases from
+9223372036854775808 at 50 years to 0 at 100 years; it refutes horizon
+monotonicity, not spend elapsed monotonicity. Historical principal
+counterexamples also remain unchanged.
+
+The normal final-tree Formal gate must compile and independently kernel-replay
+all 259 listed claims, check their approved statement/definition bindings and
+axioms, and pass the source gates. The original proposal runs compiled and
+regenerated records but lacked six approvals and skipped isolated verification;
+the records-only PR verified 253 claims. Neither substitutes for that final
+gate. Dated DRT receipts above retain their original finite scope. These
+single-rate model proofs do not cover the epoch-0 two-rate path or establish
+universal Rust/extraction equality, width/panic/allocation/cardinality safety,
+accepted/genesis reachability, principal bounds, full fee-floor policy, or
+privacy/economic guarantees. Those #1711 obligations remain separate.
