@@ -12,7 +12,10 @@
 //!   [`crate::ring_centroid_implied_factor`];
 //! - the **bridge-import floor** — `import_floor_factor_from_outputs`: a
 //!   value-weighted blend of `F` on output value tagged to a *recorded* import
-//!   cluster and `1×` on the rest.
+//!   cluster and `1×` on the rest; since protocol 10.0.0 (#1687) the `max` of
+//!   that and the same blend read from the inputs' spend candidates
+//!   (`import_floor_factor_from_inputs`, [`crate::tag_retention`]), which the
+//!   spender cannot remove by dropping output tags.
 //!
 //! And the per-cluster wealth `W[c]` those read is the cumulative sum the block
 //! writer adds for **every output ever created** with a tag on `c`
@@ -39,7 +42,10 @@ use crate::{
 /// copy in `botho-wallet/src/transaction.rs`): every ordinary transfer's
 /// outputs carry `ClusterTagVector::merge_weighted(inputs, 5%)`. This is
 /// wallet policy, not consensus — consensus accepts any non-inflating output
-/// tags (`check_cluster_tag_inheritance`, decay rate 0). The drift guard
+/// tags (`check_cluster_tag_inheritance`, decay rate 0) that keep at least
+/// `TAG_WEIGHT_SCALE − WALLET_CLUSTER_DECAY_RATE` of each cluster's weight
+/// (the protocol 10.0.0 retained-weight floor,
+/// `crate::tag_retention::CONSENSUS_MIN_TAG_RETENTION`, #1687). The drift guard
 /// `wallet_decay_rate_matches_cluster_tax_mirror` in `botho/src/wallet.rs`
 /// asserts equality.
 pub const WALLET_CLUSTER_DECAY_RATE: u32 = 50_000;
@@ -168,8 +174,13 @@ pub struct ResolvedFeeFloor {
     pub claimed_factor: u64,
     /// Ring-centroid-implied factor, FACTOR_SCALE.
     pub ring_floor: u64,
-    /// Bridge-import floor blend on the output tags, FACTOR_SCALE.
+    /// Bridge-import floor, FACTOR_SCALE: since protocol 10.0.0 (#1687)
+    /// `max(input blend, output blend)`, see [`Self::import_floor_inputs`].
     pub import_floor: u64,
+    /// The import floor read from the inputs' spend candidates
+    /// (`crate::tag_retention::import_floor_factor_from_inputs`), the part a
+    /// spender cannot remove by rewriting its output tags.
+    pub import_floor_inputs: u64,
     /// The composed input-class floor `max(ring_floor, import_floor)` —
     /// [`crate::ConsensusFeeInputs::floor`].
     pub floor: u64,
@@ -180,10 +191,13 @@ pub struct ResolvedFeeFloor {
 
 /// Resolve the fee-floor inputs exactly as `Ledger::consensus_fee_floor` does,
 /// with an explicit import floor `F` (the ledger uses
-/// [`BRIDGE_IMPORT_FACTOR_FLOOR`]).
+/// [`BRIDGE_IMPORT_FACTOR_FLOOR`]). `rings` are the transaction's inputs (one
+/// per CLSAG input, with its pseudo-output amount); the ring-centroid floor
+/// reads every member of every ring, the import floor reads each ring's spend
+/// candidates (protocol 10.0.0, #1687).
 pub fn resolve_fee_floor_at(
     outputs: &[FloorOutput<'_>],
-    ring: &[(u64, &[TagPair])],
+    rings: &[crate::tag_retention::SpendRing<'_>],
     wealth: &dyn Fn(u64) -> u128,
     is_import: &dyn Fn(u64) -> bool,
     import_floor_f: u64,
@@ -191,14 +205,22 @@ pub fn resolve_fee_floor_at(
     let curve = ClusterFactorCurve::default_params();
     let claimed_wealth = effective_cluster_wealth_from_outputs(outputs, wealth);
     let claimed_factor = curve.factor(claimed_wealth);
-    let ring_floor = ring_centroid_factor(ring, wealth, &curve);
-    let import_floor = import_floor_factor_from_outputs_at(outputs, is_import, import_floor_f);
+    let flat: Vec<(u64, &[TagPair])> = rings
+        .iter()
+        .flat_map(|r| r.members.iter().copied())
+        .collect();
+    let ring_floor = ring_centroid_factor(&flat, wealth, &curve);
+    let import_floor_inputs =
+        crate::tag_retention::import_floor_factor_from_inputs_at(rings, is_import, import_floor_f);
+    let import_floor = import_floor_factor_from_outputs_at(outputs, is_import, import_floor_f)
+        .max(import_floor_inputs);
     let floor = ring_floor.max(import_floor);
     ResolvedFeeFloor {
         claimed_wealth,
         claimed_factor,
         ring_floor,
         import_floor,
+        import_floor_inputs,
         floor,
         demurrage_factor: claimed_factor.max(floor),
     }
@@ -207,11 +229,17 @@ pub fn resolve_fee_floor_at(
 /// [`resolve_fee_floor_at`] at the ratified floor `F`.
 pub fn resolve_fee_floor(
     outputs: &[FloorOutput<'_>],
-    ring: &[(u64, &[TagPair])],
+    rings: &[crate::tag_retention::SpendRing<'_>],
     wealth: &dyn Fn(u64) -> u128,
     is_import: &dyn Fn(u64) -> bool,
 ) -> ResolvedFeeFloor {
-    resolve_fee_floor_at(outputs, ring, wealth, is_import, BRIDGE_IMPORT_FACTOR_FLOOR)
+    resolve_fee_floor_at(
+        outputs,
+        rings,
+        wealth,
+        is_import,
+        BRIDGE_IMPORT_FACTOR_FLOOR,
+    )
 }
 
 #[cfg(test)]

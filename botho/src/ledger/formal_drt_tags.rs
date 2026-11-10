@@ -9,7 +9,9 @@
 //! `ValidationReads`: `verify_cluster_tag_inheritance(tx, height)`, which runs
 //! Rule 2 and C6 in `check_cluster_tag_inheritance`;
 //! `effective_cluster_wealth_from_outputs`;
-//! `import_floor_factor_from_outputs`). Only the pre-state those methods read
+//! `import_floor_factor_from_outputs`; the protocol 10.0.0 (#1687)
+//! `verify_cluster_tag_retention` and `import_floor_factor_from_inputs`).
+//! Only the pre-state those methods read
 //! (UTXOs by target key, per-cluster wealth, the bridge-import cluster set)
 //! is in memory.
 
@@ -91,9 +93,17 @@ pub fn cluster_tag_inheritance(
     outs: &[Coin],
     height: u64,
 ) -> Result<(), LedgerError> {
-    let mut double = Double::default();
-    let mut inputs = Vec::with_capacity(rings.len());
-    for (r, ring) in rings.iter().enumerate() {
+    let inputs: Vec<(u64, Vec<Coin>)> = rings.iter().map(|r| (0, r.clone())).collect();
+    let (double, tx) = spend(&inputs, outs, Double::default());
+    double.verify_cluster_tag_inheritance(&tx, height)
+}
+
+/// A transaction with one CLSAG input per `(pseudo_output_amount, ring)`,
+/// every member a stored UTXO of `double`, and outputs `outs`. Signatures are
+/// not checked by the tag rules.
+fn spend(inputs: &[(u64, Vec<Coin>)], outs: &[Coin], mut double: Double) -> (Double, Transaction) {
+    let mut clsag = Vec::with_capacity(inputs.len());
+    for (r, (pseudo, ring)) in inputs.iter().enumerate() {
         let mut members = Vec::with_capacity(ring.len());
         for (m, coin) in ring.iter().enumerate() {
             let out = output(coin, key(r as u32, m as u32));
@@ -107,22 +117,47 @@ pub fn cluster_tag_inheritance(
                 },
             );
         }
-        inputs.push(ClsagRingInput {
+        clsag.push(ClsagRingInput {
             ring: members,
             key_image: key(r as u32, u32::MAX),
             commitment_key_image: [0u8; 32],
             clsag_signature: Vec::new(),
-            pseudo_output_amount: 0,
+            pseudo_output_amount: *pseudo,
         });
     }
     let tx = Transaction {
-        inputs: TxInputs::new(inputs),
+        inputs: TxInputs::new(clsag),
         outputs: outputs(outs),
         fee: 0,
         created_at_height: 0,
         settlement: None,
     };
-    double.verify_cluster_tag_inheritance(&tx, height)
+    (double, tx)
+}
+
+/// The retained-weight floor (protocol 10.0.0, #1687) as block validation runs
+/// it: `ValidationReads::verify_cluster_tag_retention` over a transaction
+/// whose inputs are `(pseudo_output_amount, ring)`.
+pub fn cluster_tag_retention(
+    inputs: &[(u64, Vec<Coin>)],
+    outs: &[Coin],
+) -> Result<(), LedgerError> {
+    let (double, tx) = spend(inputs, outs, Double::default());
+    double.verify_cluster_tag_retention(&tx)
+}
+
+/// `ValidationReads::import_floor_factor_from_inputs` (protocol 10.0.0,
+/// #1687) with the given bridge-import cluster set.
+pub fn import_floor_factor_from_inputs(
+    inputs: &[(u64, Vec<Coin>)],
+    imports: &[u64],
+) -> Result<u64, LedgerError> {
+    let double = Double {
+        imports: imports.iter().copied().collect(),
+        ..Double::default()
+    };
+    let (double, tx) = spend(inputs, &[], double);
+    double.import_floor_factor_from_inputs(&tx)
 }
 
 /// `ValidationReads::effective_cluster_wealth_from_outputs` with the given

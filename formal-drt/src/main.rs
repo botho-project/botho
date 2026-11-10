@@ -103,6 +103,15 @@ const LEGS: &[(&str, LegFn)] = &[
         legs_tags::ImportFloor::NAME,
         runner::run::<legs_tags::ImportFloor>,
     ),
+    // #1687 (protocol 10.0.0).
+    (
+        legs_tags::Retention::NAME,
+        runner::run::<legs_tags::Retention>,
+    ),
+    (
+        legs_tags::ImportFloorInputs::NAME,
+        runner::run::<legs_tags::ImportFloorInputs>,
+    ),
     // #1841: difficulty controller and dynamic slot duration.
     (
         legs_difficulty::DifficultyStep::NAME,

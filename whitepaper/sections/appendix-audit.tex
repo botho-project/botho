@@ -48,7 +48,8 @@ Minting authenticity & PoW preimage binding & Preimage resistance of RandomX \\
 \begin{enumerate}
   \item \textbf{Sybil resistance}: Splitting wealth does not reduce total fees
     (Theorem~\ref{thm:sybil-resistance}), for wallets that write inherited
-    tags; consensus accepts dropped tags (pending \#1687)
+    tags; since protocol 10.0.0 consensus rejects dropped tags except with a
+    same-amount decoy that lacks the cluster (\#1687)
   \item \textbf{Lottery fairness}: Uniform-mode selection has conditional
     ideal-sampling results; the finite-word hash bridge assumes IID rolls
     and includes modulo-bias slack. The draw is verifiable and seeded from

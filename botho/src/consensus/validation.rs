@@ -1510,6 +1510,7 @@ mod tests {
                     kem_ciphertext: None,
                     decoys,
                     lottery_context: None,
+                    cluster_tags: Vec::new(),
                 }],
                 recipient: RecipientAddress {
                     spend_public_key: hex::encode(recipient_addr.spend_public_key().to_bytes()),

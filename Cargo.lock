@@ -2756,6 +2756,7 @@ dependencies = [
  "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",
+ "bth-transaction-types",
  "bth-util-from-random",
  "getrandom 0.2.17",
  "getrandom 0.3.4",

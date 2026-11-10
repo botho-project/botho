@@ -59,6 +59,7 @@ pub mod monetary;
 pub mod signing;
 #[cfg(any(feature = "cli", test))]
 pub mod simulation;
+pub mod tag_retention;
 pub mod validate;
 pub mod wide;
 
@@ -86,6 +87,13 @@ pub use consensus_fee::{
 pub use fee_floor_inputs::{
     resolve_fee_floor, resolve_fee_floor_at, FloorOutput, ResolvedFeeFloor, TagPair,
     WALLET_CLUSTER_DECAY_RATE,
+};
+// Protocol 10.0.0 (#1687): import floor from the inputs, retained-tag floor.
+pub use tag_retention::{
+    first_tag_retention_violation, import_floor_factor_from_inputs,
+    import_floor_factor_from_inputs_at, required_retained_weights, spend_candidates,
+    RetentionViolation, SpendRing, CONSENSUS_MIN_TAG_RETENTION, RETENTION_MAX_CLUSTER_TAGS,
+    RETENTION_MIN_STORED_WEIGHT,
 };
 
 // ============================================================================

@@ -13,6 +13,14 @@
 //!   Lean side derives the import cluster from the height on its own (SHA-256).
 //! - `effective_cluster_wealth`, `import_floor_factor`: the fee floor's two
 //!   reads of output tags, through the same double.
+//! - `cluster_tag_retention`, `import_floor_from_inputs` (protocol 10.0.0,
+//!   #1687): `ValidationReads::verify_cluster_tag_retention` and
+//!   `ValidationReads::import_floor_factor_from_inputs` through the same
+//!   double, against `Botho.Tags.retainOk` and `Botho.Tags.importFloorIn`.
+//!   Inputs carry a pseudo-output amount, usually a member's value and
+//!   sometimes shared by a second (same-amount) member; outputs keep 0%, 94.9%,
+//!   95%, 95.1% or 100% of a spent member's weights, or the wallet's 5%-decayed
+//!   merge.
 //!
 //! Generators are biased to empty vectors, 16 and 17 entries, weights 999,
 //! 1000, `TAG_WEIGHT_SCALE` and `u32::MAX`, duplicate cluster ids (a small id
@@ -603,6 +611,207 @@ impl Leg for ImportFloor {
         }
     }
     fn classify(_: &ImportIn, r: &Value) -> String {
+        match r.as_str() {
+            Some("1000") => "1x".into(),
+            Some("1500") => "F".into(),
+            Some(_) => "blend".into(),
+            None => "error".into(),
+        }
+    }
+}
+
+// ---- cluster_tag_retention, import_floor_from_inputs (#1687) ---------------
+
+/// One input: its pseudo-output amount and its resolved ring.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SpendIn {
+    pub pseudo: u64,
+    pub ring: Vec<CoinIn>,
+}
+
+impl SpendIn {
+    fn rust(&self) -> (u64, Vec<formal_drt_tags::Coin>) {
+        (self.pseudo, self.ring.iter().map(CoinIn::rust).collect())
+    }
+    fn wire(&self) -> Value {
+        json!({
+            "pseudo": n(self.pseudo),
+            "ring": self.ring.iter().map(CoinIn::wire).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// An input whose pseudo-output amount is (mostly) one member's value, and
+/// sometimes also a second member's (a same-amount decoy). The spent member's
+/// index is returned with it.
+fn spend_input() -> BoxedStrategy<(SpendIn, usize)> {
+    let ring = prop_oneof![
+        4 => vec(rule_coin(), 1..=5),
+        1 => vec(rule_coin(), 20..=20),
+    ];
+    (
+        ring,
+        any::<prop::sample::Index>(),
+        any::<prop::sample::Index>(),
+        0u8..10,
+        value(),
+    )
+        .prop_map(|(mut ring, real, twin, mode, other)| {
+            let k = real.index(ring.len());
+            let pseudo = match mode {
+                // No member of the pseudo amount: every member is a candidate.
+                0 => other,
+                // A same-amount decoy.
+                1 | 2 => {
+                    let j = twin.index(ring.len());
+                    ring[j].value = ring[k].value;
+                    ring[k].value
+                }
+                _ => ring[k].value,
+            };
+            (SpendIn { pseudo, ring }, k)
+        })
+        .boxed()
+}
+
+fn inputs_wire(inputs: &[SpendIn]) -> Value {
+    Value::Array(inputs.iter().map(SpendIn::wire).collect())
+}
+
+fn inputs_rust(inputs: &[SpendIn]) -> Vec<(u64, Vec<formal_drt_tags::Coin>)> {
+    inputs.iter().map(SpendIn::rust).collect()
+}
+
+pub struct Retention;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetentionIn {
+    pub inputs: Vec<SpendIn>,
+    pub outputs: Vec<CoinIn>,
+}
+
+impl Leg for Retention {
+    const NAME: &'static str = "cluster_tag_retention";
+    const RUST: &'static str =
+        "botho::ledger::store::validation::ValidationReads::verify_cluster_tag_retention (bth_cluster_tax::first_tag_retention_violation)";
+    type Input = RetentionIn;
+    fn strategy() -> BoxedStrategy<RetentionIn> {
+        vec(spend_input(), 1..=3)
+            .prop_flat_map(|spent| {
+                let real: Vec<CoinIn> = spent.iter().map(|(i, k)| i.ring[*k].clone()).collect();
+                let merged: Tags = {
+                    let inputs: Vec<(ClusterTagVector, u64)> = spent
+                        .iter()
+                        .zip(&real)
+                        .map(|((i, _), m)| (rust_tags(&m.tags), i.pseudo))
+                        .collect();
+                    ClusterTagVector::merge_weighted(&inputs, 50_000)
+                        .entries
+                        .iter()
+                        .map(|e| (e.cluster_id.0, e.weight))
+                        .collect()
+                };
+                let inputs: Vec<SpendIn> = spent.into_iter().map(|(i, _)| i).collect();
+                let n_real = real.len();
+                let derived = (
+                    0..n_real,
+                    prop_oneof![
+                        Just(0u64),
+                        Just(949u64),
+                        Just(950u64),
+                        Just(951u64),
+                        Just(1000u64)
+                    ],
+                    value(),
+                )
+                    .prop_map(move |(k, num, v)| CoinIn {
+                        value: v,
+                        tags: scaled(&real[k], num).tags,
+                    });
+                let honest =
+                    (value(), Just(merged)).prop_map(|(value, tags)| CoinIn { value, tags });
+                let output = prop_oneof![3 => derived, 2 => honest, 1 => rule_coin()];
+                (Just(inputs), vec(output, 1..=3))
+            })
+            .prop_map(|(inputs, outputs)| RetentionIn { inputs, outputs })
+            .boxed()
+    }
+    fn args(_: &Fixtures, i: &RetentionIn) -> Value {
+        json!({
+            "inputs": inputs_wire(&i.inputs),
+            "outputs": i.outputs.iter().map(CoinIn::wire).collect::<Vec<_>>(),
+        })
+    }
+    fn rust(_: &Fixtures, i: &RetentionIn) -> Value {
+        let outs: Vec<formal_drt_tags::Coin> = i.outputs.iter().map(CoinIn::rust).collect();
+        match formal_drt_tags::cluster_tag_retention(&inputs_rust(&i.inputs), &outs) {
+            Ok(()) => json!({ "accepted": true }),
+            Err(LedgerError::InvalidBlock(msg)) => retention_wire(&msg),
+            Err(e) => json!({ "rust_err": e.to_string() }),
+        }
+    }
+    fn classify(_: &RetentionIn, r: &Value) -> String {
+        if r.get("accepted").is_some() {
+            "accepted".into()
+        } else if r.get("required").is_some() {
+            "rejected: below the floor".into()
+        } else {
+            "other".into()
+        }
+    }
+}
+
+/// The numbers of the retention error, `"output {o} keeps weight {a} on
+/// cluster {c}, below the retained-weight floor {r} (protocol 10.0.0,
+/// #1687)"`.
+fn retention_wire(msg: &str) -> Value {
+    let nums: Vec<&str> = msg
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .collect();
+    match nums.as_slice() {
+        [o, a, c, r, ..] if msg.contains("retained-weight floor") => json!({
+            "output": o, "actual": a, "cluster": c, "required": r,
+        }),
+        _ => json!({ "rust_err": msg }),
+    }
+}
+
+pub struct ImportFloorInputs;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImportInputsIn {
+    pub inputs: Vec<SpendIn>,
+    pub imports: Vec<u64>,
+}
+
+impl Leg for ImportFloorInputs {
+    const NAME: &'static str = "import_floor_from_inputs";
+    const RUST: &'static str =
+        "botho::ledger::store::validation::ValidationReads::import_floor_factor_from_inputs (bth_cluster_tax::import_floor_factor_from_inputs)";
+    type Input = ImportInputsIn;
+    fn strategy() -> BoxedStrategy<ImportInputsIn> {
+        (vec(spend_input(), 0..=3), vec(cluster(), 0..=4))
+            .prop_map(|(spent, imports)| ImportInputsIn {
+                inputs: spent.into_iter().map(|(i, _)| i).collect(),
+                imports,
+            })
+            .boxed()
+    }
+    fn args(_: &Fixtures, i: &ImportInputsIn) -> Value {
+        json!({
+            "inputs": inputs_wire(&i.inputs),
+            "imports": i.imports.iter().map(|c| n(*c)).collect::<Vec<_>>(),
+        })
+    }
+    fn rust(_: &Fixtures, i: &ImportInputsIn) -> Value {
+        match formal_drt_tags::import_floor_factor_from_inputs(&inputs_rust(&i.inputs), &i.imports)
+        {
+            Ok(f) => n(f),
+            Err(e) => json!({ "rust_err": e.to_string() }),
+        }
+    }
+    fn classify(_: &ImportInputsIn, r: &Value) -> String {
         match r.as_str() {
             Some("1000") => "1x".into(),
             Some("1500") => "F".into(),

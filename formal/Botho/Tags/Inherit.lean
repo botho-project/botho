@@ -10,7 +10,11 @@ block's epoch import cluster, inside `check_cluster_tag_inheritance`). The
 statements are unchanged: they are about `inheritOk`, so they stay true, and
 they are the machine-checked record of #1857. `inheritOk₈` (end of this
 module) models the 8.0.0 rules, and the DRT leg `cluster_tag_inheritance`
-compares against it.
+compares against it. Protocol 10.0.0 (#1687) adds the import floor read
+from the inputs and the retained-weight floor; `inheritOk₁₀`,
+`demurrageFactor₁₀` and `import_floor_honoured₁₀` (end of this module) model
+them, and the DRT legs `cluster_tag_retention` and `import_floor_from_inputs`
+compare against them.
 
 Consensus applies no tag mixing and no decay. In 7.x the only tag rule a
 block had to pass was C6, `check_cluster_tag_inheritance`; the ledger then
@@ -26,6 +30,8 @@ wallet need not run.
 | `wealthCredit` | `update_cluster_wealth_for_output`, `botho/src/ledger/store/writer.rs:482` | tested (end to end, `cluster_tag_invariant_tests.rs`) |
 | `effectiveWealth` | `ValidationReads::effective_cluster_wealth_from_outputs`, `store/validation.rs:280`, protocol ≤ 8.x (saturating; #1876) | model; historical since 9.0.0. The DRT leg `effective_cluster_wealth` now compares against `effectiveWealthExact` (`EffectiveExact.lean`) |
 | `importFloor` | `ValidationReads::import_floor_factor_from_outputs`, `store/validation.rs:313` | tested (DRT leg `import_floor_factor`) |
+| `inheritOk₁₀`, `retainOk`, `required₁₀`, `candidates₁₀` | 10.0.0: `first_tag_retention_violation` / `required_retained_weights` / `spend_candidates` (`cluster-tax/src/tag_retention.rs`), via `ValidationReads::verify_cluster_tag_retention` (`store/validation.rs`) | tested (DRT leg `cluster_tag_retention`); theorems below, statement blocks recorded, not yet listed |
+| `importFloorIn`, `demurrageFactor₁₀` | 10.0.0: `import_floor_factor_from_inputs` (`tag_retention.rs`), via `ValidationReads::import_floor_factor_from_inputs`, and its `.max` in `consensus_fee_floor` | tested (DRT leg `import_floor_from_inputs`); theorems below, statement blocks recorded, not yet listed |
 | `demurrageFactor` | the factor composition in `ValidationReads::consensus_fee_floor`, `store/validation.rs:169` (`claimed.max(implied)` in `ring_centroid_floored_factor`, then `.max(import_floor)`) | model; the curve and the ring-centroid factor are parameters |
 
 The fee curve (`ClusterFactorCurve::factor`) and the ring-centroid implied
@@ -61,6 +67,20 @@ Results (#1840; about 7.x C6, see the scope note above):
    tag pays at least `F` (`tag_drop_escapes_import_floor`), and the
    invariant "every accepted spend of a fully import-tagged ring pays at
    least `F`" is false (`import_floor_invariant_refuted`).
+3. **#1687 fixed in 10.0.0** (`inheritOk₁₀`, `demurrageFactor₁₀`). The
+   import floor is read from the inputs: each input's value at the largest
+   import share among its spend candidates (the members of the
+   pseudo-output amount). The restated invariant "every accepted spend
+   whose spent coins are fully import-tagged is charged at least `F`" is
+   proven for every fee curve, ring factor and import set
+   (`import_floor_honoured₁₀`), and needs no hypothesis on the outputs. A
+   lone tagged coin (decoys of other amounts) spent to an output that keeps
+   less than 95% of its weight is rejected (`tag_shed_rejected₁₀`). What
+   still does not hold: with a same-amount decoy that lacks the cluster,
+   the retained-weight floor does not bind and the drop is accepted
+   (`same_amount_decoy_drop₁₀`), though it still pays `F`; the floor limits
+   decay per spend, not per unit of time. The 7.x theorems above are
+   unchanged and remain true of `inheritOk` and `demurrageFactor`.
 -/
 import Botho.Tags.Vector
 
@@ -531,5 +551,268 @@ modelled: a parameter): Rule 1 on every output, then Rule 2, then the C6
 mass check `inheritOk`, unchanged. -/
 def inheritOk₈ (rings : List (List Coin)) (outs : List Coin) (imp : Nat) : Bool :=
   outs.all (fun o => tagsValid o.tags) && ruleTwoOk rings outs imp && inheritOk rings outs
+
+
+/-! ## Protocol 10.0.0: the import floor from the inputs and the retained-weight floor (#1687)
+
+New definitions, so the records of the 7.x theorems above keep their hashes.
+They mirror `cluster-tax/src/tag_retention.rs`, which block validation, the
+SCP value check, the block builder and mempool admission all call
+(`ValidationReads::import_floor_factor_from_inputs` and
+`ValidationReads::verify_cluster_tag_retention`, `store/validation.rs`).
+
+Integers: the Rust kernels accumulate in saturating `u128`. With values below
+`2^64` and fewer than `2^40` inputs nothing saturates, so the model uses
+`Nat` and no saturation. -/
+
+/-- One transaction input as 10.0.0 sees it: the `pseudo_output_amount` (the
+real member's value) and the resolved ring members. -/
+structure Input₁₀ where
+  pseudo : Nat
+  ring : List Coin
+  deriving DecidableEq, Repr
+
+/-- `spend_candidates`: the members whose value equals the pseudo-output
+amount (C3 and the balance proof bind the real member to one of them), or
+every member if none does. -/
+def candidates₁₀ (i : Input₁₀) : List Coin :=
+  if i.ring.filter (fun x => x.value == i.pseudo) = [] then i.ring
+  else i.ring.filter (fun x => x.value == i.pseudo)
+
+/-- `weight_on`: a vector's weight on cluster `c` (duplicates summed), capped
+at `SCALE`. -/
+def weightOn (c : Nat) (t : TagVec) : Nat := min (massP (· == c) t) SCALE
+
+/-- `import_share`: a vector's weight on import clusters, capped at
+`SCALE`. -/
+def importShare (isImport : Nat → Bool) (t : TagVec) : Nat := min (massP isImport t) SCALE
+
+/-- `iter().max().unwrap_or(0)`. -/
+def maxN : List Nat → Nat
+  | [] => 0
+  | x :: xs => max x (maxN xs)
+
+/-- `iter().min().unwrap_or(0)`. -/
+def minN : List Nat → Nat
+  | [] => 0
+  | x :: xs => xs.foldl min x
+
+/-- Mirrors `import_floor_factor_from_inputs` (`tag_retention.rs`): each
+input's pseudo-output value at the largest import share among its candidates,
+blended `F` on the import share and 1x on the rest. -/
+def importFloorIn (env : FeeEnv) (ins : List Input₁₀) : Nat :=
+  let total := sumN (ins.map Input₁₀.pseudo)
+  let imp := sumN (ins.map fun i =>
+    i.pseudo * maxN ((candidates₁₀ i).map fun x => importShare env.isImport x.tags) / SCALE)
+  if total = 0 then FACTOR_SCALE
+  else (BRIDGE_IMPORT_FACTOR_FLOOR * min imp total + FACTOR_SCALE * (total - min imp total)) / total
+
+/-- The 10.0.0 demurrage factor: the 7.x-9.x factor (`demurrageFactor`, whose
+import floor reads the outputs) and the import floor read from the inputs,
+`.max(import_floor_factor_from_inputs(tx))` in `consensus_fee_floor`. -/
+def demurrageFactor₁₀ (env : FeeEnv) (ins : List Input₁₀) (outs : List Coin) : Nat :=
+  max (demurrageFactor env (ins.map Input₁₀.ring) outs) (importFloorIn env ins)
+
+/-- `CONSENSUS_MIN_TAG_RETENTION`: 95%, the documented 5% decay per transfer
+(`SCALE - WALLET_CLUSTER_DECAY_RATE`). -/
+def CONSENSUS_MIN_TAG_RETENTION : Nat := 950000
+
+/-- `Σ_rings pseudo_r · min_{candidates m of r} w_m(c)`. -/
+def lowerMass (c : Nat) (ins : List Input₁₀) : Nat :=
+  sumN (ins.map fun i => i.pseudo * minN ((candidates₁₀ i).map fun x => weightOn c x.tags))
+
+/-- `required_retained_weights`, before its `MIN_STORED_WEIGHT` filter: the
+weight every output must keep on `c`, after the rounding slack `inputs + 1`
+(saturating subtraction). Zero when the inputs carry no value. -/
+def required₁₀ (ins : List Input₁₀) (c : Nat) : Nat :=
+  lowerMass c ins * CONSENSUS_MIN_TAG_RETENTION / (sumN (ins.map Input₁₀.pseudo) * SCALE) -
+    (ins.length + 1)
+
+/-- One output's test for cluster `c` at required weight `r`: it keeps `r`, or
+it is full (`MAX_CLUSTER_TAGS` entries) with every entry at least `r` (the
+honest wallet's truncation). -/
+def keepsWeight (c r : Nat) (o : Coin) : Bool :=
+  decide (r ≤ weightOn c o.tags) ||
+    (decide (MAX_CLUSTER_TAGS ≤ o.tags.length) && o.tags.all fun e => decide (r ≤ e.weight))
+
+/-- Mirrors `first_tag_retention_violation(..).is_none()`: for every cluster a
+ring member names whose required weight is at least `MIN_STORED_WEIGHT`, every
+output keeps it. A cluster missing from some candidate has a minimum of 0 and
+so a required weight of 0 (Rust skips it). -/
+def retainOk (ins : List Input₁₀) (outs : List Coin) : Bool :=
+  (inputClusters (ins.map Input₁₀.ring)).all fun c =>
+    decide (required₁₀ ins c < MIN_STORED_WEIGHT) || outs.all (keepsWeight c (required₁₀ ins c))
+
+/-- The 10.0.0 tag verdict of a transfer: the 8.0.0 rules, then the
+retained-weight floor (`verify_cluster_tag_retention`, after
+`verify_cluster_tag_inheritance` in `verify_transfer_for_block` and
+`validate_ordinary_body`). -/
+def inheritOk₁₀ (ins : List Input₁₀) (outs : List Coin) (imp : Nat) : Bool :=
+  inheritOk₈ (ins.map Input₁₀.ring) outs imp && retainOk ins outs
+
+/-- ADR 0007's invariant, restated for 10.0.0: every accepted spend whose
+**spent** coins are fully import-tagged is charged at least `F`. The spent
+coin is hidden in the ring, so the hypothesis names a member of each ring
+whose value is the pseudo-output amount (C3 and the balance proof guarantee
+the real member is such a member) and whose import weight is 100%. -/
+def ImportFloorHonoured₁₀ (env : FeeEnv) : Prop :=
+  ∀ (ins : List Input₁₀) (outs : List Coin) (imp : Nat), inheritOk₁₀ ins outs imp = true →
+    (∀ i ∈ ins, ∃ x ∈ i.ring, x.value = i.pseudo ∧ SCALE ≤ massP env.isImport x.tags) →
+    0 < sumN (ins.map Input₁₀.pseudo) →
+    BRIDGE_IMPORT_FACTOR_FLOOR ≤ demurrageFactor₁₀ env ins outs
+
+theorem maxN_le (l : List Nat) (k : Nat) (h : ∀ y ∈ l, y ≤ k) : maxN l ≤ k := by
+  induction l with
+  | nil => exact Nat.zero_le _
+  | cons x xs ih =>
+    exact Nat.max_le.mpr ⟨h x (List.mem_cons_self ..),
+      ih (fun y hy => h y (List.mem_cons_of_mem _ hy))⟩
+
+theorem le_maxN (l : List Nat) (y : Nat) (h : y ∈ l) : y ≤ maxN l := by
+  induction l with
+  | nil => simp at h
+  | cons x xs ih =>
+    rcases List.mem_cons.mp h with h | h
+    · subst h; exact Nat.le_max_left _ _
+    · exact Nat.le_trans (ih h) (Nat.le_max_right _ _)
+
+theorem mem_candidates₁₀ (i : Input₁₀) (x : Coin) (hx : x ∈ i.ring) (hv : x.value = i.pseudo) :
+    x ∈ candidates₁₀ i := by
+  have hf : x ∈ i.ring.filter (fun y => y.value == i.pseudo) :=
+    List.mem_filter.mpr ⟨hx, by simp [hv]⟩
+  unfold candidates₁₀
+  split
+  · rename_i h; rw [h] at hf; simp at hf
+  · exact hf
+
+/-- The largest import share among an input's candidates is 100% when its
+spent coin is fully import-tagged. -/
+theorem maxShare_full (env : FeeEnv) (i : Input₁₀) (x : Coin) (hx : x ∈ i.ring)
+    (hv : x.value = i.pseudo) (hm : SCALE ≤ massP env.isImport x.tags) :
+    maxN ((candidates₁₀ i).map fun y => importShare env.isImport y.tags) = SCALE := by
+  apply Nat.le_antisymm
+  · apply maxN_le
+    intro y hy
+    simp only [List.mem_map] at hy
+    obtain ⟨z, _, rfl⟩ := hy
+    exact Nat.min_le_right _ _
+  · have := le_maxN ((candidates₁₀ i).map fun y => importShare env.isImport y.tags)
+      (importShare env.isImport x.tags)
+      (List.mem_map.mpr ⟨x, mem_candidates₁₀ i x hx hv, rfl⟩)
+    simp only [importShare, Nat.min_eq_right hm] at this
+    exact this
+
+theorem sumN_map_congr {α : Type} (l : List α) (f g : α → Nat) (h : ∀ a ∈ l, f a = g a) :
+    sumN (l.map f) = sumN (l.map g) := by
+  induction l with
+  | nil => rfl
+  | cons a as ih =>
+    simp only [List.map_cons, sumN, h a (List.mem_cons_self ..),
+      ih (fun b hb => h b (List.mem_cons_of_mem _ hb))]
+
+/-- **#1687 fixed: the import floor read from the inputs** (proven (model)).
+If each input's spent coin is fully import-tagged, `importFloorIn` is `F`,
+whatever the outputs carry and whatever the other ring members are. -/
+theorem importFloorIn_full (env : FeeEnv) (ins : List Input₁₀)
+    (h : ∀ i ∈ ins, ∃ x ∈ i.ring, x.value = i.pseudo ∧ SCALE ≤ massP env.isImport x.tags)
+    (hpos : 0 < sumN (ins.map Input₁₀.pseudo)) :
+    importFloorIn env ins = BRIDGE_IMPORT_FACTOR_FLOOR := by
+  have himp : sumN (ins.map fun i =>
+      i.pseudo * maxN ((candidates₁₀ i).map fun x => importShare env.isImport x.tags) / SCALE) =
+      sumN (ins.map Input₁₀.pseudo) := by
+    apply sumN_map_congr
+    intro i hi
+    obtain ⟨x, hx, hv, hm⟩ := h i hi
+    rw [maxShare_full env i x hx hv hm, Nat.mul_div_cancel _ (by decide : 0 < SCALE)]
+  unfold importFloorIn
+  simp only [himp, Nat.min_self, Nat.sub_self, Nat.mul_zero, Nat.add_zero]
+  simp only [Nat.pos_iff_ne_zero.mp hpos, ite_false]
+  exact Nat.mul_div_cancel _ hpos
+
+/-- **#1687 fixed: ADR 0007's invariant holds under 10.0.0** (proven (model)),
+for every fee curve, ring factor and import set: an accepted spend of fully
+import-tagged coins is charged at least `F`. Contrast
+`import_floor_invariant_refuted` (7.x-9.x). The acceptance hypothesis is not
+even needed: the floor reads the inputs, so no choice of outputs lowers it. -/
+theorem import_floor_honoured₁₀ (env : FeeEnv) : ImportFloorHonoured₁₀ env := by
+  intro ins outs _imp _ h hpos
+  unfold demurrageFactor₁₀
+  rw [importFloorIn_full env ins h hpos]
+  exact Nat.le_max_right _ _
+
+theorem candidates₁₀_lone (v : Nat) (x : Coin) (decoys : List Coin) (hx : x.value = v)
+    (hd : ∀ d ∈ decoys, d.value ≠ v) : candidates₁₀ ⟨v, x :: decoys⟩ = [x] := by
+  have hf : decoys.filter (fun y => y.value == v) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro d hdm
+    simp [hd d hdm]
+  unfold candidates₁₀
+  simp [hx, hf]
+
+/-- The required weight of a lone fully tagged coin: 95% minus the slack of
+2 (one input). -/
+theorem required₁₀_lone (c v : Nat) (decoys : List Coin) (hv : 0 < v)
+    (hd : ∀ d ∈ decoys, d.value ≠ v) :
+    required₁₀ [⟨v, ⟨v, [⟨c, SCALE⟩]⟩ :: decoys⟩] c = CONSENSUS_MIN_TAG_RETENTION - 2 := by
+  have hw : weightOn c [⟨c, SCALE⟩] = SCALE := by
+    simp [weightOn, massP]
+  unfold required₁₀ lowerMass
+  simp only [List.map_cons, List.map_nil]
+  rw [candidates₁₀_lone v ⟨v, [⟨c, SCALE⟩]⟩ decoys rfl hd]
+  simp only [List.map_cons, List.map_nil, hw, minN, List.foldl_nil, sumN, Nat.add_zero,
+    List.length_cons, List.length_nil]
+  rw [Nat.mul_div_cancel_left _ (Nat.mul_pos hv (by decide))]
+
+/-- **#1687 fixed: the tag drop and shed are rejected** (proven (model)). A
+coin fully tagged to any cluster `c` (an import cluster or not), spent with
+decoys of other amounts (an honest wallet's ring, so it is the only
+candidate): every transaction with an output that keeps less than 95% minus
+the slack on `c`, and is not full, fails the retained-weight floor. An empty
+output (the 7.x-9.x tag drop) is such an output. -/
+theorem tag_shed_rejected₁₀ (c v : Nat) (decoys outs : List Coin) (hv : 0 < v)
+    (hd : ∀ d ∈ decoys, d.value ≠ v) (o : Coin) (ho : o ∈ outs)
+    (hw : weightOn c o.tags < CONSENSUS_MIN_TAG_RETENTION - 2)
+    (hlen : o.tags.length < MAX_CLUSTER_TAGS) :
+    retainOk [⟨v, ⟨v, [⟨c, SCALE⟩]⟩ :: decoys⟩] outs = false := by
+  have hreq := required₁₀_lone c v decoys hv hd
+  have hc : c ∈ inputClusters (List.map Input₁₀.ring [⟨v, ⟨v, [⟨c, SCALE⟩]⟩ :: decoys⟩]) := by
+    simp [inputClusters]
+  unfold retainOk
+  apply Bool.eq_false_iff.mpr
+  intro hall
+  have := List.all_eq_true.mp hall c hc
+  have hR : CONSENSUS_MIN_TAG_RETENTION = 950000 := rfl
+  have hM : MIN_STORED_WEIGHT = 1000 := rfl
+  rw [hreq] at this
+  simp only [Bool.or_eq_true, decide_eq_true_eq] at this
+  rcases this with h | h
+  · omega
+  · have ho' := List.all_eq_true.mp h o ho
+    simp only [keepsWeight, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at ho'
+    rcases ho' with h' | ⟨h', _⟩ <;> omega
+
+/-- **What the retained-weight floor does not cover** (proven (model), a
+concrete witness): with one decoy of the coin's exact amount and no tags, the
+candidates' minimum weight is 0, so the floor does not bind and the tag drop
+passes it. The import floor still binds (`import_floor_honoured₁₀`), so this
+spend of a fully import-tagged coin is charged at least `F` (in the flat
+environment: exactly `F`). -/
+theorem same_amount_decoy_drop₁₀ :
+    retainOk [⟨10 ^ 12, [⟨10 ^ 12, [⟨7, SCALE⟩]⟩, ⟨10 ^ 12, []⟩]⟩] [⟨10 ^ 12, []⟩] = true ∧
+    demurrageFactor₁₀ flatEnv [⟨10 ^ 12, [⟨10 ^ 12, [⟨7, SCALE⟩]⟩, ⟨10 ^ 12, []⟩]⟩]
+      [⟨10 ^ 12, []⟩] = BRIDGE_IMPORT_FACTOR_FLOOR := by
+  constructor
+  · decide
+  · have h := importFloorIn_full flatEnv [⟨10 ^ 12, [⟨10 ^ 12, [⟨7, SCALE⟩]⟩, ⟨10 ^ 12, []⟩]⟩]
+      (by
+        intro i hi
+        simp only [List.mem_singleton] at hi
+        subst hi
+        exact ⟨⟨10 ^ 12, [⟨7, SCALE⟩]⟩, List.mem_cons_self .., rfl, by decide⟩)
+      (by decide)
+    unfold demurrageFactor₁₀
+    rw [h, (tag_drop_demurrage_factor flatEnv _ [⟨10 ^ 12, []⟩]
+      (by intro x hx; simp at hx; subst hx; rfl) (by simp [sumN, U64_MAX])).2]
+    simp [flatEnv, FACTOR_SCALE, BRIDGE_IMPORT_FACTOR_FLOOR]
 
 end Botho.Tags
