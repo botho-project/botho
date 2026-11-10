@@ -12,8 +12,9 @@
 //! `merge_weighted` panic; `is_valid` relay gate and a saturating merge,
 //! #1863). Their tests are kept here as named records of the findings and
 //! now assert the rejection (`*_rejected_since_1863` /
-//! `*_rejected_since_1870`). The #1687 tag drop is unchanged by 8.0.0 and is
-//! still pinned as accepted.
+//! `*_rejected_since_1870`). The #1687 tag drop was unchanged by 8.0.0 and is
+//! fixed by protocol 10.0.0: its test now asserts the rejection, or the
+//! import floor where the drop is still accepted.
 //!
 //! Kept out of `store.rs` so the tests do not churn that file's SHA-256 pin in
 //! `scripts/research/fixtures/ct-contract-inventory.json`.
@@ -117,26 +118,163 @@ fn fresh_cluster_tags_above_unit_mass_rejected_since_1870() {
     assert_eq!(ledger.get_cluster_wealth(victim).unwrap(), before);
 }
 
-/// Lean `Botho.Tags.tag_drop_escapes_import_floor`, end to end (#1687): an
-/// import-tagged coin spent to an untagged output is accepted (C6 admits
-/// empty output tags), and at the first demurrage-active height its
-/// consensus fee floor is lower than that of the same spend keeping the
-/// tag, because the ADR-0007 floor `F` is read from output tags only. The
-/// demurrage it pays is also below the capitalized charge at `F`.
+/// The SCP value check and the block builder's per-transaction verdict
+/// (`check_transfer_for_block`, i.e. `verify_transfer_for_block`) rejects
+/// `tx` with a reason containing `needle`.
+fn expect_scp_invalid(ledger: &Ledger, tx: &Transaction, needle: &str) {
+    let state = ledger.get_chain_state().unwrap();
+    match ledger
+        .check_transfer_for_block(tx, state.height, state.tip_hash)
+        .unwrap()
+    {
+        super::TransferBlockCheck::Invalid(reason) => {
+            assert!(reason.contains(needle), "{reason}")
+        }
+        other => panic!("expected Invalid containing {needle:?}, got {other:?}"),
+    }
+}
+
+/// `input` spent over `ring` to `outputs` at `stock`'s fee, signed for
+/// `created_at_height`: a modified wallet.
+fn resign(
+    ledger: &Ledger,
+    wallet: &Wallet,
+    input: &crate::transaction::Utxo,
+    ring: Vec<crate::transaction::RingMember>,
+    outputs: Vec<crate::transaction::TxOutput>,
+    fee: u64,
+    created_at_height: u64,
+) -> Transaction {
+    use crate::{transaction::ClsagRingInput, wallet::WalletRead};
+    let real = ring
+        .iter()
+        .position(|m| m.target_key == input.output.target_key)
+        .unwrap();
+    let hash =
+        Transaction::new_clsag(Vec::new(), outputs.clone(), fee, created_at_height).signing_hash();
+    let key = WalletRead::recover_input(ledger, wallet, input).unwrap();
+    let signed = ClsagRingInput::new(
+        ring,
+        real,
+        &key,
+        input.output.amount,
+        &hash,
+        &mut bth_util_from_random::OsRng,
+    )
+    .unwrap();
+    let tx = Transaction::new_clsag(vec![signed], outputs, fee, created_at_height);
+    tx.verify_ring_signatures()
+        .expect("the forged spend is validly signed");
+    tx
+}
+
+/// The stock spend `stock` of `input`, re-signed with one ring member (never
+/// the real one) replaced by `decoy` and the output tagged `tags`: a modified
+/// wallet choosing one decoy.
+fn with_decoy_and_tags(
+    ledger: &Ledger,
+    wallet: &Wallet,
+    input: &crate::transaction::Utxo,
+    stock: &Transaction,
+    decoy: &crate::transaction::Utxo,
+    tags: ClusterTagVector,
+) -> Transaction {
+    let mut outputs = stock.outputs.clone();
+    outputs[0].cluster_tags = tags;
+    let mut ring = stock.inputs.clsag()[0].ring.clone();
+    let real = ring
+        .iter()
+        .position(|m| m.target_key == input.output.target_key)
+        .unwrap();
+    let slot = (real + 1) % ring.len();
+    ring[slot] = crate::transaction::RingMember::from_output(&decoy.output);
+    resign(
+        ledger,
+        wallet,
+        input,
+        ring,
+        outputs,
+        stock.fee,
+        stock.created_at_height,
+    )
+}
+
+/// #1740, fixed in protocol 10.0.0: a transfer's `created_at_height` (the
+/// height its outputs' age, and so their demurrage, is counted from) may not
+/// exceed the including block's height. A spend dated one block ahead is
+/// rejected at relay and in a block; dated at the including block it passes.
 #[test]
-fn import_tag_drop_is_accepted_and_pays_less_than_the_import_floor() {
+fn future_dated_transfer_rejected_since_1740() {
+    let (_dir, ledger, wallet, blocks) = chain(30);
+    let input = coinbase(&ledger, &blocks[2]);
+    let fee = 10 * PICOCREDITS_PER_CREDIT;
+    let stock = stock_spend(&ledger, &wallet, &input, fee);
+    let next = ledger.get_chain_state().unwrap().height + 1;
+    let dated = |h: u64| {
+        resign(
+            &ledger,
+            &wallet,
+            &input,
+            stock.inputs.clsag()[0].ring.clone(),
+            stock.outputs.clone(),
+            fee,
+            h,
+        )
+    };
+    for h in [next + 1, u64::MAX / 2] {
+        let tx = dated(h);
+        match add_tx_no_panic(&ledger, tx.clone()) {
+            Err(MempoolError::InvalidTransaction(msg)) => {
+                assert!(msg.contains("future-dated"), "{h}: {msg}")
+            }
+            other => panic!("{h}: expected relay rejection, got {other:?}"),
+        }
+        expect_scp_invalid(&ledger, &tx, "future-dated");
+        expect_block_rejected(&ledger, &wallet, tx, "future-dated");
+    }
+    let ok = dated(next);
+    add_tx_no_panic(&ledger, ok.clone()).expect("dated at the including block");
+    let block = mine_with(&ledger, &wallet, vec![ok.clone()]).unwrap();
+    assert_eq!(block.height(), next);
+    assert!(ledger
+        .get_utxo(&UtxoId::new(ok.hash(), 0))
+        .unwrap()
+        .is_some());
+}
+
+/// #1687, fixed in protocol 10.0.0. Lean `Botho.Tags.tag_drop_escapes_import_floor`
+/// and `import_floor_invariant_refuted` model the 7.x-9.x rule, under which an
+/// import-tagged coin spent to an untagged output was accepted and charged
+/// below `F` (this test used to pin that: 0.060% of value against 0.952%
+/// keeping the tag). Under 10.0.0 (`Botho.Tags.import_floor_honoured₁₀`), end
+/// to end with real signed transactions:
+///
+/// 1. With the stock wallet's ring (the coin is its input's only spend
+///    candidate), dropping or shedding the tag below 95% is rejected by relay
+///    and by block validation (the retained-weight floor); keeping 95% minus
+///    the rounding slack passes.
+/// 2. With a decoy of the coin's exact amount and no import tag (the floor's
+///    gap), the drop is accepted, but the import floor is read from the inputs
+///    (`F` = 1.5x, the candidates' maximum share), so it pays at least the
+///    capitalized charge at `F`.
+#[test]
+fn import_tag_drop_is_rejected_or_pays_the_import_floor() {
     use bth_cluster_tax::{
         capitalized_reset_charge, import_cluster_id_for_height, ClusterFactorCurve,
-        BRIDGE_IMPORT_FACTOR_FLOOR, SETTLEMENT_HORIZON_BLOCKS,
+        BRIDGE_IMPORT_FACTOR_FLOOR, CONSENSUS_MIN_TAG_RETENTION, SETTLEMENT_HORIZON_BLOCKS,
     };
 
     let (_dir, ledger, wallet, blocks) = chain(30);
     let fee = 10 * PICOCREDITS_PER_CREDIT;
 
-    // 1. An import-tagged coin: an output fully tagged to the epoch's import
-    //    cluster. (A bridge release writes the same UTXO; Rule 2 (#1870, 8.0.0)
-    //    still lets any spender write it, as the including epoch's import cluster.)
+    // An import-tagged coin: an output fully tagged to the epoch's import
+    // cluster (a bridge release writes the same UTXO; Rule 2 lets any spender
+    // write the including epoch's import cluster). In the same block, a
+    // same-amount coin without the import tag (another coinbase spent with
+    // the same fee) for step 2.
     let source = coinbase(&ledger, &blocks[2]);
+    let other = coinbase(&ledger, &blocks[3]);
+    assert_eq!(source.output.amount, other.output.amount);
     let import = import_cluster_id_for_height(ledger.get_chain_state().unwrap().height + 1).0;
     let stock = stock_spend(&ledger, &wallet, &source, fee);
     let tagged = with_tags(
@@ -146,32 +284,84 @@ fn import_tag_drop_is_accepted_and_pays_less_than_the_import_floor() {
         &stock,
         repeated(import, TAG_WEIGHT_SCALE, 1),
     );
-    let block = mine_with(&ledger, &wallet, vec![tagged.clone()]).unwrap();
+    let twin = stock_spend(&ledger, &wallet, &other, fee);
+    let block = mine_with(&ledger, &wallet, vec![tagged.clone(), twin.clone()]).unwrap();
     assert!(ledger.is_bridge_import_cluster(import).unwrap());
-    let coin = ledger
-        .get_utxo(&UtxoId::new(tagged.hash(), 0))
-        .unwrap()
-        .expect("the import-tagged coin");
+    let utxo = |tx: &Transaction| {
+        ledger
+            .get_utxo(&UtxoId::new(tx.hash(), 0))
+            .unwrap()
+            .unwrap()
+    };
+    let coin = utxo(&tagged);
+    let twin = utxo(&twin);
     assert_eq!(coin.created_at, block.height());
+    assert_eq!(coin.output.amount, twin.output.amount);
+    assert!(twin.output.cluster_tags.get_weight(ClusterId(import)) == 0);
     for _ in 0..3 {
         mine(&ledger, &wallet);
     }
 
-    // 2. The same coin, the same ring: kept tag (honest) vs dropped tag.
+    // 1. The stock ring: the coin is the only member of its amount.
     let stock = stock_spend(&ledger, &wallet, &coin, fee);
-    let honest = with_tags(
+    let ring_amounts: Vec<u64> = stock.inputs.clsag()[0]
+        .ring
+        .iter()
+        .map(|m| {
+            ledger
+                .get_utxo_by_target_key(&m.target_key)
+                .unwrap()
+                .unwrap()
+                .output
+                .amount
+        })
+        .collect();
+    assert_eq!(
+        ring_amounts
+            .iter()
+            .filter(|&&a| a == coin.output.amount)
+            .count(),
+        1,
+        "the stock ring holds no other coin of this amount"
+    );
+    let forge = |w: u32| with_tags(&ledger, &wallet, &coin, &stock, repeated(import, w, 1));
+    let honest = forge(TAG_WEIGHT_SCALE);
+    let dropped = with_tags(&ledger, &wallet, &coin, &stock, ClusterTagVector::empty());
+    // One input: slack = 2 weight units.
+    let at_floor = forge(CONSENSUS_MIN_TAG_RETENTION - 2);
+    let below = forge(CONSENSUS_MIN_TAG_RETENTION - 3);
+    let shed = forge(TAG_WEIGHT_SCALE / 20);
+    for (label, tx) in [("dropped", &dropped), ("below", &below), ("shed", &shed)] {
+        match add_tx_no_panic(&ledger, tx.clone()) {
+            Err(MempoolError::InvalidTransaction(msg)) => {
+                assert!(msg.contains("retained-weight floor"), "{label}: {msg}")
+            }
+            other => panic!("{label}: expected relay rejection, got {other:?}"),
+        }
+        expect_scp_invalid(&ledger, tx, "retained-weight floor");
+        expect_block_rejected(&ledger, &wallet, tx.clone(), "retained-weight floor");
+    }
+    add_tx_no_panic(&ledger, at_floor.clone()).expect("95% minus the slack is admitted");
+    add_tx_no_panic(&ledger, honest.clone()).expect("keeping the tag is admitted");
+
+    // 2. The floor's gap: a same-amount decoy without the import tag.
+    let gap = with_decoy_and_tags(
         &ledger,
         &wallet,
         &coin,
         &stock,
-        repeated(import, TAG_WEIGHT_SCALE, 1),
+        &twin,
+        ClusterTagVector::empty(),
     );
-    let dropped = with_tags(&ledger, &wallet, &coin, &stock, ClusterTagVector::empty());
+    assert_eq!(
+        ledger.import_floor_factor_from_inputs(&gap).unwrap(),
+        BRIDGE_IMPORT_FACTOR_FLOOR,
+        "the candidates' maximum import share is the coin's: F"
+    );
 
     let now = ledger.get_chain_state().unwrap().height + 1;
     let policy = crate::monetary::mainnet_policy();
     let active = policy.halving_interval;
-    assert_eq!(policy.demurrage_rate_bps(now), 0);
     assert!(policy.demurrage_rate_bps(active) > 0);
     let floor = |tx: &Transaction, h: u64| ledger.consensus_fee_floor(tx, h).unwrap();
     // Demurrage = floor − base fee. Since #1685 the import toll is priced in
@@ -191,7 +381,7 @@ fn import_tag_drop_is_accepted_and_pays_less_than_the_import_floor() {
     };
     let demurrage = |tx: &Transaction| floor(tx, active) - base(tx);
 
-    let value = dropped.outputs[0].amount;
+    let value = gap.outputs[0].amount;
     let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
     let owed_capitalized = capitalized_reset_charge(
         value,
@@ -201,19 +391,16 @@ fn import_tag_drop_is_accepted_and_pays_less_than_the_import_floor() {
         policy.demurrage_rate_bps(active),
         blocks_per_year,
     );
-    let (d_honest, d_dropped) = (demurrage(&honest), demurrage(&dropped));
+    let (d_honest, d_gap) = (demurrage(&honest), demurrage(&gap));
     eprintln!(
-        "value {value}: demurrage kept-tag {d_honest}, dropped-tag {d_dropped}, \
-         capitalized charge at F {owed_capitalized}"
+        "value {value}: demurrage kept-tag {d_honest}, dropped with a same-amount decoy \
+         {d_gap}, capitalized charge at F {owed_capitalized}"
     );
-    assert!(d_dropped < d_honest, "dropping the tag lowers the floor");
     assert!(
-        d_dropped < owed_capitalized,
-        "the dropped spend pays less than the capitalized charge at F"
+        d_gap >= owed_capitalized,
+        "an accepted tag drop pays at least the capitalized charge at F"
     );
-
-    // 3. Both are valid today; the tag drop is applied by add_block.
-    mine_with(&ledger, &wallet, vec![dropped]).expect("C6 accepts empty output tags");
+    mine_with(&ledger, &wallet, vec![gap]).expect("the same-amount-decoy drop is valid");
 }
 
 /// #1858, fixed by #1863. Lean `Botho.Tags.mergeWeighted_overflow_panics`

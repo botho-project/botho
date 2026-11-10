@@ -1178,6 +1178,98 @@ mod tests {
         assert_eq!(decoded.outputs.len(), tx.outputs.len());
     }
 
+    /// Protocol 10.0.0 (#1687): an honest spend of tagged coins keeps at least
+    /// 95% of each cluster's weight per unit of value (the consensus
+    /// retained-weight floor). Two tagged inputs of different amounts, with
+    /// the wallet's decoys (other amounts, so each input is its ring's only
+    /// spend candidate and the floor binds): no output falls below it.
+    #[test]
+    fn honest_spend_of_tagged_coins_passes_the_retained_weight_floor() {
+        use bth_cluster_tax::{first_tag_retention_violation, SpendRing, TagPair};
+
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        let mut a = owned_fixture_utxo(&keys, 3_000_000_000_000, 50);
+        a.cluster_tags = Some(StoredTags {
+            tags: vec![(0xFEDC_BA98_7654_3210, 700_000), (7, 250_000)],
+        });
+        let mut b = owned_fixture_utxo(&keys, 2_000_000_000_000, 51);
+        b.tx_hash = [8u8; 32];
+        b.cluster_tags = Some(StoredTags {
+            tags: vec![(7, 950_000)],
+        });
+        let total = a.amount + b.amount;
+        let builder = TransactionBuilder::new(keys, vec![a.clone(), b.clone()], 1_000);
+        let tx = builder
+            .build_signed_transaction(
+                &recipient.public_address(),
+                1_000_000_000_000,
+                MIN_TX_FEE,
+                vec![a.clone(), b.clone()],
+                total,
+                vec![
+                    fixture_decoys(MIN_RING_SIZE - 1),
+                    fixture_decoys(MIN_RING_SIZE - 1),
+                ],
+            )
+            .unwrap()
+            .transaction;
+
+        let owned = [a, b];
+        let tags_of = |amount: u64| -> Vec<TagPair> {
+            owned
+                .iter()
+                .find(|u| u.amount == amount)
+                .map(|u| u.tags().tags)
+                .unwrap_or_default()
+        };
+        let members: Vec<Vec<(u64, Vec<TagPair>)>> = tx
+            .inputs
+            .clsag()
+            .iter()
+            .map(|input| {
+                // Decoy members carry no tags; the real member is the one
+                // whose amount the pseudo-output commits to.
+                let real = tags_of(input.pseudo_output_amount);
+                let mut ring = vec![(input.pseudo_output_amount, real)];
+                ring.extend((0..MIN_RING_SIZE as u64 - 1).map(|i| (1_000 + i, Vec::new())));
+                ring
+            })
+            .collect();
+        let views: Vec<Vec<(u64, &[TagPair])>> = members
+            .iter()
+            .map(|m| m.iter().map(|(v, t)| (*v, t.as_slice())).collect())
+            .collect();
+        let rings: Vec<SpendRing> = tx
+            .inputs
+            .clsag()
+            .iter()
+            .zip(&views)
+            .map(|(input, members)| SpendRing {
+                pseudo_amount: input.pseudo_output_amount,
+                members,
+            })
+            .collect();
+        let outputs: Vec<Vec<TagPair>> = tx
+            .outputs
+            .iter()
+            .map(|o| {
+                o.cluster_tags
+                    .entries
+                    .iter()
+                    .map(|e| (e.cluster_id.0, e.weight))
+                    .collect()
+            })
+            .collect();
+        let output_views: Vec<&[TagPair]> = outputs.iter().map(Vec::as_slice).collect();
+        assert!(!outputs[0].is_empty());
+        assert_eq!(
+            first_tag_retention_violation(&rings, &output_views),
+            None,
+            "the stock wallet's 5% decay meets the 95% retained-weight floor"
+        );
+    }
+
     #[test]
     fn test_output_is_detectable_by_recipient() {
         // The exact bug class the curator found: outputs must be detectable by

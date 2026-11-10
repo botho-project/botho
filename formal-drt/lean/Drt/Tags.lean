@@ -11,7 +11,9 @@ against `Botho.Tags.mergeWeightedSafe` (it saturates, never panics), and
 `cluster_tag_inheritance` against the protocol 8.0.0 rules
 `Botho.Tags.inheritOk₈` (Rule 1, Rule 2, then C6). The pre-fix models
 (`mergeWeighted`, `inheritOk` alone) stay in `formal/` as the record of
-#1858 / #1857.
+#1858 / #1857. The protocol 10.0.0 legs (#1687) `cluster_tag_retention` and
+`import_floor_from_inputs` compare against `Botho.Tags.retainOk` and
+`Botho.Tags.importFloorIn`.
 -/
 import Lean.Data.Json
 import Botho
@@ -80,6 +82,27 @@ def firstFailure (rings : List (List Coin)) (outs : List Coin) : Option Nat :=
       | none => some c
       | some b => some (min b c)) none
 
+def decInput (j : Json) : Dec Input₁₀ := do
+  pure ⟨← nat j "pseudo", ← (← arr j "ring").mapM decCoin⟩
+
+/-- The smallest failing cluster of output `o` (`BTreeMap` order), if any. -/
+def retentionFailure (ins : List Input₁₀) (o : Coin) : Option Nat :=
+  (inputClusters (ins.map Input₁₀.ring)).foldl
+    (fun best c =>
+      if required₁₀ ins c < MIN_STORED_WEIGHT || keepsWeight c (required₁₀ ins c) o then best
+      else match best with
+        | none => some c
+        | some b => some (min b c)) none
+
+/-- The first `(output, cluster)` the retained-weight floor rejects, scanning
+outputs in order (the error `first_tag_retention_violation` reports). -/
+def firstRetentionViolation (ins : List Input₁₀) : Nat → List Coin → Option (Nat × Nat × Coin)
+  | _, [] => none
+  | i, o :: os =>
+    match retentionFailure ins o with
+    | some c => some (i, c, o)
+    | none => firstRetentionViolation ins (i + 1) os
+
 def dispatch (fn : String) (a : Json) : Option (Dec Json) :=
   match fn with
   | "merge_weighted" => some do
@@ -130,6 +153,24 @@ def dispatch (fn : String) (a : Json) : Option (Dec Json) :=
       { wealth := fun _ => 0, isImport := fun c => imports.contains c, curve := id,
         implied := fun _ => 0 }
     pure (encNat (importFloor env outs))
+  | "cluster_tag_retention" => some do
+    let ins ← (← arr a "inputs").mapM decInput
+    let outs ← (← arr a "outputs").mapM decCoin
+    let ok := retainOk ins outs
+    let r := match firstRetentionViolation ins 0 outs with
+      | none => (true, Json.mkObj [("accepted", Json.bool true)])
+      | some (i, c, o) =>
+        (false, Json.mkObj [("output", encNat i), ("actual", encNat (weightOn c o.tags)),
+          ("cluster", encNat c), ("required", encNat (required₁₀ ins c))])
+    pure (if r.1 == ok then r.2
+      else Json.mkObj [("model_error", Json.str "retainOk disagrees with the reported violation")])
+  | "import_floor_from_inputs" => some do
+    let ins ← (← arr a "inputs").mapM decInput
+    let imports ← (← arr a "imports").mapM asNat
+    let env : FeeEnv :=
+      { wealth := fun _ => 0, isImport := fun c => imports.contains c, curve := id,
+        implied := fun _ => 0 }
+    pure (encNat (importFloorIn env ins))
   | _ => none
 
 end Drt.Tags

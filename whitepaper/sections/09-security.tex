@@ -817,13 +817,17 @@ factor.
 
   \item \textbf{Wash trading}: Rapid self-transfers to decay tags
     \begin{itemize}
-      \item \textit{Result}: Consensus applies no decay and does not
-        rate-limit it; it rejects only tag \emph{inflation}
-        (\path{CONSENSUS_TAG_DECAY_RATE} $= 0$,
-        \path{botho/src/ledger/store.rs})
-      \item \textit{Outcome}: Stock wallets decay 5\% per transfer with no
-        age gate (half-life $\approx$13.5 transfers); a modified wallet can
-        write empty tags in one transaction (as built, pending \#1687)
+      \item \textit{Result}: Consensus applies no decay of its own. Since
+        protocol 10.0.0 it rejects tag \emph{inflation} and any spend that
+        keeps under 95\% of a cluster's weight that all spend candidates
+        carry (\path{first_tag_retention_violation},
+        \path{cluster-tax/src/tag_retention.rs}; \#1687)
+      \item \textit{Outcome}: Stock wallets decay 5\% per transfer, which is
+        exactly the floor, with no age gate (half-life $\approx$13.5
+        transfers). The floor bounds decay per spend, not per unit of time.
+        A modified wallet can still write empty tags if it adds a decoy of
+        the coin's exact amount that lacks the cluster; for bridge imports
+        such a spend still pays the import floor, read from the inputs
       \item \textit{Cost}: Transaction fees plus the class-downgrade charge,
         which applies from block~1 (the exit-pricing rate has no epoch-0
         holiday since protocol 10.0.0, \#1685) and can be diluted by decoy
@@ -844,8 +848,9 @@ Splitting does buy lottery tickets. The historical stationary expected-value
 study found that profitable (\#1761, pending \#1682); this is model evidence,
 not a measured current production profit rate
 (Section~\ref{sec:redistribution-status}). Wash
-trading is bounded only by the class-downgrade charge, not by a decay rate
-limit; whether consensus should guarantee tag persistence is open (\#1687).
+trading is bounded per spend by the 95\% retained-weight floor (protocol
+10.0.0, \#1687) and by the class-downgrade charge, not by a decay rate per
+unit of time.
 
 \subsection{Known Limitations}
 

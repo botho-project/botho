@@ -72,6 +72,10 @@ pub struct Candidate {
     /// the RPC client fails closed when a block omits it). Ring decoys are
     /// chosen by age `chain_height − height` (#1861).
     pub height: u64,
+    /// The output's stored cluster tags (`clusterTags`). When this output is
+    /// spent, the signer's outputs inherit them decayed 5%; since protocol
+    /// 10.0.0 consensus rejects a spend that keeps less than 95% (#1687).
+    pub cluster_tags: Vec<(u64, u32)>,
 }
 
 impl Candidate {
@@ -120,6 +124,7 @@ fn candidate_from_rpc(o: crate::rpc::RpcOutput) -> Candidate {
         },
         lottery: o.lottery,
         height: o.height,
+        cluster_tags: o.cluster_tags,
     }
 }
 
@@ -452,6 +457,10 @@ pub fn plan_send_with_rng<R: rand::Rng + ?Sized>(
         .iter()
         .map(|c| (c.output.target_key.as_str(), c.height))
         .collect();
+    let canonical_tags: std::collections::HashMap<&str, &[(u64, u32)]> = canonical
+        .iter()
+        .map(|c| (c.output.target_key.as_str(), c.cluster_tags.as_slice()))
+        .collect();
 
     let mut spend_inputs: Vec<SpendInput> = Vec::with_capacity(inputs.len());
     for input in &inputs {
@@ -499,6 +508,12 @@ pub fn plan_send_with_rng<R: rand::Rng + ?Sized>(
             // V2 lottery payout input: recovered through its context with
             // the x·G == P check (#1645).
             lottery_context: input.lottery_context.clone(),
+            // The input's stored cluster tags, from its canonical chain row:
+            // the signer's outputs inherit them (#1687 retained-weight floor).
+            cluster_tags: canonical_tags
+                .get(input.target_key.as_str())
+                .map(|tags| tags.iter().map(|&(id, w)| (id.to_string(), w)).collect())
+                .unwrap_or_default(),
             decoys,
         });
     }
@@ -797,6 +812,7 @@ mod decoy_selection_tests {
             },
             lottery: false,
             height,
+            cluster_tags: Vec::new(),
         }
     }
 
@@ -901,6 +917,27 @@ mod decoy_selection_tests {
         rings.sort();
         rings.dedup();
         assert!(rings.len() > 1, "plan_send rings must be randomized");
+    }
+
+    /// Protocol 10.0.0 (#1687): the real input's stored cluster tags reach
+    /// the signer exactly (a full u64 id, as a decimal string), so the send's
+    /// outputs inherit them.
+    #[test]
+    fn plan_send_threads_the_input_cluster_tags_to_the_signer() {
+        let (mut candidates, spendable) = chain(400, 0);
+        let id = u64::MAX - 12;
+        candidates.last_mut().unwrap().cluster_tags = vec![(id, 900_000)];
+        let rpc_row: crate::rpc::RpcOutput = serde_json::from_value(serde_json::json!({
+            "targetKey": REAL_KEY, "publicKey": "00".repeat(32),
+            "amountCommitment": "00".repeat(8), "clusterTags": [[id, 900_000]],
+        }))
+        .unwrap();
+        assert_eq!(rpc_row.cluster_tags, vec![(id, 900_000)]);
+        let request = plan(&candidates, &spendable).ok().expect("plan a send");
+        assert_eq!(
+            request.inputs[0].cluster_tags,
+            vec![(id.to_string(), 900_000)]
+        );
     }
 
     #[test]
