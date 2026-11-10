@@ -337,9 +337,13 @@ raise the maximum. A decoy of a different amount cannot raise an honest
 spender's floor. In the adversarial-dilution sweep
 (\path{docs/research/ring-floor-dilution-sweep.md}) the rule collects 100\%
 of the undiluted charge in every cell, against as little as 0\% under the
-value-weighted mean over all ring members that protocol 9.x used, and
-over-charges no honest spend on the production decoy routes (the 9.x mean
-over-charged 54\% of them when 5\% of outputs are wealthy). The rule depends
+value-weighted mean over all ring members that protocol 9.x used, and on
+the production decoy routes decoys no longer raise an honest spend's floor
+above its real input's class (the 9.x mean over-charged 54\% of them when
+5\% of outputs are wealthy). That floor is the spent coin's undecayed class,
+so every hop that lowers a wealthy coin's class, including the wallet's
+normal 5\% per-hop tag decay, still pays the downgrade charge (about 2\% of
+value per $1\times$ of class drop at the current horizon; ADR~0015). The rule depends
 on public amounts; ADR~0015 records its planned successor under confidential
 amounts (the maximum over the whole ring per input, with a wallet filter that
 drops wealthier decoys) and two open questions. A $\pm 10\%$

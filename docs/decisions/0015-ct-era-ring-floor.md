@@ -109,13 +109,30 @@ Under CT neither member amounts nor `pseudo_output_amount` are public, so rule
 
 **Positive**
 - The #925 downgrade charge can no longer be diluted by choosing decoys.
-- Honest spends are no longer over-charged by wealthy decoys: the sweep's
-  honest false-positive rate drops from 54.3% (old mean, 5% wealthy outputs) to
-  0%.
+- Wealthy decoys no longer over-charge honest spends: the sweep's honest
+  false-positive rate drops from 54.3% (old mean, 5% wealthy outputs) to 0%.
+  That 0% is measured against the spent coin's own undecayed class. It counts
+  a charge for lowering the class below that as correct, so it does not mean
+  honest spends pay no downgrade charge (see Negative).
 - Relay, consensus, simulations and wallets share one kernel and one candidate
   selection.
 
 **Negative**
+- The floor is now the spent coin's own undecayed class. Every hop that lowers
+  a wealthy coin's class therefore pays the #925 downgrade charge, including
+  the wallet's normal 5% per-hop tag decay. At the current settlement horizon
+  and rate the charge is 2.0% of value per 1× of class drop. Measured in
+  `docs/research/bridge-import-calibration.md` §0 for a 5.448× flood coin
+  (before → after #1686):
+  - honest domestic spending, cumulative over 20 spends: 0.19% → 2.29%;
+  - stock-wallet self-churn until the tag is pruned: 0.108% → 9.0%;
+  - shedding through same-amount decoys (max-shed to 1×): 0.154% → 8.9%.
+
+  This is intrinsic to an undiluted floor. Per-hop decay and deliberate
+  shedding both lower the class one hop at a time, and the floor cannot tell
+  them apart. Exempting the wallet's decay step would reopen the self-churn and
+  shed paths, so any exemption would be a separate rule with its own analysis.
+  Whether to accept this cost is pending an operator ruling (#1686).
 - Consensus now depends on public amounts in one more place. ADR 0006 makes
   CT the target, so the rule has a known end of life and its successor still
   has two open questions.

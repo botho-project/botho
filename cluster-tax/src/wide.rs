@@ -1,11 +1,14 @@
 //! Exact 256-bit intermediates for value-weighted means (#1876).
 //!
-//! The consensus fee floor takes three value-weighted means of cumulative
-//! cluster wealth: the ring centroid
-//! ([`crate::ring_centroid_implied_factor`]), each ring member's
+//! The consensus fee floor takes value-weighted means of cumulative cluster
+//! wealth: the ring floor (since #1686 the amount-matched per-input max,
+//! [`crate::amount_matched_ring_floor_wealth`]: per input, the largest wealth
+//! among ring members whose amount equals its pseudo-output amount, then the
+//! mean of those maxima weighted by pseudo-output amount), each ring member's
 //! tag-weighted wealth, and the output-tag wealth behind the claimed factor
-//! (`botho`'s `ring_centroid_floored_factor` and
-//! `effective_cluster_wealth_from_outputs`). Each one multiplies a u64 value
+//! (`botho`'s `effective_cluster_wealth_from_outputs`). The pre-#1686 ring
+//! centroid ([`crate::ring_centroid_implied_factor`], kept for the
+//! simulations) uses it too. Each one multiplies a u64 value
 //! (or a u32 tag weight) by a full-u128 wealth, so a product, and the sum of
 //! products, can exceed `u128::MAX`.
 //!
