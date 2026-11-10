@@ -341,8 +341,16 @@ The unchanged normal tier compares 280,000 generated cases when all 28 legs
 complete, plus all replay fixtures. Source-bound old checked/unchecked
 reproduction and actual-source numerical controls are documented in
 [the centroid assurance section](DEMURRAGE.md#exact-elapsed-age-centroid-1998).
-No listed theorem, universal Rust proof or production age-selector change
-is included; dependency/executable provenance is specific to each run.
+The subsequent #2004 increment proves four full-Nat centroid properties:
+whole-pair permutation, zero-value insertion at any position, positive common
+value scaling, and an unconditional bound by current height. These are
+**proven (model)**, including empty/zero-total and future-height inputs;
+Rust/Lean correspondence remains **tested**. The canonical executable model
+is unchanged. Rust/extraction equivalence, machine-width/panic/allocation/
+cardinality safety and accepted/genesis reachability remain unproved. Neither
+height boundedness nor scaling proves fee behavior, a principal bound or
+general factor dilution resistance. Production age selection is unchanged;
+dependency/executable provenance remains specific to each run.
 
 
 ## The cluster-tag model
