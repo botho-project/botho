@@ -195,32 +195,76 @@ theorem ringElapsedQuantile_le_height
   · simp [List.getD, hi]
 
 -- Quantile boundary examples are kernel-checked, unnamed and not listed claims.
-example : ringElapsedQuantile [] 100 20000 = 0 := by decide +kernel
+example : ringElapsedQuantile [] 100 20000 = 0 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
 
-example : ringElapsedQuantile [(2, 0), (3, 7)] 0 10000 = 0 := by decide +kernel
+example : ringElapsedQuantile [(2, 0), (3, 7)] 0 10000 = 0 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
 
-example : ringElapsedQuantile [(2, 11), (3, 20)] 10 10000 = 0 := by decide +kernel
+example : ringElapsedQuantile [(2, 11), (3, 20)] 10 10000 = 0 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
 
 -- Equal old values may be replaced independently, including zero and beyond u64.
 example : ringElapsedQuantile [(5, 1), (5, 7)] 10 7500 =
-    ringElapsedQuantile [(0, 1), (18446744073709551616, 7)] 10 7500 := by decide +kernel
+    ringElapsedQuantile [(0, 1), (18446744073709551616, 7)] 10 7500 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
 
 -- Zero-valued members still count, so a zero-total ring can have positive age.
-example : ringElapsedQuantile [(0, 1), (0, 7)] 10 5000 = 3 := by decide +kernel
+example : ringElapsedQuantile [(0, 1), (0, 7)] 10 5000 = 3 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
 
 -- The complete-pair permutation preserves duplicate pairs and their multiplicity.
 example : ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 =
     ringElapsedQuantile [(3, 80), (2, 90), (1, 70), (2, 90)] 100 7500 ∧
-    ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 = 20 := by decide +kernel
+    ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 = 20 := by
+  have hsort : ([30, 10, 10, 20] : List Nat).mergeSort = [10, 10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  have hreordered : ([20, 10, 30, 10] : List Nat).mergeSort = [10, 10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil, hsort, hreordered]
+  decide
 
 -- Unsorted ages [30, 10, 20] cross the two interior nearest-rank thresholds.
 example : ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 3333 = 10 ∧
     ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 3334 = 20 ∧
     ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6666 = 20 ∧
-    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6667 = 30 := by decide +kernel
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6667 = 30 := by
+  have hsort : ([30, 10, 20] : List Nat).mergeSort = [10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil, hsort]
+  decide
 
 example : ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 0 = 10 ∧
     ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 10000 = 30 ∧
-    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 20000 = 30 := by decide +kernel
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 20000 = 30 := by
+  have hsort : ([30, 10, 20] : List Nat).mergeSort = [10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil, hsort]
+  decide
 
 end Botho.Demurrage
