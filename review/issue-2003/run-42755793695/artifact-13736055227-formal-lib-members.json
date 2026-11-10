@@ -1,0 +1,130 @@
+{
+  "Botho/Basic.olean": {
+    "size": 108488,
+    "sha256": "036aeab96170b96525471f97628ddcfbff3f5e0eff033df85b464a3b95281aa2"
+  },
+  "Botho/Consensus/SlotDuration.olean": {
+    "size": 459120,
+    "sha256": "0918fd2e31d88efafbf557d15fca6857bcd379dc99cd36688e532273cb7f3fef"
+  },
+  "Botho/Demurrage/Age.olean": {
+    "size": 56360,
+    "sha256": "17af5e28dfa0fa7dcc14fdab20225884e6a9fe550a29daba0ad196a8894ca019"
+  },
+  "Botho/Demurrage/Counterexamples.olean": {
+    "size": 202416,
+    "sha256": "daba0314bc1524aabe0e4d54076c9a970b7ea0b106af1d07b5cd74a259a47d78"
+  },
+  "Botho/Demurrage/Exact.olean": {
+    "size": 113680,
+    "sha256": "81873922340e5867cf181907454d281b3b52b35ff5f348805a371145891a675d"
+  },
+  "Botho/Demurrage/ExactCharge.olean": {
+    "size": 511120,
+    "sha256": "cece8f870809017a73d266c3fae14aee5f8b3cbc0386efc3196aeabc25e44d6d"
+  },
+  "Botho/Difficulty/Step.olean": {
+    "size": 1282760,
+    "sha256": "1caf7d280aafb2cb250754a75f951093ea79d5f34024d41031326b2edccfdbc2"
+  },
+  "Botho/Difficulty/Vectors.olean": {
+    "size": 14028344,
+    "sha256": "5ecd38d1dd5b203862bb27ac1d12a391951f2b584d05b9a0541737ec39cada03"
+  },
+  "Botho/Difficulty/Warp.olean": {
+    "size": 920368,
+    "sha256": "ecad34b69d3ebc303fcbb3d44f6c0cfbc1238b27bbf41ba792afef5c25a43d92"
+  },
+  "Botho/Lottery/Arith.olean": {
+    "size": 111888,
+    "sha256": "006a6d5885b0d62a19e1a6d3857bbf8c20998cabcae5f81f36b34c14347e5a17"
+  },
+  "Botho/Lottery/Candidate.olean": {
+    "size": 358672,
+    "sha256": "5a69c431450f2b33937236cc602341478c5809e3120e2c3891085b4b791fa3e9"
+  },
+  "Botho/Lottery/Conservation.olean": {
+    "size": 713040,
+    "sha256": "29d3ab57d2d654029489cf8b64da0e79362002d8df6ddf88223a410a2cd070ee"
+  },
+  "Botho/Lottery/Determinism.olean": {
+    "size": 208152,
+    "sha256": "54e62a72d722fce025d96aba54c7e7229937cece4305d81e1d8938dcd0497810"
+  },
+  "Botho/Lottery/Draw.olean": {
+    "size": 351360,
+    "sha256": "bdee4fe746e602bce73fbf1f80c40a018d09355c25e0cef4a892a3d6a2c4d137"
+  },
+  "Botho/Lottery/Drawing.olean": {
+    "size": 236712,
+    "sha256": "5b67fe501f20204a00a42bfc3e6bc25da5c12fbda2c7010de217d4b6114a3aac"
+  },
+  "Botho/Lottery/Pool.olean": {
+    "size": 311096,
+    "sha256": "d9f0c0f2792f9e8812a47095393f8d94c4604f2f562d23dfa068131fa1f4e2dd"
+  },
+  "Botho/Lottery/Prims.olean": {
+    "size": 218144,
+    "sha256": "5908cf3ce5a17019f6056085d106b87d200201148ec96e8d068bb70553fb9fbf"
+  },
+  "Botho/Lottery/Seed.olean": {
+    "size": 18440,
+    "sha256": "0b1529bbde2948acd690bfa4a217fdc3da2b5c4ec6536f58d8ae6a9e59d286ac"
+  },
+  "Botho/Lottery/SeedIndependence.olean": {
+    "size": 413528,
+    "sha256": "f4c2c391fd5f0222432de1e9232e6c6f9a480de7430acd820d06bad2e193718a"
+  },
+  "Botho/Lottery/Sybil.olean": {
+    "size": 1706632,
+    "sha256": "42f5bf28171a7ada2c6183c891dcaccc636517a3a94cd8d2b6e0a37b28a17b42"
+  },
+  "Botho/Lottery/SybilExpectation.olean": {
+    "size": 2602816,
+    "sha256": "580ebf120236c7a16b9a94b866326a37840d969b653ac0f8cc7d0a8b2f27e688"
+  },
+  "Botho/Lottery/Window.olean": {
+    "size": 163920,
+    "sha256": "f18827269ff97e0317116b449dd987e387331ecb5b4263b26b48a08042192bb7"
+  },
+  "Botho/Monetary/Emission.olean": {
+    "size": 990208,
+    "sha256": "3346813aab75699a22790555d0520c50f0ac1d79cc43b6cd39c2ada3613435c3"
+  },
+  "Botho/Quorum/Fbas.olean": {
+    "size": 2689616,
+    "sha256": "3216217dd91463f19845d61e6b6a30e43c3775f54a28eacc3f34e63bfe7184b5"
+  },
+  "Botho/Supply/Accounting.olean": {
+    "size": 602352,
+    "sha256": "de4446d89721a0eb2d13762370bb11731551938184f5001618cb89a005db72d4"
+  },
+  "Botho/Supply/Block.olean": {
+    "size": 4729336,
+    "sha256": "d880c50dde9826cec38890b2ec4c00a084be1fcfdc679d3f482cb75ea3a6d1fc"
+  },
+  "Botho/Supply/Transactions.olean": {
+    "size": 1526224,
+    "sha256": "2778e85644dd705ddb65509e1ef0633db78ba5e60a6863d80e2b643456660efd"
+  },
+  "Botho/Tags/EffectiveExact.olean": {
+    "size": 82392,
+    "sha256": "b783f00c5d71f85218d9871636dea034d11f8bf3f044c4b58a96da6f6b955eb0"
+  },
+  "Botho/Tags/Inherit.olean": {
+    "size": 985728,
+    "sha256": "3a549f01cde307ef3fb662b4861e2e320ba508bc1a6cfca652f36dc173d3d9ee"
+  },
+  "Botho/Tags/Vector.olean": {
+    "size": 1159864,
+    "sha256": "b9dfa014f74fc511d428a2b4393144f2dd6a41194faced7481392d739cc78f7c"
+  },
+  "Botho/Timestamps.olean": {
+    "size": 935720,
+    "sha256": "fb4c12efdab918a4230d605125c64b38cbab2fb26ef6bfadf3b63a0423f15112"
+  },
+  "Botho.olean": {
+    "size": 5152,
+    "sha256": "cb7e9a6c0b192d6e1ab0528ab338bccb2558bcc98dc231eb4088a23c716f160f"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "pr": 2005,
+  "head": "ec4ce52f1bf051ca1d17fcb02c18b534ee0b85c3",
+  "base": "8e11b2bba132a8c369c7db97d66ef145a230f7f1",
+  "merge_commit_sha": "e74c9e046929b58ea59f14b8195e8a47a00a2ce2",
+  "merge_tree": "14a7aa760ed65785d97dcb3334d6e463eaa54245",
+  "merge_parents": [
+    "8e11b2bba132a8c369c7db97d66ef145a230f7f1",
+    "ec4ce52f1bf051ca1d17fcb02c18b534ee0b85c3"
+  ],
+  "checked_from": "GitHub pull request and git commit API; actual checkout log retained"
+}

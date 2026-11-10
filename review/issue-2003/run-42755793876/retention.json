@@ -1,0 +1,18 @@
+{
+  "run_id": 42755793876,
+  "source_commit": "ec4ce52f1bf051ca1d17fcb02c18b534ee0b85c3",
+  "event": "pull_request",
+  "status": "completed",
+  "conclusion": "success",
+  "logs_sha256": "2f55e3d40f7b35feb0a1907c7b367fb1fb3bbbdd750fa2f6fc6f1e734d24160d",
+  "artifacts": [
+    {
+      "id": 13736395622,
+      "name": "aeneas-gate-evidence",
+      "archive": "artifact-13736395622-aeneas-gate-evidence.zip",
+      "sha256": "9e78e8de52422ae8c10f90775c69a436e7a6ec8cf2992522f5fbe02b46bfbcd4",
+      "api_digest": "sha256:9e78e8de52422ae8c10f90775c69a436e7a6ec8cf2992522f5fbe02b46bfbcd4",
+      "size_in_bytes": 34490
+    }
+  ]
+}

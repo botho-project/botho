@@ -1,0 +1,57 @@
+[
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793695/job/129633754988",
+    "name": "formal-gate",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793695/job/129633501112",
+    "name": "verify",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793695/job/129629797026",
+    "name": "build",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755794395/job/129629743482",
+    "name": "drt",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793876/job/129629738254",
+    "name": "drift",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793695/job/129629737637",
+    "name": "changes",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755794395/job/129629743729",
+    "name": "nightly-helper-tests",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793962/job/129629738584",
+    "name": "Vendored LRU panic safety",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793876/job/129629738539",
+    "name": "typecheck",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793962/job/129629738439",
+    "name": "cargo deny",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/botho-project/botho/actions/runs/42755793962/job/129629738079",
+    "name": "Vendored GLib iterator safety",
+    "state": "SUCCESS"
+  }
+]
