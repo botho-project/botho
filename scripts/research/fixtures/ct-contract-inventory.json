@@ -4,7 +4,7 @@
   "production": [
     {
       "path": "cluster-tax/src/demurrage.rs",
-      "sha256": "9d1bfeadc16192948529fbc8b5e3ada89d8991e9c0a825fc8e74b53f963fe4f0",
+      "sha256": "b2762e0a2bc005e28e504f5f3d0bcfab450c945808134e34d90e6934c196b46d",
       "symbols": [
         "pub fn demurrage_charge(",
         "pub fn capitalized_reset_charge(",
