@@ -260,6 +260,10 @@ def dispatch (fn : String) (a : Json) : Dec Json := do
         (← nat a "elapsed") rate year))])
   | "default_cluster_factor" =>
     pure (encNat (Botho.Demurrage.defaultFactor (← nat a "wealth")))
+  | "ring_elapsed_centroid" =>
+    let members ← (← arr a "members").mapM fun m => do
+      pure (← nat m "value", ← nat m "creation_height")
+    pure (encNat (Botho.Demurrage.ringElapsedCentroid members (← nat a "current_height")))
   | "ring_elapsed_quantile" =>
     let members ← (← arr a "members").mapM fun m => do
       pure (← nat m "value", ← nat m "creation_height")

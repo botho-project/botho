@@ -1,0 +1,20 @@
+{"note":"empty","input":{"members":[],"current_height":"0"},"expected":"0"}
+{"note":"empty maximal height","input":{"members":[],"current_height":"18446744073709551615"},"expected":"0"}
+{"note":"singleton maximal","input":{"members":[{"value":"18446744073709551615","creation_height":"0"}],"current_height":"18446744073709551615"},"expected":"18446744073709551615"}
+{"note":"two maximal products","input":{"members":[{"value":"18446744073709551615","creation_height":"0"},{"value":"18446744073709551615","creation_height":"0"}],"current_height":"18446744073709551615"},"expected":"18446744073709551615"}
+{"note":"four high products","input":{"members":[{"value":"18446744073709551615","creation_height":"0"},{"value":"18446744073709551614","creation_height":"1"},{"value":"18446744073709551613","creation_height":"2"},{"value":"18446744073709551615","creation_height":"3"}],"current_height":"18446744073709551615"},"expected":"18446744073709551613"}
+{"note":"unequal weights","input":{"members":[{"value":"1","creation_height":"0"},{"value":"3","creation_height":"8"}],"current_height":"10"},"expected":"4"}
+{"note":"floor not nearest","input":{"members":[{"value":"1","creation_height":"0"},{"value":"3","creation_height":"7"}],"current_height":"10"},"expected":"4"}
+{"note":"floor once","input":{"members":[{"value":"1","creation_height":"9"},{"value":"1","creation_height":"9"}],"current_height":"10"},"expected":"1"}
+{"note":"ordinary","input":{"members":[{"value":"10","creation_height":"50"},{"value":"30","creation_height":"80"},{"value":"20","creation_height":"90"}],"current_height":"100"},"expected":"21"}
+{"note":"all zero weights","input":{"members":[{"value":"0","creation_height":"0"},{"value":"0","creation_height":"18446744073709551615"},{"value":"0","creation_height":"10"}],"current_height":"10"},"expected":"0"}
+{"note":"zero weight extremes","input":{"members":[{"value":"0","creation_height":"0"},{"value":"7","creation_height":"8"},{"value":"0","creation_height":"18446744073709551615"}],"current_height":"10"},"expected":"2"}
+{"note":"future only","input":{"members":[{"value":"18446744073709551615","creation_height":"18446744073709551615"}],"current_height":"10"},"expected":"0"}
+{"note":"equal height","input":{"members":[{"value":"18446744073709551615","creation_height":"18446744073709551615"}],"current_height":"18446744073709551615"},"expected":"0"}
+{"note":"height zero","input":{"members":[{"value":"18446744073709551615","creation_height":"0"},{"value":"1","creation_height":"18446744073709551615"}],"current_height":"0"},"expected":"0"}
+{"note":"future mixed","input":{"members":[{"value":"5","creation_height":"0"},{"value":"7","creation_height":"11"},{"value":"1","creation_height":"10"}],"current_height":"10"},"expected":"3"}
+{"note":"denominator exactly max","input":{"members":[{"value":"18446744073709551614","creation_height":"0"},{"value":"1","creation_height":"10"}],"current_height":"10"},"expected":"9"}
+{"note":"denominator above max","input":{"members":[{"value":"18446744073709551615","creation_height":"0"},{"value":"1","creation_height":"10"}],"current_height":"10"},"expected":"9"}
+{"note":"single positive weight","input":{"members":[{"value":"1","creation_height":"0"},{"value":"0","creation_height":"18446744073709551615"}],"current_height":"18446744073709551615"},"expected":"18446744073709551615"}
+{"note":"mixed maximal ages","input":{"members":[{"value":"18446744073709551615","creation_height":"0"},{"value":"18446744073709551615","creation_height":"18446744073709551615"},{"value":"18446744073709551615","creation_height":"9223372036854775807"}],"current_height":"18446744073709551615"},"expected":"9223372036854775807"}
+{"note":"zero singleton","input":{"members":[{"value":"0","creation_height":"0"}],"current_height":"18446744073709551615"},"expected":"0"}
