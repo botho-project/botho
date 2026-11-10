@@ -195,32 +195,32 @@ theorem ringElapsedQuantile_le_height
   · simp [List.getD, hi]
 
 -- Quantile boundary examples are kernel-checked, unnamed and not listed claims.
-example : ringElapsedQuantile [] 100 20000 = 0 := by decide
+example : ringElapsedQuantile [] 100 20000 = 0 := by decide +kernel
 
-example : ringElapsedQuantile [(2, 0), (3, 7)] 0 10000 = 0 := by decide
+example : ringElapsedQuantile [(2, 0), (3, 7)] 0 10000 = 0 := by decide +kernel
 
-example : ringElapsedQuantile [(2, 11), (3, 20)] 10 10000 = 0 := by decide
+example : ringElapsedQuantile [(2, 11), (3, 20)] 10 10000 = 0 := by decide +kernel
 
 -- Equal old values may be replaced independently, including zero and beyond u64.
 example : ringElapsedQuantile [(5, 1), (5, 7)] 10 7500 =
-    ringElapsedQuantile [(0, 1), (18446744073709551616, 7)] 10 7500 := by decide
+    ringElapsedQuantile [(0, 1), (18446744073709551616, 7)] 10 7500 := by decide +kernel
 
 -- Zero-valued members still count, so a zero-total ring can have positive age.
-example : ringElapsedQuantile [(0, 1), (0, 7)] 10 5000 = 3 := by decide
+example : ringElapsedQuantile [(0, 1), (0, 7)] 10 5000 = 3 := by decide +kernel
 
 -- The complete-pair permutation preserves duplicate pairs and their multiplicity.
 example : ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 =
     ringElapsedQuantile [(3, 80), (2, 90), (1, 70), (2, 90)] 100 7500 ∧
-    ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 = 20 := by decide
+    ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 = 20 := by decide +kernel
 
 -- Unsorted ages [30, 10, 20] cross the two interior nearest-rank thresholds.
 example : ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 3333 = 10 ∧
     ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 3334 = 20 ∧
     ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6666 = 20 ∧
-    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6667 = 30 := by decide
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6667 = 30 := by decide +kernel
 
 example : ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 0 = 10 ∧
     ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 10000 = 30 ∧
-    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 20000 = 30 := by decide
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 20000 = 30 := by decide +kernel
 
 end Botho.Demurrage
