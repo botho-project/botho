@@ -404,7 +404,8 @@ theorem exactCharge_le_value_of_rate_time
     simpa only [Nat.mul_assoc, Nat.mul_comm, Nat.mul_left_comm] using
       Nat.mul_le_mul_left value (Nat.mul_le_mul h hp)
   have hq := Nat.div_le_of_le_mul hn
-  unfold exactCharge Botho.Lottery.minN
+  dsimp only [exactCharge]
+  unfold Botho.Lottery.minN
   split <;> omega
 
 /-- Generic reset retains its caller-supplied horizon. Natural subtraction
