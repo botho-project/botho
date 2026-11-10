@@ -82,6 +82,12 @@ try:
                 d=OUT/(kind+'-fixtures'); before=sha(d/'ring_elapsed_centroid.jsonl'); clean=report(kind+'-restored',d,0,0)
                 assert not clean['mismatches'] and sha(d/'ring_elapsed_centroid.jsonl')==before; receipt[kind+'-restored']=clean
             run('restored-live-vectors',['cargo','test','--release','centroid_live_rust_and_lean_vectors','--','--nocapture'],cap=420,cwd=DRT)
+        report_path=OUT/'normal-drt-report.json'
+        run('normal-all-legs',[str(RUNNER),'--cases','10000','--seed','1707','--json',str(report_path)],cap=300,cwd=DRT)
+        normal=json.loads(report_path.read_text()); assert len(normal['legs'])==28
+        assert sum(l['cases'] for l in normal['legs'])==sum(l['compared'] for l in normal['legs'])==280000
+        assert all(not l['mismatches'] for l in normal['legs'])
+        receipt['normal_report_sha256']=sha(report_path)
         assert sha(MODEL)==receipt['model_sha256']
     assert {p:sha(ROOT/p) for p in hashes}==hashes
     run('final-source-diff',['git','diff','--exit-code'],cap=60)
