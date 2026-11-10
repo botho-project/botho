@@ -1738,9 +1738,10 @@ impl Ledger {
     /// - The demurrage clock uses `ring_elapsed_quantile@max` over the ring
     ///   members' public `(value, created_at)` — an unweighted order statistic,
     ///   value-independent, so fresh high-value decoys cannot dilute it to zero
-    ///   (H2/B1). The factor is floored at the ring-centroid-implied factor
-    ///   (B2, [`Ledger::ring_centroid_floored_factor`]) so background-tagged
-    ///   outputs cannot escape a wealthy ring's demurrage.
+    ///   (H2/B1). The factor is floored at the ring floor (B2,
+    ///   [`Ledger::ring_floored_factor`]; since protocol 10.0.0 the per-input
+    ///   max over amount-matched members, #1686) so background-tagged outputs
+    ///   cannot escape a wealthy ring's demurrage.
     /// - `rate_bps(height)` and `blocks_per_year` come from
     ///   [`crate::monetary::mainnet_policy`], evaluated at `block_height` (the
     ///   height being applied), identical on every node.
@@ -2362,48 +2363,72 @@ impl Ledger {
         }
     }
 
-    /// Floor a spender-claimed cluster factor at the factor implied by the ring
-    /// centroid (audit cycle 6 H2, design #574 item B2).
+    /// Floor a spender-claimed cluster factor at the ring floor (audit cycle 6
+    /// H2, design #574 item B2; protocol 10.0.0 rule, #1686).
     ///
     /// The `claimed_factor` is derived from a transaction's spender-authored
     /// OUTPUT tags, so on its own it is gameable: a wealthy spender can tag
     /// outputs as background (factor 1x) and pay ~zero demurrage. This raises
-    /// it to at least the factor implied by the RING MEMBERS' own (public,
-    /// inherited) cluster tags, which the spender cannot rewrite — so fresh
-    /// background decoys can no longer drive the demurrage factor below what
-    /// the ring composition implies. The floor can only ever RAISE the
-    /// factor; a genuinely-background ring leaves a 1x claim unchanged.
+    /// it to at least the factor the RING MEMBERS' own (public, inherited)
+    /// cluster tags imply, which the spender cannot rewrite. The floor can
+    /// only ever RAISE the factor; a background ring leaves a 1x claim
+    /// unchanged.
+    ///
+    /// Since protocol 10.0.0 (#1686) the floor is
+    /// [`bth_cluster_tax::amount_matched_ring_floor_factor`]: per input the
+    /// MAX member wealth over the members whose amount equals the input's
+    /// pseudo-output amount (the spend candidates), value-weighted across
+    /// inputs by pseudo-output amount, then the curve. Before 10.0.0 it was
+    /// the value-weighted mean over every member of every ring, which
+    /// spender-chosen high-value decoys diluted.
     ///
     /// Per-cluster wealth is resolved from the ledger **fail-closed**: a DB
     /// read error propagates as `LedgerError` rather than silently
     /// defaulting to zero wealth (which would lower the floor — matching
-    /// the M7 fail-closed fix). The factor math is the consensus-safe,
-    /// integer-only, node-local-state-free helper
-    /// [`bth_cluster_tax::ring_centroid_implied_factor`], which the consensus
-    /// fee-floor enforcement (item B4) can reuse unchanged.
+    /// the M7 fail-closed fix).
     ///
     /// # Arguments
     /// * `claimed_factor` - The cluster factor implied by the spender's output
     ///   tags, in FACTOR_SCALE units.
-    /// * `ring_members` - The resolved `(value, cluster_tags)` of every ring
-    ///   member across all inputs (public chain data).
+    /// * `rings` - One entry per input: its `pseudo_output_amount` and the
+    ///   resolved `(value, cluster_tags)` of every ring member (public chain
+    ///   data).
     /// * `curve` - The progressive cluster factor curve.
     ///
     /// # Returns
-    /// `max(claimed_factor, ring_centroid_implied_factor)` in FACTOR_SCALE
-    /// units.
-    pub fn ring_centroid_floored_factor(
+    /// `max(claimed_factor, ring floor)` in FACTOR_SCALE units.
+    pub fn ring_floored_factor(
         &self,
         claimed_factor: u64,
-        ring_members: &[(u64, &ClusterTagVector)],
+        rings: &[(u64, &[(u64, &ClusterTagVector)])],
         curve: &bth_cluster_tax::ClusterFactorCurve,
     ) -> Result<u64, LedgerError> {
-        validation::ValidationReads::ring_centroid_floored_factor(
-            self,
-            claimed_factor,
-            ring_members,
-            curve,
-        )
+        let rings: Vec<validation::SpendInputTags> = rings
+            .iter()
+            .map(|(pseudo, members)| {
+                (
+                    *pseudo,
+                    members
+                        .iter()
+                        .map(|(amount, tags)| (*amount, validation::tag_pairs(tags)))
+                        .collect(),
+                )
+            })
+            .collect();
+        validation::ValidationReads::ring_floored_factor(self, claimed_factor, &rings, curve)
+    }
+
+    /// [`Self::ring_floored_factor`] over a transaction's inputs, resolved
+    /// from the committed UTXO set exactly as `consensus_fee_floor` resolves
+    /// them. Mempool admission calls this, so relay and consensus run the
+    /// same rule on the same members.
+    pub fn ring_floored_factor_for_tx(
+        &self,
+        claimed_factor: u64,
+        tx: &BothoTransaction,
+        curve: &bth_cluster_tax::ClusterFactorCurve,
+    ) -> Result<u64, LedgerError> {
+        validation::ValidationReads::ring_floored_factor_for_tx(self, claimed_factor, tx, curve)
     }
 
     /// Compute effective cluster wealth for a set of UTXOs identified by
@@ -3155,7 +3180,7 @@ mod tests {
 
         let claimed_factor = 1_000; // 1x background claim
         let floored = ledger
-            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .ring_floored_factor(claimed_factor, &[(1_000_000, &ring_members[..])], &curve)
             .unwrap();
 
         assert!(
@@ -3179,7 +3204,7 @@ mod tests {
 
         let claimed_factor = 1_000; // 1x background
         let floored = ledger
-            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .ring_floored_factor(claimed_factor, &[(1_000_000, &ring_members[..])], &curve)
             .unwrap();
 
         assert_eq!(
@@ -3201,7 +3226,7 @@ mod tests {
 
         let claimed_factor = 6_000; // 6x
         let floored = ledger
-            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .ring_floored_factor(claimed_factor, &[(1_000_000, &ring_members[..])], &curve)
             .unwrap();
 
         assert_eq!(floored, 6_000);
@@ -3233,7 +3258,7 @@ mod tests {
                                     // Must NOT panic (debug) nor wrap (release): the `weight × global_wealth`
                                     // multiply saturates before the divide.
         let floored = ledger
-            .ring_centroid_floored_factor(claimed_factor, &ring_members, &curve)
+            .ring_floored_factor(claimed_factor, &[(1_000_000, &ring_members[..])], &curve)
             .unwrap();
 
         // Saturated wealth → max floor, the conservative direction.
@@ -4937,7 +4962,22 @@ mod tests {
         fee: u64,
         settled_value: u64,
     ) -> BothoTransaction {
-        let mut tx = mk_transfer_tx(ring, outputs, fee);
+        mk_settlement_tx_pseudo(ring, outputs, fee, settled_value, 0)
+    }
+
+    /// [`mk_settlement_tx`] with the input's `pseudo_output_amount` set (the
+    /// spent coin's amount, as C3 requires). Since protocol 10.0.0 (#1686)
+    /// the ring floor weights each input by it, so a settlement whose price
+    /// depends on the ring floor needs it.
+    #[cfg(test)]
+    fn mk_settlement_tx_pseudo(
+        ring: Vec<RingMember>,
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        settled_value: u64,
+        pseudo_output_amount: u64,
+    ) -> BothoTransaction {
+        let mut tx = mk_transfer_tx_pseudo(ring, outputs, fee, pseudo_output_amount);
         tx.settlement = Some(crate::transaction::SettlementInfo { settled_value });
         tx
     }
@@ -5100,7 +5140,7 @@ mod tests {
         // Outputs claim BACKGROUND (untagged) -> claimed factor is 1x -> zero
         // demurrage on the claim alone. The ring-centroid floor must override.
         let outputs = vec![mk_tagged_output(90_000_000, 130, ClusterTagVector::empty())];
-        let tx = mk_transfer_tx(ring, outputs, 0);
+        let tx = mk_transfer_tx_pseudo(ring, outputs, 0, 100_000_000);
 
         let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
         let base_only = {
@@ -5168,7 +5208,7 @@ mod tests {
         // Output: fully background (the deflating downgrade).
         let output_sum = 90_000_000u64;
         let outputs = vec![mk_tagged_output(output_sum, 140, ClusterTagVector::empty())];
-        let tx = mk_transfer_tx(ring, outputs, 0);
+        let tx = mk_transfer_tx_pseudo(ring, outputs, 0, 100_000_000);
 
         let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
         let base_only = base_only_fee(&ledger, &tx);
@@ -5207,6 +5247,273 @@ mod tests {
         assert_eq!(floor, again, "consensus floor must be deterministic");
     }
 
+    // ---- #1686: the amount-matched ring floor (protocol 10.0.0) ----
+
+    /// A multi-input transfer: one CLSAG input per `(ring, pseudo amount)`.
+    #[cfg(test)]
+    fn mk_multi_input_tx(
+        inputs: Vec<(Vec<RingMember>, u64)>,
+        outputs: Vec<TxOutput>,
+    ) -> BothoTransaction {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+        let inputs = inputs
+            .into_iter()
+            .enumerate()
+            .map(|(i, (ring, pseudo_output_amount))| ClsagRingInput {
+                ring,
+                key_image: [i as u8; 32],
+                commitment_key_image: [i as u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount,
+            })
+            .collect();
+        BothoTransaction {
+            inputs: TxInputs::new(inputs),
+            outputs,
+            fee: 0,
+            created_at_height: 0,
+            settlement: None,
+        }
+    }
+
+    /// The capitalized downgrade charge on `output_sum` from `floor_factor` to
+    /// background at `block_height`: what the consensus floor collects for a
+    /// young coin spent to background outputs.
+    #[cfg(test)]
+    fn background_downgrade_charge(output_sum: u64, floor_factor: u64, block_height: u64) -> u64 {
+        let policy = crate::monetary::mainnet_policy();
+        bth_cluster_tax::capitalized_reset_charge(
+            output_sum,
+            floor_factor,
+            bth_cluster_tax::demurrage::FACTOR_SCALE,
+            bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+            policy.exit_pricing_rate_bps(block_height),
+            (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1),
+        )
+    }
+
+    /// #1686: the #925 downgrade charge can no longer be diluted with
+    /// high-value background decoys. The issue's table (ring 20, a young coin
+    /// from a 10M BTH cluster, 19 background decoys, background outputs): the
+    /// pre-10.0.0 pooled value-weighted mean floored these at 4162 / 1441 /
+    /// 1000 (6.32% / 0.88% / 0% of value instead of 9.49%). The amount-matched
+    /// max reads only the members of the coin's own amount, so every row pays
+    /// the undiluted charge at 5.745x.
+    #[test]
+    fn consensus_fee_floor_factor_floor_resists_value_dilution() {
+        use bth_cluster_tax::PICO_PER_BTH;
+        let bth = PICO_PER_BTH as u64;
+        let block_height = 8_000_000u64;
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let w: u128 = 10_000_000 * PICO_PER_BTH;
+        assert_eq!(curve.factor(w), 5745);
+
+        for (row, &(coin, decoy, old_floor)) in [
+            (1_000 * bth, 2_000 * bth, 4162u64),
+            (10 * bth, 2_000 * bth, 1441),
+            (bth, 100_000 * bth, 1000),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let dir = tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            ledger.set_cluster_wealth_for_test(7, w).unwrap();
+            let base = 40 * row as u8;
+            // The real coin is young (age 0), so only the capitalized
+            // downgrade term can charge it.
+            let mut specs = vec![(coin, block_height, 7u64, base)];
+            for i in 0..19u8 {
+                specs.push((decoy, block_height, 0, base + 1 + i));
+            }
+            let ring = seed_ring_utxos(&ledger, &specs);
+            let output_sum = coin / 10 * 9;
+            let outputs = vec![mk_tagged_output(output_sum, 200, ClusterTagVector::empty())];
+            let tx = mk_transfer_tx_pseudo(ring, outputs, 0, coin);
+
+            // The pre-10.0.0 rule, for the record: diluted.
+            let pooled: Vec<(u64, u128)> = specs
+                .iter()
+                .map(|&(a, _, c, _)| (a, if c == 0 { 0 } else { w }))
+                .collect();
+            assert_eq!(
+                bth_cluster_tax::ring_centroid_implied_factor(&pooled, &curve),
+                old_floor,
+                "row {row}: the old pooled floor"
+            );
+
+            let demurrage = ledger.consensus_fee_floor(&tx, block_height).unwrap()
+                - base_only_fee(&ledger, &tx);
+            let undiluted = background_downgrade_charge(output_sum, 5745, block_height);
+            assert!(undiluted > 0);
+            assert_eq!(
+                demurrage, undiluted,
+                "row {row}: the diluted ring must pay the undiluted 5.745x charge"
+            );
+            assert!(
+                demurrage > background_downgrade_charge(output_sum, old_floor, block_height),
+                "row {row}: strictly more than the pre-10.0.0 diluted charge"
+            );
+        }
+    }
+
+    /// #1686 boundary: decoys of EXACTLY the coin's amount are spend
+    /// candidates too, so a spender can always pad the candidate set. The max
+    /// ignores background candidates (the amount-matched MEAN would have
+    /// collected only 1/20 of the wealth here), and a wealthier same-amount
+    /// decoy only raises the floor.
+    #[test]
+    fn consensus_fee_floor_ring_floor_resists_same_amount_decoys() {
+        use bth_cluster_tax::PICO_PER_BTH;
+        let bth = PICO_PER_BTH as u64;
+        let block_height = 8_000_000u64;
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000 * PICO_PER_BTH)
+            .unwrap();
+        ledger
+            .set_cluster_wealth_for_test(9, 1_000_000_000 * PICO_PER_BTH)
+            .unwrap();
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let coin = 10 * bth;
+        let output_sum = 9 * bth;
+        let charge_of = |specs: &[(u64, u64, u64, u8)]| {
+            let ring = seed_ring_utxos(&ledger, specs);
+            let outputs = vec![mk_tagged_output(output_sum, 200, ClusterTagVector::empty())];
+            let tx = mk_transfer_tx_pseudo(ring, outputs, 0, coin);
+            ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx)
+        };
+
+        // 19 background decoys of the coin's exact amount.
+        let mut specs = vec![(coin, block_height, 7u64, 1u8)];
+        for i in 0..19u8 {
+            specs.push((coin, block_height, 0, 2 + i));
+        }
+        assert_eq!(
+            charge_of(&specs),
+            background_downgrade_charge(output_sum, 5745, block_height),
+            "same-amount background decoys must not dilute the floor"
+        );
+
+        // One same-amount decoy from a wealthier cluster raises it to that
+        // cluster's factor: candidates can only push the floor up.
+        specs[7] = (coin, block_height, 9, 60);
+        let wealthier = curve.factor(1_000_000_000 * PICO_PER_BTH);
+        assert!(wealthier > 5745);
+        assert_eq!(
+            charge_of(&specs),
+            background_downgrade_charge(output_sum, wealthier, block_height)
+        );
+    }
+
+    /// #1686 boundary: an honest two-input blend (a wealthy coin and a
+    /// background coin of the same value, outputs carrying the wallet's
+    /// decayed merge) is charged exactly what the same transaction with
+    /// decoy-free rings is charged, even with wealthy decoys of other amounts
+    /// in both rings. A pooled max (or pooled amount-matched max) would price
+    /// the background input at the wealthy class. Unequal input values weight
+    /// the floor by pseudo amount, matching the claimed side.
+    #[test]
+    fn consensus_fee_floor_multi_input_blend_has_no_honest_overcharge() {
+        use bth_cluster_tax::PICO_PER_BTH;
+        use bth_transaction_types::ClusterId;
+        let bth = PICO_PER_BTH as u64;
+        let block_height = 8_000_000u64;
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000 * PICO_PER_BTH)
+            .unwrap();
+        ledger
+            .set_cluster_wealth_for_test(9, 1_000_000_000 * PICO_PER_BTH)
+            .unwrap();
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+
+        let mut seed = 0u8;
+        let mut next_seed = || {
+            seed += 1;
+            seed
+        };
+        for (v_wealthy, v_background) in [(100 * bth, 100 * bth), (30 * bth, 270 * bth)] {
+            // Real members (old enough to accrue, so both demurrage terms are
+            // exercised) and decoys of other amounts, some from wealthier
+            // clusters than the real coins.
+            let real_a = (v_wealthy, 0u64, 7u64, next_seed());
+            let real_b = (v_background, 0u64, 0u64, next_seed());
+            let mut ring_a = vec![real_a];
+            let mut ring_b = vec![real_b];
+            for i in 0..19u64 {
+                let cluster = [0u64, 7, 9][(i % 3) as usize];
+                ring_a.push((v_wealthy + (i + 1) * bth, i * 1_000, cluster, next_seed()));
+                ring_b.push((
+                    v_background + (i + 1) * bth,
+                    i * 1_000,
+                    cluster,
+                    next_seed(),
+                ));
+            }
+            let members_a = seed_ring_utxos(&ledger, &ring_a);
+            let members_b = seed_ring_utxos(&ledger, &ring_b);
+
+            // The honest wallet's outputs: the value-weighted merge of the
+            // inputs' tags with the 5% per-transfer decay.
+            let total = v_wealthy + v_background;
+            let weight =
+                ((v_wealthy as u128 * TAG_WEIGHT_SCALE as u128 / total as u128) * 95 / 100) as u32;
+            let tags = ClusterTagVector::from_pairs(&[(ClusterId(7), weight)]);
+            let outputs = vec![
+                mk_tagged_output(total / 2, 201, tags.clone()),
+                mk_tagged_output(total / 2 - bth, 202, tags),
+            ];
+
+            let tx = mk_multi_input_tx(
+                vec![
+                    (members_a.clone(), v_wealthy),
+                    (members_b.clone(), v_background),
+                ],
+                outputs.clone(),
+            );
+            let oracle = mk_multi_input_tx(
+                vec![
+                    (vec![members_a[0].clone()], v_wealthy),
+                    (vec![members_b[0].clone()], v_background),
+                ],
+                outputs,
+            );
+
+            // The floor is the pseudo-weighted mean wealth of the real inputs.
+            let floor = ledger
+                .ring_floored_factor_for_tx(bth_cluster_tax::FACTOR_SCALE, &tx, &curve)
+                .unwrap();
+            let expected_wealth = 10_000_000 * PICO_PER_BTH * v_wealthy as u128 / total as u128;
+            assert_eq!(floor, curve.factor(expected_wealth));
+            assert_eq!(
+                floor,
+                ledger
+                    .ring_floored_factor_for_tx(bth_cluster_tax::FACTOR_SCALE, &oracle, &curve)
+                    .unwrap()
+            );
+            // The pooled rules over-charge it: the wealthy-cluster decoys
+            // (and, pooled across inputs, the wealthy real coin) price the
+            // background input's value.
+            assert!(floor < curve.factor(10_000_000 * PICO_PER_BTH));
+
+            // Same demurrage, and therefore no honest over-charge (the
+            // size-based base differs only because the oracle's rings are
+            // smaller).
+            let demurrage = |t: &BothoTransaction| {
+                ledger.consensus_fee_floor(t, block_height).unwrap() - base_only_fee(&ledger, t)
+            };
+            assert!(demurrage(&oracle) > 0, "old wealthy value accrues");
+            assert_eq!(
+                demurrage(&tx),
+                demurrage(&oracle),
+                "decoys of other amounts must not change an honest blend's charge"
+            );
+        }
+    }
+
     // ---- #1695: shared consensus fee model golden vectors ----
 
     /// Resolve the ledger-side inputs of `consensus_fee_floor` for `tx` (the
@@ -5229,9 +5536,11 @@ mod tests {
         let claimed_wealth = ledger
             .effective_cluster_wealth_from_outputs(&tx.outputs)
             .unwrap();
-        // Ring-centroid floor over the seeded ring members (claimed factor 1×
-        // so only the ring's implied factor is returned; the model applies the
-        // `max(claimed, floor)` itself), then the bridge-import floor.
+        // Ring floor over the seeded ring members, read through the input's
+        // pseudo-output amount (claimed factor 1× so only the ring floor is
+        // returned; the model applies the `max(claimed, floor)` itself), then
+        // the bridge-import floor.
+        let pseudo = tx.inputs.clsag()[0].pseudo_output_amount;
         let ring_tags: Vec<(u64, ClusterTagVector)> = ring_specs
             .iter()
             .map(|&(amount, _, cluster, _)| {
@@ -5246,16 +5555,17 @@ mod tests {
         let ring_refs: Vec<(u64, &ClusterTagVector)> =
             ring_tags.iter().map(|(v, t)| (*v, t)).collect();
         let ring_floor = ledger
-            .ring_centroid_floored_factor(
+            .ring_floored_factor(
                 bth_cluster_tax::FACTOR_SCALE,
-                &ring_refs,
+                &[(pseudo, &ring_refs[..])],
                 &fc.cluster_curve,
             )
             .unwrap();
         let floor = ring_floor.max(
             ledger
                 .import_floor_factor_from_outputs(&tx.outputs)
-                .unwrap(),
+                .unwrap()
+                .max(ledger.import_floor_factor_from_inputs(tx).unwrap()),
         );
         let ages: Vec<(u64, u64)> = ring_specs.iter().map(|&(a, c, _, _)| (a, c)).collect();
         let elapsed = bth_cluster_tax::ring_elapsed_quantile(
@@ -5408,7 +5718,10 @@ mod tests {
 
         for v in &vectors {
             let ring = seed_ring_utxos(&ledger, &v.ring);
-            let tx = mk_transfer_tx(ring, v.outputs.clone(), 0);
+            // The first ring spec is the spent coin: its amount is the input's
+            // pseudo-output amount, as C3 requires of a real transaction. The
+            // protocol 10.0.0 ring floor (#1686) weights the input by it.
+            let tx = mk_transfer_tx_pseudo(ring, v.outputs.clone(), 0, v.ring[0].0);
             let n_memo = tx.outputs.iter().filter(|o| o.has_memo()).count();
             // Size-estimate drift guard: the sims price `consensus_tx_size_bytes`.
             assert_eq!(
@@ -5467,7 +5780,7 @@ mod tests {
             fee_floor_inputs::{
                 effective_cluster_wealth_from_outputs as mirror_claimed,
                 import_floor_factor_from_outputs as mirror_import_floor,
-                output_wealth_contributions, ring_centroid_factor,
+                output_wealth_contributions, ring_floor_factor,
             },
             resolve_fee_floor, ClaimedClass, ConsensusFeeInputs, ConsensusFeeParams, FeeConfig,
             FeeModelMode, FloorOutput, TagPair, PICO_PER_BTH,
@@ -5584,17 +5897,43 @@ mod tests {
                 ring_vecs.iter().map(|(v, t)| (*v, t)).collect();
             let ring_slices: Vec<(u64, &[TagPair])> =
                 ring_tags.iter().map(|(v, t)| (*v, t.as_slice())).collect();
+            // Two inputs over the sampled members (#1686: per input max over
+            // the amount-matched members, value-weighted by pseudo amount).
+            // Each input's pseudo amount is one of its own members' amounts,
+            // or an unmatched amount (the whole-ring fallback) one time in 4.
+            let cut = ring_slices.len().div_ceil(2);
+            let mut pseudo_of = |members: &[(u64, &[TagPair])]| -> u64 {
+                if members.is_empty() || next() % 4 == 0 {
+                    1 + next() % (100_000 * PICO_PER_BTH as u64)
+                } else {
+                    members[(next() % members.len() as u64) as usize].0
+                }
+            };
+            let (p1, p2) = (
+                pseudo_of(&ring_slices[..cut]),
+                pseudo_of(&ring_slices[cut..]),
+            );
+            let mirror_rings = [
+                bth_cluster_tax::SpendRing {
+                    pseudo_amount: p1,
+                    members: &ring_slices[..cut],
+                },
+                bth_cluster_tax::SpendRing {
+                    pseudo_amount: p2,
+                    members: &ring_slices[cut..],
+                },
+            ];
             assert_eq!(
                 ledger
-                    .ring_centroid_floored_factor(
+                    .ring_floored_factor(
                         bth_cluster_tax::FACTOR_SCALE,
-                        &ring_refs,
+                        &[(p1, &ring_refs[..cut]), (p2, &ring_refs[cut..])],
                         &fc.cluster_curve
                     )
                     .unwrap(),
-                ring_centroid_factor(&ring_slices, &w_of, &fc.cluster_curve)
+                ring_floor_factor(&mirror_rings, &w_of, &fc.cluster_curve)
                     .max(bth_cluster_tax::FACTOR_SCALE),
-                "sample {sample}: ring-centroid floor"
+                "sample {sample}: ring floor"
             );
 
             // Full consensus fee floor: seeded single-cluster ring members,
@@ -5747,7 +6086,7 @@ mod tests {
         let ring = seed_ring_utxos(&ledger, &specs);
         let output_sum = 90_000_000u64;
         let outputs = vec![mk_tagged_output(output_sum, 230, ClusterTagVector::empty())];
-        let tx = mk_settlement_tx(ring, outputs, 0, output_sum);
+        let tx = mk_settlement_tx_pseudo(ring, outputs, 0, output_sum, 100_000_000);
 
         let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
         let base_only = base_only_fee(&ledger, &tx);
@@ -5856,7 +6195,7 @@ mod tests {
         let ring = seed_ring_utxos(&ledger, &specs);
         let output_sum = 90_000_000u64;
         let outputs = vec![mk_tagged_output(output_sum, 140, ClusterTagVector::empty())];
-        let tx = mk_transfer_tx(ring, outputs, 0);
+        let tx = mk_transfer_tx_pseudo(ring, outputs, 0, 100_000_000);
 
         let demurrage =
             ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx);
@@ -5887,10 +6226,11 @@ mod tests {
             .unwrap();
         let specs1: Vec<_> = specs.iter().map(|&(a, _, c, k)| (a, h1, c, k)).collect();
         let ring1 = seed_ring_utxos(&ledger1, &specs1);
-        let tx1 = mk_transfer_tx(
+        let tx1 = mk_transfer_tx_pseudo(
             ring1,
             vec![mk_tagged_output(output_sum, 140, ClusterTagVector::empty())],
             0,
+            100_000_000,
         );
         assert_eq!(
             ledger1.consensus_fee_floor(&tx1, h1).unwrap() - base_only_fee(&ledger1, &tx1),
@@ -5941,7 +6281,7 @@ mod tests {
         let ring = seed_ring_utxos(&ledger, &[(100_000_000, block_height, 7, 251)]);
         let output_sum = 90_000_000u64;
         let outputs = vec![mk_tagged_output(output_sum, 142, ClusterTagVector::empty())];
-        let tx = mk_settlement_tx(ring, outputs, 0, output_sum);
+        let tx = mk_settlement_tx_pseudo(ring, outputs, 0, output_sum, 100_000_000);
 
         let charge =
             ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx);
@@ -6191,7 +6531,9 @@ mod tests {
         }
         let ring = seed_ring_utxos(ledger, &specs);
         let outputs = vec![mk_tagged_output(output_amount, 240, output_tags)];
-        mk_transfer_tx(ring, outputs, 0)
+        // The whale coin is the spent member (#1686: the ring floor reads
+        // the members of the pseudo-output amount).
+        mk_transfer_tx_pseudo(ring, outputs, 0, coin)
     }
 
     /// FIXED #1875 (codex; Lean `six_block_dead_zone`, the pre-9.0.0
@@ -6768,7 +7110,7 @@ mod tests {
         ledger
             .set_cluster_wealth_for_test(import_id, 1_000 * PICO_PER_BTH)
             .unwrap();
-        let tx_import = mk_transfer_tx(ring_bg.clone(), import_out, 0);
+        let tx_import = mk_transfer_tx_pseudo(ring_bg.clone(), import_out, 0, 100_000_000);
         let floor_import = ledger
             .consensus_fee_floor(&tx_import, block_height)
             .unwrap();
@@ -6784,7 +7126,7 @@ mod tests {
             92,
             ClusterTagVector::from_pairs(&[(ClusterId(plain_cluster), TAG_WEIGHT_SCALE)]),
         )];
-        let tx_plain = mk_transfer_tx(ring_bg, plain_out, 0);
+        let tx_plain = mk_transfer_tx_pseudo(ring_bg, plain_out, 0, 100_000_000);
         let floor_plain = ledger.consensus_fee_floor(&tx_plain, block_height).unwrap();
         assert!(
             floor_import > floor_plain,
@@ -6811,7 +7153,7 @@ mod tests {
             95,
             ClusterTagVector::from_pairs(&[(ClusterId(import_id), TAG_WEIGHT_SCALE)]),
         )];
-        let tx_rich_import = mk_transfer_tx(rich_ring.clone(), out_rich, 0);
+        let tx_rich_import = mk_transfer_tx_pseudo(rich_ring.clone(), out_rich, 0, 100_000_000);
         let floor_rich_import = ledger
             .consensus_fee_floor(&tx_rich_import, block_height)
             .unwrap();
@@ -6829,7 +7171,7 @@ mod tests {
             96,
             ClusterTagVector::from_pairs(&[(ClusterId(plain2), TAG_WEIGHT_SCALE)]),
         )];
-        let tx_rich_plain = mk_transfer_tx(rich_ring, out_rich_plain, 0);
+        let tx_rich_plain = mk_transfer_tx_pseudo(rich_ring, out_rich_plain, 0, 100_000_000);
         let floor_rich_plain = ledger
             .consensus_fee_floor(&tx_rich_plain, block_height)
             .unwrap();

@@ -226,6 +226,44 @@ CARGO_BUILD_JOBS=2 cargo +nightly-2026-06-09 run --release \
   --regressions formal-drt/regressions --no-write-regressions
 ```
 
+## Protocol 10.0.0: the amount-matched ring floor (#1686)
+
+Since protocol 10.0.0 `consensus_fee_floor` no longer calls
+`ring_centroid_implied_factor`. Its ring floor is
+`cluster-tax/src/ring_floor.rs::amount_matched_ring_floor_factor` (ADR 0015):
+per input, the largest member wealth among the members whose amount equals the
+input's pseudo-output amount (`tag_retention.rs::amount_matched`, every member
+if none matches); across inputs, the exact mean of those wealths weighted by
+pseudo-output amount (`wide::WeightedMean`), clamped once at `u128::MAX`; then
+the default curve. `ringFactorExact` remains the model of
+`ring_centroid_implied_factor`, which the simulations still call.
+
+`Botho/Demurrage/RingFloor.lean` models the new kernel as `amountMatched`,
+`inputFloorWealth`, `ringFloorWealth` and `ringFloorFactor`. Status: **model;
+tested (finite DRT)**. No theorems are stated yet. New statements need their
+records approved on the base commit first (`formal/statements.txt`), so the
+dilution-resistance property (each input's floor is at least the spent
+member's wealth, whatever the other members are) and the no-over-charge
+property (decoys of other amounts do not move the floor) follow in a separate
+change.
+
+The DRT leg `ring_floor_factor` compares the Rust kernel against
+`ringFloorFactor`. Its generator draws up to 4 inputs of up to 25 members,
+with amounts mostly from a 4-value set so members often match the pseudo
+amount and sometimes none does (the whole-ring fallback), plus full-width
+amounts and wealths. Seed 1686 ran 100,000 generated cases on
+`ring_floor_factor` and `ring_centroid_factor` (plus 8 committed replays on the
+latter): **200,008 Lean calls, zero mismatches**; see
+`formal-drt/results/ring-floor-1686.json`. Reproduce after building
+`formal-drt/lean`:
+
+```sh
+cd formal-drt
+target/release/botho-formal-drt --cases 100000 --seed 1686 \
+  --legs ring_floor_factor,ring_centroid_factor \
+  --no-write-regressions --json /tmp/ring-floor-1686.json
+```
+
 ## Charge is not always bounded by principal
 
 `charge_exceeds_value` gives `1_020_000` charged on a `1_000_000` principal
@@ -242,8 +280,9 @@ specification issue; transaction balance validation remains a separate gate.
 | `defaultFactor` | `fee_curve.rs::ClusterFactorCurve::default_params().factor` | `default_cluster_factor` |
 | `ringElapsedCentroid` (`Age.lean`) | `demurrage.rs::ring_elapsed_centroid` | `ring_elapsed_centroid` |
 | `ringElapsedQuantile` (`Age.lean`) | `demurrage.rs::ring_elapsed_quantile` | `ring_elapsed_quantile` |
-| `ringFactorExact` / `exactCentroid` | `demurrage.rs::ring_centroid_implied_factor` (protocol 9.0.0) | `ring_centroid_factor` |
+| `ringFactorExact` / `exactCentroid` | `demurrage.rs::ring_centroid_implied_factor` (protocol 9.0.0; the consensus ring floor through 9.x, sims only since 10.0.0) | `ring_centroid_factor` |
 | `ringFactor` / `centroid` | `demurrage.rs::ring_centroid_implied_factor` before 9.0.0 (historical) | none since #1876 |
+| `ringFloorFactor` / `ringFloorWealth` (`RingFloor.lean`) | `ring_floor.rs::amount_matched_ring_floor_factor` (protocol 10.0.0, the consensus ring floor) | `ring_floor_factor` |
 
 The model uses natural numbers with explicit saturation and return clamps.
 For Rust-width inputs, the first charge product is below `2^109`; elapsed

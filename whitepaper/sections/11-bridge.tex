@@ -342,7 +342,10 @@ c_{\mathrm{import}}(m) &= \Hash\!\left(\text{``bridge-import''} \,\|\, m\right),
 where $W_m$ is the import cluster's cumulative wealth. It starts at the sum of the
 epoch's unwrap amounts and grows with every downstream output that carries the
 tag. On a spend, the node charges
-$\max(\mathrm{curve}(\text{output-tag wealth}),\ \text{ring centroid},\ F\text{-blend on output tags})$.
+$\max(\mathrm{curve}(\text{output-tag wealth}),\ \text{ring floor},\ F\text{-blend})$,
+where the ring floor is the amount-matched maximum of Section~\ref{sec:demurrage-class-transition}
+(protocol 10.0.0) and the $F$-blend is read from both the output tags and the
+inputs' spend candidates (protocol 10.0.0, \#1687).
 The epoch length and floor are:
 \begin{center}
 \begin{tabular}{lll}

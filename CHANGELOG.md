@@ -76,6 +76,37 @@ consensus batch (#1683).
   it now inherits its inputs' tags decayed 5% like the node and CLI wallets.
   `chain_getOutputs` gains an additive `clusterTagsDec` field (cluster ids as
   decimal strings) because JavaScript numbers round u64 cluster ids.
+- **The ring floor cannot be diluted by decoys (#1686, ADR 0015).** The
+  #925 downgrade charge floors the spender's declared factor at a factor
+  read from the ring. Through 9.x that floor was
+  `ring_centroid_implied_factor`, the value-weighted mean wealth over every
+  member of every ring pooled, so high-value background decoys diluted it: a
+  coin from a 10M-BTH cluster in a ring of 20 was floored at 4162, 1441 or
+  1000 (1x) instead of 5745, and a 1 BTH coin among 100k-BTH decoys paid
+  nothing. Per the operator ruling of 2026-11-10, the floor is now, **per
+  input, the max wealth over the members whose amount equals the input's
+  `pseudo_output_amount`** (the spend candidates, selected by
+  `bth_cluster_tax::amount_matched`, the same code the #1687 rules use),
+  **value-weighted across inputs by pseudo-output amount**, then the curve,
+  as the claimed side. One pure kernel,
+  `bth_cluster_tax::amount_matched_ring_floor_factor`
+  (`cluster-tax/src/ring_floor.rs`), is called by `consensus_fee_floor`
+  (block application, the SCP value check and the block builder) and mempool
+  admission through `Ledger::ring_floored_factor_for_tx`, by the sims through
+  `resolve_fee_floor_at`, and is exported for wallet fee estimation (#2001;
+  `fee_floor_inputs::ring_floor_factor` takes tags). The adversarial-dilution
+  sweep re-run against the production kernel collects 100% of the undiluted
+  charge in every cell with 0% honest false positives (54.3% under the old
+  rule at 5% wealthy outputs). An input with pseudo-output amount 0 now
+  contributes nothing to the floor. Store tests
+  `consensus_fee_floor_factor_floor_resists_value_dilution`,
+  `..._ring_floor_resists_same_amount_decoys`,
+  `..._multi_input_blend_has_no_honest_overcharge`. Not used by the node any
+  more: `ring_centroid_implied_factor` (kept for sims and its Lean model) and
+  `Ledger::ring_centroid_floored_factor` (replaced by `ring_floored_factor`,
+  which takes per-input rings). ADR 0015 records the CT-era successor (max
+  over the ring per input plus a wallet filter that drops wealthier decoys)
+  and its two open questions.
 - **`MIN_TX_FEE` stays relay policy (ADR 0014).** The consensus fee rule
   remains the size-based `consensus_fee_floor`; `MIN_TX_FEE` (1e8 pico) is
   still checked only at mempool admission. See

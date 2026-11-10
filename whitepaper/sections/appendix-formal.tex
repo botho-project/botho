@@ -359,6 +359,27 @@ The earlier saturating centroid and scale counterexamples describe replaced sema
 \par\medskip
 
 \noindent\begin{minipage}{\textwidth}
+\subsubsection{Amount-matched ring floor (protocol 10.0.0)}
+
+Sources: \path{formal/Botho/Demurrage/RingFloor.lean}.
+Namespace: \path{Botho.Demurrage}.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.74\textwidth}@{}}
+\toprule
+Claim & Evidence and premises \\
+\midrule
+Model & \path{ringFloorFactor} mirrors \path{bth_cluster_tax::amount_matched_ring_floor_factor} (\#1686, ADR~0015): per input, the largest member wealth among members of the pseudo-output amount; pseudo-weighted exact mean across inputs; the default curve. No theorem is stated yet. \\
+Tested (DRT) & \path{ring_floor_factor}: the Rust kernel versus \path{ringFloorFactor}; seed 1686, 100,000 cases, zero mismatches. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Since protocol 10.0.0 this kernel, not \path{ring_centroid_implied_factor}, is the consensus ring floor. Dilution resistance is shown by simulation and store tests, not yet by a model theorem.
+\end{minipage}
+\par\medskip
+
+\noindent\begin{minipage}{\textwidth}
 \subsubsection{Monetary emission}
 
 Sources: \path{formal/Botho/Monetary/Emission.lean}.

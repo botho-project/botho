@@ -4,9 +4,10 @@
 //! `Botho.Demurrage.charge` keeps its counterexample theorems.
 use crate::{fixtures::Fixtures, gen, legs::Leg, wire};
 use bth_cluster_tax::{
-    capitalized_reset_charge, demurrage_charge, demurrage_settlement_charge,
-    ring_centroid_implied_factor, ring_elapsed_centroid, ring_elapsed_quantile,
-    spend_demurrage_charge, ClusterFactorCurve, SETTLEMENT_HORIZON_BLOCKS,
+    amount_matched_ring_floor_factor, capitalized_reset_charge, demurrage_charge,
+    demurrage_settlement_charge, ring_centroid_implied_factor, ring_elapsed_centroid,
+    ring_elapsed_quantile, spend_demurrage_charge, ClusterFactorCurve, RingFloorInput,
+    SETTLEMENT_HORIZON_BLOCKS,
 };
 use proptest::{collection::vec, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -179,6 +180,95 @@ impl Leg for RingFactor {
             "weighted numerator exceeds u128 (pre-#1876 saturated)"
         } else {
             "weighted numerator fits u128"
+        }
+        .into()
+    }
+}
+
+/// Protocol 10.0.0 (#1686): the amount-matched ring floor
+/// (`bth_cluster_tax::amount_matched_ring_floor_factor`) against
+/// `Botho.Demurrage.ringFloorFactor`.
+pub struct RingFloor;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FloorMember {
+    pub amount: u64,
+    #[serde(with = "wire::dec_u128")]
+    pub wealth: u128,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FloorInput {
+    pub pseudo_amount: u64,
+    pub members: Vec<FloorMember>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RingFloorIn {
+    pub inputs: Vec<FloorInput>,
+}
+
+impl Leg for RingFloor {
+    const NAME: &'static str = "ring_floor_factor";
+    const RUST: &'static str = "bth_cluster_tax::amount_matched_ring_floor_factor";
+    type Input = RingFloorIn;
+    fn strategy() -> BoxedStrategy<RingFloorIn> {
+        // Amounts from a small set most of the time, so members often match
+        // the pseudo amount (and sometimes none does: the whole-ring fallback).
+        let amount = || prop_oneof![3 => 0u64..4, 1 => gen::u64_edge()];
+        let member = (amount(), gen::u128_edge())
+            .prop_map(|(amount, wealth)| FloorMember { amount, wealth });
+        // Pseudo amounts are mostly nonzero, so most cases carry value.
+        let pseudo = prop_oneof![3 => 1u64..4, 1 => gen::u64_edge()];
+        let input = (pseudo, vec(member, 0..=25)).prop_map(|(pseudo_amount, members)| FloorInput {
+            pseudo_amount,
+            members,
+        });
+        vec(input, 0..=4)
+            .prop_map(|inputs| RingFloorIn { inputs })
+            .boxed()
+    }
+    fn args(_: &Fixtures, i: &RingFloorIn) -> Value {
+        json!({"inputs": wire::list(&i.inputs, |inp| json!({
+            "pseudo_amount": wire::n(inp.pseudo_amount),
+            "members": wire::list(&inp.members, |m|
+                json!({"amount": wire::n(m.amount), "wealth": wire::n(m.wealth)})),
+        }))})
+    }
+    fn rust(_: &Fixtures, i: &RingFloorIn) -> Value {
+        let members: Vec<Vec<(u64, u128)>> = i
+            .inputs
+            .iter()
+            .map(|inp| inp.members.iter().map(|m| (m.amount, m.wealth)).collect())
+            .collect();
+        let inputs: Vec<RingFloorInput<'_>> = i
+            .inputs
+            .iter()
+            .zip(&members)
+            .map(|(inp, m)| RingFloorInput {
+                pseudo_amount: inp.pseudo_amount,
+                members: m,
+            })
+            .collect();
+        wire::n(amount_matched_ring_floor_factor(
+            &inputs,
+            &ClusterFactorCurve::default_params(),
+        ))
+    }
+    fn classify(i: &RingFloorIn, _: &Value) -> String {
+        let total: u128 = i.inputs.iter().map(|x| x.pseudo_amount as u128).sum();
+        if total == 0 {
+            "no value"
+        } else if i
+            .inputs
+            .iter()
+            .any(|x| !x.members.is_empty() && x.members.iter().all(|m| m.amount != x.pseudo_amount))
+        {
+            "an input with no matching member (fallback)"
+        } else if i.inputs.len() > 1 {
+            "multi-input, matched"
+        } else {
+            "single input, matched"
         }
         .into()
     }

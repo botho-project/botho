@@ -31,6 +31,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | [0012](0012-solana-squads-pda-mint-execution.md) | Solana wBTH Mint Execution — Squads-PDA `invoke_signed`, Assembly-Only (addendum to 0002) | Accepted | 2026-07-20 |
 | [0013](0013-libcrux-pq-evaluation.md) | libcrux as the ML-KEM-768 Implementation (ML-DSA Deferred) | Proposed | 2026-11-02 |
 | [0014](0014-min-tx-fee-relay-policy.md) | Structural Transaction Limits Are Consensus; `MIN_TX_FEE` Is Relay Policy | Accepted | 2026-11-09 |
+| [0015](0015-ct-era-ring-floor.md) | The Ring Floor — Amount-Matched Max per Input Now, Max over the Ring under Confidential Amounts | Accepted (CT successor planned, two open questions) | 2026-11-10 |
 
 ## ADR Statuses
 

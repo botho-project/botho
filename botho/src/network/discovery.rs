@@ -194,6 +194,9 @@ use crate::{
 /// mempool admission, so a 9.x peer accepts small-ring, dust or over-wide
 /// transactions a proposer included that the 10.0.0 chain rejects, and the two
 /// fork. `MIN_TX_FEE` stays relay policy (fees are `consensus_fee_floor`).
+/// The same batch replaces the pooled ring-centroid fee floor with the
+/// amount-matched ring floor (#1686, `amount_matched_ring_floor_factor`): a
+/// 9.x peer accepts decoy-diluted downgrade charges the 10.0.0 chain rejects.
 /// MAJOR bump with `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 10.0.0 in
 /// lockstep; no storage format change.
 pub const PROTOCOL_VERSION: &str = "10.0.0";

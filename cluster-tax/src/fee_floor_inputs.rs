@@ -7,9 +7,11 @@
 //! - the **claimed wealth** — `effective_cluster_wealth_from_outputs`
 //!   (`botho/src/ledger/store/validation.rs`): the output-tag-weighted global
 //!   cluster wealth, `Σ_out Σ_tag (amount·weight/SCALE)·W[c] / Σ_out amount`;
-//! - the **ring-centroid floor** — `ring_centroid_floored_factor`: each ring
-//!   member's wealth `Σ_tag weight·W[c]/SCALE`, value-weighted into
-//!   [`crate::ring_centroid_implied_factor`];
+//! - the **ring floor** — `ring_floored_factor_for_tx`: each ring member's
+//!   wealth `Σ_tag weight·W[c]/SCALE`; per input the max over the members whose
+//!   amount equals the pseudo-output amount, value-weighted across inputs
+//!   ([`crate::amount_matched_ring_floor_factor`], protocol 10.0.0, #1686;
+//!   before that the pooled [`crate::ring_centroid_implied_factor`]);
 //! - the **bridge-import floor** — `import_floor_factor_from_outputs`: a
 //!   value-weighted blend of `F` on output value tagged to a *recorded* import
 //!   cluster and `1×` on the rest; since protocol 10.0.0 (#1687) the `max` of
@@ -31,7 +33,9 @@
 //! the same sampled inputs and fails CI on any drift.
 
 use crate::{
-    demurrage::ring_centroid_implied_factor, fee_curve::ClusterFactorCurve,
+    demurrage::ring_centroid_implied_factor,
+    fee_curve::ClusterFactorCurve,
+    ring_floor::{amount_matched_ring_floor_factor, RingFloorInput},
     BRIDGE_IMPORT_FACTOR_FLOOR, TAG_WEIGHT_SCALE,
 };
 
@@ -135,8 +139,8 @@ pub fn import_floor_factor_from_outputs(
     import_floor_factor_from_outputs_at(outputs, is_import, BRIDGE_IMPORT_FACTOR_FLOOR)
 }
 
-/// One ring member's effective wealth, as `ring_centroid_floored_factor`
-/// resolves it: `Σ_tag floor(weight·W[c]/SCALE)`, each term exact in 256 bits
+/// One ring member's effective wealth, as the ledger's ring floor resolves
+/// it: `Σ_tag floor(weight·W[c]/SCALE)`, each term exact in 256 bits
 /// (#1876, protocol 9.0.0); the sum is clamped at `u128::MAX` (unreachable for
 /// well-formed tags).
 pub fn ring_member_wealth(tags: &[TagPair], wealth: &dyn Fn(u64) -> u128) -> u128 {
@@ -149,9 +153,9 @@ pub fn ring_member_wealth(tags: &[TagPair], wealth: &dyn Fn(u64) -> u128) -> u12
     })
 }
 
-/// The ring-centroid-implied factor over `(value, tags)` ring members — the
-/// `ring_centroid_implied_factor` half of `ring_centroid_floored_factor`
-/// (the ledger then takes `max(claimed, implied)`).
+/// The pre-10.0.0 ring-centroid-implied factor over `(value, tags)` ring
+/// members, pooled across inputs ([`ring_centroid_implied_factor`]). The
+/// ledger no longer uses it (#1686); kept for the sims that study the old rule.
 pub fn ring_centroid_factor(
     ring: &[(u64, &[TagPair])],
     wealth: &dyn Fn(u64) -> u128,
@@ -164,6 +168,37 @@ pub fn ring_centroid_factor(
     ring_centroid_implied_factor(&members, curve)
 }
 
+/// The protocol 10.0.0 ring floor (#1686) over the transaction's inputs,
+/// from their tags: each member's [`ring_member_wealth`], then
+/// [`amount_matched_ring_floor_factor`]. This is what the ledger computes in
+/// `ring_floored_factor_for_tx` (before the `max` with the claimed factor). A
+/// wallet with the ring it built and the published per-cluster wealth gets
+/// the consensus value from here (#2001).
+pub fn ring_floor_factor(
+    rings: &[crate::tag_retention::SpendRing<'_>],
+    wealth: &dyn Fn(u64) -> u128,
+    curve: &ClusterFactorCurve,
+) -> u64 {
+    let members: Vec<Vec<(u64, u128)>> = rings
+        .iter()
+        .map(|r| {
+            r.members
+                .iter()
+                .map(|&(amount, tags)| (amount, ring_member_wealth(tags, wealth)))
+                .collect()
+        })
+        .collect();
+    let inputs: Vec<RingFloorInput<'_>> = rings
+        .iter()
+        .zip(&members)
+        .map(|(r, m)| RingFloorInput {
+            pseudo_amount: r.pseudo_amount,
+            members: m,
+        })
+        .collect();
+    amount_matched_ring_floor_factor(&inputs, curve)
+}
+
 /// Everything `Ledger::consensus_fee_floor` resolves from its databases before
 /// the pure fee arithmetic, plus the composed demurrage factor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,7 +207,7 @@ pub struct ResolvedFeeFloor {
     pub claimed_wealth: u128,
     /// `curve(claimed_wealth)`, FACTOR_SCALE.
     pub claimed_factor: u64,
-    /// Ring-centroid-implied factor, FACTOR_SCALE.
+    /// The ring floor ([`ring_floor_factor`], protocol 10.0.0), FACTOR_SCALE.
     pub ring_floor: u64,
     /// Bridge-import floor, FACTOR_SCALE: since protocol 10.0.0 (#1687)
     /// `max(input blend, output blend)`, see [`Self::import_floor_inputs`].
@@ -192,9 +227,9 @@ pub struct ResolvedFeeFloor {
 /// Resolve the fee-floor inputs exactly as `Ledger::consensus_fee_floor` does,
 /// with an explicit import floor `F` (the ledger uses
 /// [`BRIDGE_IMPORT_FACTOR_FLOOR`]). `rings` are the transaction's inputs (one
-/// per CLSAG input, with its pseudo-output amount); the ring-centroid floor
-/// reads every member of every ring, the import floor reads each ring's spend
-/// candidates (protocol 10.0.0, #1687).
+/// per CLSAG input, with its pseudo-output amount); since protocol 10.0.0 both
+/// the ring floor (#1686) and the import floor (#1687) read each ring's spend
+/// candidates.
 pub fn resolve_fee_floor_at(
     outputs: &[FloorOutput<'_>],
     rings: &[crate::tag_retention::SpendRing<'_>],
@@ -205,11 +240,7 @@ pub fn resolve_fee_floor_at(
     let curve = ClusterFactorCurve::default_params();
     let claimed_wealth = effective_cluster_wealth_from_outputs(outputs, wealth);
     let claimed_factor = curve.factor(claimed_wealth);
-    let flat: Vec<(u64, &[TagPair])> = rings
-        .iter()
-        .flat_map(|r| r.members.iter().copied())
-        .collect();
-    let ring_floor = ring_centroid_factor(&flat, wealth, &curve);
+    let ring_floor = ring_floor_factor(rings, wealth, &curve);
     let import_floor_inputs =
         crate::tag_retention::import_floor_factor_from_inputs_at(rings, is_import, import_floor_f);
     let import_floor = import_floor_factor_from_outputs_at(outputs, is_import, import_floor_f)

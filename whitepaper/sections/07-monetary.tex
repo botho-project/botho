@@ -324,20 +324,28 @@ downgrade relative to the ring floor is priced. The charge folds into the
 consensus fee floor and thus flows, via the 80/20 split, into the same
 lottery redistribution pool (ADR~0009; issue~\#925).
 
-The ring floor is the \emph{value-weighted centroid} of the ring members'
-effective cluster wealth, mapped through the factor curve
-(\path{ring_centroid_floored_factor},
-\path{botho/src/ledger/store/validation.rs}). The floor is therefore not
-exact in either direction. A high-value wealthy decoy in an honest background
-spender's ring can lift it above 1$\times$ and trip the charge. In the other
-direction, a spender who pads the ring with high-value background decoys can
-pull it toward 1$\times$ and dilute the charge (as built, pending \#1686). A
-$\pm 10\%$ \textbf{factor-similarity band} picker
-(\path{FACTOR_SIMILARITY_SPREAD},
-\path{select_decoys_cluster_aware} in
-\path{botho/src/decoy_selection.rs}) was written to keep honest
-background rings near 1$\times$, but it has no production caller. It is wallet
-policy at most, and consensus does not check it.
+The ring floor (protocol 10.0.0, \#1686, ADR~0015) reads, for each input,
+the ring members whose amount equals the input's pseudo-output amount. With
+public amounts the spent coin is one of them. The input's floor is the
+\emph{largest} effective cluster wealth among those members, the inputs are
+averaged weighted by pseudo-output amount (as the declared side is weighted
+by output value), and the result is mapped through the factor curve
+(\path{amount_matched_ring_floor_factor},
+\path{cluster-tax/src/ring_floor.rs}). A spender cannot dilute it with
+decoys: the spent coin is always a candidate, and extra candidates can only
+raise the maximum. A decoy of a different amount cannot raise an honest
+spender's floor. In the adversarial-dilution sweep
+(\path{docs/research/ring-floor-dilution-sweep.md}) the rule collects 100\%
+of the undiluted charge in every cell, against as little as 0\% under the
+value-weighted mean over all ring members that protocol 9.x used, and
+over-charges no honest spend on the production decoy routes (the 9.x mean
+over-charged 54\% of them when 5\% of outputs are wealthy). The rule depends
+on public amounts; ADR~0015 records its planned successor under confidential
+amounts (the maximum over the whole ring per input, with a wallet filter that
+drops wealthier decoys) and two open questions. A $\pm 10\%$
+\textbf{factor-similarity band} picker (\path{FACTOR_SIMILARITY_SPREAD},
+\path{select_decoys_cluster_aware} in \path{botho/src/decoy_selection.rs})
+still has no production caller.
 
 The two terms read different rates. Ordinary accrued demurrage
 $d_{\text{accrued}}$ uses the in-class rate

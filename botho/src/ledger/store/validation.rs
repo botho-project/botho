@@ -387,22 +387,20 @@ pub(in crate::ledger) trait ValidationReads {
             CONSENSUS_FEE_BASE,
         );
 
-        // Demurrage charge. Resolve the ring members ONCE from the committed
-        // UTXO set: we need (value, created_at) for the age quantile and
-        // (value, &cluster_tags) for the factor floor. Fail-closed on DB error.
+        // Demurrage charge. Resolve the ring members from the committed UTXO
+        // set: (value, created_at) for the age quantile here; the factor
+        // floor resolves (pseudo amount, members) per input itself
+        // (`ring_floored_factor_for_tx`). Fail-closed on DB error.
         let output_sum: u64 = tx
             .outputs
             .iter()
             .fold(0u64, |acc, o| acc.saturating_add(o.amount));
 
         let mut ring_age_members: Vec<(u64, u64)> = Vec::new();
-        // Owns the resolved cluster-tag vectors so we can hand out borrows.
-        let mut ring_tag_owned: Vec<(u64, ClusterTagVector)> = Vec::new();
         for input in tx.inputs.clsag() {
             for member in &input.ring {
                 if let Some(utxo) = self.get_utxo_by_target_key(&member.target_key)? {
                     ring_age_members.push((utxo.output.amount, utxo.created_at));
-                    ring_tag_owned.push((utxo.output.amount, utxo.output.cluster_tags.clone()));
                 }
             }
         }
@@ -419,24 +417,19 @@ pub(in crate::ledger) trait ValidationReads {
             CONSENSUS_RING_AGE_QUANTILE_BPS,
         );
 
-        // B2: floor the spender-claimed factor at the ring-centroid-implied
-        // factor so background-tagged outputs cannot escape a wealthy ring.
+        // B2: floor the spender-claimed factor at the ring floor so
+        // background-tagged outputs cannot escape a wealthy ring. Protocol
+        // 10.0.0 (#1686): per input the max over the amount-matched members,
+        // value-weighted by pseudo-output amount, so decoys cannot dilute it.
         let claimed_factor = fee_config.cluster_factor(cluster_wealth);
-        let ring_tag_refs: Vec<(u64, &ClusterTagVector)> = ring_tag_owned
-            .iter()
-            .map(|(value, tags)| (*value, tags))
-            .collect();
-        let demurrage_factor = self.ring_centroid_floored_factor(
-            claimed_factor,
-            &ring_tag_refs,
-            &fee_config.cluster_curve,
-        )?;
+        let demurrage_factor =
+            self.ring_floored_factor_for_tx(claimed_factor, tx, &fee_config.cluster_curve)?;
 
         // ADR 0007 (#938): the bridge-import floor. Imported wealth (tagged to a
         // bridge-import cluster) is priced at ≥ F on its import-tagged fraction,
         // so an unwrapped coin cannot be spent at background factor-1 until it
         // circulates the tag off. This is a SEPARATE lower bound from the
-        // ring-centroid floor above: both are `max` against the demurrage
+        // ring floor above: both are `max` against the demurrage
         // factor, so composing them is a single dominating `max` — no
         // double-floor. It only ever RAISES the factor, and only for value that
         // actually traces to a recorded import cluster.
@@ -455,7 +448,7 @@ pub(in crate::ledger) trait ValidationReads {
         // `max(accrued_to_date, capitalized_reset_charge)`. The capitalized term
         // prices a genuine class DOWNGRADE — the spender-declared output factor
         // `claimed_factor` dropping below the composed input-class floor
-        // `demurrage_factor` (ring-centroid B2 + ADR-0007 import floor) — at
+        // `demurrage_factor` (ring floor B2 + ADR-0007 import floor) — at
         // capitalized future demurrage over the shared
         // `SETTLEMENT_HORIZON_BLOCKS`, mirroring #831's settlement charge. It
         // fires ONLY on a downgrade (`claimed_factor < demurrage_factor`); an
@@ -552,51 +545,87 @@ pub(in crate::ledger) trait ValidationReads {
             / total_value;
         Ok(blended as u64)
     }
-    fn ring_centroid_floored_factor(
+    /// One ring member's effective cluster wealth from its tags,
+    /// `Σ_tag floor(weight × W_global / TAG_WEIGHT_SCALE)`, fail-closed on DB
+    /// error.
+    ///
+    /// Exact per tag (#1876, protocol 9.0.0): before 9.0.0 the product
+    /// saturated at u128::MAX BEFORE the divide, which lowered the member's
+    /// wealth to u128::MAX / TAG_WEIGHT_SCALE for any cluster past ~3.4e32
+    /// pico. The per-tag floor is kept, so non-overflowing inputs are
+    /// bit-identical to before. The sum saturates; each term is already
+    /// exact, so the saturating sum equals min(true sum, u128::MAX): a final
+    /// clamp (factor 6000, the conservative direction) that well-formed tags
+    /// (Σ weight <= TAG_WEIGHT_SCALE) never reach.
+    fn ring_member_wealth(&self, tags: &[(u64, u32)]) -> Result<u128, LedgerError> {
+        let mut member_wealth: u128 = 0;
+        for &(cluster, weight) in tags {
+            // `get_cluster_wealth` is full-u128 (16-byte LE accumulator).
+            let global_wealth = self.get_cluster_wealth(cluster)?;
+            member_wealth = member_wealth.saturating_add(bth_cluster_tax::wide::mul_div_floor(
+                weight as u128,
+                global_wealth,
+                TAG_WEIGHT_SCALE as u128,
+            ));
+        }
+        Ok(member_wealth)
+    }
+    /// The ring floor on the demurrage factor (protocol 10.0.0, #1686),
+    /// `max(claimed_factor, floor)`. `rings` are the inputs as
+    /// [`Self::resolve_spend_rings`] returns them: each input's
+    /// `pseudo_output_amount` and resolved members `(amount, tags)`.
+    ///
+    /// Each member's effective wealth is resolved fail-closed
+    /// ([`Self::ring_member_wealth`]); the floor is the pure, shared
+    /// `bth_cluster_tax::amount_matched_ring_floor_factor`: per input, the
+    /// MAX wealth over the members whose amount equals the pseudo-output
+    /// amount (the spend candidates, `bth_cluster_tax::amount_matched`, the
+    /// same selection the #1687 rules use); across inputs, the value-weighted
+    /// mean by pseudo-output amount; then the curve, as the claimed side.
+    ///
+    /// Before 10.0.0 this was `ring_centroid_implied_factor`, the
+    /// value-weighted mean over every member of every ring pooled. The
+    /// spender picks the decoys, so high-value background decoys diluted it
+    /// (#1686: a 1 BTH coin from a 10M BTH cluster with 100k BTH decoys paid
+    /// 0% of the undiluted downgrade charge). A decoy cannot lower the new
+    /// floor: the spent member is always a candidate of its input.
+    fn ring_floored_factor(
         &self,
         claimed_factor: u64,
-        ring_members: &[(u64, &ClusterTagVector)],
+        rings: &[SpendInputTags],
         curve: &bth_cluster_tax::ClusterFactorCurve,
     ) -> Result<u64, LedgerError> {
-        // Resolve each ring member's value-normalized effective cluster wealth
-        // (Σ_tag weight × W_global / TAG_WEIGHT_SCALE), fail-closed.
-        let mut members: Vec<(u64, u128)> = Vec::with_capacity(ring_members.len());
-        for (value, tags) in ring_members {
-            let mut member_wealth: u128 = 0;
-            for entry in &tags.entries {
-                // `get_cluster_wealth` is full-u128 (16-byte LE accumulator).
-                let global_wealth = self.get_cluster_wealth(entry.cluster_id.0)?;
-                // Exact floor(weight × W_global / TAG_WEIGHT_SCALE) (#1876,
-                // protocol 9.0.0). Before 9.0.0 the product saturated at
-                // u128::MAX BEFORE the divide, which lowered the member's
-                // wealth to u128::MAX / TAG_WEIGHT_SCALE for any cluster past
-                // ~3.4e32 pico. The per-tag floor is kept, so non-overflowing
-                // inputs are bit-identical to before.
-                //
-                // The sum saturates. Each term is already exact (clamped only
-                // if it alone exceeds u128::MAX), so the saturating sum equals
-                // min(true sum, u128::MAX): a final clamp, not a lowering
-                // intermediate. With well-formed tags (Σ weight <=
-                // TAG_WEIGHT_SCALE) the sum is at most max W_global and never
-                // clamps; a malformed vector clamps to u128::MAX (factor
-                // 6000), the conservative direction.
-                member_wealth = member_wealth.saturating_add(bth_cluster_tax::wide::mul_div_floor(
-                    entry.weight as u128,
-                    global_wealth,
-                    TAG_WEIGHT_SCALE as u128,
-                ));
+        let mut wealths: Vec<Vec<(u64, u128)>> = Vec::with_capacity(rings.len());
+        for (_, members) in rings {
+            let mut resolved = Vec::with_capacity(members.len());
+            for (amount, tags) in members {
+                resolved.push((*amount, self.ring_member_wealth(tags)?));
             }
-            // `ring_centroid_implied_factor` takes full-u128 wealth (#626
-            // PR3) and, since protocol 9.0.0 (#1876), computes the exact
-            // value-weighted centroid with a 256-bit numerator (see that
-            // function). A weighted mean is at most its largest member wealth,
-            // so the centroid always fits u128: no saturation remains on this
-            // consensus path, and every node computes the identical result.
-            members.push((*value, member_wealth));
+            wealths.push(resolved);
         }
-
-        let implied = bth_cluster_tax::ring_centroid_implied_factor(&members, curve);
-        Ok(claimed_factor.max(implied))
+        let inputs: Vec<bth_cluster_tax::RingFloorInput<'_>> = rings
+            .iter()
+            .zip(&wealths)
+            .map(|((pseudo, _), members)| bth_cluster_tax::RingFloorInput {
+                pseudo_amount: *pseudo,
+                members,
+            })
+            .collect();
+        let floor = bth_cluster_tax::amount_matched_ring_floor_factor(&inputs, curve);
+        Ok(claimed_factor.max(floor))
+    }
+    /// [`Self::ring_floored_factor`] over `tx`'s inputs, resolved from the
+    /// committed UTXO set by [`Self::resolve_spend_rings`] (the same
+    /// resolution the #1687 import floor and retention rule read). The
+    /// consensus fee floor and mempool admission both call this.
+    fn ring_floored_factor_for_tx(
+        &self,
+        claimed_factor: u64,
+        tx: &BothoTransaction,
+        curve: &bth_cluster_tax::ClusterFactorCurve,
+    ) -> Result<u64, LedgerError> {
+        let rings = self.resolve_spend_rings(tx)?;
+        self.ring_floored_factor(claimed_factor, &rings, curve)
     }
     /// The full shared ordinary block checks: the cheap header-only prefix
     /// ([`Self::validate_ordinary_header`]) followed by the body checks

@@ -3,26 +3,30 @@
 //! # The question
 //!
 //! The #925 downgrade charge floors the spender's declared output factor at a
-//! factor implied by the ring. The node computes that floor with
-//! [`crate::ring_centroid_implied_factor`], the **value-weighted mean** of the
-//! ring members' cluster wealth. The spender picks the decoys, so padding a
-//! ring with high-value background decoys pulls the floor toward 1× and
-//! dilutes the charge. This module measures four candidate floor rules side by
-//! side, without changing any consensus code:
+//! factor implied by the ring. Before protocol 10.0.0 the node computed that
+//! floor with [`crate::ring_centroid_implied_factor`], the **value-weighted
+//! mean** of the ring members' cluster wealth, pooled over every input. The
+//! spender picks the decoys, so padding a ring with high-value background
+//! decoys pulls the floor toward 1× and dilutes the charge. This module
+//! measures four candidate floor rules side by side, plus the rule the
+//! operator ruled for 10.0.0 as the node runs it:
 //!
 //! | id | rule |
 //! |---|---|
-//! | (a) `mean` | current: value-weighted mean of member wealth (the kernel itself) |
+//! | (a) `mean` | pre-10.0.0 node: value-weighted mean of member wealth (the kernel itself) |
 //! | (b) `match-mean` | value-weighted mean over members whose amount equals `pseudo_output_amount` |
 //! | (b) `match-max` | maximum over members whose amount equals `pseudo_output_amount` |
 //! | (c) `max` | maximum member factor over the whole ring (`ring_cluster_factor`'s rule) |
 //! | (d) `p50` / `p90` / `p95` | unweighted nearest-rank quantile of member factors |
 //! | (d) `vw-median` | value-weighted median of member wealth |
+//! | `node 10.0.0` | the production kernel [`crate::amount_matched_ring_floor_wealth`] (#1686 ruling: (b) `match-max`, per input, value-weighted by pseudo amount) |
 //!
 //! Every rule returns a **floor wealth**, which goes through the production
 //! [`ClusterFactorCurve`] once. The curve is monotone, so the order statistics
 //! of wealth and of factor coincide (`floor_rules_agree_with_kernels` pins
-//! that, and pins rule (a) to the consensus kernel bit for bit). The charge is
+//! that, pins rule (a) to the old kernel bit for bit, and pins `node 10.0.0`
+//! to (b) `match-max` composed per input, `node_rule_is_per_input_match_max`).
+//! The charge is
 //! the node's own [`crate::spend_demurrage_charge`] with the node's composition
 //! `max(claimed, floor)`.
 //!
@@ -50,10 +54,12 @@
 //!    the real input's amount (the public-amount leak #902 documents), and how
 //!    the minimal decoy filter that avoids max-rule over-charges shrinks the
 //!    pool and changes a max-factor adversary's hit rate.
-//! 4. **Multi-input composition**: the node pools every input's ring into one
-//!    statistic. For an honest two-input spend that blends a wealthy and a
-//!    background coin, compare that with a per-input floor composed by the
-//!    public `pseudo_output_amount`s.
+//! 4. **Multi-input composition**: pooling every input's ring into one
+//!    statistic (the pre-10.0.0 node) against a per-input floor composed by the
+//!    public `pseudo_output_amount`s (the 10.0.0 node), for an honest two-input
+//!    spend that blends a wealthy and a background coin. The `node 10.0.0` rule
+//!    composes per input by construction, so it shows the same value in both
+//!    columns.
 //! 5. **Confidential-amounts compatibility** (#902, ADR 0009): which public
 //!    data each rule reads.
 //!
@@ -139,6 +145,10 @@ pub enum FloorRule {
     Quantile(u32),
     /// (d) Value-weighted median of member wealth.
     WeightedMedian,
+    /// The protocol 10.0.0 node rule, computed by the production kernel
+    /// [`crate::amount_matched_ring_floor_wealth`] (#1686). It composes inputs
+    /// itself (per input, by pseudo amount).
+    Node,
 }
 
 impl FloorRule {
@@ -151,6 +161,7 @@ impl FloorRule {
             FloorRule::Max => "(c) max".into(),
             FloorRule::Quantile(q) => format!("(d) p{}", q / 100),
             FloorRule::WeightedMedian => "(d) vw-median".into(),
+            FloorRule::Node => "node 10.0.0".into(),
         }
     }
 
@@ -162,13 +173,17 @@ impl FloorRule {
                 | FloorRule::MatchedMean
                 | FloorRule::MatchedMax
                 | FloorRule::WeightedMedian
+                | FloorRule::Node
         )
     }
 
     /// Whether the rule reads the input's `pseudo_output_amount` (a commitment
     /// under CT).
     pub fn reads_pseudo_amount(&self) -> bool {
-        matches!(self, FloorRule::MatchedMean | FloorRule::MatchedMax)
+        matches!(
+            self,
+            FloorRule::MatchedMean | FloorRule::MatchedMax | FloorRule::Node
+        )
     }
 }
 
@@ -183,6 +198,7 @@ pub fn candidate_rules() -> Vec<FloorRule> {
         FloorRule::Quantile(9_000),
         FloorRule::Quantile(9_500),
         FloorRule::WeightedMedian,
+        FloorRule::Node,
     ]
 }
 
@@ -208,6 +224,10 @@ pub fn floor_wealth(rule: FloorRule, members: &[(u64, u128)], pseudo: u64) -> u1
         FloorRule::Mean => weighted_mean(members),
         FloorRule::MatchedMean => weighted_mean(matched),
         FloorRule::MatchedMax => matched.iter().map(|&(_, w)| w).max().unwrap_or(0),
+        FloorRule::Node => crate::amount_matched_ring_floor_wealth(&[crate::RingFloorInput {
+            pseudo_amount: pseudo,
+            members,
+        }]),
         FloorRule::Max => members.iter().map(|&(_, w)| w).max().unwrap_or(0),
         FloorRule::Quantile(q) => {
             if members.is_empty() {
@@ -735,7 +755,8 @@ fn privacy_rows(
 /// How a rule's per-ring statistic is combined across a transaction's inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Composition {
-    /// What the node does today: every input's ring members in one statistic.
+    /// What the node did before 10.0.0: every input's ring members in one
+    /// statistic.
     Pooled,
     /// One floor wealth per input, combined by the public
     /// `pseudo_output_amount`s (value-weighted mean of the per-input floors).
@@ -765,6 +786,17 @@ fn multi_input_floor(
     rings: &[(&[(u64, u128)], u64)],
     curve: &ClusterFactorCurve,
 ) -> u64 {
+    if rule == FloorRule::Node {
+        // The node composes per input itself, whatever the column.
+        let inputs: Vec<crate::RingFloorInput<'_>> = rings
+            .iter()
+            .map(|(r, p)| crate::RingFloorInput {
+                pseudo_amount: *p,
+                members: r,
+            })
+            .collect();
+        return curve.factor(crate::amount_matched_ring_floor_wealth(&inputs));
+    }
     match comp {
         Composition::Pooled => {
             // Matched rules keep each ring's own matches; the rest pool all.
@@ -1203,8 +1235,10 @@ pub fn to_markdown(r: &DilutionReport) -> String {
     s.push_str(&format!(
         "{} honest spends on node-route rings ({}): one 10M-class whale coin plus one \
          background coin of the same amount, declared at the decayed 50/50 blend. Pooled = \
-         all 40 members in one statistic (the node today); per-input = one floor per ring, \
-         combined by the public `pseudo_output_amount`s.\n\n",
+         all 40 members in one statistic (the node before 10.0.0); per-input = one floor per \
+         ring, combined by the public `pseudo_output_amount`s. `node 10.0.0` runs the \
+         production kernel, which composes per input itself, so both of its columns are the \
+         same.\n\n",
         r.multi_input.spends,
         r.multi_input.model.label()
     ));
@@ -1326,6 +1360,59 @@ mod tests {
         assert!(worst[idx(FloorRule::Mean)] < 0.95);
         // A lone wealthy member never moves an unweighted median of 20.
         assert_eq!(worst[idx(FloorRule::Quantile(5_000))], 0.0);
+    }
+
+    /// The 10.0.0 node rule (the production kernel) is (b) `match-max`
+    /// composed per input by pseudo amount, bit for bit: on single rings
+    /// (including unmatched pseudo amounts, the whole-ring fallback) and on
+    /// two-input spends. So every `node 10.0.0` cell in the report equals the
+    /// ranked recommendation's.
+    #[test]
+    fn node_rule_is_per_input_match_max() {
+        let c = curve();
+        let mut rng = ChaCha8Rng::seed_from_u64(1686);
+        let mut ring = || -> Vec<(u64, u128)> {
+            (0..20)
+                .map(|_| {
+                    let v = bth_to_pico(rng.random_range(1..=20u64));
+                    let w = if rng.random_range(0..3u32) == 0 {
+                        wealth_pico(rng.random_range(1..=50_000_000u64))
+                    } else {
+                        0
+                    };
+                    (v, w)
+                })
+                .collect()
+        };
+        for i in 0..500 {
+            let (r1, r2) = (ring(), ring());
+            let p1 = if i % 5 == 0 { 1 } else { r1[i % 20].0 };
+            let p2 = r2[(i + 7) % 20].0;
+            assert_eq!(
+                floor_factor(FloorRule::Node, &r1, p1, &c),
+                floor_factor(FloorRule::MatchedMax, &r1, p1, &c)
+            );
+            for comp in [Composition::Pooled, Composition::PerInputByPseudo] {
+                assert_eq!(
+                    multi_input_floor(FloorRule::Node, comp, &[(&r1, p1), (&r2, p2)], &c),
+                    multi_input_floor(
+                        FloorRule::MatchedMax,
+                        Composition::PerInputByPseudo,
+                        &[(&r1, p1), (&r2, p2)],
+                        &c
+                    )
+                );
+            }
+        }
+        // And it passes the dilution bar like match-max.
+        let g = dilution_grid(20, &c);
+        let worst = g.worst_per_rule();
+        let idx = |r: FloorRule| g.rules.iter().position(|x| *x == r).unwrap();
+        assert_eq!(
+            worst[idx(FloorRule::Node)],
+            worst[idx(FloorRule::MatchedMax)]
+        );
+        assert!(worst[idx(FloorRule::Node)] >= 0.999);
     }
 
     #[test]
