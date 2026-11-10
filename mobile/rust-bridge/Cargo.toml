@@ -30,7 +30,7 @@ bth-transaction-clsag = { path = "../../transaction/clsag" }
 bth-util-from-random = { path = "../../util/from-random" }
 
 # Base58 address encoding (tbotho://1/<base58(view||spend)>)
-bs58 = "0.4"
+bs58 = "0.5"
 
 # UniFFI for generating Swift/Kotlin bindings
 uniffi = { version = "0.32", features = ["cli"] }
