@@ -133,6 +133,22 @@ export async function spendableOwnedOutputs(
     }))
 }
 
+/**
+ * The cluster tags a selected input passes to the signer, ids as decimal
+ * strings, from the row's lossless `clusterTagsDec` (#1687). A row that has
+ * tags but only in the lossy numeric `clusterTags` form (a node older than
+ * 10.0.0) fails the send closed: rounded ids would name clusters the input
+ * does not carry, and dropping the tags makes the spend invalid.
+ */
+export function inputClusterTags(row: ChainOutput): Array<[string, number]> {
+  if (row.clusterTagsDec !== undefined) return row.clusterTagsDec
+  if (row.clusterTags === undefined || row.clusterTags.length === 0) return []
+  throw new Error(
+    'Node did not serve lossless cluster tags (clusterTagsDec) for a tagged input; ' +
+      'upgrade the node to protocol 10.0.0',
+  )
+}
+
 /** Equal when both are absent, or both present with the same derivation. */
 function sameLotteryContext(
   a: LotteryContext | null | undefined,
@@ -668,6 +684,9 @@ export async function buildSendTransaction(
       // V2 lottery payout input: the signer recovers x = x_base + T and checks
       // x·G == P before signing (#1645).
       lottery_context: input.lotteryContext ?? null,
+      // The input's stored cluster tags, which the signer's outputs inherit
+      // (protocol 10.0.0 retained-weight floor, #1687).
+      cluster_tags: inputClusterTags(original),
       decoys: decoys.map((d) => ({
         target_key: d.targetKey,
         public_key: d.publicKey,

@@ -311,19 +311,25 @@ and the midpoint ($3.5\times$) sits at 100k BTH.
   \item Most users (bottom 50\%) experience near-base fees
 \end{itemize}
 
-\subsubsection{Tag Decay: 0.95 per Transfer (Wallet Policy)}
+\subsubsection{Tag Decay: 0.95 per Transfer (Wallet Policy, Consensus Floor)}
 
 \textbf{As built} (Section~\ref{sec:tag-decay}):
 \begin{itemize}
   \item Stock wallets retain 0.95 of each tag weight per transfer
     (\path{DEFAULT_CLUSTER_DECAY_RATE} $= 50{,}000$ ppm,
     \path{botho/src/wallet.rs},
-    \path{botho-wallet/src/transaction.rs}), with no age gate
+    \path{botho-wallet/src/transaction.rs},
+    \path{web/packages/wasm-signer/src/core.rs}), with no age gate
   \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ transfers, with no
     time bound
   \item Consensus applies no decay (\path{CONSENSUS_TAG_DECAY_RATE}
-    $= 0$, \path{botho/src/ledger/store.rs}) and rejects only tag
-    inflation, so lower or empty output tags are valid (pending \#1687)
+    $= 0$, \path{botho/src/ledger/store.rs}). Since protocol 10.0.0 it
+    enforces the same 0.95 as a floor
+    (\path{CONSENSUS_MIN_TAG_RETENTION} $= 950{,}000$ ppm,
+    \path{cluster-tax/src/tag_retention.rs}, \#1687). An output must keep
+    0.95 of each cluster's weight that all of a ring's spend candidates carry,
+    less a rounding slack of one unit per input plus one. The floor does not
+    bind when a same-amount decoy lacks the cluster
 \end{itemize}
 
 \textbf{Not implemented: 720-block minimum age.} Earlier drafts gated decay

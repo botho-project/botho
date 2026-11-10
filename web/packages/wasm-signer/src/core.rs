@@ -12,6 +12,7 @@ use bth_transaction_clsag::{
     lottery_v2, ClsagRingInput, MemoPayload, RingMember, Transaction, TxOutput, DEFAULT_RING_SIZE,
     DUST_THRESHOLD, MIN_TX_FEE,
 };
+use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector, TAG_WEIGHT_SCALE};
 use rand_core::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
@@ -64,9 +65,63 @@ pub struct SpendInput {
     /// `x·G == P` is checked before the key is used for signing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lottery_context: Option<LotteryContext>,
+    /// The owned output's stored cluster tags as `[clusterId, weight]` pairs,
+    /// the id a decimal string (`clusterTagsDec` from `chain_getOutputs`): a
+    /// cluster id is a full u64 and a JS number would round it. Every output
+    /// inherits the inputs' amount-weighted merge of these, decayed 5%, as the
+    /// node and CLI wallets build it. Since protocol 10.0.0 (#1687) consensus
+    /// rejects a spend whose outputs keep less than 95% of a cluster's weight,
+    /// so omitting the tags of a tagged input makes the send invalid. Defaults
+    /// to empty (an untagged input).
+    #[serde(default)]
+    pub cluster_tags: Vec<(String, u32)>,
     /// Decoys for this input's ring. Must contain at least `ringSize - 1`
     /// distinct outputs (the signer uses exactly `ringSize - 1`).
     pub decoys: Vec<DecoyOutput>,
+}
+
+/// Cluster-tag decay per transfer, parts per [`TAG_WEIGHT_SCALE`]: 5%, the
+/// node wallet's `DEFAULT_CLUSTER_DECAY_RATE` and the documented 0.95 per
+/// transfer that protocol 10.0.0 enforces as a floor (#1687).
+pub const WALLET_CLUSTER_DECAY_RATE: u32 = 50_000;
+const _: () = assert!(WALLET_CLUSTER_DECAY_RATE < TAG_WEIGHT_SCALE);
+
+/// Parse one input's `cluster_tags` into a [`ClusterTagVector`].
+fn parse_cluster_tags(field: &str, tags: &[(String, u32)]) -> Result<ClusterTagVector, String> {
+    let mut entries = Vec::with_capacity(tags.len());
+    for (id, weight) in tags {
+        let id: u64 = id
+            .trim()
+            .parse()
+            .map_err(|e| format!("{field}: cluster id {id:?} is not a decimal u64: {e}"))?;
+        entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(id),
+            weight: *weight,
+        });
+    }
+    Ok(ClusterTagVector {
+        entries,
+        decay_state: None,
+    })
+}
+
+/// The tags every output of a spend of `inputs` carries: the amount-weighted
+/// merge of the inputs' tags, decayed [`WALLET_CLUSTER_DECAY_RATE`] (the node
+/// wallet's `compute_inherited_tags`).
+pub fn inherited_cluster_tags(inputs: &[SpendInput]) -> Result<ClusterTagVector, String> {
+    let weighted = inputs
+        .iter()
+        .map(|i| {
+            Ok((
+                parse_cluster_tags("input.cluster_tags", &i.cluster_tags)?,
+                i.amount,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ClusterTagVector::merge_weighted(
+        &weighted,
+        WALLET_CLUSTER_DECAY_RATE,
+    ))
 }
 
 /// The V2 lottery payout derivation context, exactly as `chain_getOutputs`
@@ -568,18 +623,22 @@ pub fn build_and_sign_with_rng<R: CryptoRng>(
     // deposit account (the bridge reserve) can read it. `None` for an ordinary
     // send => no memo, unchanged privacy.
     let recipient_memo = parse_memo("bridgeDepositMemo", &req.bridge_deposit_memo)?;
+    // Every output inherits the inputs' merged, decayed cluster tags (coin
+    // lineage), as the node wallet does. Consensus 10.0.0 requires at least
+    // 95% retention per spend (#1687); the 5% decay meets it exactly.
+    let inherited_tags = inherited_cluster_tags(&req.inputs)?;
     let recipient_output = TxOutput::new_hybrid_to_address(
         req.amount,
         &recipient,
         0,
         recipient_memo,
-        Default::default(),
+        inherited_tags.clone(),
     )
     .map_err(|e| format!("recipient address is not post-quantum (v2): {e}"))?;
     let mut outputs = vec![recipient_output];
     let actual_fee = if change >= DUST_THRESHOLD {
         let change_output =
-            TxOutput::new_hybrid_to_address(change, &sender_address, 1, None, Default::default())
+            TxOutput::new_hybrid_to_address(change, &sender_address, 1, None, inherited_tags)
                 .map_err(|e| format!("sender address is not post-quantum (v2): {e}"))?;
         outputs.push(change_output);
         req.fee
@@ -1204,6 +1263,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of(&recipient_account),
@@ -1237,6 +1297,30 @@ mod tests {
         let out_total: u64 = tx.outputs.iter().map(|o| o.amount).sum();
         assert_eq!(out_total + tx.fee, owned_amount);
         assert_eq!(tx.inputs.clsag()[0].ring.len(), DEFAULT_RING_SIZE);
+    }
+
+    /// Protocol 10.0.0 (#1687): the outputs inherit the input's cluster tags,
+    /// decayed 5% (95% kept, the consensus retained-weight floor), with the
+    /// full u64 cluster id parsed from its decimal string (a JS number would
+    /// round it). A malformed id is an error, not a silently untagged send.
+    #[test]
+    fn outputs_inherit_input_cluster_tags_decayed_five_percent() {
+        let mut rng = StdRng::from_seed([7u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+        let mut req = make_request(&sender, 10_000_000_000, 5_000_000_000, MIN_TX_FEE, &mut rng);
+        let id = 0xFEDC_BA98_7654_3211u64; // above 2^53: not a safe JS integer
+        req.inputs[0].cluster_tags = vec![(id.to_string(), 800_000), ("7".into(), 200_000)];
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+        tx.verify_ring_signatures().unwrap();
+        assert_eq!(tx.outputs.len(), 2);
+        for output in &tx.outputs {
+            assert_eq!(output.cluster_tags.get_weight(ClusterId(id)), 760_000);
+            assert_eq!(output.cluster_tags.get_weight(ClusterId(7)), 190_000);
+        }
+
+        req.inputs[0].cluster_tags = vec![("1.5e19".into(), 1)];
+        let err = build_and_sign_with_rng(&req, &mut rng).unwrap_err();
+        assert!(err.contains("not a decimal u64"), "{err}");
     }
 
     #[test]
@@ -1304,6 +1388,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of(&recipient_account),
@@ -1698,6 +1783,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
@@ -1776,6 +1862,7 @@ mod tests {
                 amount: funder_amount,
                 subaddress_index: 0,
                 decoys: make_decoys(DEFAULT_RING_SIZE - 1, funder_amount, &mut rng),
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&wallet, &wallet_pq),
@@ -1814,6 +1901,7 @@ mod tests {
                 amount: received_amount,
                 subaddress_index: 0,
                 decoys: make_decoys(DEFAULT_RING_SIZE - 1, received_amount, &mut rng),
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of(&funder),
@@ -1867,6 +1955,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient,
@@ -1943,6 +2032,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
@@ -2035,6 +2125,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
@@ -2128,6 +2219,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
@@ -2194,6 +2286,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                cluster_tags: Vec::new(),
                 lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&deposit_account, &deposit_pq),

@@ -125,6 +125,7 @@ use crate::{
     fee_curve::{FeeConfig, PICO_PER_BTH},
     fee_floor_inputs::{resolve_fee_floor, FloorOutput, TagPair},
     monetary::{mainnet_policy_mirror, node_constants::FEE_BURN_SHARE_PERMILLE},
+    tag_retention::SpendRing,
     LotteryDrawConfig, MonetaryPolicy, LOTTERY_BASE_FEE_PICO,
 };
 use rand::SeedableRng;
@@ -243,7 +244,11 @@ pub fn tx_fee_pico(n_out: u64, output_sum: u64, mode: FeeModelMode, height: u64)
         })
         .collect();
     let ring: Vec<(u64, &[TagPair])> = vec![(per_output, NO_TAGS); DECOY_COUNT + 1];
-    let resolved = resolve_fee_floor(&outputs, &ring, &|_| 0, &|_| false);
+    let rings = [SpendRing {
+        pseudo_amount: per_output,
+        members: &ring,
+    }];
+    let resolved = resolve_fee_floor(&outputs, &rings, &|_| 0, &|_| false);
     let inputs = ConsensusFeeInputs {
         size: consensus_tx_size_bytes(1, n_out as usize, 0),
         n_out: n_out as usize,
@@ -1554,7 +1559,12 @@ mod tests {
             amount: 1_000_000,
             tags: &[],
         }];
-        let r = resolve_fee_floor(&o, &[(1_000_000, &[])], &|_| 0, &|_| false);
+        let members: [(u64, &[TagPair]); 1] = [(1_000_000, &[])];
+        let rings = [SpendRing {
+            pseudo_amount: 1_000_000,
+            members: &members,
+        }];
+        let r = resolve_fee_floor(&o, &rings, &|_| 0, &|_| false);
         assert_eq!((r.claimed_factor, r.floor), (1_000, 1_000));
     }
 

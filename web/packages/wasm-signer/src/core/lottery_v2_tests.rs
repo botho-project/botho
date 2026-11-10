@@ -177,6 +177,7 @@ fn payout_spend_input(v: &Value, owned: &OwnedOutput) -> SpendInput {
         kem_ciphertext: owned.kem_ciphertext.clone(),
         lottery_context: owned.lottery_context.clone(),
         decoys: decoys(v),
+        cluster_tags: Vec::new(),
     }
 }
 

@@ -891,6 +891,7 @@ mod send_acceptance_tests {
                 kem_ciphertext: None,
                 decoys,
                 lottery_context: None,
+                cluster_tags: Vec::new(),
             }],
             recipient: parsed_recipient,
             sender_kem_public_key: signer.sender_kem_public_key.clone(),

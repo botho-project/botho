@@ -8,8 +8,20 @@
 > document warns against, with no age gate (`DEFAULT_CLUSTER_DECAY_RATE`,
 > `botho/src/wallet.rs`, `botho-wallet/src/transaction.rs`). The
 > age-based model exists as `cluster-tax/src/age_decay.rs` with no production
-> caller. The 12-decays-per-day bound below is therefore not enforced. What
-> consensus should guarantee about tag persistence is open in #1687.
+> caller. The 12-decays-per-day bound below is therefore not enforced.
+>
+> **Protocol 10.0.0 (#1687, 2026-11-09).** Consensus now enforces this
+> document's `decay_rate_per_hop = 5%` as a floor on retention: every output
+> must keep at least 95% of each cluster's weight that all spend candidates
+> of a ring carry (the ring members whose amount equals the input's
+> pseudo-output amount), value-weighted over inputs, less a rounding slack
+> of `inputs + 1` (`CONSENSUS_MIN_TAG_RETENTION`,
+> `first_tag_retention_violation`, `cluster-tax/src/tag_retention.rs`).
+> Lower or empty output tags are therefore invalid where the floor binds. It
+> limits decay per spend, not per unit of time (still no 720-block gate), and
+> it does not bind when a ring holds a same-amount decoy that lacks the
+> cluster. For bridge imports that gap is covered by the import floor, which
+> is now read from the inputs (ADR 0007, §Protocol 10.0.0 correction).
 
 ## Overview
 
