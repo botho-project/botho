@@ -11,8 +11,9 @@ import { RemoteNodeAdapter, type FeeEstimate, type WsConnectionStatus } from '@b
 import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import { deriveV2Address } from '@botho/wasm-signer'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
-import { buildSendTransaction, parseDraftFeeQuote, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys, deriveKemPublicKey, mnemonicToSeedHex } from '@botho/wasm-signer'
+import { buildSendTransaction, buildWithFeeConsent, parseDraftFeeQuote, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys, deriveKemPublicKey, mnemonicToSeedHex } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
+import { confirmSendFee, feeRejectedError, type FeeReconfirm } from '../lib/fee-consent'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
 interface WalletState {
@@ -80,6 +81,17 @@ export interface SendOptions {
   note?: string
   /** Bridge deposit order memo (64-byte hex), embedded on-chain (#1037). */
   bridgeDepositMemo?: string
+  /**
+   * The fee the user approved in the send modal (#2001). The send never signs
+   * above it; defaults to the same estimate the modal displays.
+   */
+  approvedFee?: bigint
+  /**
+   * Asked when the node's fee floor exceeds the approved fee (#2001); nothing
+   * is signed above the approved fee until it resolves true. Defaults to a
+   * browser confirm showing the required fee.
+   */
+  confirmFee?: FeeReconfirm
 }
 
 interface WalletContextValue extends WalletState {
@@ -1115,6 +1127,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (fee < MIN_TX_FEE) {
       fee = MIN_TX_FEE
     }
+    if (options?.approvedFee !== undefined && options.approvedFee > fee) {
+      fee = options.approvedFee
+    }
 
     // 4. Build + CLSAG-sign entirely client-side (wasm). The keys never leave
     //    the browser; only the signed bytes are submitted. Every output is a
@@ -1122,8 +1137,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     //    encapsulates against the recipient's published ML-KEM key
     //    (recipientKeys.kemPublic), and the change output against the wallet's
     //    OWN ML-KEM key (derived from the mnemonic).
+    //    The node prices the draft (#2001), but it is not trusted with the
+    //    fee: every pass signs at most the approved fee (`maxFee`), and a
+    //    higher quote stops before signing and re-asks the user, so nothing
+    //    above the user-confirmed fee is ever submitted.
     const senderKemPublicKey = await deriveKemPublicKey(mnemonic)
-    const { txHex } = await buildSendTransaction({
+    const buildAt = (approved: bigint) => buildSendTransaction({
       keys: {
         spendPrivateKey: toHex(kp.spendPrivate),
         viewPrivateKey: toHex(kp.viewPrivate),
@@ -1137,7 +1156,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       },
       senderKemPublicKey,
       amount,
-      fee,
+      fee: approved,
+      maxFee: approved,
       // Bridge deposit order memo: for a BTH→wBTH bridge deposit this is the
       // mint order memo (64-byte hex), embedded on-chain so the bridge watcher
       // can match the deposit to its order (#1037). Undefined for an ordinary
@@ -1151,6 +1171,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // at the node's quote until the fee settles.
         quoteDraftFee: async (txHex) => parseDraftFeeQuote(await adapter.estimateDraftFee(txHex)),
       },
+    })
+    const { result: { txHex } } = await buildWithFeeConsent({
+      approvedFee: fee,
+      build: buildAt,
+      reconfirm: options?.confirmFee ?? confirmSendFee,
+      onReject: feeRejectedError,
     })
 
     // 5. Submit the signed tx to the node.
@@ -1263,7 +1289,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // 2. Fund the ephemeral address with amount + a sweep-fee reserve, so the
     //    recipient nets `amount` after paying the sweep fee from the output.
     const fundingAmount = amount + SWEEP_FEE_RESERVE
-    const fundingTxHash = await buildAndSubmitSend(adapter, mnemonic, ephAddress, fundingAmount)
+    const fundingTxHash = await buildAndSubmitSend(adapter, mnemonic, ephAddress, fundingAmount, {
+      confirmFee: confirmSendFee,
+      onReject: feeRejectedError,
+    })
 
     // 3. Persist the outstanding link locally so the sender can track/refund.
     const record = await claimLinkStore.add({
@@ -1319,7 +1348,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!record) throw new Error('Claim link not found')
 
     // Sweep the ephemeral output back to the sender's own address.
-    const { txHash } = await sweepEphemeral(adapter, record.ephMnemonic, state.address)
+    const { txHash } = await sweepEphemeral(adapter, record.ephMnemonic, state.address, {
+      confirmFee: confirmSendFee,
+      onReject: feeRejectedError,
+    })
     await claimLinkStore.setStatus(id, 'refunded')
     setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
 

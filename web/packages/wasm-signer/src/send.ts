@@ -106,6 +106,77 @@ export interface DraftFeeQuote {
 /** Most sign-quote passes before a send gives up (as `botho send`). */
 export const MAX_FEE_PASSES = 8
 
+/** {@link FeeAboveApprovedError.code}, stable across bundles (#2001). */
+export const FEE_ABOVE_APPROVED = 'FEE_ABOVE_APPROVED'
+
+/**
+ * The node's fee floor for this send exceeds the fee the user approved
+ * (`maxFee`), so {@link buildSendTransaction} stopped BEFORE signing at it
+ * (#2001). Nothing above `approvedFee` was signed, quoted or submitted. The UI
+ * must show `requiredFee` (and, for a sweep, the reduced amount) and ask the
+ * user again; on approval it rebuilds with `fee = maxFee = requiredFee`.
+ */
+export class FeeAboveApprovedError extends Error {
+  readonly code = FEE_ABOVE_APPROVED
+  constructor(
+    /** The fee the node requires (its `resignFee`: floor plus headroom). */
+    readonly requiredFee: bigint,
+    /** The fee the user approved (`maxFee`). */
+    readonly approvedFee: bigint,
+  ) {
+    super(
+      `The node's fee floor requires ${requiredFee} picocredits, above the approved ` +
+        `${approvedFee}; nothing was submitted. Confirm the higher fee to continue.`,
+    )
+    this.name = 'FeeAboveApprovedError'
+  }
+}
+
+/**
+ * True for a {@link FeeAboveApprovedError}, including one from another copy
+ * of this module (bundles may duplicate the class, so match on `code`).
+ */
+export function isFeeAboveApprovedError(e: unknown): e is FeeAboveApprovedError {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    (e as { code?: unknown }).code === FEE_ABOVE_APPROVED &&
+    typeof (e as { requiredFee?: unknown }).requiredFee === 'bigint'
+  )
+}
+
+/** Most times a send re-asks the user for a higher fee before giving up. */
+export const MAX_FEE_RECONFIRMS = 3
+
+/**
+ * Run a priced build under user fee consent (#2001). `build(fee)` must call
+ * {@link buildSendTransaction} with `fee` AND `maxFee` both set to `fee`, so
+ * nothing above the approved fee is ever signed. When the node requires more,
+ * `reconfirm(requiredFee, approvedFee)` asks the user; on approval the build
+ * reruns at exactly `requiredFee`, on refusal `onReject()` is thrown. The
+ * caller submits only the returned result, whose fee is the last approved fee.
+ */
+export async function buildWithFeeConsent<T>(opts: {
+  /** The fee the user already approved. */
+  approvedFee: bigint
+  build: (fee: bigint) => Promise<T>
+  reconfirm: (requiredFee: bigint, approvedFee: bigint) => Promise<boolean>
+  onReject: () => Error
+  maxReconfirms?: number
+}): Promise<{ result: T; fee: bigint }> {
+  const limit = opts.maxReconfirms ?? MAX_FEE_RECONFIRMS
+  let fee = opts.approvedFee
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return { result: await opts.build(fee), fee }
+    } catch (e) {
+      if (!isFeeAboveApprovedError(e) || attempt >= limit) throw e
+      if (!(await opts.reconfirm(e.requiredFee, fee))) throw opts.onReject()
+      fee = e.requiredFee
+    }
+  }
+}
+
 /**
  * Parse the node's `estimateFee` (`tx_hex`) result into a {@link DraftFeeQuote},
  * every fee through `BigInt(String(..))` (#2001). Throws when a field is
@@ -579,9 +650,19 @@ export interface BuildSendParams {
    * Seed fee, in picocredits (>= the network minimum). With
    * {@link SendRpc.quoteDraftFee} the send re-signs at the node's quote
    * until the fee settles, so the paid fee ({@link BuildSendResult.fee}) may
-   * be higher (#2001).
+   * be higher (#2001), but never above {@link BuildSendParams.maxFee}.
    */
   fee: bigint
+  /**
+   * The most fee the user approved, in picocredits (#2001). The sign-quote
+   * loop never signs above it: when the node's quote (with headroom) exceeds
+   * it, the build throws a {@link FeeAboveApprovedError} carrying the
+   * required fee before signing again, so a hostile or buggy node cannot
+   * spend the wallet into fees, and inputs are only ever selected for
+   * `amount + fee` with `fee <= maxFee`. Defaults to `fee`: a caller that
+   * shows `fee` for confirmation pays exactly what it showed.
+   */
+  maxFee?: bigint
   /**
    * Sweep mode: keep `amount + fee` fixed, so a re-sign at a higher quoted fee
    * lowers the amount sent instead of needing more inputs (#2001). A claim
@@ -654,8 +735,10 @@ export async function buildSendTransaction(
   const { keys, recipient, senderKemPublicKey, amount, fee, bridgeDepositMemo, rpc } =
     params
   const spendTotal = amount + fee
+  const maxFee = params.maxFee ?? fee
 
   if (amount <= 0n) throw new Error('Amount must be greater than 0')
+  if (fee > maxFee) throw new FeeAboveApprovedError(fee, maxFee)
   if (!recipient.kem_public_key) {
     throw new Error(
       'Recipient address has no ML-KEM key: it is a retired v1 / classical-only ' +
@@ -825,15 +908,20 @@ export async function buildSendTransaction(
 
   // 5. Price against the node's own fee floor (#2001): sign, quote the draft,
   // re-sign at the quote until the fee settles. Each pass reselects inputs
-  // for the new amount + fee and draws a fresh ring.
+  // for the new amount + fee and draws a fresh ring. The node is not trusted
+  // with the fee: every pass signs at most `maxFee` (the user-approved fee),
+  // so a quote above it stops the loop with a typed error BEFORE signing at
+  // it, and inputs are never selected for more than `amount + maxFee`. The
+  // paid fee is the fee this wallet signed, never the node's `txFee` echo.
   let passFee = fee
   for (let pass = 0; pass < MAX_FEE_PASSES; pass++) {
     const signed = signAt(passFee)
     if (!rpc.quoteDraftFee) return { ...signed, fee: passFee }
     const quote = await rpc.quoteDraftFee(signed.txHex)
-    const paid = quote.txFee ?? passFee
-    if (paid >= quote.settleFee) return { ...signed, fee: paid }
-    passFee = quote.resignFee > passFee ? quote.resignFee : passFee + 1n
+    if (passFee >= quote.settleFee) return { ...signed, fee: passFee }
+    const next = quote.resignFee > passFee ? quote.resignFee : passFee + 1n
+    if (next > maxFee) throw new FeeAboveApprovedError(next, maxFee)
+    passFee = next
   }
   throw new Error(
     `Could not settle a fee meeting the node's fee floor after ${MAX_FEE_PASSES} passes`,

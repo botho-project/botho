@@ -1757,6 +1757,28 @@ pub fn quote_draft_fee(
     })
 }
 
+/// The structural rules a draft must pass before it is priced (#2001 review
+/// follow-up 3): `Transaction::check_consensus_structure` (inputs, ring size
+/// >= `MIN_RING_SIZE`, 1..=`MAX_OUTPUTS` outputs, no dust) and
+/// `ClusterTagVector::is_valid` on every output (at most `MAX_CLUSTER_TAGS`
+/// entries). Pure and ledger-free, so a malformed draft gets a clean error
+/// and the pricing work is bounded to at most `MAX_OUTPUTS` outputs of at
+/// most `MAX_CLUSTER_TAGS` tags each before any ledger read. Signatures and
+/// the fee are not checked: a draft is quoted before it is final.
+pub fn check_draft_structure(tx: &crate::transaction::Transaction) -> Result<(), String> {
+    tx.check_consensus_structure().map_err(|e| e.to_string())?;
+    for (i, out) in tx.outputs.iter().enumerate() {
+        if !out.cluster_tags.is_valid() {
+            return Err(format!(
+                "output {} has malformed cluster tags ({} entries)",
+                i,
+                out.cluster_tags.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `estimateFee` with `tx_hex`: quote a signed draft (#2001). See
 /// [`quote_draft_fee`].
 async fn handle_estimate_draft_fee(id: Value, tx_hex: &str, state: &RpcState) -> JsonRpcResponse {
@@ -1767,6 +1789,10 @@ async fn handle_estimate_draft_fee(id: Value, tx_hex: &str, state: &RpcState) ->
         Ok(tx) => tx,
         Err(e) => return JsonRpcResponse::error(id, -32602, &format!("Invalid tx_hex: {}", e)),
     };
+    // Structural rules first, before any lock or ledger read.
+    if let Err(e) = check_draft_structure(&tx) {
+        return JsonRpcResponse::error(id, -32602, &format!("Invalid draft transaction: {}", e));
+    }
     let relay_fee_base = read_lock!(state.mempool, id.clone()).relay_fee_base();
     let ledger = read_lock!(state.ledger, id.clone());
     let quote = match quote_draft_fee(&ledger, &tx, relay_fee_base) {
@@ -4809,6 +4835,97 @@ mod tests {
             vec![],
             Arc::new(WsBroadcaster::new(16)),
         )
+    }
+
+    /// #2001 review follow-up 3: the draft quote runs the structural rules
+    /// before pricing. A well-formed draft is priced; a short ring, an
+    /// over-long output list, a dust output and malformed output tags are
+    /// refused with a clean `-32602` before any ledger read.
+    #[tokio::test]
+    async fn estimate_fee_draft_quote_checks_structure_first() {
+        use crate::transaction::{
+            ClsagRingInput, RingMember, Transaction, TxInputs, TxOutput, MIN_RING_SIZE,
+        };
+        use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector};
+
+        fn draft(ring_len: usize, outputs: Vec<TxOutput>) -> Transaction {
+            let ring = (0..ring_len)
+                .map(|i| RingMember {
+                    target_key: [i as u8; 32],
+                    public_key: [i as u8 ^ 0x80; 32],
+                    commitment: [0u8; 32],
+                })
+                .collect();
+            Transaction {
+                inputs: TxInputs::new(vec![ClsagRingInput {
+                    ring,
+                    key_image: [1u8; 32],
+                    commitment_key_image: [2u8; 32],
+                    clsag_signature: Vec::new(),
+                    pseudo_output_amount: 1_000_000_000_000,
+                }]),
+                outputs,
+                fee: 0,
+                created_at_height: 0,
+                settlement: None,
+            }
+        }
+        fn out(amount: u64, cluster_tags: ClusterTagVector) -> TxOutput {
+            TxOutput {
+                amount,
+                target_key: [9u8; 32],
+                public_key: [10u8; 32],
+                e_memo: None,
+                cluster_tags,
+                kem_ciphertext: None,
+            }
+        }
+        async fn quote(tx: &Transaction, state: &RpcState) -> JsonRpcResponse {
+            let tx_hex = hex::encode(bincode::serialize(tx).unwrap());
+            handle_estimate_fee(json!(1), &json!({ "tx_hex": tx_hex }), state).await
+        }
+
+        let state = empty_test_state();
+        let good = out(900_000_000_000, ClusterTagVector::empty());
+
+        let ok = quote(&draft(MIN_RING_SIZE, vec![good.clone()]), &state).await;
+        assert!(ok.error.is_none(), "{:?}", ok.error);
+        assert!(ok.result.unwrap()["settleFee"].as_u64().unwrap() > 0);
+
+        let mut bad_tags = ClusterTagVector::empty();
+        bad_tags.entries = vec![
+            ClusterTagEntry {
+                cluster_id: ClusterId(7),
+                weight: 100_000,
+            };
+            2
+        ];
+        assert!(!bad_tags.is_valid());
+        let too_many = vec![good.clone(); bth_transaction_types::MAX_OUTPUTS as usize + 1];
+        for (what, tx) in [
+            ("short ring", draft(MIN_RING_SIZE - 1, vec![good.clone()])),
+            ("no outputs", draft(MIN_RING_SIZE, vec![])),
+            ("too many outputs", draft(MIN_RING_SIZE, too_many)),
+            (
+                "dust output",
+                draft(MIN_RING_SIZE, vec![out(1, ClusterTagVector::empty())]),
+            ),
+            (
+                "malformed tags",
+                draft(MIN_RING_SIZE, vec![out(900_000_000_000, bad_tags.clone())]),
+            ),
+        ] {
+            let resp = quote(&tx, &state).await;
+            let err = resp
+                .error
+                .unwrap_or_else(|| panic!("{what}: must be refused"));
+            assert_eq!(err.code, -32602, "{what}");
+            assert!(
+                err.message.contains("Invalid draft transaction"),
+                "{what}: {}",
+                err.message
+            );
+        }
     }
 
     /// #747: with no action_public_keys wired in, the field is empty — the

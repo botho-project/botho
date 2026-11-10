@@ -15,9 +15,10 @@ base, plus the wallet settle/re-sign fees (``bth_cluster_tax::settle_fee`` /
 ``discard`` (moved aside, never deleted, never submitted) before re-signing.
 """
 
+import time
 from pathlib import Path
 
-from runtime import Gate
+from runtime import Expired, Gate
 
 # `botho_wallet::fee_estimation::MAX_FEE_PASSES`: every pass draws a fresh
 # ring, so the floor moves between passes.
@@ -41,8 +42,16 @@ def check_quote(quote, fee):
     return {key: quote[key] for key in QUOTE_FIELDS}
 
 
-async def sign_priced(sign, quote, discard, artifact):
+async def sign_priced(sign, quote, discard, artifact, deadline=None, clock=None):
     """Sign until the fee settles against the node's quote.
+
+    ``deadline`` (seconds on ``clock``) bounds the whole loop (#2001 review
+    follow-up 6): a pass costs one signer run (subprocess timeout 90 s) plus
+    one quote (RPC timeout 10 s), so ``MAX_FEE_PASSES`` passes cannot be
+    guaranteed inside the controller's ``MAX_SIGNING_SECONDS`` = 120 s
+    allowance. Instead of signing past it, the loop raises ``Expired``
+    before starting a re-sign once the deadline has passed; the caller skips
+    the intent (never holds), exactly as for a single slow signature (#1635).
 
     ``sign(min_fee)`` signs ``artifact`` (``min_fee`` 0 on the first pass,
     meaning: omit it) and returns the signer response; ``quote(tx_hex)``
@@ -63,6 +72,8 @@ async def sign_priced(sign, quote, discard, artifact):
             return {**info, "fee_floor_quote": checked, "underpaid_drafts": drafts}
         drafts.append({"hash": info.get("hash"), "fee": fee, "quote": checked})
         discard()
+        if deadline is not None and (clock or time.time)() >= deadline:
+            raise Expired("signing exceeded its allowance while pricing the fee")
         min_fee = max(checked["resignFee"], fee + 1)
     raise Gate("signed fee did not settle against the node fee floor after %d passes"
                % MAX_FEE_PASSES)

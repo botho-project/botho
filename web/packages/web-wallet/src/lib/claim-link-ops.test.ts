@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { setSigner, resetSigner, type WasmSigner } from '@botho/wasm-signer'
+import { isFeeAboveApprovedError, setSigner, resetSigner, type WasmSigner } from '@botho/wasm-signer'
 import {
   deriveDefaultSubaddressPublicKeys,
   formatAddress,
@@ -164,8 +164,8 @@ describe('sweepEphemeral', () => {
     expect(result.net).toBe(gross - MIN_TX_FEE)
   })
 
-  it('takes a node fee floor above the scanned fee out of the swept amount (#2001)', async () => {
-    setSigner(fakeSigner())
+  /** A link whose node fee floor (2e9) is far above the scanned fee (#2001). */
+  function floorAdapter() {
     const gross = 5_000_000_000_000n + SWEEP_FEE_RESERVE
     const nodeFloor = 2_000_000_074n
     const adapter = stubAdapter({
@@ -176,9 +176,41 @@ describe('sweepEphemeral', () => {
       ],
       nodeFloor,
     })
-    const result = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST)
-    // Re-signed at the quoted resignFee; the whole balance is still swept.
-    expect(result.net).toBe(gross - (nodeFloor + 2n * (nodeFloor / 64n)))
+    return { adapter, gross, required: nodeFloor + 2n * (nodeFloor / 64n) }
+  }
+
+  it('refuses a node fee floor above the shown fee without a prompt; nothing submitted (#2001)', async () => {
+    setSigner(fakeSigner())
+    const { adapter, required } = floorAdapter()
+    const err = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST).catch((e: unknown) => e)
+    expect(isFeeAboveApprovedError(err)).toBe(true)
+    expect((err as { requiredFee: bigint }).requiredFee).toBe(required)
+    expect(adapter.submitTransaction).not.toHaveBeenCalled()
+  })
+
+  it('re-asks with the required fee and sweeps the rest on approval (#2001)', async () => {
+    setSigner(fakeSigner())
+    const { adapter, gross, required } = floorAdapter()
+    const confirmFee = vi.fn(async () => true)
+    const result = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST, {
+      approvedFee: MIN_TX_FEE,
+      confirmFee,
+    })
+    expect(confirmFee).toHaveBeenCalledWith(required, MIN_TX_FEE)
+    expect(result.net).toBe(gross - required)
+    expect(adapter.submitTransaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('a declined re-confirmation submits nothing (#2001)', async () => {
+    setSigner(fakeSigner())
+    const { adapter } = floorAdapter()
+    await expect(
+      sweepEphemeral(adapter, EPH_MNEMONIC, DEST, {
+        confirmFee: async () => false,
+        onReject: () => new Error('fee not approved'),
+      }),
+    ).rejects.toThrow('fee not approved')
+    expect(adapter.submitTransaction).not.toHaveBeenCalled()
   })
 
   it('throws "nothing to claim" when the link is empty / already claimed', async () => {

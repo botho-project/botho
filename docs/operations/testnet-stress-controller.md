@@ -873,6 +873,17 @@ class can owe a few tenths of a percent of the value moved, so the operator
 must size `max_single_signed_fee_picocredits` (ceiling 1 BTH) and the fee
 budget for the plan.
 
+In the campaign controller the discarded draft goes to `artifacts/expired/`
+and is counted in `expired_unsubmitted`, together with #1635 quarantines. The
+`artifact_quarantined` event's `reason` tells them apart: `underpaid_draft`
+(a draft below the node's quote), `signing_timeout` (signing ran past
+`MAX_SIGNING_SECONDS`), `unprepared_retry` and `unprepared_restart` (a
+leftover never-prepared artifact found before re-signing or at restart). The
+whole pricing loop shares the 120 s signing allowance: a pass can cost a 90 s
+signer run plus a 10 s quote, so 8 passes are not guaranteed to fit, and the
+loop stops before a re-sign that would start past the commit deadline. The
+intent is then skipped, never held.
+
 Why batches: since #1809 an input is spendable only when the thinnest
 random-offset window of its age band holds 19 decoys. A fresh chain has about
 one decoy-eligible output per block, so the first funding input is spendable

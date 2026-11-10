@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  FeeAboveApprovedError,
   MAX_FEE_PASSES,
   buildSendTransaction,
+  buildWithFeeConsent,
+  isFeeAboveApprovedError,
   parseDraftFeeQuote,
   quoteDraftFeeVia,
   resetSigner,
@@ -87,8 +90,12 @@ function fakeNode(floor: bigint) {
   return { quoted, quoteDraftFee, submit }
 }
 
-function params(quoteDraftFee?: (txHex: string) => Promise<DraftFeeQuote>): BuildSendParams {
+function params(
+  quoteDraftFee?: (txHex: string) => Promise<DraftFeeQuote>,
+  maxFee?: bigint,
+): BuildSendParams {
   return {
+    ...(maxFee !== undefined ? { maxFee } : {}),
     keys: { spendPrivateKey: '11'.repeat(32), viewPrivateKey: '22'.repeat(32) },
     recipient: {
       spend_public_key: '33'.repeat(32),
@@ -125,7 +132,8 @@ describe('buildSendTransaction prices against the node fee floor (#2001)', () =>
     expect(() => node.submit(legacy.txHex)).toThrow('Fee too low')
 
     requests.length = 0
-    const priced = await buildSendTransaction(params(node.quoteDraftFee))
+    // The user approved up to 1 BTH of fee: the loop may re-sign under it.
+    const priced = await buildSendTransaction(params(node.quoteDraftFee, 1_000_000_000_000n))
     const resign = FLOOR + 2n * (FLOOR / 64n)
     expect(requests.map((r) => BigInt(r.fee))).toEqual([MIN_TX_FEE, resign])
     expect(node.quoted).toEqual([MIN_TX_FEE, resign])
@@ -150,9 +158,9 @@ describe('buildSendTransaction prices against the node fee floor (#2001)', () =>
       floor *= 2n
       return nodeQuote(p.tx_hex as string, floor)
     })
-    await expect(buildSendTransaction(params(quoteDraftFee))).rejects.toThrow(
-      'Could not settle a fee',
-    )
+    await expect(
+      buildSendTransaction(params(quoteDraftFee, 1n << 62n)),
+    ).rejects.toThrow('Could not settle a fee')
     expect(requests).toHaveLength(MAX_FEE_PASSES)
   })
 
@@ -170,5 +178,114 @@ describe('buildSendTransaction prices against the node fee floor (#2001)', () =>
     expect(() => parseDraftFeeQuote({ minimumFee: 1, recommendedFee: 1 })).toThrow(
       'consensusFeeFloor',
     )
+  })
+})
+
+/**
+ * #2001 Judge review: the node is not trusted with the fee. A send signs at
+ * most the user-approved `maxFee`; a higher quote stops the loop with a typed
+ * error BEFORE signing at it, and the UI must re-ask the user.
+ */
+describe('buildSendTransaction never signs above the approved fee (#2001)', () => {
+  afterEach(() => resetSigner())
+
+  it('a quote above maxFee aborts with the required fee and nothing to submit', async () => {
+    const { signer, requests } = fakeSigner()
+    setSigner(signer)
+    const node = fakeNode(FLOOR)
+    const submitted: string[] = []
+    const err = await buildSendTransaction(params(node.quoteDraftFee))
+      .then((r) => {
+        submitted.push(r.txHex)
+        return null
+      })
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FeeAboveApprovedError)
+    expect(isFeeAboveApprovedError(err)).toBe(true)
+    const e = err as FeeAboveApprovedError
+    expect(e.approvedFee).toBe(MIN_TX_FEE)
+    expect(e.requiredFee).toBe(FLOOR + 2n * (FLOOR / 64n))
+    // Only the draft at the approved fee was ever signed; nothing returned.
+    expect(requests.map((r) => BigInt(r.fee))).toEqual([MIN_TX_FEE])
+    expect(submitted).toEqual([])
+  })
+
+  it('an accepted re-confirmation signs at exactly the confirmed fee and settles', async () => {
+    const { signer, requests } = fakeSigner()
+    setSigner(signer)
+    const node = fakeNode(FLOOR)
+    const asked: Array<[bigint, bigint]> = []
+    const { result, fee } = await buildWithFeeConsent({
+      approvedFee: MIN_TX_FEE,
+      build: (f) => buildSendTransaction({ ...params(node.quoteDraftFee), fee: f, maxFee: f }),
+      reconfirm: async (required, approved) => {
+        asked.push([required, approved])
+        return true
+      },
+      onReject: () => new Error('rejected'),
+    })
+    const resign = FLOOR + 2n * (FLOOR / 64n)
+    expect(asked).toEqual([[resign, MIN_TX_FEE]])
+    expect(fee).toBe(resign)
+    expect(result.fee).toBe(resign)
+    // Never signed above what the user had approved at the time.
+    expect(requests.map((r) => BigInt(r.fee))).toEqual([MIN_TX_FEE, resign])
+    expect(node.submit(result.txHex)).toBe('accepted')
+  })
+
+  it('a declined re-confirmation throws the rejection and returns nothing', async () => {
+    const { signer, requests } = fakeSigner()
+    setSigner(signer)
+    const node = fakeNode(FLOOR)
+    await expect(
+      buildWithFeeConsent({
+        approvedFee: MIN_TX_FEE,
+        build: (f) => buildSendTransaction({ ...params(node.quoteDraftFee), fee: f, maxFee: f }),
+        reconfirm: async () => false,
+        onReject: () => new Error('User rejected the higher fee'),
+      }),
+    ).rejects.toThrow('User rejected the higher fee')
+    expect(requests.map((r) => BigInt(r.fee))).toEqual([MIN_TX_FEE])
+  })
+
+  it('a hostile quote (fee ~ the whole balance) is refused without reselecting inputs', async () => {
+    const { signer, requests } = fakeSigner()
+    setSigner(signer)
+    // The wallet holds 1 BTH; the node demands ~0.99 BTH.
+    const hostile = 990_000_000_000n
+    const quoteDraftFee = quoteDraftFeeVia(async (_m, p) => nodeQuote(p.tx_hex as string, hostile))
+    const approved = 200_000_000n
+    await expect(
+      buildSendTransaction({ ...params(quoteDraftFee), amount: 1_000_000n, fee: approved }),
+    ).rejects.toSatisfy(
+      (e: unknown) => isFeeAboveApprovedError(e) && e.approvedFee === approved && e.requiredFee > hostile,
+    )
+    expect(requests).toHaveLength(1)
+    expect(BigInt(requests[0].fee)).toBe(approved)
+  })
+
+  it('a sweep never lowers the recipient amount below the approved fee', async () => {
+    const { signer, requests } = fakeSigner()
+    setSigner(signer)
+    const node = fakeNode(FLOOR)
+    const gross = 1_000_000_000_000n
+    await expect(
+      buildSendTransaction({
+        ...params(node.quoteDraftFee),
+        amount: gross - MIN_TX_FEE,
+        fee: MIN_TX_FEE,
+        subtractFeeFromAmount: true,
+      }),
+    ).rejects.toBeInstanceOf(FeeAboveApprovedError)
+    expect(requests.map((r) => BigInt(r.amount))).toEqual([gross - MIN_TX_FEE])
+  })
+
+  it('refuses a seed fee above maxFee before signing anything', async () => {
+    const { signer, requests } = fakeSigner()
+    setSigner(signer)
+    await expect(
+      buildSendTransaction({ ...params(), fee: 2n * MIN_TX_FEE, maxFee: MIN_TX_FEE }),
+    ).rejects.toBeInstanceOf(FeeAboveApprovedError)
+    expect(requests).toHaveLength(0)
   })
 })

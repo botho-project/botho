@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from fee_quote import MAX_FEE_PASSES, check_quote, sign_priced
-from runtime import Gate
+from runtime import Expired, Gate
 
 MIN_TX_FEE = 100_000_000
 
@@ -91,6 +91,41 @@ class SignPricedTests(unittest.TestCase):
             self.run_priced(signer, floors)
         self.assertEqual(len(signer.calls), MAX_FEE_PASSES)
         self.assertEqual(len(self.discarded), MAX_FEE_PASSES)
+
+    def test_pricing_stops_at_the_signing_deadline_instead_of_resigning(self):
+        # #2001 review follow-up 6: a pass costs up to a 90 s signer run plus
+        # a 10 s quote, so 8 passes cannot be promised inside the 120 s
+        # signing allowance. Past the deadline the loop raises Expired before
+        # starting another re-sign (the controller then skips the intent).
+        floor = 2_000_000_074
+        signer = Signer(self.artifact)
+        now = [1000.0]
+
+        async def slow_quote(tx_hex):
+            now[0] += 200  # one slow pass blows the 120 s allowance
+            fee = int(bytes.fromhex(tx_hex).decode().split("-")[1])
+            return node_quote(fee, floor)
+
+        with self.assertRaisesRegex(Expired, "allowance"):
+            asyncio.run(sign_priced(signer, slow_quote, self.discard, self.artifact,
+                                    deadline=1120, clock=lambda: now[0]))
+        self.assertEqual(signer.calls, [0])
+        self.assertEqual(self.discarded, [b"draft-%d" % MIN_TX_FEE])
+
+    def test_eight_fast_passes_fit_inside_the_deadline(self):
+        signer = Signer(self.artifact)
+        now = [1000.0]
+        floors = iter([10**9 * 2 ** i for i in range(MAX_FEE_PASSES)])
+
+        async def quote(tx_hex):
+            now[0] += 5  # a 5 s pass: 8 passes take 40 s < 120 s
+            fee = int(bytes.fromhex(tx_hex).decode().split("-")[1])
+            return node_quote(fee, next(floors))
+
+        with self.assertRaisesRegex(Gate, "did not settle"):
+            asyncio.run(sign_priced(signer, quote, self.discard, self.artifact,
+                                    deadline=1120, clock=lambda: now[0]))
+        self.assertEqual(len(signer.calls), MAX_FEE_PASSES)
 
 
 class CheckQuoteTests(unittest.TestCase):

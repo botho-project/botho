@@ -47,6 +47,16 @@ pub enum MobileWalletError {
     #[error("Insufficient funds")]
     InsufficientFunds,
 
+    /// The node requires a higher fee than the approved `approved_fee`
+    /// (#2001). Nothing was submitted. Show `required_fee` to the user and,
+    /// on approval, retry with `send_transaction_with_max_fee(..,
+    /// required_fee)`.
+    #[error("Network fee {required_fee} exceeds the approved {approved_fee}")]
+    FeeAboveApproved {
+        required_fee: u64,
+        approved_fee: u64,
+    },
+
     #[error("Internal error: {message}")]
     InternalError { message: String },
 }
@@ -362,10 +372,34 @@ impl MobileWallet {
     /// send output on 6.0.0 requires the recipient's published ML-KEM key.
     /// Syncs, builds a node-valid CLSAG transaction from the wallet's
     /// spendable outputs, submits it, and returns the transaction hash.
+    ///
+    /// The fee is capped at `MIN_TX_FEE`, the flat fee this call has always
+    /// paid (#2001): when the node's fee floor is higher it fails with
+    /// [`MobileWalletError::FeeAboveApproved`] carrying the required fee and
+    /// submits nothing. Re-confirm with the user, then call
+    /// [`Self::send_transaction_with_max_fee`].
     pub async fn send_transaction(
         &self,
         to_address: String,
         amount_picocredits: u64,
+    ) -> MobileResult<String> {
+        self.send_transaction_with_max_fee(
+            to_address,
+            amount_picocredits,
+            bth_transaction_clsag::MIN_TX_FEE,
+        )
+        .await
+    }
+
+    /// [`Self::send_transaction`] paying at most `max_fee_picocredits`, the
+    /// fee the user confirmed (#2001). The node prices the draft, but nothing
+    /// is signed or submitted above this cap; a higher quote fails with
+    /// [`MobileWalletError::FeeAboveApproved`].
+    pub async fn send_transaction_with_max_fee(
+        &self,
+        to_address: String,
+        amount_picocredits: u64,
+        max_fee_picocredits: u64,
     ) -> MobileResult<String> {
         let (keys, _addr) = self.signer_keys().await?;
         let recipient = parse_recipient(&to_address)?;
@@ -375,9 +409,24 @@ impl MobileWallet {
             .await
             .map_err(|message| MobileWalletError::NetworkError { message })?;
 
-        match wallet_ops::send(&rpc, &keys, recipient, amount_picocredits, &synced).await {
+        match wallet_ops::send(
+            &rpc,
+            &keys,
+            recipient,
+            amount_picocredits,
+            max_fee_picocredits,
+            &synced,
+        )
+        .await
+        {
             Ok(tx_hash) => Ok(tx_hash),
             Err(SendError::Insufficient) => Err(MobileWalletError::InsufficientFunds),
+            Err(SendError::FeeAboveApproved { required, approved }) => {
+                Err(MobileWalletError::FeeAboveApproved {
+                    required_fee: required,
+                    approved_fee: approved,
+                })
+            }
             Err(SendError::Other(message)) => {
                 // Distinguish a few actionable failure classes for the app.
                 if message.contains("decoy") {

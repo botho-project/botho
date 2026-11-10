@@ -126,8 +126,13 @@ export async function buildSweep(
   mnemonic: string,
   destinationAddress: string,
   rpc: SendRpc,
+  approvedFee?: bigint,
 ): Promise<{ txHex: string; scan: ClaimScan }> {
-  const scan = await scanClaimLink(mnemonic, rpc);
+  const scanned = await scanClaimLink(mnemonic, rpc);
+  // The fee the user approved (the confirmed scan), else this re-scan's.
+  const fee = approvedFee ?? scanned.feePicocredits;
+  const net = scanned.grossPicocredits > fee ? scanned.grossPicocredits - fee : 0n;
+  const scan = { ...scanned, feePicocredits: fee, netPicocredits: net };
   if (scan.grossPicocredits === 0n) {
     throw new Error(
       'Nothing to claim — this link is empty, already claimed, or not yet confirmed.',
@@ -140,8 +145,9 @@ export async function buildSweep(
   const destKeys = parseAddress(destinationAddress);
   const senderKemPublicKey = await deriveKemPublicKey(mnemonic);
 
-  // Sweep the whole balance: a node fee floor above the scanned fee comes
-  // out of the amount on the re-sign (#2001).
+  // Sweep the whole balance at no more than the approved fee (#2001): a node
+  // fee floor above it throws FeeAboveApprovedError BEFORE signing, so the
+  // caller re-asks the user; nothing above the confirmed fee is signed.
   const swept = await buildSendTransaction({
     keys: ephemeralKeys(mnemonic),
     recipient: {
@@ -152,6 +158,7 @@ export async function buildSweep(
     senderKemPublicKey,
     amount: scan.netPicocredits,
     fee: scan.feePicocredits,
+    maxFee: scan.feePicocredits,
     subtractFeeFromAmount: true,
     rpc,
   });

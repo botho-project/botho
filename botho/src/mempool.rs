@@ -3253,6 +3253,99 @@ mod tests {
         }
     }
 
+    /// #2001 after #1687: the draft quote includes the bridge-import floor F
+    /// read from the INPUTS. The same import-tagged spend (ring members tagged
+    /// to a recorded import cluster, outputs to background, so the outputs
+    /// carry no import tag) quotes strictly higher once the cluster is a
+    /// recorded import cluster; the quote is still exactly
+    /// `consensus_fee_floor`, and the pre-import quote is refused while the
+    /// import-aware quote is accepted.
+    #[test]
+    fn bug_2001_draft_quote_includes_input_import_floor() {
+        use crate::transaction::{ClsagRingInput, TxInputs};
+        use bth_cluster_tax::{import_cluster_id_for_height, PICO_PER_BTH};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let tip_height = 0u64;
+        let import_id = import_cluster_id_for_height(0).0;
+        // A small import epoch (1,000 BTH): the curve factor is below F, so
+        // the import floor binds.
+        let ring = seed_ring_via_snapshot(
+            &ledger,
+            &[
+                (1_000_000_000_000, 0, import_id, 86),
+                (1_000_000_000_000, 0, import_id, 87),
+            ],
+            tip_height,
+            &[(import_id, 1_000 * PICO_PER_BTH)],
+        );
+        let tx = Transaction {
+            inputs: TxInputs::new(vec![ClsagRingInput {
+                ring,
+                key_image: [0u8; 32],
+                commitment_key_image: [0u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount: 1_000_000_000_000,
+            }]),
+            outputs: vec![TxOutput {
+                amount: 900_000_000_000,
+                target_key: [136; 32],
+                public_key: [137; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
+            }],
+            fee: 0,
+            created_at_height: 0,
+            settlement: None,
+        };
+        let base = Mempool::new().relay_fee_base();
+
+        assert_eq!(
+            ledger.import_floor_factor_from_inputs(&tx).unwrap(),
+            bth_cluster_tax::FACTOR_SCALE,
+            "not yet a recorded import cluster: no input import floor"
+        );
+        let before = crate::rpc::quote_draft_fee(&ledger, &tx, base).unwrap();
+
+        ledger
+            .record_bridge_import_cluster_for_test(import_id)
+            .unwrap();
+        assert!(
+            ledger.import_floor_factor_from_inputs(&tx).unwrap() > bth_cluster_tax::FACTOR_SCALE,
+            "the recorded import cluster must floor the inputs"
+        );
+        let after = crate::rpc::quote_draft_fee(&ledger, &tx, base).unwrap();
+
+        assert_eq!(
+            after.consensus_floor,
+            ledger.consensus_fee_floor(&tx, 1).unwrap()
+        );
+        assert!(
+            after.consensus_floor > before.consensus_floor,
+            "the quote must include the input import floor F: before={before:?} after={after:?}"
+        );
+        assert!(after.relay_floor >= after.consensus_floor);
+
+        let underpaid = Transaction {
+            fee: before.resign_fee,
+            ..tx.clone()
+        };
+        if before.resign_fee < after.consensus_floor {
+            assert!(ledger
+                .verify_consensus_fee_floor_for_test(&underpaid, 1)
+                .is_err());
+        }
+        let priced = Transaction {
+            fee: after.resign_fee,
+            ..tx.clone()
+        };
+        assert!(ledger
+            .verify_consensus_fee_floor_for_test(&priced, 1)
+            .is_ok());
+    }
+
     /// #1876 (Judge review on PR #1910): mempool claimed wealth must be the
     /// exact consensus value for whale outputs. A 10M BTH output fully tagged
     /// to a 1e21 (1B BTH) cluster overflows u128 in `value_fraction ×

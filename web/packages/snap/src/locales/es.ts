@@ -30,6 +30,12 @@ export const es: Record<keyof typeof en, string> = {
   'send.networkFee': 'Comisión de red',
   'send.total': 'Total',
   'send.recipient': 'Destinatario',
+  'fee.raisedHeading': 'Comisión de red más alta',
+  'fee.raisedBody':
+    'El nodo exige para esta transacción una comisión más alta que la que aprobó. ' +
+    'No se ha enviado nada. Apruebe la nueva comisión para continuar.',
+  'fee.approved': 'Comisión aprobada',
+  'fee.required': 'Comisión requerida',
 
   'history.heading': 'Historial de transacciones',
   'history.empty': 'Aún no hay transacciones. Los pagos que recibas aparecerán aquí.',
@@ -76,4 +82,5 @@ export const es: Record<keyof typeof en, string> = {
   'error.rejectMnemonic': 'El usuario rechazó revelar la frase de recuperación.',
   'error.rejectSend': 'El usuario rechazó el envío.',
   'error.rejectClaim': 'El usuario rechazó la reclamación.',
+  'error.rejectFee': 'El usuario rechazó la comisión de red más alta. No se envió nada.',
 };

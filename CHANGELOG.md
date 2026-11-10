@@ -30,6 +30,18 @@ consensus batch (#1683).
   (at most `MAX_FEE_PASSES` = 8). The tx-less `estimateFee` form is a display
   preview only. The stress signer's `MAX_FEE` and the
   `max_single_signed_fee_picocredits` ceiling rise to 1 BTH.
+  The GUI wallets never sign above the fee the user approved: the pricing
+  loop takes a `maxFee` (wasm-signer `buildSendTransaction`, mobile
+  `price_send`), and a higher quote stops before signing with a typed
+  `FeeAboveApprovedError` / `FeeAboveApproved { required_fee, approved_fee }`.
+  The snap re-asks with a "Higher network fee" dialog, the web wallet and
+  claim page with a browser confirm, and the mobile bridge's
+  `send_transaction` (capped at `MIN_TX_FEE`) returns the error so the app can
+  re-confirm and call `send_transaction_with_max_fee`. The draft quote checks
+  the structural rules (`check_consensus_structure`, well-formed tags) before
+  pricing. The stress controller's `artifact_quarantined` event carries a
+  `reason` (`underpaid_draft`, `signing_timeout`, `unprepared_retry`,
+  `unprepared_restart`), and the pricing loop stops at the signing allowance.
 
 - **Structural transaction rules are consensus rules (#1684, #1772).** Ring
   size at least `MIN_RING_SIZE` (20), at most `MAX_OUTPUTS` (16) outputs per
