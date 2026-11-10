@@ -56,6 +56,7 @@ from plan import expand
 from runtime import (Gate, HOSTS, Journal, Quota, Rpc, atomic, campaign_targets,
                      campaign_tls_context, check_identity, parse_hosts, pinned_file)
 from selection import choose
+from fee_quote import sign_priced
 
 # main's `botho-stress-wallet` Request enum is `deny_unknown_fields`
 # (botho-wallet/src/stress.rs). Every request must carry exactly these keys.
@@ -70,6 +71,8 @@ SIGNER_FIELDS = {
                        'allowed_recipients', 'base_rate', 'artifact'},
     'inspect_grants': {'artifact'},
 }
+# Optional request fields: the node-quoted `min_fee` of a re-sign (#2001).
+SIGNER_OPTIONAL = {'prepare': {'min_fee'}, 'prepare_grants': {'min_fee'}}
 # stress.rs MAX_GRANT_OUTPUTS: consensus MAX_OUTPUTS (16) less one change output.
 GRANTS_PER_BATCH = 15
 MANIFEST_FIELDS = {
@@ -269,7 +272,10 @@ class Prefunder(Controller):
         self.state.mkdir(mode=0o700, parents=False, exist_ok=True)
         owner_only_dir(self.state, 'state_dir')
         self.grants_dir, self.artifacts = self.state / 'grants', self.state / 'artifacts'
-        for directory in (self.grants_dir, self.artifacts):
+        # Drafts the producer quoted below its fee floor (#2001): never
+        # submitted, kept for audit outside ``artifacts`` (no orphan there).
+        self.underpaid = self.state / 'underpaid'
+        for directory in (self.grants_dir, self.artifacts, self.underpaid):
             directory.mkdir(mode=0o700, exist_ok=True)
             # An existing directory is re-checked: exist_ok keeps its old mode.
             owner_only_dir(directory, 'state_dir/' + directory.name)
@@ -398,7 +404,9 @@ class Prefunder(Controller):
             raise Quota(why)
 
     async def native(self, request):
-        need(set(request) == {'operation'} | SIGNER_FIELDS.get(request.get('operation'), {None}),
+        required = {'operation'} | SIGNER_FIELDS.get(request.get('operation'), {None})
+        optional = SIGNER_OPTIONAL.get(request.get('operation'), set())
+        need(required <= set(request) <= required | optional,
              'signer request fields differ from main Request')
         if hasattr(self, 'signer'):
             return await self.signer(request)
@@ -532,19 +540,42 @@ class Prefunder(Controller):
             return False  # Funding inputs or change are maturing; wait.
         # fee_getRate and tx_submit both go to the producer. Check before signing
         # so a fresh signature is never created when it cannot be sent at once.
-        self.producer_budget(2, 'producer request budget before signing')
+        # fee_getRate, one estimateFee quote and tx_submit; a re-sign costs one
+        # more quote, checked before each (#2001).
+        self.producer_budget(3, 'producer request budget before signing')
         quote = await self.rpc.call(self.m['producer_role'], 'fee_getRate')
         self.gate(write=True)
         index = len(self.records)
         artifact = self.artifact_path(index)
         funding_images = {o['key_image'] for o in self.inventory[self.funding]}
-        info = await self.native({
+        request = {
             'operation': 'prepare_grants', 'wallet': self.wallets[self.funding]['key'], 'blocks': self.blocks,
             'height': height, 'selected': [o['id'] for o in selected],
             'spent': [s for s in self.spent if s['keyImage'] in funding_images], 'reserved': reserved,
             'outputs': [{'recipient': g['recipient_address'], 'amount': g['amount']} for g in grants],
             'allowed_recipients': [w['address'] for w in self.wallets[:self.count]],
-            'base_rate': int(quote['baseRate']), 'artifact': str(artifact)})
+            'base_rate': int(quote['baseRate']), 'artifact': str(artifact)}
+        # Price against the producer's own fee floor (#2001): sign, quote the
+        # draft with estimateFee, re-sign at the quote. An underpaying draft
+        # moves to ``underpaid/`` (kept, never submitted) before the re-sign.
+        quotes = [0]
+
+        async def sign(min_fee):
+            return await self.native({**request, **({'min_fee': min_fee} if min_fee else {})})
+
+        async def quote_draft(tx_hex):
+            if quotes[0]:
+                self.producer_budget(2, 'producer request budget before re-signing')
+            quotes[0] += 1
+            return await self.rpc.call(self.m['producer_role'], 'estimateFee', {'tx_hex': tx_hex})
+
+        def discard():
+            target, n = self.underpaid / artifact.name, 1
+            while target.exists():
+                target, n = self.underpaid / f'{artifact.stem}.{n}{artifact.suffix}', n + 1
+            os.replace(artifact, target)
+
+        info = await sign_priced(sign, quote_draft, discard, artifact)
         # From here a signed artifact exists. Any refusal leaves it as an orphan,
         # which holds every later start until an operator reviews it.
         need(0 < info['fee'] <= self.max_fee, 'signed grant fee exceeds max_single_signed_fee')
@@ -565,6 +596,7 @@ class Prefunder(Controller):
                'amount': amount, 'hash': info['hash'], 'fee': info['fee'], 'bytes': info['bytes'],
                'outputs': info['outputs'], 'key_images': info['key_images'], 'selected': info['selected'],
                'artifact': str(artifact), 'artifact_sha256': sha256_file(artifact), 'fee_quote': quote,
+               'fee_floor_quote': info['fee_floor_quote'], 'underpaid_drafts': info['underpaid_drafts'],
                'scan_height': height, 'prepared_at': self.clock(), 'state': 'prepared'}
         create_exclusive(self.record_path(index), row)
         self.records.append(row)

@@ -1777,6 +1777,22 @@ impl Ledger {
         validation::ValidationReads::consensus_fee_floor(self, tx, block_height)
     }
 
+    /// The fee floor for `tx` included at `block_height`, with the size term
+    /// priced at `fee_base` picocredits per byte (#2001).
+    ///
+    /// `fee_base == CONSENSUS_FEE_BASE` gives [`Ledger::consensus_fee_floor`];
+    /// the mempool's congestion base (`Mempool::relay_fee_base`) gives the
+    /// relay admission minimum. RPC `estimateFee` quotes wallet drafts through
+    /// it, so wallets are priced by the same function block validation uses.
+    pub fn fee_floor_at_base(
+        &self,
+        tx: &BothoTransaction,
+        block_height: u64,
+        fee_base: u64,
+    ) -> Result<u64, LedgerError> {
+        validation::ValidationReads::fee_floor_at_base(self, tx, block_height, fee_base)
+    }
+
     /// Effective cluster wealth from a transaction's output tags, weighted
     /// against the committed global per-cluster wealth.
     ///

@@ -295,6 +295,42 @@ pub struct TransactionBuilder {
 }
 
 impl TransactionBuilder {
+    /// Build, sign and price a transfer against the node's fee floor
+    /// (#2001).
+    ///
+    /// Signs at `seed_fee` (raised to [`MIN_TX_FEE`]), quotes the signed
+    /// draft with RPC `estimateFee` (`tx_hex`), and re-signs at the quoted
+    /// `resignFee` until the draft's fee settles, as `botho send` does with
+    /// its local ledger. The quote is `Ledger::consensus_fee_floor` (and the
+    /// relay floor), so the result pays the demurrage, the epoch-0 class-exit
+    /// charge (#1685) and the input import floor (#1687) that a local
+    /// estimate cannot see. Every pass draws a fresh ring.
+    pub async fn build_priced_transfer(
+        &self,
+        rpc: &mut RpcPool,
+        recipient: &PublicAddress,
+        amount: u64,
+        seed_fee: u64,
+    ) -> Result<TransferResult> {
+        let mut fee = seed_fee.max(MIN_TX_FEE);
+        for _ in 0..crate::fee_estimation::MAX_FEE_PASSES {
+            let result = self
+                .build_transfer_with_metadata(rpc, recipient, amount, fee)
+                .await?;
+            let quote = rpc
+                .quote_draft_fee(&to_tx_hex(&result.transaction)?)
+                .await?;
+            match crate::fee_estimation::next_fee_pass(result.transaction.fee, &quote) {
+                None => return Ok(result),
+                Some(next) => fee = next,
+            }
+        }
+        Err(anyhow!(
+            "Could not settle a fee meeting the node's fee floor after {} passes",
+            crate::fee_estimation::MAX_FEE_PASSES
+        ))
+    }
+
     /// Create a new transaction builder
     pub fn new(keys: WalletKeys, utxos: Vec<OwnedUtxo>, sync_height: u64) -> Self {
         Self {

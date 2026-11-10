@@ -17,6 +17,7 @@ import type {
   LotteryContext,
   SendRpc,
 } from '@botho/wasm-signer';
+import { quoteDraftFeeVia } from '@botho/wasm-signer';
 import { fetchOutputBlocksPaged } from '@botho/core';
 
 /**
@@ -244,6 +245,8 @@ export function makeSendRpc(nodeCall: NodeCall): SendRpc {
     },
     areKeyImagesSpent: (keyImages) =>
       call<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
+    // The shared send path re-signs at the node's fee-floor quote (#2001).
+    quoteDraftFee: quoteDraftFeeVia((method, params) => call<unknown>(method, params)),
   };
 }
 

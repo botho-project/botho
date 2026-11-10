@@ -140,7 +140,9 @@ export async function buildSweep(
   const destKeys = parseAddress(destinationAddress);
   const senderKemPublicKey = await deriveKemPublicKey(mnemonic);
 
-  const { txHex } = await buildSendTransaction({
+  // Sweep the whole balance: a node fee floor above the scanned fee comes
+  // out of the amount on the re-sign (#2001).
+  const swept = await buildSendTransaction({
     keys: ephemeralKeys(mnemonic),
     recipient: {
       spend_public_key: toHex(destKeys.spendPublic),
@@ -150,8 +152,12 @@ export async function buildSweep(
     senderKemPublicKey,
     amount: scan.netPicocredits,
     fee: scan.feePicocredits,
+    subtractFeeFromAmount: true,
     rpc,
   });
 
-  return { txHex, scan };
+  return {
+    txHex: swept.txHex,
+    scan: { ...scan, feePicocredits: swept.fee, netPicocredits: swept.amount },
+  };
 }

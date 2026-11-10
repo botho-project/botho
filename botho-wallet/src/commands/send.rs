@@ -145,40 +145,46 @@ async fn run_classical(
     let builder = TransactionBuilder::new(keys.clone(), utxos, height);
     let balance = builder.balance();
 
-    // Check sufficient funds
-    let total_needed = amount_picocredits + fee;
-    if balance < total_needed {
+    // Check sufficient funds for the local estimate first (cheap, no RPC).
+    if balance < amount_picocredits + fee {
         print_error(&format!(
             "Insufficient funds. Balance: {}, needed: {}",
             format_amount(balance),
-            format_amount(total_needed)
+            format_amount(amount_picocredits + fee)
         ));
         return Ok(());
     }
 
-    // Calculate expected change to warn about dust absorption
-    let expected_change = balance - total_needed;
-    let (actual_fee, dust_absorbed) = if expected_change > 0 && expected_change < DUST_THRESHOLD {
-        // Dust change will be absorbed into fee
-        (fee + expected_change, true)
-    } else {
-        (fee, false)
-    };
+    // Sign and price against the node's consensus fee floor (#2001). The
+    // local estimate above cannot see the demurrage / class-exit charge
+    // (#1685) or the input import floor (#1687), which depend on the ring
+    // and on node-side cluster wealth; the node quotes the signed draft and
+    // the wallet re-signs until the fee settles. Signing happens before the
+    // confirmation prompt so the fee shown is the fee that will be paid.
+    println!();
+    println!("Signing transaction...");
+    let transfer_result = builder
+        .build_priced_transfer(&mut rpc, &recipient, amount_picocredits, fee)
+        .await?;
+    let actual_fee = transfer_result.transaction.fee;
+    let spent: u64 = transfer_result
+        .selected_inputs
+        .iter()
+        .map(|u| u.amount)
+        .sum();
+    let change = spent.saturating_sub(amount_picocredits + actual_fee);
 
     // Show transaction details
     println!();
     println!("Transaction details:");
     println!("  Recipient: {}", address);
     println!("  Amount:    {}", format_amount(amount_picocredits));
-    if dust_absorbed {
+    println!("  Fee:       {}", format_amount(actual_fee));
+    if actual_fee > fee {
         println!(
-            "  Fee:       {} (includes {} dust change)",
-            format_amount(actual_fee),
-            format_amount(expected_change)
+            "             (node fee floor; local estimate was {})",
+            format_amount(fee)
         );
-        print_warning("Change is below dust threshold - will be added to fee.");
-    } else {
-        println!("  Fee:       {}", format_amount(fee));
     }
     println!(
         "  Total:     {}",
@@ -187,19 +193,19 @@ async fn run_classical(
     println!();
 
     // Show progressive fee breakdown
-    println!("Fee breakdown (Cluster-Tax model):");
+    println!("Fee breakdown (Cluster-Tax model, local estimate):");
     println!(
         "{}",
         format_fee_estimate(&fee_estimate, PICOCREDITS_PER_CAD)
     );
     println!();
 
-    if !dust_absorbed && expected_change > 0 {
-        println!("  Change:        {}", format_amount(expected_change));
+    if change > 0 {
+        println!("  Change:        {}", format_amount(change));
     }
     println!(
         "  Balance after: {}",
-        format_amount(balance - amount_picocredits - actual_fee)
+        format_amount(balance.saturating_sub(amount_picocredits + actual_fee))
     );
 
     // Confirm
@@ -210,14 +216,6 @@ async fn run_classical(
             return Ok(());
         }
     }
-
-    // Build and sign transaction
-    println!();
-    println!("Signing transaction...");
-
-    let transfer_result = builder
-        .build_transfer_with_metadata(&mut rpc, &recipient, amount_picocredits, fee)
-        .await?;
 
     // Submit transaction
     println!("Submitting transaction...");

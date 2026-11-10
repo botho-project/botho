@@ -16,7 +16,7 @@
  */
 
 import { deriveKeypairs, parseAddress } from '@botho/core'
-import { buildSendTransaction, spendableBalance, deriveKemPublicKey, mnemonicToSeedHex, type SendRpc } from '@botho/wasm-signer'
+import { buildSendTransaction, parseDraftFeeQuote, spendableBalance, deriveKemPublicKey, mnemonicToSeedHex, type SendRpc } from '@botho/wasm-signer'
 import type { RemoteNodeAdapter } from '@botho/adapters'
 
 /** Signer's MIN_TX_FEE (picocredits) — mirrors wallet.tsx `send()`. */
@@ -49,6 +49,9 @@ function rpcFromAdapter(adapter: RemoteNodeAdapter): SendRpc {
     getChainHeight: () => adapter.getBlockHeight(),
     getOutputs: (start, end) => adapter.getRawOutputs(start, end),
     areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+    // Claim-link funding and sweeping sign through buildSendTransaction, which
+    // re-signs at the node's fee-floor quote (#2001).
+    quoteDraftFee: async (txHex) => parseDraftFeeQuote(await adapter.estimateDraftFee(txHex)),
   }
 }
 
@@ -167,7 +170,9 @@ export async function sweepEphemeral(
   const destKeys = parseAddress(destinationAddress)
   const senderKemPublicKey = await deriveKemPublicKey(ephMnemonic)
 
-  const { txHex } = await buildSendTransaction({
+  // Sweep the whole balance: if the node's fee floor is above the scanned
+  // fee, the re-sign takes the difference out of the amount (#2001).
+  const swept = await buildSendTransaction({
     keys: {
       spendPrivateKey: toHex(kp.spendPrivate),
       viewPrivateKey: toHex(kp.viewPrivate),
@@ -181,12 +186,13 @@ export async function sweepEphemeral(
     senderKemPublicKey,
     amount: net,
     fee,
+    subtractFeeFromAmount: true,
     rpc: rpcFromAdapter(adapter),
   })
 
-  const result = await adapter.submitTransaction(hexToBytes(txHex))
+  const result = await adapter.submitTransaction(hexToBytes(swept.txHex))
   if (!result.success || !result.txHash) {
     throw new Error(result.error || 'Sweep submission failed')
   }
-  return { txHash: result.txHash, net }
+  return { txHash: result.txHash, net: swept.amount }
 }

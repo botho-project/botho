@@ -11,7 +11,7 @@ import { RemoteNodeAdapter, type FeeEstimate, type WsConnectionStatus } from '@b
 import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import { deriveV2Address } from '@botho/wasm-signer'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
-import { buildSendTransaction, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys, deriveKemPublicKey, mnemonicToSeedHex } from '@botho/wasm-signer'
+import { buildSendTransaction, parseDraftFeeQuote, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys, deriveKemPublicKey, mnemonicToSeedHex } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
@@ -1147,6 +1147,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         getChainHeight: () => adapter.getBlockHeight(),
         getOutputs: (start, end) => adapter.getRawOutputs(start, end),
         areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+        // Price against the node's own fee floor (#2001): the signer re-signs
+        // at the node's quote until the fee settles.
+        quoteDraftFee: async (txHex) => parseDraftFeeQuote(await adapter.estimateDraftFee(txHex)),
       },
     })
 

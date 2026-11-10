@@ -639,6 +639,14 @@ impl Mempool {
         &mut self.dynamic_fee
     }
 
+    /// The congestion-adjusted fee base (picocredits per byte) admission
+    /// prices the size term at: the `dynamic_base` of [`Mempool::add_tx`].
+    /// RPC `estimateFee` passes it to `Ledger::fee_floor_at_base` to quote
+    /// a draft's relay minimum (#2001). Never below `CONSENSUS_FEE_BASE`.
+    pub fn relay_fee_base(&self) -> u64 {
+        self.dynamic_fee.compute_base(self.at_min_block_time)
+    }
+
     /// Get current dynamic fee state for diagnostics/RPC
     pub fn dynamic_fee_state(&self) -> DynamicFeeState {
         self.dynamic_fee.state(self.at_min_block_time)
@@ -3145,6 +3153,106 @@ mod tests {
             relay_cold, consensus_floor,
             "uncongested relay minimum must equal the consensus floor in epoch 0"
         );
+    }
+
+    /// #2001: RPC `estimateFee` with `tx_hex` quotes a wallet draft through
+    /// `Ledger::fee_floor_at_base`, the function `consensus_fee_floor` is.
+    /// For a spend included at height 1 (epoch 0) that owes the class-exit
+    /// charge (#1685): the quote's consensus floor IS the consensus floor,
+    /// its relay floor IS the admission minimum on a cold and a congested
+    /// node, a draft at `MIN_TX_FEE` is refused by block validation, and a
+    /// re-sign at the quoted settle/re-sign fee is accepted.
+    #[test]
+    fn bug_2001_draft_quote_is_the_consensus_and_relay_floor_at_height_1() {
+        use crate::transaction::{ClsagRingInput, TxInputs, MIN_TX_FEE};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let tip_height = 0u64; // the draft is included at height 1
+        let wealthy_cluster = 9u64;
+        let ring = seed_ring_via_snapshot(
+            &ledger,
+            &[
+                (1_000_000_000_000, 0, wealthy_cluster, 84),
+                (1_000_000_000_000, 0, wealthy_cluster, 85),
+            ],
+            tip_height,
+            &[(wealthy_cluster, 10_000_000_000_000_000_000)],
+        );
+        // Spent to background tags: a class exit, as a wallet that drops or
+        // decays its inputs' tags produces.
+        let tx = Transaction {
+            inputs: TxInputs::new(vec![ClsagRingInput {
+                ring,
+                key_image: [0u8; 32],
+                commitment_key_image: [0u8; 32],
+                clsag_signature: Vec::new(),
+                pseudo_output_amount: 1_000_000_000_000,
+            }]),
+            outputs: vec![TxOutput {
+                amount: 900_000_000_000,
+                target_key: [134; 32],
+                public_key: [135; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
+            }],
+            fee: MIN_TX_FEE,
+            created_at_height: 0,
+            settlement: None,
+        };
+        let fee_config = FeeConfig::default();
+
+        let cold = Mempool::new();
+        assert_eq!(
+            cold.relay_fee_base(),
+            DynamicFeeBase::default().compute_base(false)
+        );
+        let quote = crate::rpc::quote_draft_fee(&ledger, &tx, cold.relay_fee_base()).unwrap();
+        assert_eq!(quote.inclusion_height, 1);
+        assert_eq!(
+            quote.consensus_floor,
+            ledger.consensus_fee_floor(&tx, 1).unwrap()
+        );
+        assert!(
+            quote.consensus_floor > MIN_TX_FEE,
+            "epoch-0 exit must owe more than MIN_TX_FEE: {quote:?}"
+        );
+        assert_eq!(
+            quote.relay_floor,
+            relay_minimum_fee(&tx, &ledger, &fee_config, &DynamicFeeBase::default(), false)
+        );
+        assert_eq!(quote.minimum_fee, quote.relay_floor.max(MIN_TX_FEE));
+        assert_eq!(
+            quote.settle_fee,
+            bth_cluster_tax::settle_fee(quote.relay_floor)
+        );
+        assert_eq!(
+            quote.resign_fee,
+            bth_cluster_tax::resign_fee(quote.relay_floor)
+        );
+
+        // A congested node quotes its own (higher) admission minimum.
+        let mut hot = DynamicFeeBase::default();
+        for _ in 0..50 {
+            hot.update(100, 100, true);
+        }
+        let hot_quote = crate::rpc::quote_draft_fee(&ledger, &tx, hot.compute_base(true)).unwrap();
+        assert_eq!(hot_quote.consensus_floor, quote.consensus_floor);
+        assert_eq!(
+            hot_quote.relay_floor,
+            relay_minimum_fee(&tx, &ledger, &fee_config, &hot, true)
+        );
+        assert!(hot_quote.relay_floor > quote.relay_floor);
+
+        // The pre-#2001 wallet fee is refused; the quoted fees are accepted.
+        assert!(ledger.verify_consensus_fee_floor_for_test(&tx, 1).is_err());
+        for fee in [quote.minimum_fee, quote.settle_fee, quote.resign_fee] {
+            let priced = Transaction { fee, ..tx.clone() };
+            assert!(ledger
+                .verify_consensus_fee_floor_for_test(&priced, 1)
+                .is_ok());
+        }
     }
 
     /// #1876 (Judge review on PR #1910): mempool claimed wealth must be the

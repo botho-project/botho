@@ -17,6 +17,20 @@ Consensus-breaking; fresh chains from genesis (testnet reset).
 peers are refused at the identify handshake. First item of the 10.0.0
 consensus batch (#1683).
 
+- **Wallets price against the node's fee floor (#2001).** Since 10.0.0 a
+  spend owes the class-exit charge from block 1 (#1685) and the input import
+  floor (#1687), which a wallet cannot compute locally (cluster wealth, ring).
+  RPC `estimateFee` with `tx_hex` now quotes a signed draft through
+  `Ledger::fee_floor_at_base`, the function `consensus_fee_floor` is, at
+  `CONSENSUS_FEE_BASE` and at the node's relay congestion base, and returns
+  `settleFee`/`resignFee` (`bth_cluster_tax::settle_fee`/`resign_fee`,
+  floor/64 headroom). botho-wallet, the stress harness (prefund, controller,
+  workload signer `min_fee`), the web wallet, claim links, the snap and the
+  mobile bridge sign, quote and re-sign at `resignFee` until the fee settles
+  (at most `MAX_FEE_PASSES` = 8). The tx-less `estimateFee` form is a display
+  preview only. The stress signer's `MAX_FEE` and the
+  `max_single_signed_fee_picocredits` ceiling rise to 1 BTH.
+
 - **Structural transaction rules are consensus rules (#1684, #1772).** Ring
   size at least `MIN_RING_SIZE` (20), at most `MAX_OUTPUTS` (16) outputs per
   transaction, and no output below `DUST_THRESHOLD` (1,000,000 pico) were

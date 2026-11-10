@@ -1704,7 +1704,127 @@ fn parse_cluster_wealth_param(params: &Value) -> u128 {
     }
 }
 
+/// The fee a signed draft transaction must carry, priced by the node's own
+/// floor functions (#2001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DraftFeeQuote {
+    /// The height the floor is priced at: tip + 1, the earliest block that
+    /// can include the draft (as relay admission and block validation price).
+    pub inclusion_height: u64,
+    /// `Ledger::consensus_fee_floor`: the block-validity floor, including
+    /// the epoch-0 exit charge (#1685) and the import floor read from the
+    /// inputs (#1687).
+    pub consensus_floor: u64,
+    /// The same floor at the mempool's congestion base: what relay
+    /// admission (`Mempool::add_tx`) requires. Never below `consensus_floor`.
+    pub relay_floor: u64,
+    /// `max(relay_floor, MIN_TX_FEE)`: the least fee a node admits.
+    pub minimum_fee: u64,
+    /// `bth_cluster_tax::settle_fee(relay_floor)`: a draft whose fee is at
+    /// least this is priced; a wallet may submit it.
+    pub settle_fee: u64,
+    /// `bth_cluster_tax::resign_fee(relay_floor)`: the fee to re-sign at when
+    /// the draft does not settle.
+    pub resign_fee: u64,
+}
+
+/// Quote `tx` against `ledger` at the next block, with the relay size term
+/// at `relay_fee_base` (`Mempool::relay_fee_base`) (#2001).
+///
+/// Every number comes from `Ledger::fee_floor_at_base`, the function
+/// `Ledger::consensus_fee_floor` is, so a wallet that signs at `resign_fee`
+/// pays what block validation and relay require. Only the draft's ring
+/// members (resolved from the UTXO set) and its outputs are read; the draft's
+/// signatures and fee are not checked.
+pub fn quote_draft_fee(
+    ledger: &Ledger,
+    tx: &crate::transaction::Transaction,
+    relay_fee_base: u64,
+) -> Result<DraftFeeQuote, crate::ledger::LedgerError> {
+    let tip = ledger.get_chain_state()?.height;
+    let inclusion_height = tip.saturating_add(1);
+    let consensus_floor = ledger.consensus_fee_floor(tx, inclusion_height)?;
+    let relay_floor = ledger
+        .fee_floor_at_base(tx, inclusion_height, relay_fee_base)?
+        .max(consensus_floor);
+    Ok(DraftFeeQuote {
+        inclusion_height,
+        consensus_floor,
+        relay_floor,
+        minimum_fee: relay_floor.max(MIN_TX_FEE),
+        settle_fee: bth_cluster_tax::settle_fee(relay_floor),
+        resign_fee: bth_cluster_tax::resign_fee(relay_floor),
+    })
+}
+
+/// `estimateFee` with `tx_hex`: quote a signed draft (#2001). See
+/// [`quote_draft_fee`].
+async fn handle_estimate_draft_fee(id: Value, tx_hex: &str, state: &RpcState) -> JsonRpcResponse {
+    let tx: crate::transaction::Transaction = match hex::decode(tx_hex)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| bincode::deserialize(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(tx) => tx,
+        Err(e) => return JsonRpcResponse::error(id, -32602, &format!("Invalid tx_hex: {}", e)),
+    };
+    let relay_fee_base = read_lock!(state.mempool, id.clone()).relay_fee_base();
+    let ledger = read_lock!(state.ledger, id.clone());
+    let quote = match quote_draft_fee(&ledger, &tx, relay_fee_base) {
+        Ok(q) => q,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                id,
+                -32000,
+                &format!("Failed to compute the fee floor: {}", e),
+            )
+        }
+    };
+    let cluster_wealth = ledger
+        .effective_cluster_wealth_from_outputs(&tx.outputs)
+        .unwrap_or(0);
+    drop(ledger);
+    let cluster_factor = read_lock!(state.mempool, id.clone()).cluster_factor(cluster_wealth);
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "minimumFee": quote.minimum_fee,
+            "consensusFeeFloor": quote.consensus_floor,
+            "relayFeeFloor": quote.relay_floor,
+            "settleFee": quote.settle_fee,
+            "resignFee": quote.resign_fee,
+            "recommendedFee": quote.resign_fee,
+            "highPriorityFee": quote.resign_fee.saturating_mul(2),
+            "inclusionHeight": quote.inclusion_height,
+            "txFee": tx.fee,
+            "feeSettles": tx.fee >= quote.settle_fee,
+            "clusterFactor": cluster_factor,
+            "clusterFactorDisplay": format!("{:.2}x", cluster_factor as f64 / 1000.0),
+            "clusterWealth": cluster_wealth.to_string(),
+        }),
+    )
+}
+
+/// `estimateFee` / `tx_estimateFee`.
+///
+/// With `tx_hex` (a bincode-serialized signed draft, as for `tx_submit`) this
+/// returns the fee that draft must carry, priced by the node's consensus and
+/// relay floors ([`handle_estimate_draft_fee`], #2001). This is the
+/// authoritative quote: it includes the demurrage, the class-exit charge
+/// (#1685) and the input-read import floor (#1687), which depend on the
+/// draft's ring and output tags. Wallets sign, quote, and re-sign at
+/// `resignFee` until `feeSettles`.
+///
+/// Without `tx_hex` it returns the legacy size/cluster preview from `amount`,
+/// `memos` and `cluster_wealth`, which does NOT include demurrage or the exit
+/// charge; use it for display only.
 async fn handle_estimate_fee(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    if let Some(tx_hex) = params
+        .get("tx_hex")
+        .or_else(|| params.get("txHex"))
+        .and_then(|v| v.as_str())
+    {
+        return handle_estimate_draft_fee(id, tx_hex, state).await;
+    }
     // Parse parameters
     let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
     let num_memos = params.get("memos").and_then(|v| v.as_u64()).unwrap_or(0) as usize;

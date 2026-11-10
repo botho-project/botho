@@ -356,8 +356,6 @@ pub async fn send(
         )));
     }
 
-    let fee = MIN_TX_FEE;
-
     // Resolve each target once in chain order before selecting inputs or
     // decoys (#1450): legacy lottery aliases are never selected; V2 payouts
     // are ordinary canonical inputs (#1645).
@@ -365,20 +363,57 @@ pub async fn send(
     let candidates = fetch_candidates(rpc, height)
         .await
         .map_err(SendError::Other)?;
-    let request = plan_send(
-        keys,
-        recipient,
-        amount,
-        fee,
-        height,
-        &synced.spendable,
-        &candidates,
-    )?;
 
-    let tx_hex = build_and_sign_inner(&request).map_err(SendError::Other)?;
+    // Price against the node's own fee floor (#2001). The flat MIN_TX_FEE
+    // underpays any spend that owes the class-exit charge (#1685) or the
+    // input import floor (#1687), which the node then refuses as `Fee too
+    // low`. Sign at MIN_TX_FEE, quote the draft with `estimateFee`, and
+    // re-sign at the quote until the fee settles, as `botho send` does; each
+    // pass reselects inputs for amount + fee and draws a fresh ring.
+    let tx_hex = price_send(
+        MIN_TX_FEE,
+        |fee| {
+            let request = plan_send(
+                keys,
+                recipient.clone(),
+                amount,
+                fee,
+                height,
+                &synced.spendable,
+                &candidates,
+            )?;
+            build_and_sign_inner(&request).map_err(SendError::Other)
+        },
+        |tx_hex: String| async move { rpc.quote_draft_fee(&tx_hex).await },
+    )
+    .await?;
     rpc.submit_transaction(&tx_hex)
         .await
         .map_err(SendError::Other)
+}
+
+/// Sign at `seed_fee`, quote each draft with `quote`, and re-sign at the
+/// quoted `resignFee` until the signed fee settles (#2001). Returns the
+/// settled tx hex. `sign(fee)` plans and signs a draft paying `fee`.
+pub async fn price_send<S, Q, F>(seed_fee: u64, mut sign: S, quote: Q) -> Result<String, SendError>
+where
+    S: FnMut(u64) -> Result<String, SendError>,
+    Q: Fn(String) -> F,
+    F: std::future::Future<Output = Result<botho_wallet::fee_estimation::DraftFeeQuote, String>>,
+{
+    use botho_wallet::fee_estimation::{next_fee_pass, MAX_FEE_PASSES};
+    let mut fee = seed_fee.max(MIN_TX_FEE);
+    for _ in 0..MAX_FEE_PASSES {
+        let tx_hex = sign(fee)?;
+        let quoted = quote(tx_hex.clone()).await.map_err(SendError::Other)?;
+        match next_fee_pass(fee, &quoted) {
+            None => return Ok(tx_hex),
+            Some(next) => fee = next,
+        }
+    }
+    Err(SendError::Other(format!(
+        "could not settle a fee meeting the node's fee floor after {MAX_FEE_PASSES} passes"
+    )))
 }
 
 /// Plan a send offline: canonical input selection over the spendable set,
@@ -945,5 +980,94 @@ mod decoy_selection_tests {
         let rows = crate::rpc::flatten_outputs(&blocks).unwrap();
         let candidate = candidate_from_rpc(rows.into_iter().next().unwrap());
         assert_eq!(candidate.height, 77);
+    }
+}
+
+/// #2001: the mobile send prices against the node's fee floor.
+#[cfg(test)]
+mod price_send_tests {
+    use super::{price_send, SendError};
+    use botho_wallet::fee_estimation::DraftFeeQuote;
+    use bth_transaction_clsag::MIN_TX_FEE;
+    use std::cell::RefCell;
+
+    /// The node's quote (`bth_cluster_tax::settle_fee` / `resign_fee`) for a
+    /// relay floor `floor`.
+    fn quote(floor: u64) -> DraftFeeQuote {
+        let h = floor / 64;
+        DraftFeeQuote {
+            minimum_fee: floor.max(MIN_TX_FEE),
+            consensus_fee_floor: floor,
+            relay_fee_floor: floor,
+            settle_fee: (floor + h).max(MIN_TX_FEE),
+            resign_fee: (floor + 2 * h).max(MIN_TX_FEE),
+        }
+    }
+
+    /// A node that refuses a tx below its floor, as the mempool does.
+    fn admits(fee: u64, floor: u64) -> bool {
+        fee >= floor.max(MIN_TX_FEE)
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    #[test]
+    fn epoch_zero_exit_charge_is_resigned_at_the_node_quote() {
+        // stress_node's 10.0.0 case: a ~2e9 floor against the flat MIN_TX_FEE.
+        let floor = 2_000_000_074u64;
+        // The pre-#2001 mobile send signed once at MIN_TX_FEE: refused.
+        assert!(!admits(MIN_TX_FEE, floor));
+        let signed = RefCell::new(Vec::new());
+        let tx_hex = block_on(price_send(
+            MIN_TX_FEE,
+            |fee| {
+                signed.borrow_mut().push(fee);
+                Ok(format!("{fee:016x}"))
+            },
+            |_tx_hex: String| async move { Ok(quote(floor)) },
+        ))
+        .ok()
+        .unwrap();
+        let resign = floor + 2 * (floor / 64);
+        assert_eq!(*signed.borrow(), vec![MIN_TX_FEE, resign]);
+        let paid = u64::from_str_radix(&tx_hex, 16).unwrap();
+        assert_eq!(paid, resign);
+        assert!(admits(paid, floor));
+    }
+
+    #[test]
+    fn background_spend_settles_at_min_tx_fee_in_one_pass() {
+        let signed = RefCell::new(0);
+        assert!(block_on(price_send(
+            MIN_TX_FEE,
+            |fee| {
+                *signed.borrow_mut() += 1;
+                Ok(format!("{fee:016x}"))
+            },
+            |_tx_hex: String| async move { Ok(quote(3_960)) },
+        ))
+        .is_ok());
+        assert_eq!(*signed.borrow(), 1);
+    }
+
+    #[test]
+    fn insufficient_funds_on_a_resign_surfaces_as_insufficient() {
+        let result = block_on(price_send(
+            MIN_TX_FEE,
+            |fee| {
+                if fee > MIN_TX_FEE {
+                    Err(SendError::Insufficient)
+                } else {
+                    Ok(String::from("00"))
+                }
+            },
+            |_tx_hex: String| async move { Ok(quote(2_000_000_074)) },
+        ));
+        assert!(matches!(result, Err(SendError::Insufficient)));
     }
 }

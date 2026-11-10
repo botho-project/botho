@@ -680,6 +680,18 @@ export class RemoteNodeAdapter implements NodeAdapter {
   }
 
   /**
+   * Quote a signed draft (bincode hex, as for `tx_submit`) with the node's
+   * `estimateFee` `tx_hex` form (#2001): the fee the node's consensus and
+   * relay floors require of it, as the raw JSON result (parse it with
+   * `@botho/wasm-signer`'s `parseDraftFeeQuote`). The send path re-signs at
+   * its `resignFee` until the fee settles; {@link estimateFee} cannot see the
+   * demurrage / class-exit charge (#1685) or the input import floor (#1687).
+   */
+  async estimateDraftFee(txHex: string): Promise<Record<string, unknown>> {
+    return this.call<Record<string, unknown>>('estimateFee', { tx_hex: txHex })
+  }
+
+  /**
    * Look up the sender's cluster wealth (string-encoded u128) for a set of owned
    * output target keys, so {@link estimateFee} can be given a real cluster
    * wealth and the node applies the correct progressive fee factor (#634).

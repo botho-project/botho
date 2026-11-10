@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 from discovery_plan import degrade_opt_in
+from fee_quote import sign_priced
 from plan import expand
 from reporting import legacy_lottery_evidence
 from lottery import (check_lottery_rules, decoy_row, lottery_context, lottery_rows,
@@ -1308,13 +1309,26 @@ class Controller:
         ingress = self.choose_ingress(identifier)
         fee_rate = await self.rpc.call(ingress,'fee_getRate')
         blocks, spent = self.prepare_history(height, selected)
-        info = await self.native({'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
+        request = {'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
             'blocks':blocks,'height':height,'selected':[o['id'] for o in selected],
             'spent':spent,'reserved':[r[0] for r in self.j.db.execute('SELECT input FROM reservations')],
             'recipient':self.wallets[row['recipient']]['address'],
             'allowed_recipients':[w['address'] for w in self.wallets],
             'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact),
-            **({'fee_multiplier':fee_multiplier} if self.plan.get('schema_version') == 2 else {})})
+            **({'fee_multiplier':fee_multiplier} if self.plan.get('schema_version') == 2 else {})}
+
+        # Price against the ingress node's own fee floor (#2001): since
+        # protocol 10.0.0 the class-exit charge (#1685) and the input import
+        # floor (#1687) are owed from block 1 and the signer cannot see them.
+        # Sign, quote the draft, re-sign at the quote; an underpaying draft
+        # is quarantined (never submitted) like an unprepared artifact.
+        async def sign(min_fee):
+            return await self.native({**request, **({'min_fee': min_fee} if min_fee else {})})
+
+        async def quote(tx_hex):
+            return await self.rpc.call(ingress, 'estimateFee', {'tx_hex': tx_hex})
+
+        info = await sign_priced(sign, quote, lambda: self.quarantine_artifact(identifier), artifact)
         if self.plan.get('schema_version') == 2:
             from fee_evidence import signed_fee_evidence
             info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
