@@ -148,8 +148,7 @@ theorem ringElapsedQuantile_mono_quantile
   change ages.getD (index q1) 0 ≤ ages.getD (index q2) 0
   by_cases hempty : ages = []
   · simp [hempty]
-  · have hn : 0 < ages.length := by
-      cases ages <;> simp_all
+  · have hn : 0 < ages.length := List.length_pos_iff.mpr hempty
     have hi1 : index q1 < ages.length := by
       have := Nat.min_le_right (((min q1 10000 * ages.length + 9999) / 10000) - 1)
         (ages.length - 1)
