@@ -325,8 +325,31 @@ separate rounding, spend crossover and the decreasing generic-reset horizon
 witness. The 259 approved records for these listed claims remain byte-identical. Rust correspondence
 stays **tested**; the epoch-0 two-rate path, universal Rust/extraction equality,
 width/panic/allocation/cardinality safety, accepted/genesis reachability,
-principal bounds, full fee-floor policy and privacy/economic guarantees are
+full fee-floor policy and privacy/economic guarantees are
 separate obligations. See [the six contracts and assurance boundary](DEMURRAGE.md#proven-composition-model-properties-2015).
+
+The #2029 increment adds four **proven (model)** conditional principal bounds
+and the current-kernel `exactCharge_exceeds_value` counterexample. Accrued
+charge is at most principal when `rate * elapsed ≤ 10000 * year`; generic
+reset uses `rate * horizon ≤ 10000 * year`. Settlement uses the literal
+31,536,000-block horizon, and single-rate spend requires both its elapsed
+budget and that fixed reset budget. These sufficient conditions need no
+positive-year, factor-range, width or no-cap premise; they are not necessary
+conditions or newly imposed transaction rules. The unchanged current model
+charges 1,020,000 on principal 1,000,000 at factor 6000 after 51 default years
+at 2%, so **the unconditional principal bound is refuted**. The legacy
+counterexample remains intact.
+
+The five proofs and 17 appended unnamed examples reuse the compiled records
+proposal. [PR #2030](https://github.com/botho-project/botho/pull/2030) approved
+the records first; all 268 stored blocks remain unchanged, with 264 active
+claims and four pending tag records. Final proof acceptance requires actual
+isolated kernel, statement and axiom checks of all 264 claims. Other
+kernel/composition/rounding properties, dilution, full fee-floor/no-saturation,
+binary fuzz replay, universal Rust/extraction correspondence,
+width/panic/allocation/cardinality, accepted/genesis reachability and economic
+guarantees remain separate. Historical finite DRT keeps its **tested** status.
+See [the exact premises, examples and provenance](DEMURRAGE.md#proven-conditional-principal-bounds-2029).
 
 
 `Botho.Demurrage.ringElapsedQuantile` (`Botho/Demurrage/Age.lean`, #1993)

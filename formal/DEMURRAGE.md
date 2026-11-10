@@ -32,8 +32,10 @@ clamped to `u64::MAX`, with no intermediate time fraction.
 - With the DRT dispatch temporarily pointed back at the legacy `charge`, the
   committed regression lines produce mismatches against the 9.0.0 Rust
   kernel, so the leg distinguishes the two kernels.
-- `charge_exceeds_value` still holds for the exact kernel (51 years at 2%
-  and 6x is 102% of principal): the clamp is to `u64::MAX`, not principal.
+- The legacy `charge_exceeds_value` witness is retained. The current-kernel
+  theorem `exactCharge_exceeds_value` proves the same 51-year exception;
+  [four conditional principal bounds](#proven-conditional-principal-bounds-2029)
+  state sufficient rate-time budgets. The cap remains `u64::MAX`.
 - The #1908 study's u128 candidate was exact only for
   `blocks_per_year <= 368_934_881_474` and saturated upward beyond. The
   production kernel splits `elapsed` at 2^32, so it is exact for every input;
@@ -228,10 +230,83 @@ CARGO_BUILD_JOBS=2 cargo +nightly-2026-06-09 run --release \
 
 ## Charge is not always bounded by principal
 
-`charge_exceeds_value` gives `1_020_000` charged on a `1_000_000` principal
-after 51 years at 2% and factor `6000`. The kernel clamps to `u64::MAX`, not
-to principal. This refutes #1711's unconditional bound. It is a long-horizon
-specification issue; transaction balance validation remains a separate gate.
+The legacy `charge_exceeds_value` gives `1_020_000` charged on a `1_000_000`
+principal after 51 years at 2% and factor `6000`. The new
+`exactCharge_exceeds_value` proves the same exception for the unchanged
+current `exactCharge` model:
+
+```lean
+exactCharge 1000000 6000 (51 * 6307200) 200 6307200 = 1020000 ∧
+  1000000 < exactCharge 1000000 6000 (51 * 6307200) 200 6307200
+```
+
+Thus #1711's **unconditional principal bound is refuted in the current
+model**. The kernel caps at `u64::MAX`; no new principal cap or consensus
+restriction is introduced. This model witness does not construct a
+production-accepted or genesis-reachable spend; transaction balance
+validation remains a separate gate.
+
+## Proven conditional principal bounds (#2029)
+
+The four bounds below are **proven (model)** in `ExactCharge.lean`, with all
+arguments ranging over `Nat` and only the displayed hypotheses. All five
+new claims, including the counterexample above, are listed in `Theorems.lean`.
+
+| Claim in `Botho.Demurrage` | Sole hypothesis or hypotheses | Conclusion |
+|---|---|---|
+| `exactCharge_le_value_of_rate_time` | `rate * elapsed ≤ 10000 * year` | `exactCharge value factor elapsed rate year ≤ value` |
+| `exactResetCharge_le_value_of_rate_time` | `rate * horizon ≤ 10000 * year` | `exactResetCharge value inputFactor outputFactor horizon rate year ≤ value` |
+| `exactSettlementCharge_le_value_of_rate_time` | `rate * 31536000 ≤ 10000 * year` | `exactSettlementCharge value inputFactor rate year ≤ value` |
+| `exactSpendCharge_le_value_of_rate_times` | `rate * elapsed ≤ 10000 * year` and `rate * 31536000 ≤ 10000 * year` | `exactSpendCharge value inputFactor outputFactor elapsed rate year ≤ value` |
+
+These budgets are **sufficient, not necessary or sharp equivalences**. At
+factor `3500`, the 51-year budget fails but the charge is only `510000` on
+principal `1000000`. At factor `6000`, 50 default years gives equality and
+51 gives the counterexample. The hypotheses describe mathematical domains;
+they impose no new transaction rule.
+
+There is no positivity, factor-range, integer-width or no-cap premise.
+Zero value/rate/year, both factor clamps and the final cap are included,
+subject to the stated budgets. Natural division by zero gives zero; at
+year zero the positive fixed-horizon budget forces rate zero. The proof
+bounds clamp progressivity by 5000, then bounds the quotient by principal;
+the final cap can only lower it. A reset's guard and natural subtraction
+can only lower its input-factor charge, and `max` combines the two spend
+bounds.
+
+Generic `exactResetCharge` keeps its caller-supplied `horizon`. Only
+settlement and spend's reset component specialize it to **31,536,000**,
+independently of the caller's `year`. The spend theorem covers the canonical
+single-rate model; the epoch-0 two-rate Rust wrapper stays separate. The
+existing generic-reset horizon-monotonicity counterexample remains intact.
+
+Seventeen appended unnamed kernel-checked examples exercise budget equality
+and failure, zero inputs/year, both factor clamps and above-width factors,
+raw reset guards and clamp plateaus, an arbitrary reset horizon, fixed-horizon
+settlement with caller year 3154, positive reset at zero spend elapsed, and
+an above-u64 principal hitting the final cap. They supplement the quantified
+proofs; the earlier examples and legacy counterexample remain unchanged.
+
+The complete records landed first in [PR #2030](https://github.com/botho-project/botho/pull/2030),
+merge `f72bb28f14461481255117e63db9d32bb9d3a64c`. This increment preserves
+all **268 stored blocks** byte-for-byte: **264 active claims** plus four
+pending tag records. The five proof bodies and 17 examples match proposal
+source `4178a61dd61cb38654cbdc157b156f80c231b7ba`. Independent proposal runs
+[42888546822](https://github.com/botho-project/botho/actions/runs/42888546822)
+and [42889000335](https://github.com/botho-project/botho/actions/runs/42889000335)
+compiled and generated matching complete records, then failed the expected
+missing-five-record self-test and skipped isolated verification. Records CI
+verified only the existing 259 claims. Proof acceptance requires the normal
+final-tree gates to actually replay the kernel, check axioms and match the
+approved statement/definition records for all 264 active claims.
+
+These results dispose of the unconditional principal target and prove the
+four conditional model bounds. Other kernel/composition/rounding properties,
+adversarial dilution, full fee-floor/no-saturation policy, actual binary
+fuzz-corpus replay, universal Rust/extraction correspondence,
+width/panic/allocation/cardinality safety, accepted/genesis reachability and
+privacy/economic guarantees remain separate #1711 obligations. Historical
+DRT receipts retain their finite **tested** scope and per-run provenance.
 
 ## Model correspondence and remaining scope
 
@@ -274,11 +349,12 @@ target/release/botho-formal-drt --cases 100000 --seed 1711 \
 ```
 
 This is a partial #1711 contribution. The unconditional principal bound
-remains refuted. Reset/settlement/spend property proofs (the later #1985 model/DRT increment
-is below), quantile property proofs, monotonicity of other kernels, adversarial dilution,
-fee-floor bounds, binary fuzz-corpus replay and reachable transaction/block
-witnesses remain outstanding. Do not mark #1711 complete on these results
-or weaken its targets silently.
+remains refuted; the four conditional bounds above and the later composition,
+quantile and centroid proof increments cover only their stated contracts.
+Further kernel/composition/rounding properties, adversarial dilution,
+full fee-floor/no-saturation bounds, binary fuzz-corpus replay and reachable
+transaction/block witnesses remain outstanding. Do not mark #1711 complete
+on these results or weaken its targets silently.
 Changes to consensus arithmetic need their own reviewed policy, activation
 and regression work; the #1998 helper repair below leaves the production age
 selector unchanged.
@@ -647,5 +723,6 @@ the records-only PR verified 253 claims. Neither substitutes for that final
 gate. Dated DRT receipts above retain their original finite scope. These
 single-rate model proofs do not cover the epoch-0 two-rate path or establish
 universal Rust/extraction equality, width/panic/allocation/cardinality safety,
-accepted/genesis reachability, principal bounds, full fee-floor policy, or
-privacy/economic guarantees. Those #1711 obligations remain separate.
+accepted/genesis reachability, full fee-floor policy, or privacy/economic
+guarantees. The [conditional principal bounds](#proven-conditional-principal-bounds-2029)
+are a separate increment; other #1711 obligations remain open.
