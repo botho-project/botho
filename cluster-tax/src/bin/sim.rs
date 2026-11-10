@@ -838,6 +838,10 @@ mod cli {
             /// Ring size (1 real input + ring_size-1 decoys)
             #[arg(long, default_value_t = bth_transaction_types::RING_SIZE)]
             ring_size: usize,
+            /// #1686: compare candidate ring-floor rules (mean, amount-matched,
+            /// max, quantiles) on dilution, honest over-charge and privacy
+            #[arg(long)]
+            adversarial_dilution: bool,
         },
 
         /// M2 (#605 / #626 §7) — RECALIBRATED-CUMULATIVE run: exercises the
@@ -1303,7 +1307,11 @@ mod cli {
             Command::DemurrageQuantizationSweep { smoke } => {
                 run_demurrage_quantization_sweep_cli(smoke)
             }
-            Command::HonestOverchargeSweep { ring_size } => {
+            Command::HonestOverchargeSweep {
+                ring_size,
+                adversarial_dilution: true,
+            } => run_ring_floor_dilution_cli(ring_size),
+            Command::HonestOverchargeSweep { ring_size, .. } => {
                 run_honest_overcharge_sweep_cli(ring_size)
             }
             Command::M2Cumulative {
@@ -5718,6 +5726,14 @@ mod cli {
         let report = run_honest_overcharge_sweep_at(ring_size);
         println!("# Honest-Overcharge Sweep for the #925 Downgrade Charge (issue #950)\n");
         println!("{}", to_markdown(&report));
+    }
+
+    fn run_ring_floor_dilution_cli(ring_size: usize) {
+        use bth_cluster_tax::simulation::downgrade_overcharge_sweep::dilution::{
+            run_dilution_sweep, to_markdown,
+        };
+        println!("# Ring-Floor Adversarial-Dilution Sweep (issue #1686)\n");
+        println!("{}", to_markdown(&run_dilution_sweep(ring_size)));
     }
 
     #[cfg(test)]
