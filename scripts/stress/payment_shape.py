@@ -23,8 +23,11 @@ that shape against the plan before anything is staged:
     to 1M BTH, at one wallet hop (``hop``: the outputs keep the ring's class
     less the wallet's 5% tag decay). A prefund batch is also gated at its ring
     downgrade (``ring``: a fresh coinbase's batch, claiming one hop from a 50
-    BTH cluster, against a value-weighted ring centroid at the largest
-    cluster wealth the prefunder can build, ``ring_bound_bth``). Rows that
+    BTH cluster, against ring-floor wealth at the largest cluster wealth the
+    prefunder can build, ``ring_bound_bth``). The floor takes each input's
+    maximum effective wealth over amount-matched members (all members if
+    none match), then their pseudo-amount-weighted mean before the curve.
+    The bound on every member therefore bounds this mean too. Rows that
     declare background against a wealthy ring (``exit``) are reported, not
     gated: the operator freezes the plan from the Part A rehearsal's p99
     quoted fee per BTH moved instead.
@@ -122,8 +125,9 @@ def ring_bound_bth(golden):
     coinbase cluster holds at most coinbase x sum((1 - decay)^k, k = 0..depth).
     Only the producer mints on an x-series chain and the campaign wallets
     spend nothing before the prefund ends, so this bounds every ring member's
-    effective wealth, and with it the value-weighted ring centroid, while
-    batches are signed.
+    effective wealth while batches are signed. It therefore bounds each
+    amount-matched per-input maximum (including the all-member fallback)
+    and their pseudo-amount-weighted mean before the curve.
     """
     from prefund import MAX_FUNDING_DEPTH
     keep = 1 - golden["wallet_decay_rate"] / golden["tag_weight_scale"]

@@ -1061,9 +1061,12 @@ less value:
   wealth from 50 BTH to 1M BTH at one wallet hop (5% tag decay). A prefund
   batch is also gated at its **ring** downgrade: a batch spending a fresh
   coinbase claims one hop from a 50 BTH cluster (47.5 BTH) while the
-  value-weighted ring centroid sits at the largest funding-cluster wealth the
-  prefunder can build (142.6 BTH, see "Funding order" above; priced at the
-  150 BTH golden row). Full exits to background are reported
+  ring-floor wealth sits at the largest funding-cluster wealth the prefunder
+  can build (142.6 BTH, see "Funding order" above; priced at the
+  150 BTH golden row). The floor takes each input's maximum effective wealth
+  over members matching its pseudo amount (all members if none match), then
+  their pseudo-amount-weighted mean before applying the curve. The bound on
+  every member therefore bounds this mean too. Full exits to background are reported
   (`exit_fits_cap_to_wealth_bth`), not gated, as are ring rows past the bound
   (2.4×10^11 at 1k BTH: why prefund must not chain change). For the pinned
   plan the gated payment worst case is 4×10^8 (tier 4, the relay minimum times
