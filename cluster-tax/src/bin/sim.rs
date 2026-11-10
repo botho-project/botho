@@ -1627,8 +1627,9 @@ mod cli {
         println!("Principal washed: {principal_bth} BTH");
         println!("Decay rate: {decay_pct}% per hop");
         println!(
-            "Height: {height} (demurrage {} bps/yr at max factor)\n",
-            params.demurrage_rate_bps(height)
+            "Height: {height} (in-class demurrage {} bps/yr, exit pricing {} bps/yr, at max factor)\n",
+            params.demurrage_rate_bps(height),
+            params.exit_pricing_rate_bps(height)
         );
 
         println!(

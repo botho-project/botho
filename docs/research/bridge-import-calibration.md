@@ -27,7 +27,21 @@ Both file:line claims were re-checked against `main` at d5962dab. The F-blend is
 
 The DB-dependent half of the fee floor (claimed wealth, ring-centroid floor, import floor, writer accumulation) is restated over plain data in `cluster-tax/src/fee_floor_inputs.rs`. The golden test `fee_floor_inputs_match_ledger_for_sampled_inputs` (`botho/src/ledger/store.rs`) runs the real ledger and those mirrors over 24 sampled inputs and checks they agree, including the full consensus fee floor. `sim_factor_matches_production_import_factor_for_sampled_wealth` checks that the sim's factor for a fresh unwrap equals `import_cluster_factor(W)` over 200 sampled `W`.
 
-Model assumptions: each input sits in a ring of 20 (`RING_SIZE`) with 19 background decoys of equal value. Fees are priced at the first demurrage-active height. In epoch 0 every demurrage term below is zero (#1685). Spends are two outputs (payment + change).
+Model assumptions: each input sits in a ring of 20 (`RING_SIZE`) with 19 background decoys of equal value. Fees are priced at the first demurrage-active height. Spends are two outputs (payment + change).
+
+**Epoch 0 (#1685, protocol 10.0.0).** Before 10.0.0 every demurrage term below was zero in epoch 0, including the import toll, because the capitalized downgrade charge read the in-class rate (0 for the first 6,307,200 blocks). Since 10.0.0 the toll and every other capitalized downgrade read `MonetaryPolicy::exit_pricing_rate_bps` (200 bps from block 1), and only accrued in-class demurrage keeps the holiday. Re-running the sweep with every spend priced at height 1 instead of the first epoch-1 block (a one-off run; the committed tables stay at epoch 1) changes only accrued-only cells. The capitalized cells, which carry the conclusions, are identical:
+
+| cell (§8) | epoch 1 | height 1 |
+|---|---:|---:|
+| F sweep, F = 1.500×: wallet spend @ 1 day / @ 1 year (the onboarding toll) | 0.4420% / 0.4420% | 0.4420% / 0.4420% |
+| F sweep, any F: tag-drop spend @ 1 day | 0.0600% | 0.0600% |
+| F sweep, F ≤ 1.250× (no toll): wallet spend @ 1 day / @ 1 year (accrued only) | 0.0003% / 0.1016% | 0.0000% / 0.0000% |
+| Tag-drop adversary: whale drop fee | 5.0000% | 5.0000% |
+| Tag-drop adversary: whale honest fee (accrued only) | 0.0049% | 0.0000% |
+| Domestic decay: cumulative fee after 20 spends | 0.1888% | 0.1480% |
+| Self-churn, whale: cumulative fee to tag pruned | 0.1082% | 0.1080% |
+
+The split-game, collateral and factor columns do not depend on the rate and are unchanged.
 
 ---
 

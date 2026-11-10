@@ -127,21 +127,28 @@ fn test_concurrent_transfers() {
     network.verify_consistency();
 
     // Only the burn share of fees is destroyed; the rest flows to the lottery
-    // pool (audit cycle 6, M4). The burn of N fees is exact for MIN_TX_FEE
-    // regardless of how the txs are grouped into blocks.
-    let total_fees = DEFAULT_NUM_NODES as u64 * MIN_TX_FEE;
-    let (_, expected_burn) = split_fees(total_fees, &Default::default());
-    let expected_burn = expected_burn as u128;
+    // pool (audit cycle 6, M4). Each fee is MIN_TX_FEE plus the transfer's
+    // class-exit charge (from block 1 since protocol 10.0.0, #1685), so the
+    // fees differ and the per-block split rounds by under 1 pico per tx
+    // depending on how the txs are grouped into blocks.
+    let expected_burn: u128 = transactions
+        .iter()
+        .map(|(_, tx)| split_fees(tx.fee, &Default::default()).1 as u128)
+        .sum();
     let node = network.get_node(0);
     let state = node.chain_state();
     println!(
         "\nFees burned (20% share): {} (expected: {})",
         state.total_fees_burned, expected_burn
     );
-    assert_eq!(
-        state.total_fees_burned, expected_burn,
-        "Burn share of {} concurrent-transfer fees should be destroyed",
-        DEFAULT_NUM_NODES
+    assert!(
+        state.total_fees_burned <= expected_burn
+            && expected_burn - state.total_fees_burned < DEFAULT_NUM_NODES as u128,
+        "Burn share of {} concurrent-transfer fees should be destroyed \
+         (burned {}, expected {})",
+        DEFAULT_NUM_NODES,
+        state.total_fees_burned,
+        expected_burn
     );
     drop(node);
 
@@ -199,7 +206,9 @@ fn test_multi_input_consolidation() {
         .iter()
         .map(|(u, _)| u.output.amount)
         .sum();
-    let send_amount = total_input - MIN_TX_FEE;
+    // Keep 1 BTH back for the class-exit charge the spend owes from block 1
+    // since protocol 10.0.0 (#1685); the rest returns as change.
+    let send_amount = total_input - MIN_TX_FEE - PICOCREDITS_PER_CREDIT;
 
     let node = network.get_node(0);
     let current_height = node.chain_state().height;
@@ -407,6 +416,7 @@ fn test_stress_load_patterns() {
     let send_amount = 1 * PICOCREDITS_PER_CREDIT; // Small transfers
     let mut total_transactions: u64 = 0;
     let mut confirmed_tx_count: u64 = 0;
+    let mut confirmed_burn: u128 = 0;
 
     for n in 0..total_rounds {
         let sender_idx = n % DEFAULT_NUM_NODES;
@@ -442,6 +452,7 @@ fn test_stress_load_patterns() {
                 total_transactions += 1;
                 if confirm_transaction(&network, &tx, sender_idx) {
                     confirmed_tx_count += 1;
+                    confirmed_burn += split_fees(tx.fee, &Default::default()).1 as u128;
                     println!("    {} -> {}: 1 BTH (confirmed)", sender_idx, recipient_idx);
                 }
             }
@@ -484,12 +495,11 @@ fn test_stress_load_patterns() {
     );
 
     // Each confirmed transfer lands in its own block, so the destroyed amount
-    // is confirmed * burn(MIN_TX_FEE) (audit cycle 6, M4).
-    let per_fee_burn = split_fees(MIN_TX_FEE, &Default::default()).1;
+    // is the sum of the confirmed transfers' burn shares (audit cycle 6, M4).
+    // Fees include each transfer's class-exit charge (#1685).
     assert_eq!(
-        final_state.total_fees_burned,
-        (confirmed_tx_count * per_fee_burn) as u128,
-        "Destroyed fees should be confirmed_count * per-fee burn share"
+        final_state.total_fees_burned, confirmed_burn,
+        "Destroyed fees should be the confirmed transfers' burn shares"
     );
 
     // Supply conservation: mined = wallets + burned + lottery pool.
@@ -547,6 +557,7 @@ fn test_rapid_sequential_transfers() {
     println!("\nCreating rapid transfer chain: 0 -> 1 -> 2 -> 3 -> 4 -> 0");
 
     let send_amount = 10 * PICOCREDITS_PER_CREDIT;
+    let mut sequential_burn: u128 = 0;
 
     for round in 0..DEFAULT_NUM_NODES {
         let sender_idx = round;
@@ -598,6 +609,7 @@ fn test_rapid_sequential_transfers() {
             sender_idx,
             recipient_idx
         );
+        sequential_burn += split_fees(tx.fee, &Default::default()).1 as u128;
     }
 
     // Final verification
@@ -621,12 +633,11 @@ fn test_rapid_sequential_transfers() {
     drop(node);
 
     // Each transfer lands in its own block (sequential), so the destroyed
-    // amount is N * burn(MIN_TX_FEE) — only the burn share, not the gross
-    // fee (audit cycle 6, M4).
-    let per_fee_burn = split_fees(MIN_TX_FEE, &Default::default()).1;
+    // amount is the sum of the transfers' burn shares — only the burn share,
+    // not the gross fee (audit cycle 6, M4). Fees include each transfer's
+    // class-exit charge (#1685).
     assert_eq!(
-        final_state.total_fees_burned,
-        DEFAULT_NUM_NODES as u128 * per_fee_burn as u128,
+        final_state.total_fees_burned, sequential_burn,
         "Burn share of {} sequential-transfer fees should be destroyed",
         DEFAULT_NUM_NODES
     );
@@ -695,7 +706,8 @@ fn test_mixed_transaction_patterns() {
         wallet0,
         &utxos_to_consolidate,
         &wallet0.default_address(),
-        consolidate_total - MIN_TX_FEE,
+        // 1 BTH kept back for the class-exit charge (#1685), returned as change.
+        consolidate_total - MIN_TX_FEE - PICOCREDITS_PER_CREDIT,
         MIN_TX_FEE,
         current_height,
         &network,

@@ -295,6 +295,15 @@ Three executable definitions in `Botho/Demurrage/ExactCharge.lean` reuse
 | `exactSettlementCharge` | `demurrage_settlement_charge` | Reset to factor 1000 over exactly 31,536,000 blocks, independently of the supplied year |
 | `exactSpendCharge` | `spend_demurrage_charge` | Maximum of accrued charge at supplied elapsed time and reset at the fixed 31,536,000-block horizon |
 
+Since protocol 10.0.0 (#1685) the consensus fee floor calls
+`spend_demurrage_charge_with_exit_rate`, which takes the accrued rate
+(`demurrage_rate_bps`, 0 in epoch 0) and the reset rate
+(`exit_pricing_rate_bps`, 200 bps from block 1) separately. It is the same
+`max` of the same two DRT-covered functions, and a unit test pins it to
+`spend_demurrage_charge` whenever the two rates are equal, so
+`exactSpendCharge` covers every epoch-1+ spend. The epoch-0 shape (accrual 0,
+reset 200) has no Lean model or DRT leg yet.
+
 These are **tested models**, not new theorems. The existing extracted
 `capitalized_reset_charge_no_downgrade` proves only its named branch;
 finite correspondence here does not prove Rust equivalence or panic freedom.

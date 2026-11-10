@@ -18,15 +18,18 @@ The node's floor is `Ledger::consensus_fee_floor` (`botho/src/ledger/store/valid
 
 ```text
 floor = 1 pico/byte × size × factor × min(n_out,10)² + memo fees
-      + spend_demurrage_charge(output_sum, max(claimed, ring/import floor), claimed,
-                               elapsed, demurrage_rate_bps(height), blocks_per_year)
+      + spend_demurrage_charge_with_exit_rate(output_sum, max(claimed, ring/import floor),
+            claimed, elapsed, demurrage_rate_bps(height), exit_pricing_rate_bps(height),
+            blocks_per_year)
 ```
+
+The accrued term reads the in-class rate, 0 in epoch 0. The capitalized downgrade term (which is also the #831 settlement charge and the ADR-0007 import toll) reads the exit-pricing rate, 200 bps from block 1. That split is protocol 10.0.0 (#1685); before it both terms read the in-class rate.
 
 A default node also refuses to relay a transaction below `MIN_TX_FEE` = 1e8 pico (0.0001 BTH).
 
 `cluster_tax::consensus_fee_model` (`cluster-tax/src/consensus_fee.rs`) is the pure half of that floor. It takes the inputs the ledger resolves from its database as parameters: the output-tag cluster wealth, the composed ring/import floor factor, and the max-quantile ring age. It has two modes, `ConsensusOnly` and `ConsensusPlusRelayMin` (`max(floor, MIN_TX_FEE)`).
 
-A golden-vector test (`consensus_fee_model_matches_ledger_floor_golden_vectors` in `botho/src/ledger/store.rs`) recomputes seven vectors from the live `Ledger::consensus_fee_floor` and requires agreement within 1 pico: background, mid-wealth, high-wealth with accrued demurrage, memo, `n_out = 12`, young downgrade (capitalized), and bridge-import floor. Drift guards pin `RELAY_MIN_TX_FEE == MIN_TX_FEE`, the fee base, the age quantile, the mainnet demurrage schedule and the size estimate.
+A golden-vector test (`consensus_fee_model_matches_ledger_floor_golden_vectors` in `botho/src/ledger/store.rs`) recomputes ten vectors from the live `Ledger::consensus_fee_floor` and requires agreement within 1 pico: background, mid-wealth, high-wealth with accrued demurrage, memo, `n_out = 12`, young downgrade (capitalized), bridge-import floor, and (#1685) three epoch-0 vectors: an old in-class hold (no demurrage), a young downgrade and a bridge-import floor (both priced). Drift guards pin `RELAY_MIN_TX_FEE == MIN_TX_FEE`, the fee base, the age quantile, the mainnet demurrage schedule and the size estimate.
 
 All five sims take `--fee-model {consensus,consensus-relay,legacy}`. The default is `consensus`. The legacy paths are kept, not deleted, and remain reachable with `--fee-model legacy`.
 
@@ -54,7 +57,7 @@ The default height is the first epoch-1 block (6,307,200), so the node's demurra
 
 ## Verdicts
 
-### 1. `wash-trading`: **SURVIVES** (epoch ≥ 1). Bootstrap epoch: **FAILS**, tracked as #1685
+### 1. `wash-trading`: **SURVIVES**, from block 1 (the bootstrap-epoch FAILS was closed by #1685)
 
 Setup: 100M-BTH cluster, 5% decay per hop, `--principal` defaulting to the whole cluster. A ledger amount is a `u64` of picocredits, so the principal saturates at `u64::MAX` pico (about 18.45M BTH, the largest single transaction the node can carry); the cost percentages below are relative to that saturated principal. (Judge note on review of #1728.) The break-even horizon is a ratio and does not depend on the principal.
 
@@ -68,7 +71,9 @@ The legacy table charged 30% of the principal per hop. Its "Never" at 5–15 hop
 
 Under the node's floor, each hop's tag decay is a class downgrade, so it pays the #925 capitalized reset charge. That charge equals the demurrage the attacker would save over `SETTLEMENT_HORIZON_BLOCKS`, so washing breaks even after exactly the 5-year horizon, by construction. Per-tx size-fee savings are a few hundred pico and never repay the wash: about 10¹⁴ txs. With `consensus-relay`, the relay minimum swamps the factor, so per-tx savings are 0. The verdict is **SURVIVES**, as designed.
 
-Bootstrap epoch (`--height 1`): the demurrage rate is 0, so the downgrade charge is 0. Fifty hops cost 255,242 pico (2.6e-7 BTH) and shed the factor from 5.949× to 5.692× before demurrage switches on. The verdict there is **FAILS**. This is the epoch-0 holiday already tracked in **#1685**; the numbers are posted there. No new issue.
+Bootstrap epoch (`--height 1`). **Before protocol 10.0.0** the downgrade charge read the in-class demurrage rate, which is 0 in epoch 0, so the charge was 0: fifty hops cost 255,242 pico (2.6e-7 BTH) and shed the factor from 5.949× to 5.692× before demurrage switched on. The verdict there was **FAILS**, tracked as #1685.
+
+**Re-run after #1685** (operator ruling 2026-11-09, option 2: exit charges read `exit_pricing_rate_bps`, 200 bps from block 1, while in-class demurrage keeps its epoch-0 rate of 0). At `--height 1` every hop now pays the same capitalized downgrade charge as at the first epoch-1 block: 2,213.6 BTH at 5 hops, 10,330.2 BTH at 20 and 94,816.3 BTH at 50, identical to the epoch-1 table above. The break-even column now prices the attacker's savings at the in-class rate that applies once the holiday ends (in epoch 0 there is nothing to save yet), so it reads 5.00 years of active demurrage at every hop count, again identical to epoch 1. The epoch-0 verdict flips to **SURVIVES**. Goldens: `docs/research/generated/wash-trading-height-1.txt`; the header line of every wash-trading golden now prints both rates.
 
 ### 2. `structuring`: **SURVIVES** (unchanged)
 
@@ -133,11 +138,24 @@ The headline Gini criterion already failed under the legacy flat fee over this 3
 | Sim | Legacy verdict | Consensus verdict | Action |
 |---|---|---|---|
 | wash-trading (epoch ≥ 1) | mixed (Never → 61 txs) | **SURVIVES** (break-even = 5-yr horizon, by design) | none |
-| wash-trading (epoch 0) | n/a | **FAILS** (free downgrade) | #1685 (existing) |
+| wash-trading (epoch 0) | n/a | **SURVIVES** since protocol 10.0.0 (was FAILS: free downgrade) | #1685 (closed by this re-run's code change) |
 | structuring | SURVIVES | **SURVIVES** | none |
 | scenario-whale | FAILS (wash 94.7%, aggressive 99.4%) | **SURVIVES** | none |
 | m2-cumulative / m2-decay | PASS | **FAILS** (Δgini ≈ 0.029) | **#1727** (new) |
 | lottery-sweep | FAILS (Gini) | **FAILS** (Gini); anti-gaming PASS | none (unchanged) |
+
+## #1685 re-run of the affected calibration sweeps (protocol 10.0.0)
+
+#1685 named four sweeps that assumed 200 bps from block 1. After the ruling the exit charges really are 200 bps from block 1, so only in-class accrual differs from those sims in epoch 0. Each was re-run at commit `e5d5ebc9` plus this change:
+
+| Sweep | What it prices | Epoch-0 re-run | Change |
+|---|---|---|---|
+| `settlement-horizon-sweep` | #831 settlement (exit) + spend-time HOLD | the existing launch-start table (`start_height = 0`) | Settlement now costs the same at launch as in epoch 1: Δgini_escape at 5yr goes from −0.0001 FAIL to **+0.0723 PASS** (1yr: +0.0142, FAIL, as in epoch 1). HOLD collects slightly less from launch (Δgini_hold +0.0830 vs +0.0852) because accrual is free in year 0. Doc: `settlement-horizon-calibration.md` §8. |
+| `bridge-import-sweep` | import toll, tag-drop and shedding (capitalized) plus accrued holds | one-off run with every spend priced at height 1 | Capitalized cells identical (onboarding toll 0.4420%, tag-drop 0.0600%, whale drop 5.0000%); accrued-only cells go to 0. Doc: `bridge-import-calibration.md` §1. |
+| `honest-overcharge-sweep` (`downgrade_overcharge_sweep.rs`) | capitalized downgrade only, at a fixed 200 bps | golden unchanged | It never read a height. Before #1685 it overstated what epoch 0 charged (0); now it describes every height. |
+| `m2-cumulative` / `m2-decay` (`m2.rs`) | in-class `demurrage_at_spend_bps = 200` from block 1; consensus fees at the first epoch-1 height | not re-run (~190 s per run, outside CI) | The ruling does not touch in-class accrual, and the sim prices fees at an epoch-1 height, so its numbers do not move. It still models in-class demurrage in year 0, which the node does not charge; `m2-production` models the holiday and is the production-faithful run. |
+
+`m2-production` (`m2_production.rs`) prices every spend with `consensus_fee_model` at its real height, so since #1685 its year-0 downgrades are charged. Its published runs (`m2-production-verdicts.md`) predate the change and were not re-run here (> 200 s per run, several runs). Its "mechanism off" baseline now sets `halving_interval = 0`, which switches off both rates; the old `u64::MAX` only postponed the in-class rate.
 
 ## Known limits of these re-runs
 

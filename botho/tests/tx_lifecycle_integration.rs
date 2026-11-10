@@ -350,16 +350,50 @@ fn create_signed_transaction(
     let decoys = ledger
         .get_decoy_outputs(MIN_RING_SIZE - 1, &[sender_utxo.output.target_key], 0)
         .expect("Failed to get decoy outputs - need at least 20 UTXOs in ledger");
-    positive_transfer::with_decoys(
-        sender_wallet,
-        sender_utxo,
-        subaddress_index,
-        recipient,
-        amount,
-        fee,
-        current_height,
-        &decoys,
-    )
+    // `fee` is paid on top of the spend's class-exit charge, which consensus
+    // prices from block 1 since protocol 10.0.0 (#1685): a fresh mint's
+    // change output carries decayed tags, a class downgrade.
+    let mut paid = fee;
+    for _ in 0..8 {
+        let tx = positive_transfer::with_decoys(
+            sender_wallet,
+            sender_utxo,
+            subaddress_index,
+            recipient,
+            amount,
+            paid,
+            current_height,
+            &decoys,
+        );
+        let need = fee.saturating_add(exit_charge(ledger, &tx));
+        if paid >= need {
+            return tx;
+        }
+        paid = need.saturating_add((need - fee) / 32);
+    }
+    panic!("could not settle a fee covering the exit charge");
+}
+
+/// The part of the consensus fee floor above the size/cluster base fee: the
+/// demurrage or class-exit charge the spend owes at the next block (#1685).
+fn exit_charge(ledger: &Ledger, tx: &Transaction) -> u64 {
+    use bth_cluster_tax::{FeeConfig, TransactionType};
+    let height = ledger.get_chain_state().expect("chain state").height + 1;
+    let floor = ledger
+        .consensus_fee_floor(tx, height)
+        .expect("consensus fee floor");
+    let wealth = ledger
+        .effective_cluster_wealth_from_outputs(&tx.outputs)
+        .expect("claimed wealth");
+    let base = FeeConfig::default().minimum_fee_dynamic_with_outputs(
+        TransactionType::Hidden,
+        tx.estimate_size(),
+        wealth,
+        tx.outputs.len(),
+        tx.outputs.iter().filter(|o| o.has_memo()).count(),
+        1, // CONSENSUS_FEE_BASE
+    );
+    floor.saturating_sub(base)
 }
 
 // ============================================================================
@@ -474,6 +508,9 @@ fn test_tx_lifecycle_fee_burning() {
         &ledger,
     );
 
+    // The paid fee is `fee` plus the spend's class-exit charge (#1685).
+    let paid_fee = tx.fee;
+
     // Mine block with transaction
     let block = mine_block(&ledger, &miner_address, vec![tx]);
     ledger
@@ -482,7 +519,7 @@ fn test_tx_lifecycle_fee_burning() {
 
     // Verify the burn share was destroyed. Only the burn fraction of a fee
     // is destroyed; the rest flows to the lottery pool (audit cycle 6, M4).
-    let per_fee_burn = LotteryFeeConfig::default().split_fees(fee).1 as u128;
+    let per_fee_burn = LotteryFeeConfig::default().split_fees(paid_fee).1 as u128;
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.total_fees_burned, per_fee_burn,
@@ -505,17 +542,18 @@ fn test_tx_lifecycle_fee_burning() {
         &ledger,
     );
 
+    let tx2_burn = LotteryFeeConfig::default().split_fees(tx2.fee).1 as u128;
     let block = mine_block(&ledger, &miner_address, vec![tx2]);
     ledger
         .add_block(&block)
         .expect("Failed to add block with tx2");
 
-    // Verify cumulative burn: two separate blocks, each burning the per-fee
+    // Verify cumulative burn: two separate blocks, each burning its fee's
     // burn share (audit cycle 6, M4).
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.total_fees_burned,
-        per_fee_burn * 2,
+        per_fee_burn + tx2_burn,
         "Both transaction fee burn shares should be destroyed"
     );
 }
@@ -850,6 +888,7 @@ fn test_chained_transactions_in_sequence() {
         &ledger,
     );
 
+    let tx2_fee = tx2.fee;
     let block = mine_block(&ledger, &addr_a, vec![tx2]);
     ledger
         .add_block(&block)
@@ -864,7 +903,7 @@ fn test_chained_transactions_in_sequence() {
     );
 
     let balance_b_final = get_wallet_balance(&ledger, &wallet_b);
-    let expected_b = 20 * PICOCREDITS_PER_CREDIT - 10 * PICOCREDITS_PER_CREDIT - MIN_TX_FEE;
+    let expected_b = 20 * PICOCREDITS_PER_CREDIT - 10 * PICOCREDITS_PER_CREDIT - tx2_fee;
     assert_eq!(balance_b_final, expected_b, "Wallet B should have change");
 }
 
@@ -924,6 +963,7 @@ fn test_multiple_transactions_in_single_block() {
         &ledger,
     );
 
+    let block_fees = tx1.fee + tx2.fee;
     // Mine block with both transactions
     let block = mine_block(&ledger, &miner_addr, vec![tx1, tx2]);
     ledger
@@ -947,7 +987,8 @@ fn test_multiple_transactions_in_single_block() {
 
     // Verify the burn share for both fees. Both txs share one block, so the
     // burn is computed on the combined block fee (audit cycle 6, M4).
-    let expected_burn = LotteryFeeConfig::default().split_fees(MIN_TX_FEE * 2).1 as u128;
+    // Each fee includes its spend's class-exit charge (#1685).
+    let expected_burn = LotteryFeeConfig::default().split_fees(block_fees).1 as u128;
     let state = ledger.get_chain_state().unwrap();
     assert_eq!(
         state.total_fees_burned, expected_burn,
@@ -1016,7 +1057,7 @@ fn test_utxo_set_consistency_after_transactions() {
     assert_eq!(recipient_utxo.output.amount, 10 * PICOCREDITS_PER_CREDIT);
 
     let change_utxo = ledger.get_utxo(&change_utxo_id).unwrap().unwrap();
-    let expected_change = TEST_BLOCK_REWARD - 10 * PICOCREDITS_PER_CREDIT - MIN_TX_FEE;
+    let expected_change = TEST_BLOCK_REWARD - 10 * PICOCREDITS_PER_CREDIT - tx.fee;
     assert_eq!(change_utxo.output.amount, expected_change);
 }
 
@@ -1091,20 +1132,35 @@ fn test_exact_amount_spend_no_change() {
     let state = ledger.get_chain_state().unwrap();
     let miner_addr = miner.public_address();
 
-    // Spend exact amount (no change)
-    let exact_amount = utxo.output.amount - MIN_TX_FEE;
+    // Spend exact amount (no change). The fee must cover the spend's
+    // class-exit charge (#1685), so size it from a probe spend of nearly the
+    // whole input, plus 1/8 slack, then build the change-free spend directly.
+    let probe = create_signed_transaction(
+        &miner,
+        utxo,
+        *subaddr,
+        &recipient.public_address(),
+        utxo.output.amount - MIN_TX_FEE - PICOCREDITS_PER_CREDIT,
+        MIN_TX_FEE,
+        state.height,
+        &ledger,
+    );
+    let exact_fee = probe.fee + (probe.fee - MIN_TX_FEE) / 8;
+    let exact_amount = utxo.output.amount - exact_fee;
 
-    // Note: create_signed_transaction always creates change output if change > 0
-    // This test verifies spending with minimal change
-    let tx = create_signed_transaction(
+    // Note: positive_transfer always creates a change output if change > 0
+    let decoys = ledger
+        .get_decoy_outputs(MIN_RING_SIZE - 1, &[utxo.output.target_key], 0)
+        .expect("decoys");
+    let tx = positive_transfer::with_decoys(
         &miner,
         utxo,
         *subaddr,
         &recipient.public_address(),
         exact_amount,
-        MIN_TX_FEE,
+        exact_fee,
         state.height,
-        &ledger,
+        &decoys,
     );
 
     // Should have exactly 1 output (recipient only, no change)
@@ -1222,10 +1278,11 @@ fn test_mempool_transactions_sorted_by_fee() {
     let sorted_txs = mempool.get_transactions(10);
     assert_eq!(sorted_txs.len(), 3);
 
-    // Highest fee should be first (3x base)
-    assert_eq!(sorted_txs[0].fee, base_fee * 3);
-    // Lowest fee should be last (1x base)
-    assert_eq!(sorted_txs[2].fee, base_fee);
+    // Highest fee should be first (3x base), lowest last (1x base). Each fee
+    // also carries the spend's class-exit charge (#1685), so compare order.
+    assert!(sorted_txs[0].fee > sorted_txs[1].fee);
+    assert!(sorted_txs[1].fee > sorted_txs[2].fee);
+    assert!(sorted_txs[2].fee >= base_fee);
 }
 
 // ============================================================================
