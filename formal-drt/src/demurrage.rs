@@ -5,8 +5,8 @@
 use crate::{fixtures::Fixtures, gen, legs::Leg, wire};
 use bth_cluster_tax::{
     capitalized_reset_charge, demurrage_charge, demurrage_settlement_charge,
-    ring_centroid_implied_factor, ring_elapsed_quantile, spend_demurrage_charge,
-    ClusterFactorCurve, SETTLEMENT_HORIZON_BLOCKS,
+    ring_centroid_implied_factor, ring_elapsed_centroid, ring_elapsed_quantile,
+    spend_demurrage_charge, ClusterFactorCurve, SETTLEMENT_HORIZON_BLOCKS,
 };
 use proptest::{collection::vec, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -640,5 +640,228 @@ mod age_tests {
         );
         assert_eq!(vectors.len(), 27);
         assert_eq!(transformations, 114);
+    }
+}
+
+/// Exact weighted age; the 64-member limit bounds test work only.
+pub struct ElapsedCentroid;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ElapsedCentroidIn {
+    pub members: Vec<AgeMember>,
+    #[serde(with = "wire::dec_u64")]
+    pub current_height: u64,
+}
+
+impl Leg for ElapsedCentroid {
+    const NAME: &'static str = "ring_elapsed_centroid";
+    const RUST: &'static str = "bth_cluster_tax::ring_elapsed_centroid";
+    type Input = ElapsedCentroidIn;
+
+    fn strategy() -> BoxedStrategy<Self::Input> {
+        (
+            proptest::sample::select(vec![0, 0, 1, 1, 2, 3, 3, 4, 5]),
+            gen::u64_edge(),
+            vec((gen::u64_edge(), gen::u64_edge()), 0..=64),
+        )
+            .prop_map(|(layout, height, mut raw)| {
+                // High-product classes deliberately exercise multi-limb division.
+                if layout == 3 && raw.len() < 2 {
+                    raw.resize(2, (0, 0));
+                }
+                let current_height = match layout {
+                    0 | 4 => 1 + height % 1_000_000,
+                    3 | 5 => u64::MAX,
+                    _ => height,
+                };
+                let members = raw
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, (v, h))| {
+                        let (value, creation_height) = match layout {
+                            0 => (1 + v % 1_000_000, h % (current_height + 1)),
+                            1 => (v, current_height.saturating_sub(h % 1_000_001)),
+                            3 => (u64::MAX - v % 1024, h % 1024),
+                            4 => (
+                                if idx % 3 == 0 { 0 } else { v },
+                                current_height.saturating_add(h % 100),
+                            ),
+                            5 => (v, 0),
+                            _ => (v, h),
+                        };
+                        AgeMember {
+                            value,
+                            creation_height,
+                        }
+                    })
+                    .collect();
+                ElapsedCentroidIn {
+                    members,
+                    current_height,
+                }
+            })
+            .boxed()
+    }
+
+    fn args(_: &Fixtures, i: &Self::Input) -> Value {
+        // The stored input and model wire both use decimal strings for every u64.
+        serde_json::to_value(i).expect("centroid input")
+    }
+
+    fn rust(_: &Fixtures, i: &Self::Input) -> Value {
+        let members: Vec<_> = i
+            .members
+            .iter()
+            .map(|m| (m.value, m.creation_height))
+            .collect();
+        wire::n(ring_elapsed_centroid(&members, i.current_height))
+    }
+
+    fn classify(i: &Self::Input, r: &Value) -> String {
+        let ages: Vec<_> = i
+            .members
+            .iter()
+            .map(|m| i.current_height.saturating_sub(m.creation_height))
+            .collect();
+        // Sticky checked overflow is diagnostic only, never the comparison oracle.
+        let numerator = i
+            .members
+            .iter()
+            .zip(&ages)
+            .try_fold(0u128, |sum, (m, age)| {
+                sum.checked_add(u128::from(m.value) * u128::from(*age))
+            });
+        let denominator: u128 = i.members.iter().map(|m| u128::from(m.value)).sum();
+        let output = if r == &wire::n(0) {
+            "zero"
+        } else if r == &wire::n(u64::MAX) {
+            "max"
+        } else {
+            "positive"
+        };
+        format!("len={};numerator_exceeds_u128={};denominator_exceeds_u64={};output={output};mixed_ages={};unequal_weights={};height_wide={};zero_weight={};future={};equal_height={}",
+            i.members.len(), numerator.is_none(), denominator > u128::from(u64::MAX),
+            ages.windows(2).any(|w| w[0] != w[1]), i.members.windows(2).any(|w| w[0].value != w[1].value),
+            i.current_height > u32::MAX as u64, i.members.iter().any(|m| m.value == 0),
+            i.members.iter().any(|m| m.creation_height > i.current_height),
+            i.members.iter().any(|m| m.creation_height == i.current_height))
+    }
+}
+
+#[cfg(test)]
+mod centroid_tests {
+    use super::*;
+    use crate::model::Model;
+    use std::path::Path;
+
+    #[derive(Deserialize)]
+    struct Vector {
+        input: ElapsedCentroidIn,
+        expected: Value,
+        note: String,
+    }
+
+    #[test]
+    fn centroid_live_rust_and_lean_vectors() {
+        let vectors: Vec<Vector> = include_str!("../regressions/ring_elapsed_centroid.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let fx = Fixtures::new();
+        let mut model = Model::spawn(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("lean/.lake/build/bin/botho-model"),
+        )
+        .expect("build the Lean DRT executable before running DRT tests");
+        let (mut permutations, mut zero_insertions, mut scalings) = (0, 0, 0);
+        for v in &vectors {
+            let mut inputs = vec![v.input.clone()];
+            for rotate in [false, true] {
+                let mut i = v.input.clone();
+                if rotate && !i.members.is_empty() {
+                    i.members.rotate_left(1);
+                } else {
+                    i.members.reverse();
+                }
+                if !inputs.contains(&i) {
+                    inputs.push(i);
+                    permutations += 1;
+                }
+            }
+            let mut i = v.input.clone();
+            i.members.extend([
+                AgeMember {
+                    value: 0,
+                    creation_height: 0,
+                },
+                AgeMember {
+                    value: 0,
+                    creation_height: u64::MAX,
+                },
+            ]);
+            inputs.push(i);
+            zero_insertions += 1;
+            // Only positive common scaling with every resulting u64 weight fitting.
+            if v.input.members.iter().any(|m| m.value > 0)
+                && v.input.members.iter().all(|m| m.value <= u64::MAX / 2)
+            {
+                let mut i = v.input.clone();
+                for m in &mut i.members {
+                    m.value *= 2;
+                }
+                inputs.push(i);
+                scalings += 1;
+            }
+            let requests: Vec<_> = inputs
+                .iter()
+                .map(|i| wire::request(ElapsedCentroid::NAME, &ElapsedCentroid::args(&fx, i)))
+                .collect();
+            let lean = model.call_batch(&requests);
+            assert_eq!(lean.len(), inputs.len());
+            for (i, actual_lean) in inputs.iter().zip(lean) {
+                assert_eq!(
+                    ElapsedCentroid::rust(&fx, i),
+                    v.expected,
+                    "Rust: {}",
+                    v.note
+                );
+                assert_eq!(actual_lean, v.expected, "Lean: {}", v.note);
+                let args = ElapsedCentroid::args(&fx, i);
+                assert_eq!(
+                    serde_json::from_value::<ElapsedCentroidIn>(args.clone()).unwrap(),
+                    *i
+                );
+                assert_eq!(
+                    args["current_height"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap(),
+                    i.current_height
+                );
+                for (member, encoded) in i.members.iter().zip(args["members"].as_array().unwrap()) {
+                    assert_eq!(
+                        encoded["value"].as_str().unwrap().parse::<u64>().unwrap(),
+                        member.value
+                    );
+                    assert_eq!(
+                        encoded["creation_height"]
+                            .as_str()
+                            .unwrap()
+                            .parse::<u64>()
+                            .unwrap(),
+                        member.creation_height
+                    );
+                }
+                assert_eq!(
+                    wire::n(actual_lean.as_str().unwrap().parse::<u64>().unwrap()),
+                    v.expected
+                );
+            }
+            println!("centroid vector {}: {}", v.note, v.expected);
+        }
+        println!("centroid live counts: vectors={} permutations={permutations} zero_insertions={zero_insertions} scalings={scalings} implementations=2", vectors.len());
+        assert_eq!(vectors.len(), 20);
+        assert!(permutations > 0 && scalings > 0);
+        assert_eq!(zero_insertions, 20);
     }
 }

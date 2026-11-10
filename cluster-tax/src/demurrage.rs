@@ -391,23 +391,21 @@ pub fn spend_demurrage_charge(
 /// * `current_height` - The validating block height
 ///
 /// # Returns
-/// Value-weighted average of `current_height − creation_height` across
-/// members, or 0 if the set is empty or has zero total value.
+/// Exact value-weighted average of saturated `current_height −
+/// creation_height`, floored once after summing, or 0 for
+/// empty/zero-total-value input.
 pub fn ring_elapsed_centroid(members: &[(u64, u64)], current_height: u64) -> u64 {
-    let mut weighted: u128 = 0;
-    let mut total_value: u128 = 0;
-
+    // On targets with at most 64-bit usize, n < 2^64: the numerator is
+    // < 2^192 and denominator < 2^128. Neither accumulator can saturate.
+    // A positive-weight mean is <= max(age) <= u64::MAX, so the final clamp
+    // and conversion are exact too. This bound does not require a ring cap.
+    let mut mean = crate::wide::WeightedMean::new();
     for &(value, creation_height) in members {
         let elapsed = current_height.saturating_sub(creation_height);
-        weighted += value as u128 * elapsed as u128;
-        total_value += value as u128;
+        mean.add_product(value as u128, elapsed as u128);
+        mean.add_weight(value as u128);
     }
-
-    if total_value == 0 {
-        return 0;
-    }
-
-    (weighted / total_value) as u64
+    mean.floor() as u64
 }
 
 /// Compute a value-independent quantile (order statistic) of the elapsed ages
@@ -1277,6 +1275,21 @@ mod tests {
                 "monotone in elapsed"
             );
         }
+    }
+
+    #[test]
+    fn test_ring_elapsed_centroid_full_width_and_single_floor() {
+        let m = u64::MAX;
+        assert_eq!(ring_elapsed_centroid(&[(m, 0), (m, 0)], m), m);
+        assert_eq!(ring_elapsed_centroid(&[(m, 0); 4], m), m);
+        assert_eq!(ring_elapsed_centroid(&[(1, 0), (3, 8)], 10), 4);
+        assert_eq!(ring_elapsed_centroid(&[(1, 0), (3, 7)], 10), 4);
+        assert_eq!(ring_elapsed_centroid(&[(1, 9), (1, 9)], 10), 1);
+        assert_eq!(ring_elapsed_centroid(&[(m, 0), (1, 10)], 10), 9);
+        assert_eq!(ring_elapsed_centroid(&[(0, 0), (7, 8), (0, m)], 10), 2);
+        assert_eq!(ring_elapsed_centroid(&[(m, m)], 10), 0);
+        assert_eq!(ring_elapsed_centroid(&[(0, 0), (0, m)], m), 0);
+        assert_eq!(ring_elapsed_centroid(&[], m), 0);
     }
 
     /// Pre-9.0.0 `ring_centroid_implied_factor` centroid, kept verbatim as the
