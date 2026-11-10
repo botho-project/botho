@@ -65,6 +65,50 @@ pub const CONSENSUS_FEE_BASE: u64 = 1;
 /// (`consensus_fee_model_relay_min_matches_min_tx_fee`) asserts equality.
 pub const RELAY_MIN_TX_FEE: u64 = 100_000_000;
 
+/// Headroom a wallet adds above an observed fee floor: 1/64 of the floor
+/// (about 1.6%) (#2001).
+///
+/// A wallet learns the floor of a signed draft (`Ledger::consensus_fee_floor`
+/// through RPC `estimateFee` with `tx_hex`, or directly in `botho send`), then
+/// re-signs. Re-signing draws fresh decoys, so the ring-dependent demurrage
+/// and exit charge move between passes, and the floor keeps rising while the
+/// transaction waits for inclusion (exact demurrage, #1875). The headroom
+/// absorbs both.
+pub const fn fee_headroom(floor: u64) -> u64 {
+    floor / 64
+}
+
+/// The least fee a signed draft may carry to be accepted as priced against an
+/// observed `floor`: `floor` plus [`fee_headroom`], and never below the relay
+/// minimum [`RELAY_MIN_TX_FEE`] (#2001).
+pub const fn settle_fee(floor: u64) -> u64 {
+    let fee = floor.saturating_add(fee_headroom(floor));
+    if fee > RELAY_MIN_TX_FEE {
+        fee
+    } else {
+        RELAY_MIN_TX_FEE
+    }
+}
+
+/// The fee to re-sign at after a draft priced at `floor` did not settle:
+/// twice the headroom, so the next pass still settles if its fresh ring
+/// prices up to just under one headroom higher; never below
+/// [`RELAY_MIN_TX_FEE`] (#2001).
+pub const fn resign_fee(floor: u64) -> u64 {
+    let fee = floor.saturating_add(fee_headroom(floor).saturating_mul(2));
+    if fee > RELAY_MIN_TX_FEE {
+        fee
+    } else {
+        RELAY_MIN_TX_FEE
+    }
+}
+
+/// Whether a signed `fee` settles against an observed `floor`
+/// (`fee >= settle_fee(floor)`) (#2001).
+pub const fn fee_settles(fee: u64, floor: u64) -> bool {
+    fee >= settle_fee(floor)
+}
+
 /// Fraction of a block's total fees (base + demurrage) routed to the lottery
 /// pool, in permille; the remainder is burned.
 ///
@@ -621,6 +665,28 @@ mod tests {
         assert_eq!(s.charge(3_960), 0);
         assert_eq!(s.charge(3_960), 1);
         assert_eq!(s.total_fee_pico, 11_880);
+    }
+
+    #[test]
+    fn wallet_pricing_headroom_settle_and_resign() {
+        // Below the relay minimum the minimum dominates.
+        assert_eq!(settle_fee(0), RELAY_MIN_TX_FEE);
+        assert_eq!(resign_fee(3_960), RELAY_MIN_TX_FEE);
+        assert!(fee_settles(RELAY_MIN_TX_FEE, 3_960));
+        assert!(!fee_settles(RELAY_MIN_TX_FEE - 1, 3_960));
+        // Above it: floor + floor/64 settles, the floor alone does not.
+        let floor = 2_000_000_074u64;
+        assert_eq!(fee_headroom(floor), floor / 64);
+        assert!(!fee_settles(floor, floor));
+        assert!(!fee_settles(settle_fee(floor) - 1, floor));
+        assert!(fee_settles(settle_fee(floor), floor));
+        // A re-sign at `resign_fee` survives a fresh ring pricing just under
+        // one headroom higher.
+        let jittered = floor + fee_headroom(floor) / 2;
+        assert!(fee_settles(resign_fee(floor), jittered));
+        // Saturates.
+        assert_eq!(settle_fee(u64::MAX), u64::MAX);
+        assert_eq!(resign_fee(u64::MAX), u64::MAX);
     }
 
     #[test]

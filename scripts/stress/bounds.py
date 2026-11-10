@@ -17,6 +17,11 @@ CEILINGS = {
     **LEGACY,
     "max_unique_chain_writes": 100000,
     "max_signed_fee_picocredits": 100_000_000_000_000,
+    # Protocol 10.0.0 prices a class exit from block 1 (#1685) and the input
+    # import floor (#1687) on the whole value a spend moves; the controller
+    # pays the node-quoted floor (#2001), so one fee can far exceed the
+    # legacy 5e9. Equal to the signer's program bound (stress.rs MAX_FEE).
+    "max_single_signed_fee_picocredits": 1_000_000_000_000,
     "max_inflight": 64,
     "max_normal_submissions_per_minute": 60,
     "max_burst_size": 64,

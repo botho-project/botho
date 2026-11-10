@@ -361,6 +361,25 @@ pub(in crate::ledger) trait ValidationReads {
         tx: &BothoTransaction,
         block_height: u64,
     ) -> Result<u64, LedgerError> {
+        self.fee_floor_at_base(tx, block_height, CONSENSUS_FEE_BASE)
+    }
+    /// The consensus fee floor with the size term priced at `fee_base`
+    /// picocredits per byte instead of the neutral [`CONSENSUS_FEE_BASE`].
+    ///
+    /// At `CONSENSUS_FEE_BASE` this IS the consensus floor (block validity).
+    /// At the mempool's congestion base (`Mempool::relay_fee_base`) it is the
+    /// relay admission minimum: `Mempool::add_tx` prices the same base curve
+    /// and demurrage at the same inclusion height, differing only in that
+    /// base. RPC `estimateFee` quotes a wallet's draft transaction through
+    /// this one function (#2001), so every send path pays what consensus and
+    /// relay will require, including the epoch-0 exit charge (#1685) and the
+    /// import floor read from the inputs (#1687).
+    fn fee_floor_at_base(
+        &self,
+        tx: &BothoTransaction,
+        block_height: u64,
+        fee_base: u64,
+    ) -> Result<u64, LedgerError> {
         use bth_cluster_tax::{FeeConfig, TransactionType as FeeTransactionType};
 
         // Consensus fee config: the canonical, fixed FeeConfig. This is a pure
@@ -369,7 +388,7 @@ pub(in crate::ledger) trait ValidationReads {
         let fee_config = FeeConfig::default();
 
         // Base minimum fee (size + cluster factor + output penalty + memos),
-        // congestion-free: the dynamic base is pinned to CONSENSUS_FEE_BASE.
+        // priced at `fee_base` (CONSENSUS_FEE_BASE for the consensus floor).
         let tx_size_bytes = tx.estimate_size();
         let num_outputs = tx.outputs.len();
         let num_memos = tx.outputs.iter().filter(|o| o.has_memo()).count();
@@ -384,7 +403,7 @@ pub(in crate::ledger) trait ValidationReads {
             cluster_wealth,
             num_outputs,
             num_memos,
-            CONSENSUS_FEE_BASE,
+            fee_base,
         );
 
         // Demurrage charge. Resolve the ring members from the committed UTXO

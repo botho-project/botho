@@ -16,8 +16,25 @@
  */
 
 import { deriveKeypairs, parseAddress } from '@botho/core'
-import { buildSendTransaction, spendableBalance, deriveKemPublicKey, mnemonicToSeedHex, type SendRpc } from '@botho/wasm-signer'
+import { buildSendTransaction, buildWithFeeConsent, parseDraftFeeQuote, spendableBalance, deriveKemPublicKey, mnemonicToSeedHex, type SendRpc } from '@botho/wasm-signer'
 import type { RemoteNodeAdapter } from '@botho/adapters'
+
+/**
+ * Fee consent for a send (#2001). `approvedFee` is the fee the user saw and
+ * approved (default: the freshly resolved estimate); the build never signs
+ * above it. When the node requires more, `confirmFee(required, approved)` is
+ * asked; without it, or on a decline, nothing is submitted and the typed
+ * `FeeAboveApprovedError` (or `onReject()`) is thrown.
+ */
+export interface FeeConsentOptions {
+  approvedFee?: bigint
+  confirmFee?: (requiredFee: bigint, approvedFee: bigint) => Promise<boolean>
+  onReject?: () => Error
+}
+
+function rejectedFee(): Error {
+  return new Error('The higher network fee was not approved; nothing was sent.')
+}
 
 /** Signer's MIN_TX_FEE (picocredits) — mirrors wallet.tsx `send()`. */
 export const MIN_TX_FEE = 100_000_000n
@@ -49,6 +66,9 @@ function rpcFromAdapter(adapter: RemoteNodeAdapter): SendRpc {
     getChainHeight: () => adapter.getBlockHeight(),
     getOutputs: (start, end) => adapter.getRawOutputs(start, end),
     areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+    // Claim-link funding and sweeping sign through buildSendTransaction, which
+    // re-signs at the node's fee-floor quote (#2001).
+    quoteDraftFee: async (txHex) => parseDraftFeeQuote(await adapter.estimateDraftFee(txHex)),
   }
 }
 
@@ -72,14 +92,16 @@ export async function buildAndSubmitSend(
   senderMnemonic: string,
   recipientAddress: string,
   amount: bigint,
+  consent: FeeConsentOptions = {},
 ): Promise<string> {
   if (!adapter.isConnected()) throw new Error('Not connected to a node')
   const kp = deriveKeypairs(senderMnemonic, 0)
   const recipientKeys = parseAddress(recipientAddress)
-  const fee = await resolveFee(adapter)
+  const approvedFee = consent.approvedFee ?? (await resolveFee(adapter))
   const senderKemPublicKey = await deriveKemPublicKey(senderMnemonic)
 
-  const { txHex } = await buildSendTransaction({
+  // Never signed above the approved fee; a higher node quote re-asks (#2001).
+  const build = (fee: bigint) => buildSendTransaction({
     keys: {
       spendPrivateKey: toHex(kp.spendPrivate),
       viewPrivateKey: toHex(kp.viewPrivate),
@@ -93,7 +115,16 @@ export async function buildAndSubmitSend(
     senderKemPublicKey,
     amount,
     fee,
+    maxFee: fee,
     rpc: rpcFromAdapter(adapter),
+  })
+  const { result: { txHex } } = await buildWithFeeConsent({
+    approvedFee,
+    build,
+    reconfirm: consent.confirmFee ?? (async () => false),
+    onReject: consent.onReject ?? rejectedFee,
+    // Without a prompt, surface the typed error (carrying the required fee).
+    maxReconfirms: consent.confirmFee ? undefined : 0,
   })
 
   const result = await adapter.submitTransaction(hexToBytes(txHex))
@@ -151,11 +182,16 @@ export async function sweepEphemeral(
   adapter: RemoteNodeAdapter,
   ephMnemonic: string,
   destinationAddress: string,
+  consent: FeeConsentOptions = {},
 ): Promise<{ txHash: string; net: bigint }> {
   if (!adapter.isConnected()) throw new Error('Not connected to a node')
 
-  // Re-scan to get the current gross and fee at sweep time.
-  const { gross, fee, net } = await scanEphemeral(adapter, ephMnemonic)
+  // Re-scan to get the current gross and fee at sweep time. The approved fee
+  // is the one the user saw (the claim page's scan), else this re-scan's.
+  const scanned = await scanEphemeral(adapter, ephMnemonic)
+  const gross = scanned.gross
+  const fee = consent.approvedFee ?? scanned.fee
+  const net = gross > fee ? gross - fee : 0n
   if (gross === 0n) {
     throw new Error('Nothing to claim — the link is empty, already claimed, or not yet confirmed')
   }
@@ -167,7 +203,10 @@ export async function sweepEphemeral(
   const destKeys = parseAddress(destinationAddress)
   const senderKemPublicKey = await deriveKemPublicKey(ephMnemonic)
 
-  const { txHex } = await buildSendTransaction({
+  // Sweep the whole balance at no more than the approved fee: a node floor
+  // above it stops the build before signing and re-asks the user, showing
+  // the reduced net (#2001). Nothing above the confirmed fee is submitted.
+  const build = (sweepFee: bigint) => buildSendTransaction({
     keys: {
       spendPrivateKey: toHex(kp.spendPrivate),
       viewPrivateKey: toHex(kp.viewPrivate),
@@ -179,14 +218,26 @@ export async function sweepEphemeral(
       kem_public_key: toHex(destKeys.kemPublic),
     },
     senderKemPublicKey,
-    amount: net,
-    fee,
+    amount: gross - sweepFee,
+    fee: sweepFee,
+    maxFee: sweepFee,
+    subtractFeeFromAmount: true,
     rpc: rpcFromAdapter(adapter),
   })
+  const { result: swept } = await buildWithFeeConsent({
+    approvedFee: fee,
+    build: (f) => {
+      if (f >= gross) throw new Error('The funded amount does not cover the sweep fee')
+      return build(f)
+    },
+    reconfirm: consent.confirmFee ?? (async () => false),
+    onReject: consent.onReject ?? rejectedFee,
+    maxReconfirms: consent.confirmFee ? undefined : 0,
+  })
 
-  const result = await adapter.submitTransaction(hexToBytes(txHex))
+  const result = await adapter.submitTransaction(hexToBytes(swept.txHex))
   if (!result.success || !result.txHash) {
     throw new Error(result.error || 'Sweep submission failed')
   }
-  return { txHash: result.txHash, net }
+  return { txHash: result.txHash, net: swept.amount }
 }

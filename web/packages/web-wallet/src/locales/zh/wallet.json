@@ -86,5 +86,10 @@
   "setup": {
     "createNew": "新建",
     "importExisting": "导入现有"
+  },
+  "feeConsent": {
+    "send": "节点现在要求此交易支付 {{required}} BTH 的网络手续费，高于您批准的 {{approved}} BTH。尚未发送任何内容。是否以更高的手续费发送？",
+    "claim": "节点现在要求 {{required}} BTH 的归集手续费，高于显示的 {{approved}} BTH。您将收到 {{net}} BTH。尚未发送任何内容。是否以更高的手续费领取？",
+    "rejected": "已取消：未批准更高的网络手续费。未发送任何内容。"
   }
 }

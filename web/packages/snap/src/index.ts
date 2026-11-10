@@ -48,6 +48,7 @@ import {
 } from '@metamask/snaps-sdk';
 import {
   buildSendTransaction,
+  buildWithFeeConsent,
   loadSigner,
   type RecipientAddress,
 } from '@botho/wasm-signer';
@@ -77,6 +78,7 @@ import {
   sendConfirmContent,
   claimPreviewContent,
   claimConfirmContent,
+  feeRaisedContent,
   paymentRequestContent,
   mnemonicBackupContent,
 } from './ui';
@@ -361,14 +363,39 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
         throw new UserRejectedRequestError(t('error.rejectSend', locale));
       }
 
+      // Sign at the confirmed fee and never above it (#2001): the node prices
+      // the draft, but a higher quote stops before signing and re-asks with
+      // the required fee. Nothing above a user-confirmed fee is submitted.
       const wallet = await deriveWallet();
-      const { txHex } = await buildSendTransaction({
-        keys: wallet.keys,
-        recipient,
-        senderKemPublicKey: wallet.kemPublicKey,
-        amount,
-        fee,
-        rpc: makeSendRpc(call),
+      const rpc = makeSendRpc(call);
+      const {
+        result: { txHex },
+      } = await buildWithFeeConsent({
+        approvedFee: fee,
+        build: (approved) =>
+          buildSendTransaction({
+            keys: wallet.keys,
+            recipient,
+            senderKemPublicKey: wallet.kemPublicKey,
+            amount,
+            fee: approved,
+            maxFee: approved,
+            rpc,
+          }),
+        reconfirm: (required, approved) =>
+          confirm(
+            feeRaisedContent(
+              {
+                approvedFeePicocredits: approved,
+                requiredFeePicocredits: required,
+                amountPicocredits: amount,
+                recipientAddress,
+                rpcUrl,
+              },
+              locale,
+            ),
+          ),
+        onReject: () => new UserRejectedRequestError(t('error.rejectFee', locale)),
       });
 
       const { txHash } = await call<{ txHash: string }>('tx_submit', { tx_hex: txHex });
@@ -421,8 +448,29 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
 
       // Sweep into the user's OWN derived address. `buildSweep` re-scans and
       // surfaces "nothing to claim" (never submitting) when the link is empty.
+      // Sweep at the confirmed fee; a node floor above it re-asks with the
+      // reduced net before anything is signed above it (#2001).
       const wallet = await deriveWallet();
-      const { txHex, scan: sweptScan } = await buildSweep(mnemonic, wallet.address, rpc);
+      const {
+        result: { txHex, scan: sweptScan },
+      } = await buildWithFeeConsent({
+        approvedFee: scan.feePicocredits,
+        build: (approved) => buildSweep(mnemonic, wallet.address, rpc, approved),
+        reconfirm: (required, approved) =>
+          confirm(
+            feeRaisedContent(
+              {
+                approvedFeePicocredits: approved,
+                requiredFeePicocredits: required,
+                amountPicocredits:
+                  scan.grossPicocredits > required ? scan.grossPicocredits - required : 0n,
+                rpcUrl,
+              },
+              locale,
+            ),
+          ),
+        onReject: () => new UserRejectedRequestError(t('error.rejectFee', locale)),
+      });
 
       const { txHash } = await call<{ txHash: string }>('tx_submit', { tx_hex: txHex });
       return { txHash, netPicocredits: sweptScan.netPicocredits.toString() } as Json;

@@ -132,7 +132,7 @@ Under CT neither member amounts nor `pseudo_output_amount` are public, so rule
   shedding both lower the class one hop at a time, and the floor cannot tell
   them apart. Exempting the wallet's decay step would reopen the self-churn and
   shed paths, so any exemption would be a separate rule with its own analysis.
-  Whether to accept this cost is pending an operator ruling (#1686).
+  The operator accepted this cost on 2026-11-10 (#1686): exempting per-hop decay would reopen the churn and shed paths, and deferring would leave decoy dilution open in 10.0.0.
 - Consensus now depends on public amounts in one more place. ADR 0006 makes
   CT the target, so the rule has a known end of life and its successor still
   has two open questions.

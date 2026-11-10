@@ -86,5 +86,10 @@
   "setup": {
     "createNew": "Crear nuevo",
     "importExisting": "Importar existente"
+  },
+  "feeConsent": {
+    "send": "El nodo ahora exige una comisión de red de {{required}} BTH para esta transacción, superior a los {{approved}} BTH que aprobó. No se ha enviado nada. ¿Enviar con la comisión más alta?",
+    "claim": "El nodo ahora exige una comisión de barrido de {{required}} BTH, superior a los {{approved}} BTH mostrados. Recibiría {{net}} BTH. No se ha enviado nada. ¿Reclamar con la comisión más alta?",
+    "rejected": "Cancelado: no se aprobó la comisión de red más alta. No se envió nada."
   }
 }

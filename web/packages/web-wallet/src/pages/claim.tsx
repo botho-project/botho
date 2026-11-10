@@ -29,6 +29,7 @@ import { useNetwork } from '../contexts/network'
 import { PasswordFields, isPasswordValid } from '../components/PasswordSettingsModal'
 import { LocaleSwitcher } from '../components/LocaleSwitcher'
 import { scanEphemeral, sweepEphemeral, type EphemeralScan } from '../lib/claim-link-ops'
+import { confirmSendFee, confirmSweepFee, feeRejectedError } from '../lib/fee-consent'
 
 /**
  * P2 — Claim page for claimable payment links (#460).
@@ -210,7 +211,12 @@ export function ClaimPage() {
       if (createdMnemonic && showNewWallet) {
         await saveWallet(createdMnemonic, newWalletPassword, await deriveV2Address(createdMnemonic))
       }
-      const { txHash } = await sweepEphemeral(adapter, secret.mnemonic, dest)
+      // Sweep at the fee shown on this page; a higher node floor re-asks with
+      // the reduced net, and nothing above the confirmed fee is sent (#2001).
+      const { txHash } = await sweepEphemeral(adapter, secret.mnemonic, dest, {
+        ...(scan ? { approvedFee: scan.fee, confirmFee: confirmSweepFee(scan.gross) } : { confirmFee: confirmSendFee }),
+        onReject: feeRejectedError,
+      })
       setClaimTxHash(txHash)
       setState('claimed')
     } catch (err) {

@@ -323,3 +323,11 @@ import Botho
 #print axioms Botho.Demurrage.ringElapsedQuantile_perm
 #print axioms Botho.Demurrage.ringElapsedQuantile_mono_quantile
 #print axioms Botho.Demurrage.ringElapsedQuantile_le_height
+
+-- Botho.Demurrage.ExactCharge (#2014/#2015; proposal, full-Nat composition properties)
+#print axioms Botho.Demurrage.exactResetCharge_mono_input_factor
+#print axioms Botho.Demurrage.exactResetCharge_antitone_output_factor
+#print axioms Botho.Demurrage.exactSettlementCharge_mono_input_factor
+#print axioms Botho.Demurrage.exactSpendCharge_mono_input_factor
+#print axioms Botho.Demurrage.exactSpendCharge_antitone_output_factor
+#print axioms Botho.Demurrage.exactSpendCharge_mono_elapsed
