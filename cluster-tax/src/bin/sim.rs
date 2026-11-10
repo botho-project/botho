@@ -967,6 +967,64 @@ mod cli {
             run: String,
         },
 
+        /// REDISTRIBUTION SHAPES (#1987): the four rule shapes the #1801
+        /// study listed as not built (§7.1), on the same three axes.
+        /// `--part splitting` / `--part privacy` print the tables (seconds);
+        /// `--part m2` runs one m2-production run and prints one JSON line
+        /// per snapshot (10 and 20 yr).
+        ///
+        ///   sim redistribution-shapes --part splitting
+        ///   sim redistribution-shapes --part m2 --shape factor-price \
+        ///       --mining egalitarian --seed 2 --tx-scale 100 --run on
+        ///   sim redistribution-shapes --part m2 --shape stock --run off
+        RedistributionShapes {
+            /// splitting, privacy, or m2
+            #[arg(long, default_value = "splitting")]
+            part: String,
+
+            /// Shape: factor-price (S1), churn-fee (S2), demurrage-miners
+            /// (S3a), settle-miners (S3b), window-30d (S4a),
+            /// window-30d-value (S4b); or stock (the #1801 R0 rules, for
+            /// reference and off runs)
+            #[arg(long, default_value = "factor-price")]
+            shape: String,
+
+            /// Hashpower distribution: wealth or egalitarian
+            #[arg(long, default_value = "egalitarian")]
+            mining: String,
+
+            /// Strategic whale: honest or optimal-decoy
+            #[arg(long, default_value = "honest")]
+            whale: String,
+
+            /// Deterministic RNG seed
+            #[arg(long, default_value = "1696")]
+            seed: u64,
+
+            /// Transaction-rate multiplier (1 = the M2 rates)
+            #[arg(long, default_value = "1")]
+            tx_scale: f64,
+
+            /// Keep spent outputs in the lottery window (what the node does)
+            #[arg(long)]
+            spent_eligible: bool,
+
+            /// S2 churn fee, ppm of the value moved (default: the grid's
+            /// break-even, CHURN_FEE_PPM)
+            #[arg(long)]
+            churn_fee_ppm: Option<u64>,
+
+            /// Lottery window override MIN:MAX in blocks (selects the
+            /// incremental-weight path; `--shape window-30d --window
+            /// 720:10000` is R0 on that path, for validation)
+            #[arg(long)]
+            window: Option<String>,
+
+            /// on (mechanism on) or off (counterfactual)
+            #[arg(long, default_value = "on")]
+            run: String,
+        },
+
         /// M2-PRODUCTION (#1696): the M2 Gini experiment at the node's real
         /// parameters — 6,307,200 blocks/yr, mainnet emission with the
         /// lottery-share ramp and epoch-0 holiday, the V2 uniform draw
@@ -1365,6 +1423,29 @@ mod cli {
                 tx_scale,
                 spent_eligible,
                 &decay_key,
+                &run,
+            ),
+            Command::RedistributionShapes {
+                part,
+                shape,
+                mining,
+                whale,
+                seed,
+                tx_scale,
+                spent_eligible,
+                churn_fee_ppm,
+                window,
+                run,
+            } => run_redistribution_shapes_cli(
+                &part,
+                &shape,
+                &mining,
+                &whale,
+                seed,
+                tx_scale,
+                spent_eligible,
+                churn_fee_ppm,
+                window.as_deref(),
                 &run,
             ),
             Command::M2Decay {
@@ -5361,6 +5442,119 @@ mod cli {
                         t.elapsed().as_secs_f64(),
                         cohorts.join(",")
                     );
+                }
+            }
+            _ => {
+                eprintln!("--part must be splitting, privacy or m2");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    /// #1987 redistribution shapes: printing wrapper over
+    /// `bth_cluster_tax::simulation::redistribution_shapes`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_redistribution_shapes_cli(
+        part: &str,
+        shape: &str,
+        mining: &str,
+        whale: &str,
+        seed: u64,
+        tx_scale: f64,
+        spent_eligible: bool,
+        churn_fee_ppm: Option<u64>,
+        window: Option<&str>,
+        run: &str,
+    ) {
+        use bth_cluster_tax::simulation::{
+            m2_production::{run_m2_production, MiningModel, WhaleStrategy},
+            redistribution_redesign::{variant_params, Variant},
+            redistribution_shapes::{
+                m2_json_lines, privacy_markdown, shape_params, splitting_markdown, Shape,
+                CHURN_FEE_PPM,
+            },
+        };
+        match part {
+            "splitting" => {
+                println!("# Redistribution shapes (#1987): splitting grid\n");
+                print!("{}", splitting_markdown());
+            }
+            "privacy" => {
+                println!("# Redistribution shapes (#1987): privacy measurements\n");
+                print!("{}", privacy_markdown());
+            }
+            "m2" => {
+                let mining_model = match mining {
+                    "wealth" => MiningModel::WealthProportional,
+                    "egalitarian" => MiningModel::Egalitarian,
+                    _ => {
+                        eprintln!("--mining must be wealth or egalitarian");
+                        std::process::exit(2);
+                    }
+                };
+                let whale_strategy = match whale {
+                    "honest" => WhaleStrategy::Honest,
+                    "optimal-decoy" => WhaleStrategy::OptimalDecoy,
+                    _ => {
+                        eprintln!("--whale must be honest or optimal-decoy");
+                        std::process::exit(2);
+                    }
+                };
+                let fee = churn_fee_ppm.unwrap_or(CHURN_FEE_PPM);
+                let (label, mut p) = if shape == "stock" {
+                    (
+                        "stock".to_string(),
+                        variant_params(
+                            Variant::Baseline,
+                            mining_model,
+                            whale_strategy,
+                            seed,
+                            tx_scale,
+                            spent_eligible,
+                        ),
+                    )
+                } else {
+                    let Some(s) = Shape::parse(shape) else {
+                        eprintln!("unknown shape {shape:?}");
+                        std::process::exit(2);
+                    };
+                    (
+                        s.id().to_string(),
+                        shape_params(
+                            s,
+                            mining_model,
+                            whale_strategy,
+                            seed,
+                            tx_scale,
+                            spent_eligible,
+                            fee,
+                        ),
+                    )
+                };
+                let mut label = label;
+                if let Some(w) = window {
+                    let parsed = w
+                        .split_once(':')
+                        .and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?)));
+                    let Some((a, b)) = parsed else {
+                        eprintln!("--window must be MIN:MAX");
+                        std::process::exit(2);
+                    };
+                    p.shapes.window = Some((a, b));
+                    label = format!("{label}@{a}:{b}");
+                }
+                p.mechanism = match run {
+                    "on" => true,
+                    "off" => false,
+                    _ => {
+                        eprintln!("--run must be on or off");
+                        std::process::exit(2);
+                    }
+                };
+                let t = std::time::Instant::now();
+                let r = run_m2_production(&p);
+                for line in m2_json_lines(&label, &p, &r, t.elapsed().as_secs_f64()) {
+                    println!("{line}");
                 }
             }
             _ => {

@@ -465,6 +465,8 @@ The argument above says nothing about rule shapes outside the families built her
 - **Redistribution through the demurrage side** (who pays, #1790 cause 3) rather than through ticket weighting.
 - **A different lottery window**, which changes how much value-linear weight tracks turnover (§3.6).
 
+All four have since been built and measured on this study's harnesses and bars in the [redistribution shapes study](redistribution-shapes-study.md) (#1987, from the #1837 ruling). None passes all three bars, and none passes Gini in any cell.
+
 ## 8. Ranked recommendation (no decision stated)
 
 This ranking orders the candidates by how much of the operator's requirement each one could carry. It is not a decision.

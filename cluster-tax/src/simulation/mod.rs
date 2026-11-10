@@ -59,6 +59,7 @@ pub mod privacy_routes;
 pub mod provenance_factor_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod redistribution_redesign;
+pub mod redistribution_shapes;
 mod runner;
 #[cfg(any(feature = "cli", test))]
 pub mod settlement_horizon_sweep;

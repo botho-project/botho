@@ -224,6 +224,15 @@ pub enum TicketRule {
     /// a spent ticket stops counting) only if the owner's median holding time
     /// covers the circulation window.
     TicketPrice,
+    /// #1987 S1: [`TicketRule::TicketPrice`] with a factor-dependent price.
+    /// Each ticket costs `base x factor` (factor in units of 1x, read from
+    /// the new output's tags at creation), with `base = payout / sum of the
+    /// factor weights of the tickets bought` in the previous step. The total
+    /// burn still balances the payout, but a 1x ticket pays less than its
+    /// expected payout whenever higher-factor tickets are in the pool, and a
+    /// high-factor ticket pays more: a budget-balanced progressive subsidy.
+    /// With every ticket at 1x it is exactly R3's price.
+    FactorPrice,
 }
 
 impl TicketRule {
@@ -233,8 +242,63 @@ impl TicketRule {
             TicketRule::ValueAge => "value-age",
             TicketRule::InverseFactor => "inverse-factor",
             TicketRule::TicketPrice => "ticket-price",
+            TicketRule::FactorPrice => "factor-price",
         }
     }
+
+    /// Tickets are bought (R3, S1).
+    pub fn priced(self) -> bool {
+        matches!(self, TicketRule::TicketPrice | TicketRule::FactorPrice)
+    }
+}
+
+/// Where the demurrage part of each fee goes (#1987 S3). Size fees always go
+/// to the pool (80%) and the burn (20%), as on the node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DemurrageDest {
+    /// As on the node: demurrage is part of the fee, 80% to the lottery pool,
+    /// 20% burned.
+    #[default]
+    Pool,
+    /// 80% of the demurrage goes to the next step's block producers (added
+    /// to their coinbase outputs, so in proportion to blocks mined); 20% is
+    /// burned as before. The lottery pool keeps the emission share and 80% of
+    /// the size fees.
+    Miners,
+}
+
+impl DemurrageDest {
+    pub fn label(self) -> &'static str {
+        match self {
+            DemurrageDest::Pool => "pool",
+            DemurrageDest::Miners => "miners",
+        }
+    }
+}
+
+/// Switches for the #1987 shapes (the redistribution shapes §7.1 of the
+/// #1801 study did not build). The default changes nothing, so every #1790 /
+/// #1801 run reproduces bit for bit.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShapeSwitches {
+    /// S2: an ad-valorem fee on the value a spend moves to its counterparty,
+    /// in parts per million, added to the consensus fee and pooled like any
+    /// fee (80% pool, 20% burn). Charged only with the mechanism on. 0 = off.
+    pub value_fee_ppm: u64,
+    /// S3: where the demurrage part of each fee goes.
+    pub demurrage_dest: DemurrageDest,
+    /// S3: settle on spend. Every spend's outputs are background (no tags),
+    /// and the spender pays the #925 capitalized charge for all the tag mass
+    /// it drops, from its input floor. So the holder pays its demurrage in
+    /// full at its next spend, and payment recipients never inherit tags
+    /// (#1790 cause 3). Active only once the demurrage rate is positive
+    /// (epoch 1 on): under the epoch-0 holiday (#1685) the charge is 0.
+    pub settle_on_spend: bool,
+    /// S4: lottery window override `(min_utxo_age, circulation_window)` in
+    /// blocks. `None` = the node's 720..=10,000. Setting it also selects an
+    /// incremental ticket-weight path that keeps long windows tractable
+    /// (statistically equivalent, not bit-identical, to the default path).
+    pub window: Option<(u64, u64)>,
 }
 
 /// How honest wallets decay their output tags (#1801 redesign study).
@@ -316,6 +380,8 @@ pub struct ProdParams {
     /// which output was spent. Pass `false` to reproduce #1790's published
     /// numbers.
     pub spent_eligible: bool,
+    /// #1987 shapes. The default is a no-op.
+    pub shapes: ShapeSwitches,
 }
 
 impl ProdParams {
@@ -339,6 +405,7 @@ impl ProdParams {
             tag_decay: TagDecay::PerHop,
             // The node's rule (#1808). #1790's published numbers need `false`.
             spent_eligible: true,
+            shapes: ShapeSwitches::default(),
         }
     }
 }
@@ -377,6 +444,13 @@ pub struct ProdSnapshot {
     pub downgrade_bth: f64,
     /// Strategic whale's priced factor (FACTOR_SCALE) at this snapshot.
     pub whale_priced_factor: u64,
+    /// #1987 S2: ad-valorem fees charged so far (part of `fees_bth`), BTH.
+    pub value_fee_bth: f64,
+    /// #1987 S3: demurrage paid to block producers so far, BTH.
+    pub miner_dividend_bth: f64,
+    /// #1987 S1: mean factor weight (units of 1x) of the tickets bought so
+    /// far (1.0 when none were bought or the price is not factor-dependent).
+    pub ticket_mean_factor: f64,
 }
 
 /// Result of one run.
@@ -479,6 +553,28 @@ struct World {
     downgrade: u128,
     /// Ticket prices paid (burned), pico.
     ticket_burn: u128,
+    /// #1987 S1: per-unit-factor ticket price, pico (FactorPrice).
+    ticket_base: f64,
+    /// #1987 S1: factor weight of the tickets bought since the last price
+    /// update.
+    ticket_weight_step: f64,
+    /// #1987 S1: cumulative tickets bought and their factor weight.
+    ticket_count_total: f64,
+    ticket_weight_total: f64,
+    /// #1987 S2: ad-valorem fees charged, pico.
+    value_fees: u128,
+    /// #1987 S3: demurrage owed to the next step's block producers, pico.
+    miner_dividend: u128,
+    /// #1987 S3: demurrage paid to block producers, pico.
+    miner_dividend_paid: u128,
+    /// #1987 S4: incremental ticket weights (only with a window override).
+    /// `cum[o]` holds the running sum of owner `o`'s static entry weights,
+    /// parallel to `owner_entries[o]`; `cum_base[o]` is the sum already
+    /// expired. Owner weight = back - base.
+    fast: bool,
+    cum: Vec<VecDeque<f64>>,
+    cum_base: Vec<f64>,
+    cum_pops: Vec<u32>,
     rng_mine: ChaCha8Rng,
     rng_tx: ChaCha8Rng,
     rng_lot: ChaCha8Rng,
@@ -603,7 +699,20 @@ impl World {
             // Demurrage never activates.
             fee_params.halving_interval = u64::MAX;
         }
-        let draw = LotteryDrawConfig::default();
+        let mut draw = LotteryDrawConfig::default();
+        if let Some((min_age, max_age)) = p.shapes.window {
+            assert!(
+                min_age >= 1 && max_age > min_age,
+                "window must be min < max"
+            );
+            assert!(
+                p.ticket_rule != TicketRule::ValueAge,
+                "the window-override path needs a static ticket weight"
+            );
+            draw.min_utxo_age = min_age;
+            draw.circulation_window = max_age;
+        }
+        let fast = p.shapes.window.is_some();
         let s = p.step_blocks;
         let lo = draw.min_utxo_age.div_ceil(s);
         let hi = draw.circulation_window / s;
@@ -692,6 +801,17 @@ impl World {
             tickets_bought: 0,
             downgrade: 0,
             ticket_burn: 0,
+            ticket_base: 0.0,
+            ticket_weight_step: 0.0,
+            ticket_count_total: 0.0,
+            ticket_weight_total: 0.0,
+            value_fees: 0,
+            miner_dividend: 0,
+            miner_dividend_paid: 0,
+            fast,
+            cum: (0..na).map(|_| VecDeque::new()).collect(),
+            cum_base: vec![0.0; na],
+            cum_pops: vec![0; na],
             rng_mine: ChaCha8Rng::seed_from_u64(seed ^ 0x6d69_6e65),
             rng_tx: ChaCha8Rng::seed_from_u64(seed ^ 0x7478_7478),
             rng_lot: ChaCha8Rng::seed_from_u64(seed ^ 0x6c6f_7474),
@@ -875,6 +995,22 @@ impl World {
             self.charge(owner, price * count as u128);
             self.tickets_bought += count;
         }
+        if self.p.ticket_rule == TicketRule::FactorPrice && self.p.mechanism {
+            // #1987 S1: the same purchase rule, at `base x factor`.
+            let median_hold = std::f64::consts::LN_2 * PROD_BLOCKS_PER_YEAR as f64
+                / self.agents[owner].tx_per_year;
+            let holds = self.p.spent_eligible || median_hold >= self.draw.circulation_window as f64;
+            let weight = self.ticket_factor_weight(&tags, count);
+            let price = (self.ticket_base * weight) as u128;
+            if !holds || value_each <= price {
+                return;
+            }
+            self.charge(owner, price * count as u128);
+            self.tickets_bought += count;
+            self.ticket_weight_step += weight * count as f64;
+            self.ticket_count_total += count as f64;
+            self.ticket_weight_total += weight * count as f64;
+        }
         let idx = (step - self.bucket_base) as usize;
         while self.buckets.len() <= idx {
             self.buckets.push_back(Vec::new());
@@ -906,6 +1042,33 @@ impl World {
         self.burned += amount;
     }
 
+    /// #1987 S1: an output's ticket-price weight, its factor in units of 1x
+    /// at creation (the mean over a coinbase group's fresh clusters).
+    fn ticket_factor_weight(&self, tags: &OutTags, count: u64) -> f64 {
+        let unit = |f: u64| f as f64 / ClusterFactorCurve::FACTOR_SCALE as f64;
+        match tags {
+            OutTags::Shared(t) => unit(self.factor(self.eff_wealth(t))),
+            OutTags::Coinbase { first } => {
+                let n = count.max(1);
+                (0..n)
+                    .map(|k| unit(self.factor(self.w[(*first + k as u32) as usize])))
+                    .sum::<f64>()
+                    / n as f64
+            }
+        }
+    }
+
+    /// #1987 S4: static ticket weight of a window entry (fast path only).
+    fn static_weight(&self, e: &OwnerEntry) -> f64 {
+        match self.p.ticket_rule {
+            TicketRule::Uniform | TicketRule::TicketPrice | TicketRule::FactorPrice => {
+                e.count as f64
+            }
+            TicketRule::InverseFactor => e.count as f64 * e.value * e.tilt,
+            TicketRule::ValueAge => unreachable!("rejected in World::new"),
+        }
+    }
+
     /// Per-value ticket tilt of an output entering the window.
     fn entry_tilt(&self, tags: &OutTags, count: u64) -> f64 {
         if self.p.ticket_rule != TicketRule::InverseFactor {
@@ -934,7 +1097,9 @@ impl World {
     /// Ticket weight of one window entry at `step`.
     fn entry_weight(&self, e: &OwnerEntry, step: u64) -> f64 {
         match self.p.ticket_rule {
-            TicketRule::Uniform | TicketRule::TicketPrice => e.count as f64,
+            TicketRule::Uniform | TicketRule::TicketPrice | TicketRule::FactorPrice => {
+                e.count as f64
+            }
             TicketRule::InverseFactor => e.count as f64 * e.value * e.tilt,
             TicketRule::ValueAge => {
                 let age = (step - e.step) * self.p.step_blocks;
@@ -960,13 +1125,19 @@ impl World {
                         }
                         let tilt = self.entry_tilt(&e.tags, e.count);
                         self.owner_counts[o] += e.count;
-                        self.owner_entries[o].push_back(OwnerEntry {
+                        let entry = OwnerEntry {
                             step: enter,
                             count: e.count,
                             tags: e.tags,
                             value: e.value,
                             tilt,
-                        });
+                        };
+                        if self.fast {
+                            let w = self.static_weight(&entry);
+                            let last = self.cum[o].back().copied().unwrap_or(self.cum_base[o]);
+                            self.cum[o].push_back(last + w);
+                        }
+                        self.owner_entries[o].push_back(entry);
                     }
                 }
             }
@@ -985,8 +1156,30 @@ impl World {
                     }
                     self.owner_counts[o] -= front.count;
                     self.owner_entries[o].pop_front();
+                    if self.fast {
+                        self.cum_base[o] = self.cum[o].pop_front().unwrap();
+                        self.cum_pops[o] += 1;
+                    }
+                }
+                if self.fast && self.cum_pops[o] >= 4096 {
+                    // Rebase so the running sums stay near the window's own
+                    // weight (f64 precision).
+                    let base = self.cum_base[o];
+                    for c in self.cum[o].iter_mut() {
+                        *c -= base;
+                    }
+                    self.cum_base[o] = 0.0;
+                    self.cum_pops[o] = 0;
                 }
             }
+        }
+    }
+
+    /// #1987 S4 fast path: owner `o`'s current ticket weight.
+    fn fast_owner_weight(&self, o: usize) -> f64 {
+        match self.cum[o].back() {
+            Some(b) => (b - self.cum_base[o]).max(0.0),
+            None => 0.0,
         }
     }
 
@@ -994,7 +1187,15 @@ impl World {
         let s = self.p.step_blocks;
         let reward = self.reward_at(h0);
         let share = self.lottery_share(h0, reward);
-        let miner_payout = (reward - share) as u128;
+        let mut miner_payout = (reward - share) as u128;
+        // #1987 S3: last step's redirected demurrage, spread evenly over this
+        // step's blocks (zero unless `DemurrageDest::Miners`).
+        if self.miner_dividend > 0 {
+            let per_block = self.miner_dividend / s as u128;
+            self.miner_dividend -= per_block * s as u128;
+            self.miner_dividend_paid += per_block * s as u128;
+            miner_payout += per_block;
+        }
         let weights: Vec<f64> = self.agents.iter().map(|a| a.hashpower).collect();
         let blocks = multinomial(&mut self.rng_mine, s, &weights);
         for (i, m) in blocks.into_iter().enumerate() {
@@ -1073,6 +1274,12 @@ impl World {
             return 0;
         }
         let strategic_opt = self.agents[a].strategic && self.p.whale == WhaleStrategy::OptimalDecoy;
+        // #1987 S3 settle on spend starts with demurrage. Under the epoch-0
+        // holiday (#1685, open) the #925 charge is 0, so a settle rule live
+        // in epoch 0 would drop every tag for free; wallets keep the stock
+        // rule until the rate turns on.
+        let settle =
+            self.p.shapes.settle_on_spend && self.fee_params.demurrage_rate_bps(height) > 0;
         let in_tags = self.input_tags(a);
         let elapsed = height.saturating_sub(self.agents[a].oldest);
         let n_in = (self.agents[a].coins as usize).clamp(1, 16);
@@ -1100,11 +1307,18 @@ impl World {
                 height,
                 n_in,
             );
-            if pb.0 <= pa.0 {
+            if pb.0 <= pa.0 || settle {
                 (Vec::new(), pb.0, pb.1, pb.2, pb.3)
             } else {
                 (in_tags, pa.0, pa.1, pa.2, pa.3)
             }
+        } else if settle {
+            // #1987 S3 settle on spend: claim background and pay the #925
+            // capitalized charge for all of the inputs' tag mass.
+            let claimed = ClusterFactorCurve::FACTOR_SCALE;
+            let floor = self.factor(self.input_eff_wealth(a)).max(claimed);
+            let (f, d, n, r) = self.price(v, claimed, floor, elapsed, height, n_in);
+            (Vec::new(), f, d, n, r)
         } else {
             let keep = match self.p.tag_decay {
                 TagDecay::PerHop => 1.0 - STOCK_WALLET_DECAY,
@@ -1127,9 +1341,20 @@ impl World {
             let (f, d, n, r) = self.price(v, claimed, floor, elapsed, height, n_in);
             (out, f, d, n, r)
         };
-        let fee = fee.min(v);
-        let net = v - fee;
+        let mut fee = fee.min(v);
         let frac = (self.agents[a].velocity / self.agents[a].tx_per_year).min(1.0);
+        if self.p.mechanism && self.p.shapes.value_fee_ppm > 0 {
+            // #1987 S2: the ad-valorem fee on the value moved to the
+            // counterparty. A coin-selecting wallet moves about the payment;
+            // this always-consolidating wallet also moves its change, which
+            // is not charged (in the mechanism's favour).
+            let pay0 = (v - fee) as f64 * frac;
+            let vfee = (pay0 * self.p.shapes.value_fee_ppm as f64 / 1e6) as u128;
+            let vfee = vfee.min(v - fee);
+            fee += vfee;
+            self.value_fees += vfee;
+        }
+        let net = v - fee;
         let pay = ((net as f64) * frac) as u128;
         let change = net - pay;
 
@@ -1168,6 +1393,11 @@ impl World {
             ag.generation = ag.generation.wrapping_add(1);
             self.owner_counts[a] = 0;
             self.owner_entries[a].clear();
+            if self.fast {
+                self.cum[a].clear();
+                self.cum_base[a] = 0.0;
+                self.cum_pops[a] = 0;
+            }
         }
         let ag = &mut self.agents[a];
         ag.demurrage_paid += dem;
@@ -1191,6 +1421,16 @@ impl World {
             OutTags::Shared(tags.clone()),
         );
         self.add_output(step, r, n_tx, per, pay / n, OutTags::Shared(tags));
+        if self.p.mechanism && self.p.shapes.demurrage_dest == DemurrageDest::Miners {
+            // #1987 S3: the demurrage part leaves the fee stream. 80% goes to
+            // the next step's block producers, 20% is burned as before.
+            let d = dem.min(fee);
+            let to_miners = d * POOL_FRACTION_PERMILLE / 1000;
+            self.miner_dividend += to_miners;
+            self.burned += d - to_miners;
+            self.fees += d;
+            return fee - d;
+        }
         fee
     }
 
@@ -1234,6 +1474,15 @@ impl World {
             }
             self.tickets_bought = 0;
         }
+        if self.p.ticket_rule == TicketRule::FactorPrice {
+            // #1987 S1: per-unit-factor price, so the factor-weighted burn
+            // balances the payout in aggregate (base = R / sum of weights).
+            if self.ticket_weight_step > 0.0 {
+                self.ticket_base = payout_total as f64 / self.ticket_weight_step;
+            }
+            self.ticket_weight_step = 0.0;
+            self.tickets_bought = 0;
+        }
         if slots == 0 || payout_total == 0 {
             return;
         }
@@ -1244,10 +1493,14 @@ impl World {
 
         let uniform = matches!(
             self.p.ticket_rule,
-            TicketRule::Uniform | TicketRule::TicketPrice
+            TicketRule::Uniform | TicketRule::TicketPrice | TicketRule::FactorPrice
         );
         let weights: Vec<f64> = if uniform {
             self.owner_counts.iter().map(|c| *c as f64).collect()
+        } else if self.fast {
+            (0..self.owner_entries.len())
+                .map(|o| self.fast_owner_weight(o))
+                .collect()
         } else {
             self.owner_entries
                 .iter()
@@ -1262,16 +1515,32 @@ impl World {
             // Spread the owner's k wins over its eligible outputs by ticket
             // weight (by count under the uniform rule).
             let mut picks: BTreeMap<usize, u64> = BTreeMap::new();
-            let ew: Vec<f64> = self.owner_entries[o]
-                .iter()
-                .map(|e| self.entry_weight(e, step))
-                .collect();
-            for (i, n) in multinomial(&mut self.rng_lot, k, &ew)
-                .into_iter()
-                .enumerate()
-            {
-                if n > 0 {
-                    picks.insert(i, n);
+            if self.fast {
+                // #1987 S4: k independent draws by inverse CDF over the
+                // running sums (the same distribution as the multinomial).
+                let base = self.cum_base[o];
+                let total = self.fast_owner_weight(o);
+                let len = self.cum[o].len();
+                if total <= 0.0 || len == 0 {
+                    continue;
+                }
+                for _ in 0..k {
+                    let r = base + self.rng_lot.random::<f64>() * total;
+                    let i = self.cum[o].partition_point(|c| *c <= r).min(len - 1);
+                    *picks.entry(i).or_insert(0) += 1;
+                }
+            } else {
+                let ew: Vec<f64> = self.owner_entries[o]
+                    .iter()
+                    .map(|e| self.entry_weight(e, step))
+                    .collect();
+                for (i, n) in multinomial(&mut self.rng_lot, k, &ew)
+                    .into_iter()
+                    .enumerate()
+                {
+                    if n > 0 {
+                        picks.insert(i, n);
+                    }
                 }
             }
             for (i, n) in picks {
@@ -1356,6 +1625,13 @@ impl World {
             ticket_burn_bth: bth(self.ticket_burn),
             downgrade_bth: bth(self.downgrade),
             whale_priced_factor: self.priced_factor(whale),
+            value_fee_bth: bth(self.value_fees),
+            miner_dividend_bth: bth(self.miner_dividend_paid),
+            ticket_mean_factor: if self.ticket_count_total > 0.0 {
+                self.ticket_weight_total / self.ticket_count_total
+            } else {
+                1.0
+            },
         }
     }
 }
@@ -1450,6 +1726,7 @@ mod tests {
             ticket_rule: TicketRule::Uniform,
             tag_decay: TagDecay::PerHop,
             spent_eligible: false,
+            shapes: ShapeSwitches::default(),
         }
     }
 
