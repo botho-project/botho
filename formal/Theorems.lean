@@ -311,3 +311,9 @@ import Botho
 #print axioms Botho.Timestamps.honest_stamp_headroom_iff
 #print axioms Botho.Timestamps.zero_skew_counterexample
 #print axioms Botho.Timestamps.some_observed_gap_floor
+
+-- Botho.Demurrage.Age (#2004; proven (model), full-Nat elapsed-centroid properties)
+#print axioms Botho.Demurrage.ringElapsedCentroid_perm
+#print axioms Botho.Demurrage.ringElapsedCentroid_insert_zero
+#print axioms Botho.Demurrage.ringElapsedCentroid_scale_values
+#print axioms Botho.Demurrage.ringElapsedCentroid_le_height

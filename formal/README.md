@@ -331,6 +331,28 @@ and 225 replays with zero mismatches; final PR CI is separate from that
 historical control-workflow checkout and its captured dependency inputs.
 
 
+`ringElapsedCentroid` (#1998) adds the 28th scalar DRT leg and repairs the
+public elapsed-age helper with the existing wide accumulator. Twenty live
+expected-output vectors and 45 separately counted transformations check
+full-width weighted means, zero/future ages and one final floor. Generation
+uses deliberately mixed lengths 0..=64, including numerator-above-u128 and
+denominator-above-u64 classes; this is a campaign budget, not a contract cap.
+The unchanged normal tier compares 280,000 generated cases when all 28 legs
+complete, plus all replay fixtures. Source-bound old checked/unchecked
+reproduction and actual-source numerical controls are documented in
+[the centroid assurance section](DEMURRAGE.md#exact-elapsed-age-centroid-1998).
+The subsequent #2004 increment proves four full-Nat centroid properties:
+whole-pair permutation, zero-value insertion at any position, positive common
+value scaling, and an unconditional bound by current height. These are
+**proven (model)**, including empty/zero-total and future-height inputs;
+Rust/Lean correspondence remains **tested**. The canonical executable model
+is unchanged. Rust/extraction equivalence, machine-width/panic/allocation/
+cardinality safety and accepted/genesis reachability remain unproved. Neither
+height boundedness nor scaling proves fee behavior, a principal bound or
+general factor dilution resistance. Production age selection is unchanged;
+dependency/executable provenance remains specific to each run.
+
+
 ## The cluster-tag model
 
 `Botho/Tags/` (#1840) asks whether the cluster-tag rules keep the invariants
@@ -540,6 +562,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
 | `lottery_sim` | Actual `LotterySimulation::apply_production_block` and separate node cap/accounting/draw calls; independent per-step public-state checks | One composed `Drt.lotterySim` result in both expected slots; Lean advances its own arithmetic carryover |
 | `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
+| `ring_elapsed_centroid` | `bth_cluster_tax::ring_elapsed_centroid` | `Botho.Demurrage.ringElapsedCentroid`; exact weighted saturated ages, one final floor, zero total weight gives zero |
 | `ring_elapsed_quantile` | `bth_cluster_tax::ring_elapsed_quantile` | `Botho.Demurrage.ringElapsedQuantile`; one scalar, saturated sorted ages and clamped nearest rank; values ignored |
 | `demurrage_composition` | `bth_cluster_tax::{capitalized_reset_charge, demurrage_settlement_charge, spend_demurrage_charge}` | `Botho.Demurrage.{exactResetCharge, exactSettlementCharge, exactSpendCharge}`; three results per case, independent typed inputs and fixed production wrapper horizon |
 | `monetary` | Actual mainnet policy phase/halving, both tail wrappers, library and node block reward, lottery bps/share and demurrage | `Botho.Monetary` and `Botho.Supply.Block`; independent u64 inputs and arithmetic-safe wide supply 0..A, including modulo cast loss; see [domain/coverage](MONETARY.md#monetary-drt-domain-and-replay-1922) |

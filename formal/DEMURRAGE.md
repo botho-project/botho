@@ -240,6 +240,7 @@ specification issue; transaction balance validation remains a separate gate.
 | `exactCharge` | `demurrage.rs::demurrage_charge` (protocol 9.0.0) | `demurrage_charge` |
 | `charge` (legacy) | `demurrage.rs::demurrage_charge` before 9.0.0 (kept in its tests as `legacy_quantized_charge`) | none since #1875 (receipt `demurrage-1711.json`) |
 | `defaultFactor` | `fee_curve.rs::ClusterFactorCurve::default_params().factor` | `default_cluster_factor` |
+| `ringElapsedCentroid` (`Age.lean`) | `demurrage.rs::ring_elapsed_centroid` | `ring_elapsed_centroid` |
 | `ringElapsedQuantile` (`Age.lean`) | `demurrage.rs::ring_elapsed_quantile` | `ring_elapsed_quantile` |
 | `ringFactorExact` / `exactCentroid` | `demurrage.rs::ring_centroid_implied_factor` (protocol 9.0.0) | `ring_centroid_factor` |
 | `ringFactor` / `centroid` | `demurrage.rs::ring_centroid_implied_factor` before 9.0.0 (historical) | none since #1876 |
@@ -274,12 +275,13 @@ target/release/botho-formal-drt --cases 100000 --seed 1711 \
 
 This is a partial #1711 contribution. The unconditional principal bound
 remains refuted. Reset/settlement/spend property proofs (the later #1985 model/DRT increment
-is below), ring elapsed centroid, quantile property proofs, monotonicity of other kernels, adversarial dilution,
+is below), quantile property proofs, monotonicity of other kernels, adversarial dilution,
 fee-floor bounds, binary fuzz-corpus replay and reachable transaction/block
 witnesses remain outstanding. Do not mark #1711 complete on these results
 or weaken its targets silently.
-Any arithmetic repair changes consensus outputs and needs its own reviewed
-policy, activation and regression work.
+Changes to consensus arithmetic need their own reviewed policy, activation
+and regression work; the #1998 helper repair below leaves the production age
+selector unchanged.
 
 
 ## Composition models and DRT (#1985)
@@ -406,8 +408,8 @@ and nightly-helper checks are not a million-case execution claim.
 No theorem, extraction equivalence, universal permutation/value-independence,
 generic overflow/allocation/panic freedom or accepted-chain reachability
 result is added. #1711 retains those proof/reachability obligations, the
-separate elapsed-centroid model and its unchecked-u128 accumulator overflow
-lead, dilution, fee-floor composition and binary fuzz-corpus replay. Historical
+other elapsed-centroid obligations beyond the four full-Nat properties proved
+in #2004 below, dilution, fee-floor composition and binary fuzz-corpus replay. Historical
 receipts above remain historical; final-head receipts are on the child PR.
 
 On 2026-11-09, [formal gates](https://github.com/botho-project/botho/actions/runs/42711257939)
@@ -433,3 +435,114 @@ root/standalone lock hashes differ (1,157/688 packages); unchanged tracked
 source does not establish identical dependency graphs or binaries across
 runs. These receipts precede the documentation-only follow-up; final PR CI
 validates its final checkout separately. No million-case run was performed.
+
+## Exact elapsed-age centroid (#1998)
+
+`ring_elapsed_centroid` now computes `floor(Σ value × saturated_age / Σ value)`
+with `wide::WeightedMean`, returning zero for an empty or zero-weight sum.
+The canonical `Botho.Demurrage.ringElapsedCentroid` uses `Nat` subtraction,
+products, sums and one final division (including `Nat` division by zero = 0).
+Its scalar DRT leg invokes the public crate helper and the built Lean codec;
+all u64 members/heights and results use lossless decimal strings.
+
+For a slice on a target with at most 64-bit `usize`, `n < 2^64`, so the
+numerator is below `2^192` and denominator below `2^128`. The existing U256
+numerator/u128 denominator cannot saturate. A positive-weight mean cannot
+exceed its largest age, at most `u64::MAX`, so the accumulator's final clamp
+and u64 conversion are exact here. Release targets are x86_64/aarch64. This
+source/arithmetic argument preserves all nonoverflowing old results; it is
+not a machine-checked Rust-equivalence or panic-freedom theorem.
+
+Twenty independent numerical fixtures cover high products beyond u128,
+both denominator-division branches, empty/singleton/zero weights, future
+ages, full-width heights, unequal weights and flooring once. The live test
+asserts each expected value separately against fresh Rust and Lean calls,
+then checks 18 distinct pair permutations, 20 zero-weight insertions and
+seven common doublings with every scaled weight fitting u64. These **45
+transformations** are separate from vectors, generated cases and replays.
+The unequal case `[(1,0),(3,8)]` at height 10 gives 4, while `[(1,9),(1,9)]`
+gives 1, distinguishing the weighted mean and single final floor.
+
+Generated lengths are bounded to 0..=64 solely for campaign work. The
+mixture deliberately samples ordinary positive ages/weights, full-width
+relative and independent heights, near-maximal multi-member products,
+zero/future/equal ages and maximal ages. Diagnostics classify lengths,
+numerator overflow (checked sticky u128 detection), denominator width,
+zero/positive/max output, mixed ages and unequal weights. No helper input
+restriction follows from this finite domain. The unchanged normal budget
+is 10,000 generated cases per discovered leg (28 legs), within five minutes;
+nightly retains 1M/leg, four workers, 3600 seconds/leg and 9600 seconds total.
+No nightly-million execution is claimed.
+
+The [old-source reproduction](https://github.com/botho-project/botho/actions/runs/42731267633)
+checks out `9f62edc7` and calls the actual public helper with two `(M,0)`
+members at height `M = u64::MAX`. Checked release panics at the numerator
+addition; an explicitly unchecked diagnostic returns `9223372036854775806`
+instead of `18446744073709551615`. Normal root and DRT release profiles
+retain overflow checks. The probe's manifest, resolved lock, flags,
+executable/source hashes and original artifact archive are retained.
+
+Runtime/control and final-head campaign receipts are linked in the child
+PR, including original ZIP hashes verified against GitHub API digests,
+run/job/artifact identities, actual source checkout versus control-workflow
+commit, commands, toolchains and executable identities, and the copied root
+versus resolved standalone locks. A source-equal run does not imply an equal
+resolved dependency graph or executable; normal CI and diagnostic runs are
+identified separately. Historical fixtures, receipts, controls, theorem
+lists and statement records remain unchanged.
+
+The #1998 increment adds arithmetic repair, an executable model and finite
+correspondence and mutation evidence; it adds no listed model theorem. The
+four subsequent #2004 model proofs below leave Rust/extraction equivalence,
+machine-width/panic/allocation/cardinality safety and accepted/genesis-chain
+reachability unproved. Production validation and relay still select `ring_elapsed_quantile`
+at 10,000 bps; the centroid is a public helper and simulation comparison
+kernel (the ledger occurrence is a test). No accepted-chain exploit is
+established. #1711 remains open for its separate proof and policy questions.
+
+### Proven elapsed-centroid model properties (#2004)
+
+Four claims about the unchanged canonical `ringElapsedCentroid` are now
+**proven (model)** and listed in `Theorems.lean`:
+
+| Theorem | Full-Nat contract |
+| --- | --- |
+| `ringElapsedCentroid_perm` | Any permutation of complete `(value, creationHeight)` pairs preserves the result. |
+| `ringElapsedCentroid_insert_zero` | A zero-value pair with any creation height can be inserted between arbitrary prefix and suffix lists. |
+| `ringElapsedCentroid_scale_values` | Multiplying every value by the same `k` preserves the result, assuming solely `0 < k`. |
+| `ringElapsedCentroid_le_height` | The result is at most current height, unconditionally. |
+
+These quantify over arbitrary finite lists and all natural values/heights,
+without positive-total, u64-width, nonoverflow or 64-member premises. Empty
+and all-zero rings return zero; future creation heights have saturated age
+zero. Unnamed kernel-checked examples cover those boundaries, zero current
+height, middle insertion, pair permutation, the unequal-weight fractional
+mean `27 / 5`, and positive scaling whose values exceed u64.
+
+The reviewed statements were merged first in [PR #2005](https://github.com/botho-project/botho/pull/2005)
+at `90a7fb8b2f8817293e699ae797f78a9359ebf955`; this increment preserves all
+249 complete records. The proof source was retained separately at
+`c3da7077422cc72bd71273c56f3b98cded305e5d` (tree
+`fb54ebf01aa180741ffe650360b6c794d2eb044d`). Its independent proposal
+[run 42755505776](https://github.com/botho-project/botho/actions/runs/42755505776)
+compiled the proofs and generated matching records, but the workflow failed
+at the expected missing-record self-test and skipped isolated verification.
+It is historical proposal evidence; the implementing PR records its own
+final-head build and isolated verification against the records-bearing base.
+
+The #1998 finite Rust/Lean correspondence remains **tested**, separate from
+these universal Nat model proofs. Its final normal [DRT run 42736471238](https://github.com/botho-project/botho/actions/runs/42736471238)
+reported 280,000 comparisons, 245 replays and zero mismatches at reviewed head
+`56cb51f37bc0e6964401b339d82453d1f20f5ed8`, using identical-tree checkout
+`786bc9f994c783408d1dd46b0a12c837ee525a18`. Original
+[report artifact 13727407395](https://github.com/botho-project/botho/actions/runs/42736471238/artifacts/13727407395)
+has ZIP SHA-256 `f31f5e5595fc6618b46b9f2e255fa119224867b6446e4b82141217f2ca0b0ccc`;
+this is a historical run, not execution of the #2004 proof head. The final diff preserves the executable
+Age declarations and Rust/DRT sources, fixtures and budgets; source identity
+does not imply equal resolved dependencies or binaries across runs. The
+historical runs above retain their original scopes and provenance. No new
+Rust/extraction equivalence or machine-width/panic/allocation/cardinality/
+reachability proof follows from these properties. The height bound concerns
+the elapsed centroid only; neither it nor positive scaling proves accepted-chain
+fee behavior, a principal bound or general factor dilution resistance.
+Quantile properties and the remaining #1711 obligations stay separate.
