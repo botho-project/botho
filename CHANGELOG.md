@@ -106,7 +106,15 @@ consensus batch (#1683).
   `Ledger::ring_centroid_floored_factor` (replaced by `ring_floored_factor`,
   which takes per-input rings). ADR 0015 records the CT-era successor (max
   over the ring per input plus a wallet filter that drops wealthier decoys)
-  and its two open questions.
+  and its two open questions. **Economic consequence:** the floor is now the
+  spent coin's own undecayed class, so any spend that lowers a wealthy coin's
+  class pays the capitalized downgrade from it, including the stock wallet's
+  5% per-hop tag decay. Under the old mean, distinct-amount background decoys
+  masked that decay. Bridge-import sweep (`bridge-import-calibration.md` §0):
+  shedding a 5.448x flood import to 1x now costs about 8.9% of value however
+  it is done (one same-amount-decoy drop, 3 max-shed hops, or 135 stock
+  self-spends; max-shed was 0.154%), and honest domestic circulation of that
+  coin pays about 2.3% over 10 spends (was 0.19%). `K` and `F` are unchanged.
 - **`MIN_TX_FEE` stays relay policy (ADR 0014).** The consensus fee rule
   remains the size-based `consensus_fee_floor`; `MIN_TX_FEE` (1e8 pico) is
   still checked only at mempool admission. See
