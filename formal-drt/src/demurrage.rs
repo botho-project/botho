@@ -5,8 +5,8 @@
 use crate::{fixtures::Fixtures, gen, legs::Leg, wire};
 use bth_cluster_tax::{
     capitalized_reset_charge, demurrage_charge, demurrage_settlement_charge,
-    ring_centroid_implied_factor, spend_demurrage_charge, ClusterFactorCurve,
-    SETTLEMENT_HORIZON_BLOCKS,
+    ring_centroid_implied_factor, ring_elapsed_quantile, spend_demurrage_charge,
+    ClusterFactorCurve, SETTLEMENT_HORIZON_BLOCKS,
 };
 use proptest::{collection::vec, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -382,5 +382,263 @@ mod composition_tests {
             distinct.expected,
             json!({"reset":"10000", "settlement":"100000", "spend":"200000"})
         );
+    }
+}
+
+/// Scalar age quantile; 64 is a campaign budget, not a production bound.
+pub struct RingAge;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgeMember {
+    #[serde(with = "wire::dec_u64")]
+    pub value: u64,
+    #[serde(with = "wire::dec_u64")]
+    pub creation_height: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RingAgeIn {
+    pub members: Vec<AgeMember>,
+    #[serde(with = "wire::dec_u64")]
+    pub current_height: u64,
+    pub quantile_bps: u32,
+}
+
+impl Leg for RingAge {
+    const NAME: &'static str = "ring_elapsed_quantile";
+    const RUST: &'static str = "bth_cluster_tax::ring_elapsed_quantile";
+    type Input = RingAgeIn;
+
+    fn strategy() -> BoxedStrategy<Self::Input> {
+        let members = vec((gen::u64_edge(), gen::u64_edge()), 0..=64);
+        (
+            prop_oneof![gen::u64_edge(), 1u64..=2_000_000],
+            members,
+            0u8..4,
+            any::<bool>(),
+        )
+            .prop_map(|(current_height, raw, layout, ordered)| {
+                let equal = raw.first().map_or(0, |m| m.1);
+                let mut members: Vec<_> = raw
+                    .into_iter()
+                    .map(|(value, height)| AgeMember {
+                        value,
+                        creation_height: match layout {
+                            // Full-width independent scalars remain supported.
+                            0 => height,
+                            // Relative heights produce positive, mixed ages.
+                            1 => current_height.saturating_sub(height % 1_000_001),
+                            2 => equal,
+                            _ => current_height,
+                        },
+                    })
+                    .collect();
+                if ordered {
+                    members.sort_by_key(|m| current_height.saturating_sub(m.creation_height));
+                }
+                (current_height, members)
+            })
+            .prop_flat_map(|(current_height, members)| {
+                let n = members.len().max(1) as u32;
+                let boundary = (1u32..=n, 0u32..=2).prop_map(move |(rank, delta)| {
+                    (rank * 10_000 / n).saturating_sub(1) + delta
+                });
+                let q = prop_oneof![
+                    3 => 1u32..10_000,
+                    3 => boundary,
+                    2 => proptest::sample::select(vec![0, 1, 3333, 3334, 5000, 6666, 6667, 9999, 10_000, 10_001, u32::MAX]),
+                    1 => any::<u32>(),
+                ];
+                q.prop_map(move |quantile_bps| RingAgeIn {
+                    members: members.clone(),
+                    current_height,
+                    quantile_bps,
+                })
+            })
+            .boxed()
+    }
+
+    fn args(_: &Fixtures, i: &Self::Input) -> Value {
+        json!({"members":wire::list(&i.members, |m|
+            json!({"value":wire::n(m.value), "creation_height":wire::n(m.creation_height)})),
+            "current_height":wire::n(i.current_height), "quantile_bps":wire::n(i.quantile_bps)})
+    }
+
+    fn rust(_: &Fixtures, i: &Self::Input) -> Value {
+        let members: Vec<_> = i
+            .members
+            .iter()
+            .map(|m| (m.value, m.creation_height))
+            .collect();
+        wire::n(ring_elapsed_quantile(
+            &members,
+            i.current_height,
+            i.quantile_bps,
+        ))
+    }
+
+    fn classify(i: &Self::Input, r: &Value) -> String {
+        let ages: Vec<_> = i
+            .members
+            .iter()
+            .map(|m| i.current_height.saturating_sub(m.creation_height))
+            .collect();
+        let age = if ages.is_empty() {
+            "empty"
+        } else if ages.iter().all(|a| *a == 0) {
+            "zero"
+        } else if ages.iter().all(|a| Some(a) == ages.first()) {
+            "equal_positive"
+        } else {
+            "mixed"
+        };
+        let q = match i.quantile_bps {
+            0 => "zero",
+            1..=9999 => "interior",
+            10_000 => "maximum",
+            u32::MAX => "u32_max",
+            _ => "above",
+        };
+        // Rank is diagnostic only: the adapter above calls the real helper.
+        let n = ages.len() as u64;
+        let rank = (u64::from(i.quantile_bps.min(10_000)) * n).div_ceil(10_000);
+        let rank = if n == 0 {
+            "empty"
+        } else if rank <= 1 {
+            "first"
+        } else if rank >= n {
+            "last"
+        } else {
+            "interior"
+        };
+        let output = if r == &wire::n(0) {
+            "zero"
+        } else if r == &wire::n(u64::MAX) {
+            "u64_max"
+        } else {
+            "positive"
+        };
+        format!("len={n};age={age};ordered={};q={q};rank={rank};output={output};height_wide={};height_zero={};creation_zero={};creation_equal={};creation_future={};value_zero={};value_max={}",
+            ages.windows(2).all(|w| w[0] <= w[1]), i.current_height > u32::MAX as u64, i.current_height == 0,
+            i.members.iter().any(|m| m.creation_height == 0),
+            i.members.iter().any(|m| m.creation_height == i.current_height),
+            i.members.iter().any(|m| m.creation_height > i.current_height),
+            i.members.iter().any(|m| m.value == 0), i.members.iter().any(|m| m.value == u64::MAX))
+    }
+}
+
+#[cfg(test)]
+mod age_tests {
+    use super::*;
+    use crate::model::Model;
+    use std::path::Path;
+
+    #[derive(Deserialize)]
+    struct Vector {
+        input: RingAgeIn,
+        expected: Value,
+        note: String,
+    }
+
+    #[test]
+    fn quantile_live_rust_and_lean_vectors() {
+        let vectors: Vec<Vector> = include_str!("../regressions/ring_elapsed_quantile.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let fx = Fixtures::new();
+        let mut model = Model::spawn(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("lean/.lake/build/bin/botho-model"),
+        )
+        .expect("build the Lean DRT executable before running DRT tests");
+        let mut transformations = 0;
+        for v in &vectors {
+            let mut inputs = vec![v.input.clone()];
+            let ages: Vec<_> = v
+                .input
+                .members
+                .iter()
+                .map(|m| v.input.current_height.saturating_sub(m.creation_height))
+                .collect();
+            if ages.windows(2).any(|w| w[0] != w[1]) {
+                for variant in 0..6 {
+                    let mut i = v.input.clone();
+                    match variant {
+                        0 => i.members.reverse(),
+                        1 => i.members.rotate_left(1),
+                        2 => {
+                            let last = i.members.len() - 1;
+                            i.members.swap(0, last);
+                        }
+                        _ => {
+                            for (idx, m) in i.members.iter_mut().enumerate() {
+                                m.value = match variant {
+                                    3 => 0,
+                                    4 => u64::MAX,
+                                    _ => [0, 1, u64::MAX][idx % 3],
+                                };
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        (i.current_height, i.quantile_bps),
+                        (v.input.current_height, v.input.quantile_bps)
+                    );
+                    inputs.push(i);
+                    transformations += 1;
+                }
+            }
+            let requests: Vec<_> = inputs
+                .iter()
+                .map(|i| wire::request(RingAge::NAME, &RingAge::args(&fx, i)))
+                .collect();
+            let lean = model.call_batch(&requests);
+            assert_eq!(lean.len(), inputs.len());
+            for (i, actual_lean) in inputs.iter().zip(lean) {
+                assert_eq!(RingAge::rust(&fx, i), v.expected, "Rust: {}", v.note);
+                assert_eq!(actual_lean, v.expected, "Lean: {}", v.note);
+                let stored = serde_json::to_value(i).unwrap();
+                assert_eq!(
+                    serde_json::from_value::<RingAgeIn>(stored.clone()).unwrap(),
+                    *i
+                );
+                let args = RingAge::args(&fx, i);
+                assert_eq!(args["members"], stored["members"]);
+                assert_eq!(args["current_height"], stored["current_height"]);
+                assert_eq!(
+                    args["quantile_bps"],
+                    wire::n(stored["quantile_bps"].as_u64().unwrap())
+                );
+                assert_eq!(
+                    args["current_height"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap(),
+                    i.current_height
+                );
+                for (member, encoded) in i.members.iter().zip(args["members"].as_array().unwrap()) {
+                    assert_eq!(
+                        encoded["value"].as_str().unwrap().parse::<u64>().unwrap(),
+                        member.value
+                    );
+                    assert_eq!(
+                        encoded["creation_height"]
+                            .as_str()
+                            .unwrap()
+                            .parse::<u64>()
+                            .unwrap(),
+                        member.creation_height
+                    );
+                }
+            }
+            println!("quantile vector {}: {}", v.note, v.expected);
+        }
+        println!(
+            "quantile live counts: vectors={} transformations={transformations} implementations=2",
+            vectors.len()
+        );
+        assert_eq!(vectors.len(), 27);
+        assert_eq!(transformations, 114);
     }
 }

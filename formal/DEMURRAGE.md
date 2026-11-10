@@ -240,6 +240,7 @@ specification issue; transaction balance validation remains a separate gate.
 | `exactCharge` | `demurrage.rs::demurrage_charge` (protocol 9.0.0) | `demurrage_charge` |
 | `charge` (legacy) | `demurrage.rs::demurrage_charge` before 9.0.0 (kept in its tests as `legacy_quantized_charge`) | none since #1875 (receipt `demurrage-1711.json`) |
 | `defaultFactor` | `fee_curve.rs::ClusterFactorCurve::default_params().factor` | `default_cluster_factor` |
+| `ringElapsedQuantile` (`Age.lean`) | `demurrage.rs::ring_elapsed_quantile` | `ring_elapsed_quantile` |
 | `ringFactorExact` / `exactCentroid` | `demurrage.rs::ring_centroid_implied_factor` (protocol 9.0.0) | `ring_centroid_factor` |
 | `ringFactor` / `centroid` | `demurrage.rs::ring_centroid_implied_factor` before 9.0.0 (historical) | none since #1876 |
 
@@ -273,7 +274,7 @@ target/release/botho-formal-drt --cases 100000 --seed 1711 \
 
 This is a partial #1711 contribution. The unconditional principal bound
 remains refuted. Reset/settlement/spend property proofs (the later #1985 model/DRT increment
-is below), ring elapsed centroid/quantile, monotonicity of other kernels, adversarial dilution,
+is below), ring elapsed centroid, quantile property proofs, monotonicity of other kernels, adversarial dilution,
 fee-floor bounds, binary fuzz-corpus replay and reachable transaction/block
 witnesses remain outstanding. Do not mark #1711 complete on these results
 or weaken its targets silently.
@@ -347,3 +348,79 @@ expected numerical mismatches, real generator/shrink/saved-fixture replay,
 and exact restoration. No mutant or control-only workflow is part of the
 normal source. Historical receipts above remain historical; final PR CI
 provides the new composition evidence.
+
+
+## Ring age quantile model and DRT (#1993)
+
+`Botho.Demurrage.ringElapsedQuantile` in `Botho/Demurrage/Age.lean` is an
+executable model of `cluster-tax/src/demurrage.rs::ring_elapsed_quantile`.
+Empty input returns zero. Member values are ignored, including zero values;
+ages are saturated current-minus-creation heights, sorted ascending. The
+quantile is clamped to 10,000 bps, the rank is `ceil(q * n / 10000)`, and
+`rank - 1` is clamped to the available indices. Thus q=0 selects the minimum
+and q=10,000 selects the maximum. Source inspection of ledger validation
+(`botho/src/ledger/store/validation.rs`, constant in `store.rs`) and mempool
+relay (`botho/src/mempool.rs`) finds both callers using 10,000 bps. The DRT
+adapter executes the public helper, not either complete caller.
+
+The scalar `ring_elapsed_quantile` leg is the 27th registered leg. Its
+explicit campaign budget is **0..=64 members**, with full-width u64 values,
+creation/current heights and u32 q support. Relative past heights supply
+positive mixed ages; repeated/equal heights and ordered/unsorted layouts are
+also generated. Interior q and nearest-rank boundaries are deliberately
+sampled alongside 0, 10,000 and larger q, including u32 max. Existing report
+classes record actual list lengths, age/order, q/rank/output, wide/zero
+current height, zero/equal/future creation heights and zero/maximal values.
+The length budget is not a production-validity bound or arbitrary-cardinality
+coverage. Stored u64 fields and all wire integers are exact decimal strings.
+
+`quantile_live_rust_and_lean_vectors` asserts explicit numerical outputs for
+27 fixtures on both the actual Rust helper and the built Lean codec, with
+serialization/decimal checks. Ordinary replay reads only fixture `input`.
+The live test separately runs 114 transformations: reverse, rotation and
+endpoint swap, plus all-zero, all-maximal and mixed replacement values,
+keeping the same current height, q and age multiset. These are finite checks.
+At current 100, unsorted ages [30,10,20] change result from 10 to 20 between
+q=3333/3334 and from 20 to 30 between q=6666/6667. One age 500000 among ten
+zero ages yields 0 at q=9090 and 500000 at q=9091 or 10,000; this does not
+identify a real spender or establish a decoy-economic guarantee.
+
+The implementing PR retains remote numerical controls for ceiling-to-floor
+rank rounding and omitted sorting in the actual production helper, with an
+unchanged Lean model, rebuilt runners, generated shrinking, saved failing
+replay and restored passing replay. Normal-source evidence reports 10,000
+generated and compared cases per leg separately from replay and these live
+transformations. The five-minute PR campaign and nightly 1M/leg, four-worker,
+3600-second leg and 9600-second collection budgets are unchanged; discovery
+and nightly-helper checks are not a million-case execution claim.
+
+No theorem, extraction equivalence, universal permutation/value-independence,
+generic overflow/allocation/panic freedom or accepted-chain reachability
+result is added. #1711 retains those proof/reachability obligations, the
+separate elapsed-centroid model and its unchecked-u128 accumulator overflow
+lead, dilution, fee-floor composition and binary fuzz-corpus replay. Historical
+receipts above remain historical; final-head receipts are on the child PR.
+
+On 2026-11-09, [formal gates](https://github.com/botho-project/botho/actions/runs/42711257939)
+and the [control/normal campaign](https://github.com/botho-project/botho/actions/runs/42712236451)
+passed at actual normal checkout `7eb426d8c7bcda232a5d8469e4dfd37d5b56a752`
+(tree `d1695f8756607a2a71af4568c0f8c2997e59ce83`). The temporary workflow came
+from control commit `43820316bf8cb7f3febe8952c96a57f21b3598f6`. After exact
+restoration, seed 1707 completed **270,000 generated = compared**, 225 replays,
+zero mismatches, and 70.212 summed leg seconds; quantile contributed 10,000
+comparisons, 27 replays and 2.447 seconds. Its observed classes included all
+65 lengths, 4,642 mixed ages, 7,867 interior q, 6,615 interior ranks and 4,348
+positive outputs (37 at u64 max). The live 27 vectors/114 transformations are
+separate from those campaign counts.
+
+At seed 1993, floor rounding gave Rust 10 versus Lean 20 at q=3334; omitted
+sorting gave Rust 30 versus Lean 10 at q=0. A clean scratch floor campaign
+generated 64 inputs, compared 23, made five shrink attempts and saved five
+numerical failures. The same five inputs failed replay and passed after exact
+restoration/rebuild; both targeted vectors also passed restored replay.
+Original archives, API digests, patches, commands, source/model/runner hashes
+and root/resolved lockfiles are retained in the PR evidence receipt. The
+root/standalone lock hashes differ (1,157/688 packages); unchanged tracked
+source does not establish identical dependency graphs or binaries across
+runs. These receipts precede the documentation-only follow-up; final PR CI
+validates its final checkout separately. No million-case run was performed.

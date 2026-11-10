@@ -316,6 +316,21 @@ property or Rust-equivalence theorem is claimed; see
 [the composition domain and controls](DEMURRAGE.md#composition-models-and-drt-1985).
 
 
+`Botho.Demurrage.ringElapsedQuantile` (`Botho/Demurrage/Age.lean`, #1993)
+adds an executable age order-statistic model and the 27th DRT leg. The actual
+Rust helper and built Lean codec receive 27 explicit numerical vectors and
+114 separately counted value/permutation transformations. Generated lists
+are bounded to 0..=64 with full-width scalars and deliberately sampled positive
+mixed ages/interior ranks. Both production callers currently use 10,000 bps
+(maximum age), read from source rather than exercised as complete validators.
+This is finite correspondence evidence, with no new listed theorem,
+extraction-equivalence or generic panic/reachability claim; see
+[the quantile domain and controls](DEMURRAGE.md#ring-age-quantile-model-and-drt-1993).
+The linked normal-source receipt at `7eb426d8` completed 270,000 comparisons
+and 225 replays with zero mismatches; final PR CI is separate from that
+historical control-workflow checkout and its captured dependency inputs.
+
+
 ## The cluster-tag model
 
 `Botho/Tags/` (#1840) asks whether the cluster-tag rules keep the invariants
@@ -525,6 +540,7 @@ and `botho::ledger::formal_drt`, which runs the production
 | `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
 | `lottery_sim` | Actual `LotterySimulation::apply_production_block` and separate node cap/accounting/draw calls; independent per-step public-state checks | One composed `Drt.lotterySim` result in both expected slots; Lean advances its own arithmetic carryover |
 | `merge_weighted` | `ClusterTagVector::merge_weighted` since #1863 (saturating; a panic would be reported as `{"panic": true}` and mismatch) | `Botho.Tags.mergeWeightedSafe` |
+| `ring_elapsed_quantile` | `bth_cluster_tax::ring_elapsed_quantile` | `Botho.Demurrage.ringElapsedQuantile`; one scalar, saturated sorted ages and clamped nearest rank; values ignored |
 | `demurrage_composition` | `bth_cluster_tax::{capitalized_reset_charge, demurrage_settlement_charge, spend_demurrage_charge}` | `Botho.Demurrage.{exactResetCharge, exactSettlementCharge, exactSpendCharge}`; three results per case, independent typed inputs and fixed production wrapper horizon |
 | `monetary` | Actual mainnet policy phase/halving, both tail wrappers, library and node block reward, lottery bps/share and demurrage | `Botho.Monetary` and `Botho.Supply.Block`; independent u64 inputs and arithmetic-safe wide supply 0..A, including modulo cast loss; see [domain/coverage](MONETARY.md#monetary-drt-domain-and-replay-1922) |
 | `cluster_tag_inheritance` | 8.0.0 (#1870): `first_malformed_output_tags` (Rule 1), then `ValidationReads::verify_cluster_tag_inheritance(tx, height)` (Rule 2, C6) over the in-memory double `botho::ledger::formal_drt_tags`; fixtures include #1870's `rules_golden_vectors` | `Botho.Tags.inheritOk₈`, the import cluster derived from the height in the DRT driver (and the failing rule's numbers) |
