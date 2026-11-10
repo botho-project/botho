@@ -93,8 +93,9 @@ fn blocks_per_year_matches_node_block_time() {
 }
 
 /// `demurrage_rate_bps`: the sims' `RATE_BPS` copies equal the node's rate,
-/// and the node keeps demurrage off in epoch 0 (which the sims model via
-/// `ConsensusFeeParams::demurrage_rate_bps`, shared code).
+/// and the node keeps in-class demurrage off in epoch 0 (which the sims model
+/// via `ConsensusFeeParams::demurrage_rate_bps`, shared code) while exit
+/// pricing (`exit_pricing_rate_bps`) runs at the same rate from block 1.
 #[test]
 fn demurrage_rate_matches_node_policy() {
     let rate = node_epoch1_demurrage_rate_bps();
@@ -106,6 +107,14 @@ fn demurrage_rate_matches_node_policy() {
     let policy = botho::monetary::mainnet_policy();
     assert_eq!(policy.demurrage_rate_bps(0), 0);
     assert_eq!(policy.demurrage_rate_bps(policy.halving_interval - 1), 0);
+
+    // #1685: the exit charges (downgrade, settlement, import toll) have no
+    // epoch-0 holiday, so the sims' fixed-rate capitalized charges
+    // (`downgrade_overcharge_sweep`, `settlement_horizon_sweep`) describe
+    // every height, epoch 0 included.
+    for h in [1, policy.halving_interval - 1, policy.halving_interval] {
+        assert_eq!(policy.exit_pricing_rate_bps(h), rate, "height {h}");
+    }
 }
 
 /// `SETTLEMENT_HORIZON_BLOCKS` is shared code (node and sims both import it);

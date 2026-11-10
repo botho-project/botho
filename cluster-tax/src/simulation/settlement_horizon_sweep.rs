@@ -73,7 +73,9 @@
 //! The HOLD world (and the holders who stay behind in the ESCAPE world) is
 //! charged the way the node charges ([`ChargeModel::SpendTime`]): demurrage is
 //! collected only when a coin is spent, on its accrued age, by the shared
-//! [`crate::consensus_fee_model`] (#1695). Epoch 0 is rate-0, the fee is split
+//! [`crate::consensus_fee_model`] (#1695). In epoch 0 in-class accrual is
+//! rate-0 while exit charges (settlement, downgrade) are priced at 200 bps
+//! from block 1 (#1685, protocol 10.0.0). The fee is split
 //! 80% pool / 20% burned, and the ring-centroid floor is computed over a
 //! 20-member ring, with an optional min-centroid dilution adversary
 //! ([`DilutionAdversary`]). Spend velocities are per wealth decile. The
@@ -107,9 +109,10 @@ pub const BLOCKS_PER_YEAR: u64 = MAINNET_BLOCKS_PER_YEAR;
 
 /// Annual demurrage rate at maximum factor, basis points (2%/yr, #351).
 ///
-/// `MonetaryPolicy::demurrage_rate_bps` keeps its rate in a function-local
+/// `MonetaryPolicy::demurrage_rate_bps` keeps its rate in a private module
 /// constant, so this cannot be imported; `botho/tests/sim_code_parity.rs`
-/// asserts it equals the node's mainnet epoch-1 rate (#1702).
+/// asserts it equals the node's mainnet epoch-1 rate (#1702) and the
+/// exit-pricing rate at every height (#1685).
 pub const RATE_BPS: u32 = 200;
 
 /// A candidate `SETTLEMENT_HORIZON_BLOCKS` value, labelled by its wall-clock
@@ -374,7 +377,8 @@ pub struct GiniSweepParams {
     /// Chain height of sim block 0. Default: the first epoch-1 block
     /// (`ConsensusFeeParams::first_demurrage_height`), so the sweep measures
     /// the steady-state charge; `0` starts at launch, where epoch 0 charges no
-    /// demurrage for the first year.
+    /// in-class demurrage for the first year (exit charges still apply,
+    /// #1685).
     pub start_height: u64,
     /// Redistribution ticks per year (the pool is paid out per capita at the
     /// end of each tick). Spend-time model only.
@@ -888,7 +892,9 @@ pub fn settlement_fee(value: u64, floor_factor: u64, horizon_blocks: u64, height
         floor_factor,
         FACTOR_SCALE,
         horizon_blocks,
-        fp.demurrage_rate_bps(height),
+        // #1685: settlement is an exit charge, priced at the exit-pricing
+        // rate (200 bps from block 1), not the in-class rate.
+        fp.exit_pricing_rate_bps(height),
         fp.blocks_per_year,
     ))
 }
@@ -1231,7 +1237,8 @@ pub fn to_markdown(report: &SettlementHorizonReport) -> String {
     variant_table(&mut s, "ring policy", &report.dilution_sensitivity);
 
     s.push_str(
-        "### Launch start: epoch 0 (height 0, first year demurrage-free; 100% adoption)\n\n",
+        "### Launch start: epoch 0 (height 0, first year free of in-class demurrage; \
+         settlement priced from block 1, #1685; 100% adoption)\n\n",
     );
     erosion_table(&mut s, &report.epoch0_rows, true);
     s
@@ -1365,24 +1372,26 @@ mod tests {
     }
 
     #[test]
-    fn epoch_zero_charges_no_demurrage() {
-        // Settlement at launch (height 0, epoch 0): the capitalized charge is
-        // zero because the consensus rate is zero; only the base fee remains.
+    fn epoch_zero_prices_settlement_but_not_in_class_holding() {
+        // #1685: settlement at launch (height 0, epoch 0) is an exit charge,
+        // priced at the exit-pricing rate, so it costs the same as in epoch 1.
         let value = 100_000 * PICO_PER_BTH as u64;
+        let h1 = fee_params().first_demurrage_height();
         let launch = settlement_fee(value, 5_745, 5 * BLOCKS_PER_YEAR, 0);
+        let epoch1 = settlement_fee(value, 5_745, 5 * BLOCKS_PER_YEAR, h1);
         let base_only = settlement_fee(value, FACTOR_SCALE, 5 * BLOCKS_PER_YEAR, 0);
-        assert_eq!(launch, base_only);
-        assert!(launch < 1_000_000, "base fee only: {launch}");
-        // A one-year run starting at launch collects strictly less demurrage
-        // than the same run in epoch 1.
+        assert_eq!(launch, epoch1, "settlement has no epoch-0 holiday");
+        assert!(launch > base_only + 1_000_000_000_000, "priced: {launch}");
+        // In-class holding keeps the holiday: a one-year HOLD run starting at
+        // launch collects far less than the same run in epoch 1.
         let mut p = GiniSweepParams::default_for(whale());
         p.years = 1;
         p.decile_velocity_milli = [12_000; 10];
         let h = candidate_horizons()[4];
-        let epoch1 = run_world(&p, h, World::Hold);
+        let hold1 = run_world(&p, h, World::Hold);
         p.start_height = 0;
-        let epoch0 = run_world(&p, h, World::Hold);
-        assert!(epoch0.pool_pico < epoch1.pool_pico / 100);
+        let hold0 = run_world(&p, h, World::Hold);
+        assert!(hold0.pool_pico < hold1.pool_pico / 100);
     }
 
     #[test]

@@ -335,12 +335,16 @@ pub(in crate::ledger) trait ValidationReads {
         // accrued-to-date demurrage exactly as before. The young-coin exploit
         // (elapsed ≈ 0 ⇒ accrued ≈ 0) is now caught by the capitalized term.
         // Pure integer math; only ever RAISES the floor (liveness-safe).
-        let demurrage = bth_cluster_tax::spend_demurrage_charge(
+        // #1685: the accrued term reads the in-class rate (0 in epoch 0); the
+        // capitalized term (downgrade / settlement / import toll) reads the
+        // exit-pricing rate, which has no epoch-0 holiday.
+        let demurrage = bth_cluster_tax::spend_demurrage_charge_with_exit_rate(
             output_sum,
             demurrage_factor,
             claimed_factor,
             elapsed,
             policy.demurrage_rate_bps(block_height),
+            policy.exit_pricing_rate_bps(block_height),
             blocks_per_year,
         );
 

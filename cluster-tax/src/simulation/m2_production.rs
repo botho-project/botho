@@ -696,8 +696,11 @@ impl World {
         let policy = mainnet_monetary_policy();
         let mut fee_params = ConsensusFeeParams::from_policy(&policy, p.fee_mode);
         if !p.mechanism {
-            // Demurrage never activates.
-            fee_params.halving_interval = u64::MAX;
+            // Demurrage never activates. A zero halving interval switches off
+            // BOTH the in-class rate and the exit-pricing rate; `u64::MAX`
+            // only postponed the in-class rate, and since #1685 exit pricing
+            // has no epoch-0 holiday.
+            fee_params.halving_interval = 0;
         }
         let mut draw = LotteryDrawConfig::default();
         if let Some((min_age, max_age)) = p.shapes.window {
@@ -1772,6 +1775,10 @@ mod tests {
         let off = World::new(short(720, false));
         assert_eq!(off.lottery_share(3 * y, off.reward_at(3 * y)), 0);
         assert_eq!(off.fee_params.demurrage_rate_bps(3 * y), 0);
+        assert_eq!(off.fee_params.exit_pricing_rate_bps(0), 0);
+        assert_eq!(off.fee_params.exit_pricing_rate_bps(3 * y), 0);
+        // #1685: the mechanism world prices exits from block 1.
+        assert_eq!(w.fee_params.exit_pricing_rate_bps(1), 200);
     }
 
     /// Lottery payouts are new outputs: they add to the winner's value and to

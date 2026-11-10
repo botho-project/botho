@@ -357,6 +357,11 @@ pub fn demurrage_settlement_charge(
 /// # Determinism
 /// CONSENSUS-CRITICAL: pure integer arithmetic. Liveness-safe: only ever raises
 /// the fee floor, never false-rejects a valid spend.
+///
+/// This single-rate form charges both terms at one rate. Consensus calls
+/// [`spend_demurrage_charge_with_exit_rate`], which prices the two terms at
+/// their own rates (#1685); the two agree whenever the rates are equal (from
+/// epoch 1 on), which is what this function computes.
 pub fn spend_demurrage_charge(
     transfer_value: u64,
     input_floor_factor: u64,
@@ -378,6 +383,68 @@ pub fn spend_demurrage_charge(
         output_factor,
         SETTLEMENT_HORIZON_BLOCKS,
         rate_bps,
+        blocks_per_year,
+    );
+    accrued.max(capitalized)
+}
+
+/// The consensus spend-demurrage charge (#925 + #1685): the greater of
+/// accrued-to-date demurrage at the **in-class** rate and the capitalized
+/// class-exit charge at the **exit-pricing** rate.
+///
+/// ```text
+/// charge = max(
+///     demurrage_charge(value, input_floor_factor, elapsed, accrual_rate_bps, ..),
+///     capitalized_reset_charge(value, input_floor_factor, output_factor,
+///                              SETTLEMENT_HORIZON_BLOCKS, exit_rate_bps, ..),
+/// )
+/// ```
+///
+/// Callers pass `accrual_rate_bps = MonetaryPolicy::demurrage_rate_bps(h)`
+/// (0 in the epoch-0 bootstrap holiday) and `exit_rate_bps =
+/// MonetaryPolicy::exit_pricing_rate_bps(h)` (200 bps from block 1). The
+/// capitalized term is the #925 downgrade charge, and for the two special
+/// cases of a downgrade it is also the #831 settlement charge (all-background
+/// outputs, see [`demurrage_settlement_charge`]) and the ADR-0007 bridge-import
+/// toll (the import floor `F` composed into `input_floor_factor`). Splitting
+/// the rates keeps the holiday for ordinary holding while pricing every exit
+/// from a wealth class from block 1, which closes the epoch-0 leak (#1685).
+///
+/// When `accrual_rate_bps == exit_rate_bps` this is exactly
+/// [`spend_demurrage_charge`] (unit-tested), so the DRT-checked single-rate
+/// model covers every epoch-1+ spend.
+///
+/// The ledger's consensus floor (`Ledger::consensus_fee_floor`), mempool relay
+/// admission (`relay_demurrage`) and the sims' shared
+/// [`crate::consensus_fee_model`] all call this ONE function, so block
+/// validation, relay and the models cannot diverge.
+///
+/// # Determinism
+/// CONSENSUS-CRITICAL: pure integer arithmetic. Liveness-safe: the exit term
+/// only ever raises the floor relative to [`spend_demurrage_charge`] at the
+/// in-class rate.
+pub fn spend_demurrage_charge_with_exit_rate(
+    transfer_value: u64,
+    input_floor_factor: u64,
+    output_factor: u64,
+    elapsed_blocks: u64,
+    accrual_rate_bps: u32,
+    exit_rate_bps: u32,
+    blocks_per_year: u64,
+) -> u64 {
+    let accrued = demurrage_charge(
+        transfer_value,
+        input_floor_factor,
+        elapsed_blocks,
+        accrual_rate_bps,
+        blocks_per_year,
+    );
+    let capitalized = capitalized_reset_charge(
+        transfer_value,
+        input_floor_factor,
+        output_factor,
+        SETTLEMENT_HORIZON_BLOCKS,
+        exit_rate_bps,
         blocks_per_year,
     );
     accrued.max(capitalized)
@@ -877,6 +944,63 @@ mod tests {
         let one_year = demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
         let half = demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR / 2, 200, BLOCKS_PER_YEAR);
         assert_eq!(one_year, half * 2);
+    }
+
+    /// #1685: the two-rate consensus kernel equals the single-rate one when
+    /// the rates agree, and in the epoch-0 shape (accrual 0, exit 200) it
+    /// still prices the downgrade while an in-class spend stays free.
+    #[test]
+    fn exit_rate_kernel_matches_single_rate_and_prices_epoch_zero_exits() {
+        let v = 1_000_000_000_000_000u64; // 1000 BTH
+        for (fi, fo) in [(5745u64, 1000u64), (5745, 5745), (1500, 1254), (1000, 1000)] {
+            for elapsed in [0u64, 1, BLOCKS_PER_YEAR, 10 * BLOCKS_PER_YEAR] {
+                for rate in [0u32, 200, 10_000] {
+                    assert_eq!(
+                        spend_demurrage_charge_with_exit_rate(
+                            v,
+                            fi,
+                            fo,
+                            elapsed,
+                            rate,
+                            rate,
+                            BLOCKS_PER_YEAR
+                        ),
+                        spend_demurrage_charge(v, fi, fo, elapsed, rate, BLOCKS_PER_YEAR),
+                        "fi {fi} fo {fo} elapsed {elapsed} rate {rate}"
+                    );
+                }
+            }
+        }
+
+        // Epoch-0 rates: in-class accrual 0, exit pricing 200 bps.
+        let old = 10 * BLOCKS_PER_YEAR;
+        let in_class =
+            spend_demurrage_charge_with_exit_rate(v, 5745, 5745, old, 0, 200, BLOCKS_PER_YEAR);
+        assert_eq!(in_class, 0, "in-class holding stays free in epoch 0");
+        let downgrade =
+            spend_demurrage_charge_with_exit_rate(v, 5745, 1000, 0, 0, 200, BLOCKS_PER_YEAR);
+        assert_eq!(
+            downgrade,
+            capitalized_reset_charge(
+                v,
+                5745,
+                1000,
+                SETTLEMENT_HORIZON_BLOCKS,
+                200,
+                BLOCKS_PER_YEAR
+            )
+        );
+        assert_eq!(
+            downgrade, 94_900_000_000_000,
+            "5.745x -> 1x on 1000 BTH = 94.9 BTH"
+        );
+        // Settlement and import toll are the same capitalized term.
+        assert_eq!(
+            downgrade,
+            demurrage_settlement_charge(v, 5745, 200, BLOCKS_PER_YEAR)
+        );
+        let toll = spend_demurrage_charge_with_exit_rate(v, 1475, 1254, 0, 0, 200, BLOCKS_PER_YEAR);
+        assert!(toll > 0, "import toll priced in epoch 0");
     }
 
     /// REGRESSION (issue #834 → fix #925): the wealthy-holder class-reset

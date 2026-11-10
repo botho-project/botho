@@ -337,11 +337,23 @@ $\pm 10\%$ \textbf{factor-similarity band} picker
 \path{select_decoys_cluster_aware} in
 \path{botho/src/decoy_selection.rs}) was written to keep honest
 background rings near 1$\times$, but it has no production caller. It is wallet
-policy at most, and consensus does not check it. The charge also uses the
-epoch's demurrage rate, which is zero for the first halving epoch
-(\path{demurrage_rate_bps}, \path{cluster-tax/src/monetary.rs}), so
-the class-transition and settlement charges are zero until block 6,307,200
-(as built, pending \#1685).
+policy at most, and consensus does not check it.
+
+The two terms read different rates. Ordinary accrued demurrage
+$d_{\text{accrued}}$ uses the in-class rate
+(\path{demurrage_rate_bps}, \path{cluster-tax/src/monetary.rs}), which is
+zero for the first halving epoch (blocks below 6,307,200) so that miners are
+not charged for holding their bootstrap coinbases. The capitalized reset
+$d_{\text{cap}}$ uses a separate \emph{exit-pricing rate}
+(\path{exit_pricing_rate_bps}), the same 200~bps but with no epoch-0
+holiday. Every exit from a wealth class is therefore priced from block~1:
+the class-transition charge above, the settlement charge below, and the
+bridge-import toll (Section~\ref{sec:bridge}), which is the same capitalized
+term evaluated from the import floor $F$. Before protocol 10.0.0 all three read
+the in-class rate and were free for the whole first epoch, about 315M~BTH or
+51.6\% of Phase-1 supply (\#1685; operator ruling 2026-11-09). Block
+validation (\path{consensus_fee_floor}) and mempool admission compute the
+charge with one kernel, \path{spend_demurrage_charge_with_exit_rate}.
 
 A holder may also \emph{opt in} to a \textbf{demurrage-settlement operation}
 (issue~\#831): a transaction declaring all-background (factor-1) outputs pays
@@ -422,8 +434,9 @@ This creates:
     on the \emph{source} side --- the demurrage and progressive-fee terms
     that fill the pool are value- and factor-dependent. At today's constants
     the flat $10^{8}$~pico-BTH relay minimum exceeds the factor-scaled size
-    fee for ordinary transactions, so demurrage (from the second halving
-    epoch on) is the term that is progressive in practice (pending \#1688)
+    fee for ordinary transactions, so demurrage (accrued demurrage from the
+    second halving epoch on, and class-exit charges from block~1, \#1685) is
+    the term that is progressive in practice (pending \#1688)
   \item \textbf{Deflationary pressure}: 20\% burn creates supply reduction
   \item \textbf{Anti-MEV}: No miner incentive to reorder transactions
   \item \textbf{Alignment}: Miner income comes from its share of the block

@@ -305,7 +305,7 @@ The parity review (#1683, child #1698) found that the HOLD world in §4.3 did no
 | a coin that is never spent | pays 1 year per year | pays **nothing** | pays nothing (unit test `never_spending_holder_pays_zero`) |
 | charge formula | `demurrage_charge` | `spend_demurrage_charge` inside the fee floor | the shared `cluster_tax::consensus_fee_model` (#1695/PR #1728), not a parallel formula |
 | where the fee goes | 100% to the pool | 80% to the lottery pool, 20% burned (`LotteryFeeConfig::split_fees`, `pool_fraction_permille: 800`) | 80/20 (`split_fee_pool_burn`, drift-guarded against the node) |
-| epoch 0 (first year) | charged | rate 0 (`MonetaryPolicy::demurrage_rate_bps`) | rate 0 (default run starts in epoch 1; launch start reported separately) |
+| epoch 0 (first year) | charged | in-class rate 0 (`MonetaryPolicy::demurrage_rate_bps`); since 10.0.0 settlement/downgrade at 200 bps (`exit_pricing_rate_bps`, #1685) | same (default run starts in epoch 1; launch start reported separately) |
 | ring floor / decoy dilution | none | `max(claimed, ring_centroid_implied_factor)` over a 20-member ring | same, with the wallet's ±10% factor band for honest rings, plus a min-centroid dilution adversary |
 
 Velocities are per wealth decile (`DEFAULT_DECILE_VELOCITY_MILLI`), taken from the M2 ladder:
@@ -380,12 +380,12 @@ How much residual redistribution gain survives if only a FRACTION of the top dec
 | min-centroid decoys | 1yr | +0.0838 | +0.0141 | +0.0696 | 98372.43 | 54847.01 | FAIL |
 | min-centroid decoys | 5yr | +0.0838 | +0.0718 | +0.0120 | 98372.43 | 54847.01 | PASS |
 
-#### Launch start: epoch 0 (height 0, first year demurrage-free; 100% adoption)
+#### Launch start: epoch 0 (height 0, first year free of in-class demurrage; settlement priced from block 1, #1685; 100% adoption)
 
 | horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | burned (escape, BTH) | burned (hold, BTH) | uncollected (hold, BTH) | floor |
 |---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|---------------------:|-------------------:|------------------------:|:-----:|
-| 1yr (1.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.73 | 0.00 | 24417.93 | 55968.53 | FAIL |
-| 5yr (5.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.73 | 0.00 | 24417.93 | 55968.53 | FAIL |
+| 1yr (1.00yr) | 0.7344 | 0.8032 | +0.0688 | +0.0830 | +0.0142 | 15184.00 | 97671.73 | 3796.00 | 24417.93 | 55968.53 | FAIL |
+| 5yr (5.00yr) | 0.7344 | 0.7451 | +0.0107 | +0.0830 | +0.0723 | 75920.00 | 97671.73 | 18980.00 | 24417.93 | 55968.53 | PASS |
 
 ### 8.3 Reading it
 
@@ -417,12 +417,18 @@ How much residual redistribution gain survives if only a FRACTION of the top dec
   background decoys, declared class ratcheting down on every spend) cuts the whale's paid
   demurrage by about 1.6% and moves Δgini by less than 0.002. It changes no floor verdict.
   Honest rings, with the wallet's ±10% band, dilute nothing.
-- **Epoch 0 makes settlement free.** If the run starts at launch (height 0), the consensus
-  demurrage rate is 0 for the first year. The #831 settlement charge and the #925 capitalized
-  downgrade charge are therefore both **zero**, and a whale can wrap out permanently for the
-  base fee alone (Δgini_escape −0.0001, FAIL at every horizon). No horizon choice can fix this.
-  It is a property of the epoch-0 rate gate, reported for a human decision (see the #1698 issue
-  thread).
+- **Epoch 0 no longer makes settlement free (#1685, protocol 10.0.0).** Before 10.0.0 the #831
+  settlement charge and the #925 capitalized downgrade charge read the in-class demurrage rate,
+  which is 0 for the first year, so a whale could wrap out permanently at launch for the base fee
+  alone (Δgini_escape −0.0001, FAIL at every horizon). The operator ruled on 2026-11-09 (option 2
+  on #1685) that the exit charges read a separate exit-pricing rate
+  (`MonetaryPolicy::exit_pricing_rate_bps`, the same ratified 200 bps, active from block 1),
+  while ordinary in-class demurrage keeps its epoch-0 holiday. Re-run from launch: the
+  settlement costs exactly what it costs in epoch 1 (escape pool 75,920 BTH at 5yr, the same as
+  the epoch-1 table), Δgini_escape is +0.0723 at 5yr (PASS) and +0.0142 at 1yr (FAIL), the
+  same verdicts as the epoch-1 run. The HOLD world still collects slightly less from launch
+  (Δgini_hold +0.0830 vs +0.0852) because in-class accrual is free in year 0. The 5yr
+  recommendation stands from launch as well as from epoch 1.
 
 ### 8.4 Recommendation impact
 

@@ -3894,140 +3894,174 @@ async fn handle_faucet_request(
     drop(mempool);
     info!("Faucet: found {} unspent UTXOs", utxos.len());
 
-    // Calculate fee (use minimum required fee)
-    let fee = MIN_TX_FEE;
+    // Fee: start at the relay minimum, then re-sign at the consensus floor of
+    // the block that would include the grant plus headroom (the same loop as
+    // `botho send`). Since protocol 10.0.0 (#1685) the capitalized class-exit
+    // charge applies from block 1, so a grant whose decayed output tags claim
+    // less than its ring floor costs more than `MIN_TX_FEE` even in epoch 0.
+    const MAX_FEE_PASSES: usize = 8;
+    let mut fee = MIN_TX_FEE;
+    let mut priced = None;
+    for _ in 0..MAX_FEE_PASSES {
+        // Check balance
+        let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
+        let required = amount.saturating_add(fee);
 
-    // Check balance
-    let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
-    let required = amount + fee;
+        if total_balance < required {
+            error!(
+                "Faucet: insufficient balance: have {} picocredits, need {}",
+                total_balance, required
+            );
+            return JsonRpcResponse::error(id, -32000, "Faucet has insufficient balance");
+        }
 
-    if total_balance < required {
-        error!(
-            "Faucet: insufficient balance: have {} picocredits, need {}",
-            total_balance, required
+        // Select UTXOs (simple: use enough to cover amount + fee)
+        let mut selected_utxos = Vec::new();
+        let mut selected_amount = 0u64;
+        info!(
+            "Faucet: selecting from {} UTXOs, need {} picocredits",
+            utxos.len(),
+            required
         );
-        return JsonRpcResponse::error(id, -32000, "Faucet has insufficient balance");
-    }
-
-    // Select UTXOs (simple: use enough to cover amount + fee)
-    let mut selected_utxos = Vec::new();
-    let mut selected_amount = 0u64;
-    info!(
-        "Faucet: selecting from {} UTXOs, need {} picocredits",
-        utxos.len(),
-        required
-    );
-    for (idx, utxo) in utxos.iter().enumerate() {
-        if selected_amount >= required {
-            break;
+        for (idx, utxo) in utxos.iter().enumerate() {
+            if selected_amount >= required {
+                break;
+            }
+            info!(
+                "Faucet: selected UTXO {}: id={}, amount={}, target_key={}",
+                idx,
+                hex::encode(&utxo.id.to_bytes()[0..8]),
+                utxo.output.amount,
+                hex::encode(&utxo.output.target_key[0..8])
+            );
+            selected_utxos.push(utxo.clone());
+            selected_amount += utxo.output.amount;
         }
         info!(
-            "Faucet: selected UTXO {}: id={}, amount={}, target_key={}",
-            idx,
-            hex::encode(&utxo.id.to_bytes()[0..8]),
-            utxo.output.amount,
-            hex::encode(&utxo.output.target_key[0..8])
+            "Faucet: selected {} UTXOs totaling {} picocredits",
+            selected_utxos.len(),
+            selected_amount
         );
-        selected_utxos.push(utxo.clone());
-        selected_amount += utxo.output.amount;
-    }
-    info!(
-        "Faucet: selected {} UTXOs totaling {} picocredits",
-        selected_utxos.len(),
-        selected_amount
-    );
 
-    // Get current height
-    let current_height = match ledger.get_chain_state() {
-        Ok(state) => state.height,
-        Err(e) => {
-            error!("Faucet: failed to get chain state: {}", e);
-            return JsonRpcResponse::error(id, -32000, "Failed to get chain state");
-        }
-    };
+        // Get current height
+        let current_height = match ledger.get_chain_state() {
+            Ok(state) => state.height,
+            Err(e) => {
+                error!("Faucet: failed to get chain state: {}", e);
+                return JsonRpcResponse::error(id, -32000, "Failed to get chain state");
+            }
+        };
 
-    // Build outputs.
-    //
-    // Protocol 6.0.0: every value-transfer output is a hybrid post-quantum
-    // stealth output carrying an ML-KEM-768 ciphertext encapsulated to the
-    // destination's published KEM key (issue #958 sub-issue 4). The recipient
-    // output is index 0; the change output (a self-send encapsulated to our
-    // own address) is index 1.
-    let mut outputs = Vec::new();
-    match TxOutput::new_hybrid_to_address(
-        amount,
-        &recipient,
-        0,
-        None,
-        bth_transaction_types::ClusterTagVector::empty(),
-    ) {
-        Ok(out) => outputs.push(out),
-        Err(e) => {
-            error!(
-                "Faucet: recipient address lacks a valid ML-KEM-768 key: {}",
-                e
-            );
-            return JsonRpcResponse::error(id, -32000, "Recipient address is not post-quantum");
-        }
-    }
-
-    // Change output (if any), encapsulated to our own published address.
-    let change = selected_amount - amount - fee;
-    if change > 0 {
+        // Build outputs.
+        //
+        // Protocol 6.0.0: every value-transfer output is a hybrid post-quantum
+        // stealth output carrying an ML-KEM-768 ciphertext encapsulated to the
+        // destination's published KEM key (issue #958 sub-issue 4). The recipient
+        // output is index 0; the change output (a self-send encapsulated to our
+        // own address) is index 1.
+        let mut outputs = Vec::new();
         match TxOutput::new_hybrid_to_address(
-            change,
-            &our_address,
-            1,
+            amount,
+            &recipient,
+            0,
             None,
             bth_transaction_types::ClusterTagVector::empty(),
         ) {
             Ok(out) => outputs.push(out),
             Err(e) => {
-                error!("Faucet: wallet address lacks a valid ML-KEM-768 key: {}", e);
-                return JsonRpcResponse::error(id, -32000, "Wallet address is not post-quantum");
+                error!(
+                    "Faucet: recipient address lacks a valid ML-KEM-768 key: {}",
+                    e
+                );
+                return JsonRpcResponse::error(id, -32000, "Recipient address is not post-quantum");
             }
         }
-    }
 
-    // Create the transaction
-    let tx = match wallet.create_private_transaction(
-        &selected_utxos,
-        outputs,
-        fee,
-        current_height,
-        &ledger,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            // Cold-start guard (issue #583): on a fresh-genesis chain the decoy
-            // anonymity set has not warmed up yet, so ring formation fails with
-            // a typed `LedgerError::InsufficientDecoys`. This self-heals in
-            // ~30 blocks. Catch ONLY that specific case and return a graceful,
-            // structured "warming up" result (HTTP 200, not an error) so the
-            // web-wallet can render a friendly message. All other tx-creation
-            // failures still surface as real errors below.
-            if let Some(response) = faucet::FaucetResponse::warming_up_for_tx_error(&e) {
-                warn!(
-                    "Faucet: chain warming up — insufficient decoys (have {:?}, need {:?})",
-                    response.have_decoys, response.need_decoys
-                );
-                return match serde_json::to_value(&response) {
-                    Ok(value) => JsonRpcResponse::success(id, value),
-                    Err(e) => JsonRpcResponse::error(
+        // Change output (if any), encapsulated to our own published address.
+        let change = selected_amount - amount - fee;
+        if change > 0 {
+            match TxOutput::new_hybrid_to_address(
+                change,
+                &our_address,
+                1,
+                None,
+                bth_transaction_types::ClusterTagVector::empty(),
+            ) {
+                Ok(out) => outputs.push(out),
+                Err(e) => {
+                    error!("Faucet: wallet address lacks a valid ML-KEM-768 key: {}", e);
+                    return JsonRpcResponse::error(
                         id,
                         -32000,
-                        &format!("Failed to serialize response: {}", e),
-                    ),
-                };
+                        "Wallet address is not post-quantum",
+                    );
+                }
             }
-
-            error!("Faucet: failed to create transaction: {}", e);
-            return JsonRpcResponse::error(
-                id,
-                -32000,
-                &format!("Failed to create transaction: {}", e),
-            );
         }
+
+        // Create the transaction
+        let tx = match wallet.create_private_transaction(
+            &selected_utxos,
+            outputs,
+            fee,
+            current_height,
+            &ledger,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                // Cold-start guard (issue #583): on a fresh-genesis chain the decoy
+                // anonymity set has not warmed up yet, so ring formation fails with
+                // a typed `LedgerError::InsufficientDecoys`. This self-heals in
+                // ~30 blocks. Catch ONLY that specific case and return a graceful,
+                // structured "warming up" result (HTTP 200, not an error) so the
+                // web-wallet can render a friendly message. All other tx-creation
+                // failures still surface as real errors below.
+                if let Some(response) = faucet::FaucetResponse::warming_up_for_tx_error(&e) {
+                    warn!(
+                        "Faucet: chain warming up — insufficient decoys (have {:?}, need {:?})",
+                        response.have_decoys, response.need_decoys
+                    );
+                    return match serde_json::to_value(&response) {
+                        Ok(value) => JsonRpcResponse::success(id, value),
+                        Err(e) => JsonRpcResponse::error(
+                            id,
+                            -32000,
+                            &format!("Failed to serialize response: {}", e),
+                        ),
+                    };
+                }
+
+                error!("Faucet: failed to create transaction: {}", e);
+                return JsonRpcResponse::error(
+                    id,
+                    -32000,
+                    &format!("Failed to create transaction: {}", e),
+                );
+            }
+        };
+
+        let floor = match ledger.consensus_fee_floor(&tx, current_height + 1) {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Faucet: failed to compute the consensus fee floor: {}", e);
+                return JsonRpcResponse::error(id, -32000, "Failed to compute the fee floor");
+            }
+        };
+        // 1/64 headroom absorbs ring-dependent jitter between passes and a
+        // short inclusion delay (as in `commands::send`).
+        let headroom = floor / 64;
+        if fee >= floor.saturating_add(headroom) {
+            priced = Some(tx);
+            break;
+        }
+        fee = floor.saturating_add(headroom.saturating_mul(2));
+    }
+    let Some(tx) = priced else {
+        error!(
+            "Faucet: could not settle a fee meeting the consensus floor after {} passes",
+            MAX_FEE_PASSES
+        );
+        return JsonRpcResponse::error(id, -32000, "Failed to price the faucet transaction");
     };
 
     let tx_hash = tx.hash();
@@ -4087,8 +4121,9 @@ async fn handle_faucet_request(
 /// 100%-cluster-tagged coinbases (`block.rs::to_tx_output`) — it never
 /// naturally holds factor-1. A settlement is the consensus-sanctioned
 /// reclassification to background (the same on-ramp a real wrap deposit
-/// uses); in the bootstrap epoch the capitalized settlement charge is zero
-/// (`demurrage_rate_bps == 0`), so it costs only the base fee.
+/// uses). Since protocol 10.0.0 (#1685) the capitalized settlement charge
+/// applies from block 1 (`exit_pricing_rate_bps`, no epoch-0 holiday), so the
+/// fee is priced at the consensus floor rather than fixed at `MIN_TX_FEE`.
 ///
 /// Params: `{ "amount": <picocredits, optional, default 1 BTH> }`.
 /// Gated to testnet — never exposed on mainnet.
@@ -4125,12 +4160,6 @@ async fn handle_dev_settle_to_background(
         .and_then(|v| v.as_u64())
         .unwrap_or(DEFAULT_SETTLE_AMOUNT);
 
-    let fee = MIN_TX_FEE;
-    let required = match amount.checked_add(fee) {
-        Some(r) => r,
-        None => return JsonRpcResponse::error(id, -32602, "amount + fee overflow"),
-    };
-
     let our_address = wallet.default_address();
 
     let ledger = read_lock!(state.ledger, id);
@@ -4154,27 +4183,6 @@ async fn handle_dev_settle_to_background(
         .collect();
     drop(mempool);
 
-    // Select enough inputs to cover amount + fee.
-    let mut selected_utxos = Vec::new();
-    let mut selected_amount = 0u64;
-    for utxo in &utxos {
-        if selected_amount >= required {
-            break;
-        }
-        selected_utxos.push(utxo.clone());
-        selected_amount = selected_amount.saturating_add(utxo.output.amount);
-    }
-    if selected_amount < required {
-        return JsonRpcResponse::error(
-            id,
-            -32000,
-            &format!(
-                "insufficient spendable balance: have {} pc, need {} pc (mine more blocks)",
-                selected_amount, required
-            ),
-        );
-    }
-
     let current_height = match ledger.get_chain_state() {
         Ok(s) => s.height,
         Err(e) => {
@@ -4183,32 +4191,50 @@ async fn handle_dev_settle_to_background(
         }
     };
 
-    // Build the (background) outputs: the settled amount + any change, both back
-    // to our own address. `create_settlement_transaction` forces empty cluster
-    // tags and stamps the settlement flag / settled_value.
-    let mut outputs = Vec::new();
-    match TxOutput::new_hybrid_to_address(
-        amount,
-        &our_address,
-        0,
-        None,
-        bth_transaction_types::ClusterTagVector::empty(),
-    ) {
-        Ok(out) => outputs.push(out),
-        Err(e) => {
-            error!(
-                "dev_settleToBackground: wallet address lacks ML-KEM key: {}",
-                e
-            );
-            return JsonRpcResponse::error(id, -32000, "Wallet address is not post-quantum");
+    // #1685: a settlement pays the capitalized #831 charge from block 1 (exit
+    // pricing has no epoch-0 holiday), on the whole settled value including
+    // the change. So the fee is not a constant: sign at `MIN_TX_FEE`, then
+    // re-sign at the consensus floor of the block that would include it plus
+    // headroom (the same loop as `botho send`), re-selecting inputs as the fee
+    // grows.
+    const MAX_FEE_PASSES: usize = 8;
+    let mut fee = MIN_TX_FEE;
+    let mut settled = None;
+    for _ in 0..MAX_FEE_PASSES {
+        let required = match amount.checked_add(fee) {
+            Some(r) => r,
+            None => return JsonRpcResponse::error(id, -32602, "amount + fee overflow"),
+        };
+
+        // Select enough inputs to cover amount + fee.
+        let mut selected_utxos = Vec::new();
+        let mut selected_amount = 0u64;
+        for utxo in &utxos {
+            if selected_amount >= required {
+                break;
+            }
+            selected_utxos.push(utxo.clone());
+            selected_amount = selected_amount.saturating_add(utxo.output.amount);
         }
-    }
-    let change = selected_amount - amount - fee;
-    if change > 0 {
+        if selected_amount < required {
+            return JsonRpcResponse::error(
+                id,
+                -32000,
+                &format!(
+                    "insufficient spendable balance: have {} pc, need {} pc (mine more blocks)",
+                    selected_amount, required
+                ),
+            );
+        }
+
+        // Build the (background) outputs: the settled amount + any change, both
+        // back to our own address. `create_settlement_transaction` forces empty
+        // cluster tags and stamps the settlement flag / settled_value.
+        let mut outputs = Vec::new();
         match TxOutput::new_hybrid_to_address(
-            change,
+            amount,
             &our_address,
-            1,
+            0,
             None,
             bth_transaction_types::ClusterTagVector::empty(),
         ) {
@@ -4221,24 +4247,73 @@ async fn handle_dev_settle_to_background(
                 return JsonRpcResponse::error(id, -32000, "Wallet address is not post-quantum");
             }
         }
-    }
-
-    let tx = match wallet.create_settlement_transaction(
-        &selected_utxos,
-        outputs,
-        fee,
-        current_height,
-        &ledger,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("dev_settleToBackground: failed to build settlement: {}", e);
-            return JsonRpcResponse::error(
-                id,
-                -32000,
-                &format!("Failed to build settlement transaction: {}", e),
-            );
+        let change = selected_amount - amount - fee;
+        if change > 0 {
+            match TxOutput::new_hybrid_to_address(
+                change,
+                &our_address,
+                1,
+                None,
+                bth_transaction_types::ClusterTagVector::empty(),
+            ) {
+                Ok(out) => outputs.push(out),
+                Err(e) => {
+                    error!(
+                        "dev_settleToBackground: wallet address lacks ML-KEM key: {}",
+                        e
+                    );
+                    return JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        "Wallet address is not post-quantum",
+                    );
+                }
+            }
         }
+
+        let tx = match wallet.create_settlement_transaction(
+            &selected_utxos,
+            outputs,
+            fee,
+            current_height,
+            &ledger,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                error!("dev_settleToBackground: failed to build settlement: {}", e);
+                return JsonRpcResponse::error(
+                    id,
+                    -32000,
+                    &format!("Failed to build settlement transaction: {}", e),
+                );
+            }
+        };
+
+        let floor = match ledger.consensus_fee_floor(&tx, current_height + 1) {
+            Ok(f) => f,
+            Err(e) => {
+                error!("dev_settleToBackground: failed to price settlement: {}", e);
+                return JsonRpcResponse::error(id, -32000, "Failed to compute the fee floor");
+            }
+        };
+        // Headroom of 1/64 of the floor absorbs ring-dependent jitter between
+        // passes and a short inclusion delay (as in `commands::send`).
+        let headroom = floor / 64;
+        if fee >= floor.saturating_add(headroom) {
+            settled = Some((tx, change));
+            break;
+        }
+        fee = floor.saturating_add(headroom.saturating_mul(2));
+    }
+    let Some((tx, change)) = settled else {
+        return JsonRpcResponse::error(
+            id,
+            -32000,
+            &format!(
+                "Could not settle a fee meeting the consensus floor after {} passes",
+                MAX_FEE_PASSES
+            ),
+        );
     };
 
     let tx_hash = tx.hash();

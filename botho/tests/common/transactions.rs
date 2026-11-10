@@ -40,7 +40,7 @@ fn output(amount: u64, recipient: &PublicAddress, index: usize) -> TxOutput {
 /// * `fee` - Transaction fee
 /// * `current_height` - Current chain height (used for tx metadata)
 /// * `network` - The test network (for decoy selection)
-pub fn create_signed_transaction(
+fn build_signed_transaction(
     sender_wallet: &Wallet,
     sender_utxo: &Utxo,
     subaddress_index: u64,
@@ -145,7 +145,7 @@ pub fn create_signed_transaction(
 /// * `fee` - Transaction fee
 /// * `current_height` - Current chain height
 /// * `network` - The test network
-pub fn create_multi_input_transaction(
+fn build_multi_input_transaction(
     sender_wallet: &Wallet,
     utxos_to_spend: &[(Utxo, u64)],
     recipient: &PublicAddress,
@@ -247,7 +247,7 @@ pub fn create_multi_input_transaction(
 /// * `fee` - Transaction fee
 /// * `current_height` - Current chain height
 /// * `network` - The test network
-pub fn create_split_payment_transaction(
+fn build_split_payment_transaction(
     sender_wallet: &Wallet,
     sender_utxo: &Utxo,
     subaddress_index: u64,
@@ -336,4 +336,135 @@ pub fn create_split_payment_transaction(
         fee,
         current_height,
     ))
+}
+
+/// The demurrage part of the consensus fee floor for `tx` in the next block:
+/// `consensus_fee_floor − size/factor base`.
+///
+/// Since protocol 10.0.0 (#1685) the capitalized class-exit charge (the #925
+/// downgrade charge) applies from block 1. These helpers write background
+/// (empty-tag) outputs, so spending a cluster-tagged coinbase is a class
+/// downgrade and owes that charge even in epoch 0; before 10.0.0 it was 0
+/// until block 6,307,200.
+pub fn exit_charge(network: &TestNetwork, tx: &Transaction) -> u64 {
+    use bth_cluster_tax::{FeeConfig, TransactionType};
+    let node = network.get_node(0);
+    let height = node.chain_state().height + 1;
+    let ledger = node.ledger.read().unwrap();
+    let floor = ledger
+        .consensus_fee_floor(tx, height)
+        .expect("consensus fee floor");
+    let wealth = ledger
+        .effective_cluster_wealth_from_outputs(&tx.outputs)
+        .expect("claimed wealth");
+    let base = FeeConfig::default().minimum_fee_dynamic_with_outputs(
+        TransactionType::Hidden,
+        tx.estimate_size(),
+        wealth,
+        tx.outputs.len(),
+        tx.outputs.iter().filter(|o| o.has_memo()).count(),
+        1, // CONSENSUS_FEE_BASE
+    );
+    floor.saturating_sub(base)
+}
+
+/// Sign with `fee` on top of the transaction's exit charge
+/// ([`exit_charge`]): build at `fee`, and if the next block's floor carries an
+/// exit charge, re-sign at `fee + charge` plus 1/32 headroom (each signing
+/// draws fresh decoys, which moves the ring floor a little). The caller's
+/// `fee` stays the part above the charge, so relative fees between test
+/// transactions are preserved. Read the paid fee from `tx.fee`.
+fn with_exit_charge(
+    network: &TestNetwork,
+    fee: u64,
+    mut build: impl FnMut(u64) -> Result<Transaction, String>,
+) -> Result<Transaction, String> {
+    let mut paid = fee;
+    for _ in 0..8 {
+        let tx = build(paid)?;
+        let need = fee.saturating_add(exit_charge(network, &tx));
+        if paid >= need {
+            return Ok(tx);
+        }
+        paid = need.saturating_add((need - fee) / 32);
+    }
+    Err("could not settle a fee covering the exit charge".into())
+}
+
+/// Create a signed CLSAG ring signature transaction.
+///
+/// `fee` is paid on top of any class-exit charge the spend owes (see
+/// [`exit_charge`]); the paid fee is `tx.fee`. Other arguments as
+/// [`build_signed_transaction`].
+#[allow(clippy::too_many_arguments)]
+pub fn create_signed_transaction(
+    sender_wallet: &Wallet,
+    sender_utxo: &Utxo,
+    subaddress_index: u64,
+    recipient: &PublicAddress,
+    amount: u64,
+    fee: u64,
+    current_height: u64,
+    network: &TestNetwork,
+) -> Result<Transaction, String> {
+    with_exit_charge(network, fee, |fee| {
+        build_signed_transaction(
+            sender_wallet,
+            sender_utxo,
+            subaddress_index,
+            recipient,
+            amount,
+            fee,
+            current_height,
+            network,
+        )
+    })
+}
+
+/// Create a multi-input transaction; `fee` is paid on top of any exit charge
+/// (see [`create_signed_transaction`]).
+pub fn create_multi_input_transaction(
+    sender_wallet: &Wallet,
+    utxos_to_spend: &[(Utxo, u64)],
+    recipient: &PublicAddress,
+    amount: u64,
+    fee: u64,
+    current_height: u64,
+    network: &TestNetwork,
+) -> Result<Transaction, String> {
+    with_exit_charge(network, fee, |fee| {
+        build_multi_input_transaction(
+            sender_wallet,
+            utxos_to_spend,
+            recipient,
+            amount,
+            fee,
+            current_height,
+            network,
+        )
+    })
+}
+
+/// Create a split payment transaction; `fee` is paid on top of any exit
+/// charge (see [`create_signed_transaction`]).
+pub fn create_split_payment_transaction(
+    sender_wallet: &Wallet,
+    sender_utxo: &Utxo,
+    subaddress_index: u64,
+    recipients: &[(&PublicAddress, u64)],
+    fee: u64,
+    current_height: u64,
+    network: &TestNetwork,
+) -> Result<Transaction, String> {
+    with_exit_charge(network, fee, |fee| {
+        build_split_payment_transaction(
+            sender_wallet,
+            sender_utxo,
+            subaddress_index,
+            recipients,
+            fee,
+            current_height,
+            network,
+        )
+    })
 }

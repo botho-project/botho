@@ -39,7 +39,8 @@ in `cluster-tax/src/lottery.rs` for simulation only; the consensus default is
 `SelectionMode::Uniform`. The other two components did ship: emission routing
 (`lottery_emission_bps`, `cluster-tax/src/monetary.rs`) and demurrage on
 the consensus fee floor (`consensus_fee_floor`,
-`botho/src/ledger/store/validation.rs`; zero in epoch 0, #1685). The
+`botho/src/ledger/store/validation.rs`; accrued demurrage is zero in epoch 0,
+while class-exit charges apply from block 1 since protocol 10.0.0, #1685). The
 simulated Gini results below are for the tilted payout and do not measure the
 implemented draw; the separate M2 re-run (#1696) and historical stationary splitting study
 (#1761) are summarised above.

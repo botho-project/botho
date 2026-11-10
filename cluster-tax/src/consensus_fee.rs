@@ -13,13 +13,17 @@
 //! ```text
 //! floor = FeeConfig::default().minimum_fee_dynamic_with_outputs(
 //!             Hidden, size, claimed_wealth, n_out, n_memo, CONSENSUS_FEE_BASE)
-//!       + spend_demurrage_charge(output_sum, max(claimed_factor, floor_factor),
-//!             claimed_factor, elapsed, demurrage_rate_bps(height), blocks_per_year)
+//!       + spend_demurrage_charge_with_exit_rate(output_sum,
+//!             max(claimed_factor, floor_factor), claimed_factor, elapsed,
+//!             demurrage_rate_bps(height), exit_pricing_rate_bps(height),
+//!             blocks_per_year)
 //! ```
 //!
 //! i.e. `1 pico/byte × size × factor × min(n_out, 10)²` plus memo fees, plus
-//! demurrage (accrued-to-date, or the capitalized class-downgrade charge,
-//! whichever is larger).
+//! demurrage (accrued-to-date at the in-class rate, or the capitalized
+//! class-downgrade charge at the exit-pricing rate, whichever is larger). The
+//! in-class rate is zero in epoch 0; the exit-pricing rate is 200 bps from
+//! block 1 (#1685).
 //!
 //! The ledger resolves the DB-dependent inputs **before** it runs this math:
 //! the output-tag effective cluster wealth (`claimed_wealth`), the composed
@@ -43,7 +47,7 @@
 //! simulators price fees the way the node does.
 
 use crate::{
-    demurrage::spend_demurrage_charge,
+    demurrage::spend_demurrage_charge_with_exit_rate,
     fee_curve::{ClusterFactorCurve, FeeConfig, TransactionType, OUTPUT_FEE_EXPONENT_SCALE},
     MonetaryPolicy,
 };
@@ -105,8 +109,9 @@ pub const CONSENSUS_RING_AGE_QUANTILE_BPS: u32 = 10_000;
 /// (`botho::monetary::mainnet_policy`): `365 × 86400 / 5`.
 pub const MAINNET_BLOCKS_PER_YEAR: u64 = 6_307_200;
 
-/// Mainnet halving interval (`botho::monetary::mainnet_policy`). Demurrage is
-/// zero during epoch 0 (`height < halving_interval`).
+/// Mainnet halving interval (`botho::monetary::mainnet_policy`). In-class
+/// demurrage is zero during epoch 0 (`height < halving_interval`); exit
+/// pricing is not (#1685).
 pub const MAINNET_HALVING_INTERVAL: u64 = MAINNET_BLOCKS_PER_YEAR;
 
 /// Mirror of the node's `botho::monetary::mainnet_policy()` (#1696), for sims
@@ -206,17 +211,30 @@ impl ConsensusFeeParams {
         self
     }
 
-    /// The consensus demurrage rate at `height`, via
-    /// [`MonetaryPolicy::demurrage_rate_bps`] (zero in epoch 0).
-    pub fn demurrage_rate_bps(&self, height: u64) -> u32 {
+    /// The monetary policy these parameters stand for (only
+    /// `halving_interval` matters to the rate accessors).
+    fn rate_policy(&self) -> MonetaryPolicy {
         MonetaryPolicy {
             halving_interval: self.halving_interval,
             ..MonetaryPolicy::default()
         }
-        .demurrage_rate_bps(height)
     }
 
-    /// A height in epoch 1 (demurrage active) — the first post-bootstrap block.
+    /// The consensus in-class demurrage rate at `height`, via
+    /// [`MonetaryPolicy::demurrage_rate_bps`] (zero in epoch 0).
+    pub fn demurrage_rate_bps(&self, height: u64) -> u32 {
+        self.rate_policy().demurrage_rate_bps(height)
+    }
+
+    /// The consensus exit-pricing rate at `height` (downgrade, settlement and
+    /// import toll), via [`MonetaryPolicy::exit_pricing_rate_bps`] (200 bps
+    /// from block 1, #1685).
+    pub fn exit_pricing_rate_bps(&self, height: u64) -> u32 {
+        self.rate_policy().exit_pricing_rate_bps(height)
+    }
+
+    /// A height in epoch 1 (in-class demurrage active) — the first
+    /// post-bootstrap block.
     pub const fn first_demurrage_height(&self) -> u64 {
         self.halving_interval
     }
@@ -266,7 +284,8 @@ pub struct ConsensusFeeInputs {
 pub struct ConsensusFeeBreakdown {
     /// `fee_per_byte × size × factor × min(n_out, cap)² + memo fees`.
     pub base: u64,
-    /// `spend_demurrage_charge(..)`: accrued or capitalized downgrade.
+    /// `spend_demurrage_charge_with_exit_rate(..)`: accrued or capitalized
+    /// downgrade.
     pub demurrage: u64,
     /// `base + demurrage` — `Ledger::consensus_fee_floor`.
     pub consensus_floor: u64,
@@ -325,12 +344,13 @@ pub fn consensus_fee_breakdown(
     };
 
     let demurrage_factor = claimed_factor.max(inputs.floor);
-    let demurrage = spend_demurrage_charge(
+    let demurrage = spend_demurrage_charge_with_exit_rate(
         inputs.output_sum,
         demurrage_factor,
         claimed_factor,
         inputs.elapsed,
         params.demurrage_rate_bps(inputs.height),
+        params.exit_pricing_rate_bps(inputs.height),
         params.blocks_per_year,
     );
 
@@ -527,6 +547,7 @@ mod tests {
 
     #[test]
     fn demurrage_is_zero_in_epoch_zero_and_active_after() {
+        // In-class accrued demurrage keeps its epoch-0 holiday.
         let p = ConsensusFeeParams::mainnet(FeeModelMode::ConsensusOnly);
         let old = 2 * MAINNET_BLOCKS_PER_YEAR;
         let wealthy = ClaimedClass::Factor(6_000);
@@ -535,6 +556,30 @@ mod tests {
             consensus_fee_breakdown(&inputs(wealthy, 6_000, old, MAINNET_HALVING_INTERVAL), &p);
         assert_eq!(pre.demurrage, 0);
         assert!(post.demurrage > 0);
+    }
+
+    /// #1685: the downgrade (and so the settlement and the import toll) is
+    /// priced at height 1, at the same value as in epoch 1.
+    #[test]
+    fn epoch_zero_downgrade_is_priced_at_the_exit_rate() {
+        let p = ConsensusFeeParams::mainnet(FeeModelMode::ConsensusOnly);
+        assert_eq!(p.demurrage_rate_bps(1), 0);
+        assert_eq!(p.exit_pricing_rate_bps(1), 200);
+        let at1 = consensus_fee_breakdown(&inputs(ClaimedClass::Factor(1_000), 5_745, 0, 1), &p);
+        let at_epoch1 = consensus_fee_breakdown(
+            &inputs(
+                ClaimedClass::Factor(1_000),
+                5_745,
+                0,
+                MAINNET_HALVING_INTERVAL,
+            ),
+            &p,
+        );
+        assert!(at1.demurrage > 0, "epoch-0 downgrade must be priced");
+        assert_eq!(at1.demurrage, at_epoch1.demurrage);
+        // Import toll: 1.475x floor, plain-curve 1.254x claim.
+        let toll = consensus_fee_breakdown(&inputs(ClaimedClass::Factor(1_254), 1_475, 0, 1), &p);
+        assert!(toll.demurrage > 0, "epoch-0 import toll must be priced");
     }
 
     #[test]
