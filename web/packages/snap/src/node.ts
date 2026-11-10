@@ -154,6 +154,8 @@ interface RawOutput {
   winnerOutpoint?: string;
   /** Stored cluster tags (`[clusterId, weight]` pairs). */
   clusterTags?: Array<[number, number]>;
+  /** The same tags, ids as decimal strings (lossless, #1687). */
+  clusterTagsDec?: Array<[string, number]>;
 }
 
 /**
@@ -181,6 +183,7 @@ function decodeRow(o: RawOutput): ChainOutput {
   if (o.lotteryContext != null) row.lotteryContext = o.lotteryContext;
   if (o.winnerOutpoint !== undefined) row.winnerOutpoint = o.winnerOutpoint;
   if (o.clusterTags !== undefined) row.clusterTags = o.clusterTags;
+  if (o.clusterTagsDec !== undefined) row.clusterTagsDec = o.clusterTagsDec;
   return row;
 }
 

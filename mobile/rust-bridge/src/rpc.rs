@@ -67,6 +67,12 @@ pub struct RpcOutput {
     /// age-similar ring decoys (#1861).
     #[serde(skip)]
     pub height: u64,
+    /// The output's stored cluster tags, `[clusterId, weight]` pairs. Serde
+    /// reads the full u64 id exactly (no JS-number rounding), so the mobile
+    /// path uses `clusterTags` directly. A spend's outputs inherit them
+    /// (protocol 10.0.0 retained-weight floor, #1687). Empty when absent.
+    #[serde(rename = "clusterTags", default)]
+    pub cluster_tags: Vec<(u64, u32)>,
 }
 
 /// Spent/pending status of a key image from `chain_areKeyImagesSpent`.

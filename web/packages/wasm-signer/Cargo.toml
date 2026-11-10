@@ -22,6 +22,10 @@ path = "src/lib.rs"
 # so browser SENDS attach an ML-KEM-768 ciphertext to every output and are
 # accepted under 6.0.0 universal-ML-KEM consensus enforcement (issue #978).
 bth-transaction-clsag = { path = "../../../transaction/clsag", features = ["pq"] }
+# Cluster-tag vectors and the node-identical amount-weighted merge, so a send
+# inherits its inputs' decayed tags as the node and CLI wallets do (protocol
+# 10.0.0 retained-weight floor, #1687).
+bth-transaction-types = { path = "../../../transaction/types" }
 bth-account-keys = { path = "../../../account-keys" }
 bth-address-codec = { path = "../../../address-codec" }
 bth-crypto-keys = { path = "../../../crypto/keys" }

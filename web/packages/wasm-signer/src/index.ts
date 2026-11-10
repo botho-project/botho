@@ -103,6 +103,15 @@ export interface SpendInput {
    */
   lottery_context?: LotteryContext | null
   /**
+   * The owned output's stored cluster tags, `[clusterId, weight]` with the id
+   * a DECIMAL STRING (from the row's `clusterTagsDec`): a cluster id is a full
+   * u64 that a JS number would round. The signer's outputs inherit these
+   * decayed 5%; since protocol 10.0.0 consensus rejects a spend keeping less
+   * than 95% of a cluster's weight (#1687), so a tagged input must pass them.
+   * Omit for an untagged input.
+   */
+  cluster_tags?: Array<[string, number]>
+  /**
    * Decoys for this input's ring. Must contain at least `ringSize() - 1`
    * distinct outputs.
    */
@@ -207,8 +216,16 @@ export interface ChainOutput {
    * closed rather than falling back to chain-ordered decoys.
    */
   height?: number
-  /** The output's stored cluster tags (`[clusterId, weight]` pairs). */
+  /**
+   * The output's stored cluster tags (`[clusterId, weight]` pairs). The ids
+   * are JS numbers and lose precision above 2^53; use `clusterTagsDec`.
+   */
   clusterTags?: Array<[number, number]>
+  /**
+   * The same tags with each id a decimal string (`clusterTagsDec`, #1687):
+   * lossless, and what the send path passes to the signer.
+   */
+  clusterTagsDec?: Array<[string, number]>
   /** Hex-encoded 32-byte one-time target key of the output. */
   targetKey: string
   /** Hex-encoded 32-byte ephemeral public key of the output. */

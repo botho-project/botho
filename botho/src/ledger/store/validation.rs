@@ -17,6 +17,47 @@ pub(in crate::ledger) enum RootRule {
     /// the lottery summary, so the block hash commits to the payouts.
     BodyV2([u8; 32]),
 }
+/// One input for the protocol 10.0.0 tag rules: `(pseudo_output_amount,
+/// [(member amount, member tags as (cluster, weight))])`.
+pub(in crate::ledger) type SpendInputTags = (u64, Vec<(u64, Vec<(u64, u32)>)>);
+
+/// A tag vector as `(cluster id, weight)` pairs.
+pub(in crate::ledger) fn tag_pairs(tags: &ClusterTagVector) -> Vec<(u64, u32)> {
+    tags.entries
+        .iter()
+        .map(|e| (e.cluster_id.0, e.weight))
+        .collect()
+}
+
+fn spend_ring_views(rings: &[SpendInputTags]) -> Vec<Vec<(u64, &[(u64, u32)])>> {
+    rings
+        .iter()
+        .map(|(_, members)| members.iter().map(|(a, t)| (*a, t.as_slice())).collect())
+        .collect()
+}
+
+fn spend_rings<'a>(
+    rings: &[SpendInputTags],
+    views: &'a [Vec<(u64, &'a [(u64, u32)])>],
+) -> Vec<bth_cluster_tax::SpendRing<'a>> {
+    rings
+        .iter()
+        .zip(views)
+        .map(|((pseudo, _), members)| bth_cluster_tax::SpendRing {
+            pseudo_amount: *pseudo,
+            members,
+        })
+        .collect()
+}
+
+// The pure retention kernel restates these two tag-vector limits; keep them
+// equal to the node's.
+const _: () = assert!(
+    bth_cluster_tax::RETENTION_MIN_STORED_WEIGHT == bth_transaction_types::MIN_STORED_WEIGHT
+);
+const _: () =
+    assert!(bth_cluster_tax::RETENTION_MAX_CLUSTER_TAGS == bth_transaction_types::MAX_CLUSTER_TAGS);
+
 #[derive(Clone, Copy)]
 pub(in crate::ledger) enum ReadPolicy {
     Legacy,
@@ -122,6 +163,79 @@ pub(in crate::ledger) trait ValidationReads {
             bth_cluster_tax::import_cluster_id_for_height(height).0,
         )
     }
+    /// Every input's pseudo-output amount and resolved ring members
+    /// `(amount, tags)`, for the protocol 10.0.0 tag rules (#1687). A member
+    /// that does not resolve is skipped (C3 rejects such a ring first).
+    fn resolve_spend_rings(
+        &self,
+        tx: &BothoTransaction,
+    ) -> Result<Vec<SpendInputTags>, LedgerError> {
+        let mut rings = Vec::with_capacity(tx.inputs.clsag().len());
+        for input in tx.inputs.clsag() {
+            let mut members = Vec::with_capacity(input.ring.len());
+            for member in &input.ring {
+                if let Some(utxo) = self.get_utxo_by_target_key(&member.target_key)? {
+                    members.push((utxo.output.amount, tag_pairs(&utxo.output.cluster_tags)));
+                }
+            }
+            rings.push((input.pseudo_output_amount, members));
+        }
+        Ok(rings)
+    }
+    /// The ADR-0007 import floor read from the INPUTS (protocol 10.0.0,
+    /// #1687): each input's value (its pseudo-output amount) at the largest
+    /// import share among its spend candidates, blended with 1x
+    /// (`bth_cluster_tax::import_floor_factor_from_inputs`). The spender cannot
+    /// lower it by rewriting its output tags, and a decoy cannot dilute it.
+    /// Import membership is the recorded set, fail-closed on DB error.
+    fn import_floor_factor_from_inputs(&self, tx: &BothoTransaction) -> Result<u64, LedgerError> {
+        let rings = self.resolve_spend_rings(tx)?;
+        let mut imports = std::collections::BTreeSet::new();
+        for (_, members) in &rings {
+            for (_, tags) in members {
+                for &(c, _) in tags {
+                    if self.is_bridge_import_cluster(c)? {
+                        imports.insert(c);
+                    }
+                }
+            }
+        }
+        let views = spend_ring_views(&rings);
+        let spend_rings = spend_rings(&rings, &views);
+        Ok(bth_cluster_tax::import_floor_factor_from_inputs(
+            &spend_rings,
+            &|c| imports.contains(&c),
+        ))
+    }
+    /// The retained-weight floor (protocol 10.0.0, #1687): every output of an
+    /// ordinary transfer keeps at least `CONSENSUS_MIN_TAG_RETENTION` (95%) of
+    /// each cluster's weight that every spend candidate of a ring carries
+    /// (`bth_cluster_tax::first_tag_retention_violation`, which documents the
+    /// honest-wallet slack, pruning and truncation exemptions). A settlement is
+    /// exempt: it must reclassify all value to background (C8) and pays the
+    /// capitalized charge for it.
+    fn verify_cluster_tag_retention(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+        if tx.settlement.is_some() {
+            return Ok(());
+        }
+        let rings = self.resolve_spend_rings(tx)?;
+        let views = spend_ring_views(&rings);
+        let spend_rings = spend_rings(&rings, &views);
+        let outputs: Vec<Vec<(u64, u32)>> = tx
+            .outputs
+            .iter()
+            .map(|o| tag_pairs(&o.cluster_tags))
+            .collect();
+        let output_refs: Vec<&[(u64, u32)]> = outputs.iter().map(Vec::as_slice).collect();
+        match bth_cluster_tax::first_tag_retention_violation(&spend_rings, &output_refs) {
+            None => Ok(()),
+            Some(v) => Err(LedgerError::InvalidBlock(format!(
+                "output {} keeps weight {} on cluster {}, below the retained-weight floor {} \
+                 (protocol 10.0.0, #1687)",
+                v.output, v.actual, v.cluster, v.required
+            ))),
+        }
+    }
     fn verify_settlement(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         let Some(settlement) = &tx.settlement else {
             return Ok(());
@@ -208,6 +322,12 @@ pub(in crate::ledger) trait ValidationReads {
                 tx.created_at_height, MAX_TX_AGE, block_height
             )));
         }
+        if is_future_dated_transfer_at(tx, block_height) {
+            return Err(LedgerError::InvalidBlock(format!(
+                "future-dated: created_at_height {} > block height {} (protocol 10.0.0, #1740)",
+                tx.created_at_height, block_height
+            )));
+        }
         self.verify_ring_members(tx)?;
         if let Some(i) = first_malformed_output_tags(&tx.outputs) {
             return Err(LedgerError::InvalidBlock(format!(
@@ -217,6 +337,7 @@ pub(in crate::ledger) trait ValidationReads {
             )));
         }
         self.verify_cluster_tag_inheritance(tx, block_height)?;
+        self.verify_cluster_tag_retention(tx)?;
         self.verify_consensus_fee_floor(tx, block_height)?;
         self.verify_settlement(tx)?;
         self.verify_transaction(tx)
@@ -338,7 +459,15 @@ pub(in crate::ledger) trait ValidationReads {
         // factor, so composing them is a single dominating `max` — no
         // double-floor. It only ever RAISES the factor, and only for value that
         // actually traces to a recorded import cluster.
-        let import_floor = self.import_floor_factor_from_outputs(&tx.outputs)?;
+        //
+        // Protocol 10.0.0 (#1687): the floor is ALSO read from the inputs
+        // (`import_floor_factor_from_inputs`, the candidates' maximum import
+        // share), so dropping the output tags no longer removes it. The
+        // output read stays as a further `max` (it prices a release's freshly
+        // tagged import output).
+        let import_floor = self
+            .import_floor_factor_from_outputs(&tx.outputs)?
+            .max(self.import_floor_factor_from_inputs(tx)?);
         let demurrage_factor = demurrage_factor.max(import_floor);
 
         // #925 (background-reset leak, #834): total demurrage is
@@ -745,6 +874,24 @@ pub(in crate::ledger) trait ValidationReads {
             )));
         }
 
+        // C5b (protocol 10.0.0, #1740): a transfer may not be dated after the
+        // block that includes it. Deterministic like C5 (the block's own
+        // height). Together with Rule 2 this keeps a release from carrying a
+        // future epoch's import-cluster id.
+        if let Some(tx_idx) = block
+            .transactions
+            .iter()
+            .position(|tx| is_future_dated_transfer_at(tx, block.height()))
+        {
+            let tx = &block.transactions[tx_idx];
+            return Err(LedgerError::InvalidBlock(format!(
+                "Transaction {} is future-dated: created_at_height {} > block height {}",
+                tx_idx,
+                tx.created_at_height,
+                block.height()
+            )));
+        }
+
         // C3: Resolve every ring member against the UTXO set.
         //
         // CLSAG verifies signatures over the *claimed* ring; without this
@@ -799,6 +946,13 @@ pub(in crate::ledger) trait ValidationReads {
                         tx_idx, e
                     ))
                 })?;
+            // Protocol 10.0.0 (#1687): the retained-weight floor.
+            self.verify_cluster_tag_retention(tx).map_err(|e| {
+                LedgerError::InvalidBlock(format!(
+                    "Transaction {} cluster-tag retention validation failed: {}",
+                    tx_idx, e
+                ))
+            })?;
         }
 
         // C7 (issue #578, H1-B4): deterministic consensus fee floor.

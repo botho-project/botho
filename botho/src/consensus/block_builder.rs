@@ -42,6 +42,16 @@ use tracing::{debug, info, warn};
 /// the two paths agree exactly.
 pub const MAX_TX_AGE: u64 = 100;
 
+/// Protocol 10.0.0 (#1740 option b): a transfer is invalid in a block below
+/// its own `created_at_height`. The upper twin of the [`MAX_TX_AGE`] staleness
+/// rule, evaluated against the including block's height, so build, SCP and
+/// apply agree and cannot fork. With #1857 Rule 2 it keeps a release from
+/// naming a future epoch's import cluster. One definition, shared by the
+/// builder, the ledger (`is_future_dated_transfer_at`) and the mempool.
+pub fn is_future_dated(created_at_height: u64, block_height: u64) -> bool {
+    created_at_height > block_height
+}
+
 /// Result of building a block from externalized values
 #[derive(Debug)]
 pub struct BuiltBlock {
@@ -124,10 +134,10 @@ impl BlockBuilder {
                     // (no externalize-then-reject halt — the #449/#421 failure
                     // mode).
                     //
-                    // `created_at_height` is attacker-set and is NOT bounded
-                    // anywhere (mempool admission, the SCP intrinsic validity
-                    // gate, and gossip all leave it unconstrained), so the age
-                    // bound must saturate. With `overflow-checks = true` on the
+                    // `created_at_height` is attacker-set (since protocol
+                    // 10.0.0 it is bounded above by the block height, checked
+                    // just below, but only after this sum), so the age bound
+                    // must saturate. With `overflow-checks = true` on the
                     // release profile (#663) an unchecked `+` here would let a
                     // crafted `created_at_height` near `u64::MAX` panic — and
                     // because `build_from_externalized` runs deterministically
@@ -150,6 +160,18 @@ impl BlockBuilder {
                             block_height,
                             "Skipping stale transfer tx in block (created_at_height + \
                              MAX_TX_AGE < block_height)"
+                        );
+                        continue;
+                    }
+                    // Protocol 10.0.0 (#1740): the upper bound, mirroring
+                    // the apply-side `is_future_dated_transfer_at`.
+                    if is_future_dated(tx.created_at_height, block_height) {
+                        warn!(
+                            tx_hash = hex::encode(&value.tx_hash[0..8]),
+                            created_at_height = tx.created_at_height,
+                            block_height,
+                            "Skipping future-dated transfer tx in block (created_at_height > \
+                             block_height)"
                         );
                         continue;
                     }
@@ -504,11 +526,10 @@ mod tests {
     ///
     /// Semantics: with `saturating_add`, `u64::MAX + MAX_TX_AGE` saturates to
     /// `u64::MAX`, which is never `< block_height`, so the far-future tx is
-    /// classified "not stale" here and simply retained by this filter (it is
-    /// rejected downstream by the ordinary validity gates, e.g. C3 ring
-    /// resolution, on real crafted inputs). This deterministically matches the
-    /// apply-side `first_stale_transfer_tx` in store.rs, so build and apply
-    /// verdicts cannot diverge across nodes.
+    /// "not stale". Since protocol 10.0.0 (#1740) it is then filtered as
+    /// future-dated (`is_future_dated`), matching the apply-side
+    /// `is_future_dated_transfer_at` in store.rs, so build and apply verdicts
+    /// cannot diverge across nodes.
     #[test]
     fn test_build_from_externalized_no_overflow_on_max_created_at_height() {
         use crate::transaction::TxInputs;
@@ -549,21 +570,65 @@ mod tests {
         let built_b = BlockBuilder::build_from_externalized(&values, get_minting, get_transfer)
             .expect("second build must not panic either");
 
-        // Deterministic inclusion: saturated sum (u64::MAX) is never
-        // < block_height, so the far-future tx is "not stale" and retained here.
-        assert_eq!(
-            built_a.block.transactions.len(),
-            1,
-            "u64::MAX-created tx is not stale (saturated sum >= block_height) and is retained"
+        // Deterministic exclusion. The saturated sum (u64::MAX) is never
+        // < block_height, so the tx is not stale, but since protocol 10.0.0
+        // (#1740) it is future-dated (created_at_height > block_height) and
+        // skipped, exactly as the apply side rejects it.
+        assert!(
+            built_a.block.transactions.is_empty(),
+            "u64::MAX-created tx is future-dated and filtered at build"
         );
         assert_eq!(
             built_a.transfer_tx_hashes, built_b.transfer_tx_hashes,
             "inclusion/exclusion of the crafted tx must be deterministic across builds"
         );
         assert!(
-            built_a.transfer_tx_hashes.contains(&crafted_hash),
-            "crafted tx must be deterministically recorded in the built block"
+            !built_a.transfer_tx_hashes.contains(&crafted_hash),
+            "the future-dated tx must not be recorded in the built block"
         );
+    }
+
+    /// Protocol 10.0.0 (#1740): the `created_at_height` upper bound at its
+    /// boundary. A tx dated at the block's own height is kept; one dated a
+    /// block later is skipped at build.
+    #[test]
+    fn test_build_from_externalized_filters_future_dated_txs() {
+        use crate::transaction::TxInputs;
+
+        let block_height = 200u64;
+        let mk = |created_at_height: u64| Transaction {
+            inputs: TxInputs::new(vec![]),
+            outputs: vec![],
+            fee: 0,
+            created_at_height,
+            settlement: None,
+        };
+        let at = mk(block_height);
+        let after = mk(block_height + 1);
+        let (at_hash, after_hash) = (at.hash(), after.hash());
+        assert!(!is_future_dated(block_height, block_height));
+        assert!(is_future_dated(block_height + 1, block_height));
+
+        let values = vec![
+            ConsensusValue::from_minting_tx([9u8; 32], 0),
+            ConsensusValue::from_transaction(at_hash, 0),
+            ConsensusValue::from_transaction(after_hash, 0),
+        ];
+        let minting_tx = mock_minting_tx(block_height);
+        let get_minting = |_: &[u8; 32]| Some(minting_tx.clone());
+        let get_transfer = move |h: &[u8; 32]| {
+            if *h == at_hash {
+                Some(at.clone())
+            } else if *h == after_hash {
+                Some(after.clone())
+            } else {
+                None
+            }
+        };
+        let built = BlockBuilder::build_from_externalized(&values, get_minting, get_transfer)
+            .expect("build should succeed");
+        assert!(built.transfer_tx_hashes.contains(&at_hash));
+        assert!(!built.transfer_tx_hashes.contains(&after_hash));
     }
 
     // ========================================================================

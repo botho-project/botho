@@ -246,6 +246,14 @@ async fn v2_lottery_row_matches_golden_and_frozen_contract() {
     let tags = stored_tags(&chain.state, &payout);
     assert_eq!(tags.as_array().unwrap().len(), 2);
     assert_eq!(row["clusterTags"], tags);
+    // The lossless form (#1687): the same pairs, each id a decimal string.
+    let lossless: Vec<Value> = tags
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| json!([p[0].as_u64().unwrap().to_string(), p[1]]))
+        .collect();
+    assert_eq!(row["clusterTagsDec"], json!(lossless));
 
     // And the accessor the row was built from agrees.
     let (_, context) = chain

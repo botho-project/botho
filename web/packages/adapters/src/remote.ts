@@ -106,6 +106,7 @@ interface RpcOutputRow {
   lotteryContext?: RpcLotteryContext | null
   winnerOutpoint?: string
   clusterTags?: Array<[number, number]>
+  clusterTagsDec?: Array<[string, number]>
 }
 
 /** The decoded scan/send view of one output row. */
@@ -123,6 +124,8 @@ export interface RawChainOutput {
   winnerOutpoint?: string
   /** Stored cluster tags (`[clusterId, weight]`), when the node serves them. */
   clusterTags?: Array<[number, number]>
+  /** The same tags, ids as decimal strings (lossless, #1687). */
+  clusterTagsDec?: Array<[string, number]>
   /**
    * Block height the output was confirmed at. The send path needs it to draw
    * ring decoys from the real input's age band (#1693).
@@ -152,6 +155,7 @@ function decodeOutputRow(output: RpcOutputRow): RawChainOutput {
   }
   if (output.winnerOutpoint !== undefined) decoded.winnerOutpoint = output.winnerOutpoint
   if (output.clusterTags !== undefined) decoded.clusterTags = output.clusterTags
+  if (output.clusterTagsDec !== undefined) decoded.clusterTagsDec = output.clusterTagsDec
   return decoded
 }
 

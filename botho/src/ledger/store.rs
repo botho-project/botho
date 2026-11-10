@@ -189,6 +189,15 @@ fn is_stale_transfer_at(tx: &BothoTransaction, block_height: u64) -> bool {
     tx.created_at_height.saturating_add(MAX_TX_AGE) < block_height
 }
 
+/// Protocol 10.0.0 (#1740 option b): a transfer whose `created_at_height` is
+/// above the including block's height. Checked against the block's own
+/// height, so it is deterministic like the staleness rule, and shared by block
+/// validation, `verify_transfer_for_block` (SCP and the builder's skip), the
+/// block builder and mempool admission (`crate::consensus::is_future_dated`).
+fn is_future_dated_transfer_at(tx: &BothoTransaction, block_height: u64) -> bool {
+    crate::consensus::is_future_dated(tx.created_at_height, block_height)
+}
+
 /// Consensus decay rate for the cluster-tag inflation guard (issue #576).
 ///
 /// Fixed at 0 (no decay credit) on purpose. The per-cluster bound this yields
@@ -199,7 +208,10 @@ fn is_stale_transfer_at(tx: &BothoTransaction, block_height: u64) -> bool {
 /// rate depending on the entropy proof, so any nonzero rate here could reject a
 /// valid zero-decay-credit block and halt consensus. The guard's sole job is to
 /// reject *inflation* — outputs claiming more cluster mass than the inputs can
-/// supply — which `decay_rate = 0` captures exactly.
+/// supply — which `decay_rate = 0` captures exactly. The opposite bound, how
+/// much weight a spend may *shed*, is the separate protocol 10.0.0 rule
+/// `ValidationReads::verify_cluster_tag_retention` (95% retained per spend,
+/// `bth_cluster_tax::CONSENSUS_MIN_TAG_RETENTION`, #1687).
 const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
 
 /// Cluster-tag inflation guard (issue #576, decomposition item H2-B3;
@@ -1842,9 +1854,32 @@ impl Ledger {
     ///
     /// Pure integer u128 accumulation; no float. `TAG_WEIGHT_SCALE` weights and
     /// `FACTOR_SCALE` factors compose exactly.
-    #[cfg(test)]
-    fn import_floor_factor_from_outputs(&self, outputs: &[TxOutput]) -> Result<u64, LedgerError> {
+    pub fn import_floor_factor_from_outputs(
+        &self,
+        outputs: &[TxOutput],
+    ) -> Result<u64, LedgerError> {
         validation::ValidationReads::import_floor_factor_from_outputs(self, outputs)
+    }
+
+    /// The bridge-import factor floor read from a transaction's INPUTS
+    /// (protocol 10.0.0, #1687): each input's pseudo-output amount at the
+    /// largest import share among its spend candidates (the ring members of
+    /// that amount). The consensus fee floor takes the `max` of this and
+    /// [`Self::import_floor_factor_from_outputs`]; mempool admission calls the
+    /// same function, so relay and consensus agree.
+    pub fn import_floor_factor_from_inputs(
+        &self,
+        tx: &BothoTransaction,
+    ) -> Result<u64, LedgerError> {
+        validation::ValidationReads::import_floor_factor_from_inputs(self, tx)
+    }
+
+    /// The retained-weight floor (protocol 10.0.0, #1687): reject an ordinary
+    /// transfer whose outputs keep less than 95% of a cluster weight every
+    /// spend candidate of a ring carries. Shared by block validation,
+    /// `verify_transfer_for_block` (SCP, block builder) and mempool admission.
+    pub fn verify_cluster_tag_retention(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+        validation::ValidationReads::verify_cluster_tag_retention(self, tx)
     }
 
     // ========================================================================
@@ -4878,13 +4913,27 @@ mod tests {
 
     #[cfg(test)]
     fn mk_transfer_tx(ring: Vec<RingMember>, outputs: Vec<TxOutput>, fee: u64) -> BothoTransaction {
+        mk_transfer_tx_pseudo(ring, outputs, fee, 0)
+    }
+
+    /// [`mk_transfer_tx`] with the input's `pseudo_output_amount` set: the
+    /// protocol 10.0.0 tag rules (#1687) read the ring members of that amount
+    /// as the spend candidates and weight the input by it. `mk_transfer_tx`'s
+    /// pseudo amount of 0 gives the input no value, so those rules are no-ops.
+    #[cfg(test)]
+    fn mk_transfer_tx_pseudo(
+        ring: Vec<RingMember>,
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        pseudo_output_amount: u64,
+    ) -> BothoTransaction {
         use crate::transaction::{ClsagRingInput, TxInputs};
         let input = ClsagRingInput {
             ring,
             key_image: [0u8; 32],
             commitment_key_image: [0u8; 32],
             clsag_signature: Vec::new(),
-            pseudo_output_amount: 0,
+            pseudo_output_amount,
         };
         BothoTransaction {
             inputs: TxInputs::new(vec![input]),
@@ -5582,7 +5631,9 @@ mod tests {
                 })
                 .collect();
             let ring = seed_ring_utxos(&ledger, &ring_specs);
-            let tx = mk_transfer_tx(ring, outputs.clone(), 0);
+            // The pseudo-output amount picks the spend candidates (#1687).
+            let pseudo = ring_specs[(next() % ring_specs.len() as u64) as usize].0;
+            let tx = mk_transfer_tx_pseudo(ring, outputs.clone(), 0, pseudo);
             let member_tags: Vec<(u64, Vec<TagPair>)> = ring_specs
                 .iter()
                 .map(|&(a, _, c, _)| {
@@ -5600,7 +5651,16 @@ mod tests {
                 .iter()
                 .map(|(v, t)| (*v, t.as_slice()))
                 .collect();
-            let resolved = resolve_fee_floor(&floor_outs, &member_slices, &w_of, &is_imp);
+            let rings = [bth_cluster_tax::SpendRing {
+                pseudo_amount: pseudo,
+                members: &member_slices,
+            }];
+            assert_eq!(
+                ledger.import_floor_factor_from_inputs(&tx).unwrap(),
+                bth_cluster_tax::import_floor_factor_from_inputs(&rings, &is_imp),
+                "sample {sample}: import floor from the inputs"
+            );
+            let resolved = resolve_fee_floor(&floor_outs, &rings, &w_of, &is_imp);
             let ages: Vec<(u64, u64)> = ring_specs.iter().map(|&(a, c, _, _)| (a, c)).collect();
             let params = ConsensusFeeParams::from_policy(
                 &crate::monetary::mainnet_policy(),

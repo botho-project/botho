@@ -193,7 +193,7 @@ Not every transaction triggers decay. To prevent **wash trading attacks** (rapid
 
 This means a wash trader executing 100 rapid self-transfers gets 0% decay (all outputs too young), while legitimate commerce over time allows natural tag diffusion.
 
-> **As built**, the age gate above is a library model with no production caller. Consensus applies no tag decay and accepts smaller or empty output tags (charging only the class-downgrade fee); stock wallets decay tags 5% on every transfer with no age gate (#1687). See whitepaper §5 (cluster tags).
+> **As built**, the age gate above is a library model with no production caller. Consensus applies no tag decay. Since protocol 10.0.0 it rejects outputs that keep less than 95% of the weight all spend candidates carry (#1687), so shedding is limited per spend but not per unit of time; stock wallets decay tags 5% on every transfer with no age gate. See whitepaper §5 (cluster tags).
 
 #### Simulation Results
 

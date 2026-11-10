@@ -1921,6 +1921,18 @@ fn cluster_tags_json(tags: &bth_transaction_types::ClusterTagVector) -> Vec<[u64
         .collect()
 }
 
+/// The same pairs as [`cluster_tags_json`] with each cluster id a decimal
+/// string: the `clusterTagsDec` field (additive, #1687). A cluster id is a
+/// full u64 (a coinbase cluster is 8 bytes of a hash), which a JavaScript
+/// number rounds; thin JS wallets read this field to inherit their inputs'
+/// tags exactly, as the protocol 10.0.0 retained-weight floor requires.
+fn cluster_tags_dec_json(tags: &bth_transaction_types::ClusterTagVector) -> Vec<(String, u32)> {
+    tags.entries
+        .iter()
+        .map(|e| (e.cluster_id.0.to_string(), e.weight))
+        .collect()
+}
+
 /// One `chain_getOutputs` lottery payout row (frozen V2 wire contract,
 /// #1641 / #1286 P4).
 ///
@@ -1958,6 +1970,7 @@ fn lottery_payout_row(
         "publicKey": hex::encode(lottery_output.public_key),
         "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),
         "clusterTags": Vec::<[u64; 2]>::new(),
+        "clusterTagsDec": Vec::<(String, u32)>::new(),
         // Unified ML-KEM ciphertext (issue #970): hex or null.
         "kemCiphertext": lottery_output.kem_ciphertext.as_ref().map(hex::encode),
         "lottery": true,
@@ -2010,6 +2023,10 @@ fn lottery_payout_row(
     fields.insert(
         "clusterTags".into(),
         json!(cluster_tags_json(&utxo.output.cluster_tags)),
+    );
+    fields.insert(
+        "clusterTagsDec".into(),
+        json!(cluster_tags_dec_json(&utxo.output.cluster_tags)),
     );
     Ok(row)
 }
@@ -2134,6 +2151,7 @@ async fn handle_get_outputs_capped(
                 "publicKey": hex::encode(coinbase.public_key),
                 "amountCommitment": hex::encode(coinbase.amount.to_le_bytes()),
                 "clusterTags": coinbase_tags,
+                "clusterTagsDec": cluster_tags_dec_json(&coinbase.cluster_tags),
                 // Unified ML-KEM ciphertext field (issue #970): hex, or null for
                 // a classical/legacy KEM-less output. Thin wallets need it to
                 // decapsulate and detect hybrid outputs on the single scan path.
@@ -2170,6 +2188,7 @@ async fn handle_get_outputs_capped(
                         "publicKey": hex::encode(output.public_key),
                         "amountCommitment": hex::encode(output.amount.to_le_bytes()),
                         "clusterTags": cluster_tags,
+                        "clusterTagsDec": cluster_tags_dec_json(&output.cluster_tags),
                         "eMemo": e_memo,
                         // Unified ML-KEM ciphertext (issue #970): hex or null.
                         "kemCiphertext": output.kem_ciphertext.as_ref().map(hex::encode),

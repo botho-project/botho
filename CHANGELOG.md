@@ -43,6 +43,53 @@ consensus batch (#1683).
   which mempool admission also calls, so relay and consensus cannot drift.
   The constant values are unchanged. Coinbase (`MintingTx`) and lottery
   payouts are not `Transaction`s and are unaffected.
+- **Bridge-import tag drop priced (#1687, #1740).** The drop now pays `F`
+  once, read from the inputs. The retention floor does not stop it when the
+  ring holds a same-amount decoy without the tag (see below). Under 7.x-9.x
+  a spender could rewrite an import-tagged coin's output tags to nothing: C6
+  only rejected tag *inflation*, and the ADR-0007 import floor `F` = 1.5x was read
+  from the output tags, so the spend was charged at 1x (Lean
+  `Botho.Tags.import_floor_invariant_refuted`). Per the operator ruling
+  (options 1 + 4), three new consensus rules, enforced by block validation
+  (`verify_transfer_for_block`, used by the block builder and the SCP value
+  check, and `validate_ordinary_body`) and mempool admission through the same
+  functions:
+  1. *The import floor is read from the inputs*
+     (`bth_cluster_tax::import_floor_factor_from_inputs`, via
+     `ValidationReads::import_floor_factor_from_inputs` inside
+     `consensus_fee_floor`). Each input's value, its pseudo-output amount, is
+     priced at the largest import share among its *spend candidates* (the ring
+     members whose amount equals the pseudo-output amount, which C3 and the
+     balance proof bind the real member to), blended with 1x. The output-tag
+     blend is kept as a further `max`. Output tags no longer lower `F`, and a
+     decoy cannot dilute it.
+  2. *Retained-weight floor* (`first_tag_retention_violation`, via
+     `ValidationReads::verify_cluster_tag_retention`). Every output keeps at
+     least 95% of each cluster's weight that every spend candidate of a ring
+     carries (value-weighted over inputs, less a rounding slack of
+     `inputs + 1`). 95% is the documented 0.95 decay per transfer
+     (whitepaper Appendix, `docs/design/cluster-tag-decay.md`) the stock
+     wallets already apply: no new constant. Required weights below
+     `MIN_STORED_WEIGHT` are not checked, and an output with 16 entries, all at
+     least the required weight, is excused (honest truncation). Settlements
+     are exempt (they must be background and pay the capitalized charge).
+  3. *`created_at_height` bound (#1740).* A transfer dated after the including
+     block's height is rejected (`is_future_dated`); the block builder skips
+     such transactions and relay refuses them against the next height.
+
+  Known limits: a decoy of the coin's exact amount without the cluster lowers
+  the candidates' minimum to zero, so the retained-weight floor does not bind
+  (the drop then still pays `F` from the inputs); the floor limits decay per
+  spend, not per unit of time. Lean: `import_floor_honoured₁₀`,
+  `tag_shed_rejected₁₀`, `same_amount_decoy_drop₁₀` (statement records added;
+  listed by a follow-up), DRT legs `cluster_tag_retention` and
+  `import_floor_from_inputs`. The honest first spend of a lone 1,000-BTH
+  import now pays 0.492% instead of 0.442%, because `F` is read from the
+  undecayed input. Wallets: the web/snap/mobile signer (`bth-wasm-signer`)
+  wrote empty output tags and would now be rejected spending any tagged coin;
+  it now inherits its inputs' tags decayed 5% like the node and CLI wallets.
+  `chain_getOutputs` gains an additive `clusterTagsDec` field (cluster ids as
+  decimal strings) because JavaScript numbers round u64 cluster ids.
 - **`MIN_TX_FEE` stays relay policy (ADR 0014).** The consensus fee rule
   remains the size-based `consensus_fee_floor`; `MIN_TX_FEE` (1e8 pico) is
   still checked only at mempool admission. See

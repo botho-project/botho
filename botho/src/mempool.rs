@@ -39,6 +39,7 @@ use bth_cluster_tax::{
     DynamicFeeBase, DynamicFeeState, FeeConfig, FeeSuggestion,
     TransactionType as FeeTransactionType,
 };
+#[cfg(test)]
 use bth_transaction_types::TAG_WEIGHT_SCALE;
 
 /// #1857 Rule 2 at admission, for a tx that would be included at
@@ -153,39 +154,11 @@ fn effective_cluster_wealth_from_outputs(
 /// what consensus requires (the relay-only-tightening invariant). Fail-closed
 /// on DB error.
 fn import_floor_factor_from_outputs(outputs: &[TxOutput], ledger: &Ledger) -> Result<u64, String> {
-    use bth_cluster_tax::{ClusterFactorCurve, BRIDGE_IMPORT_FACTOR_FLOOR};
-
-    let background = ClusterFactorCurve::FACTOR_SCALE as u128;
-    let floor = BRIDGE_IMPORT_FACTOR_FLOOR as u128;
-
-    let mut total_value: u128 = 0;
-    let mut import_value: u128 = 0;
-
-    for output in outputs {
-        let amount = output.amount as u128;
-        total_value = total_value.saturating_add(amount);
-        for entry in &output.cluster_tags.entries {
-            let is_import = ledger
-                .is_bridge_import_cluster(entry.cluster_id.0)
-                .map_err(|e| format!("is_bridge_import_cluster({}): {}", entry.cluster_id.0, e))?;
-            if is_import {
-                let tagged =
-                    amount.saturating_mul(entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
-                import_value = import_value.saturating_add(tagged);
-            }
-        }
-    }
-
-    if total_value == 0 {
-        return Ok(ClusterFactorCurve::FACTOR_SCALE);
-    }
-    let import_value = import_value.min(total_value);
-    let background_value = total_value - import_value;
-    let blended = (floor
-        .saturating_mul(import_value)
-        .saturating_add(background.saturating_mul(background_value)))
-        / total_value;
-    Ok(blended as u64)
+    // One implementation for relay and consensus (#1687): delegate to the
+    // ledger, as `effective_cluster_wealth_from_outputs` does (#1876).
+    ledger
+        .import_floor_factor_from_outputs(outputs)
+        .map_err(|e| format!("import_floor_factor_from_outputs: {}", e))
 }
 
 // ============================================================================
@@ -896,6 +869,23 @@ impl Mempool {
             .saturating_add(1);
         check_output_rule2_for_relay(&ring_tags, &tx, next_height)?;
 
+        // Protocol 10.0.0 (#1740): a tx dated after the next block can never
+        // be included in it. Every later block is higher, so a tx admitted
+        // here stays includable (the same `is_future_dated` the builder and
+        // block validation apply).
+        if crate::consensus::is_future_dated(tx.created_at_height, next_height) {
+            return Err(MempoolError::InvalidTransaction(format!(
+                "future-dated: created_at_height {} is above the next block height {} (#1740)",
+                tx.created_at_height, next_height
+            )));
+        }
+
+        // Protocol 10.0.0 (#1687): the retained-weight floor, the same
+        // function block validation and SCP apply.
+        ledger
+            .verify_cluster_tag_retention(&tx)
+            .map_err(|e| MempoolError::InvalidTransaction(format!("{e} (#1687)")))?;
+
         // Validate outputs + fee <= inputs
         // Use checked arithmetic to detect overflow from malicious transactions
         let output_sum: u64 = tx
@@ -974,8 +964,16 @@ impl Mempool {
         // tx below what consensus requires (the relay-only-tightening invariant
         // asserted below depends on this). Separate `max` from the ring-centroid
         // floor above — no double-floor.
+        //
+        // Protocol 10.0.0 (#1687): and the floor read from the inputs, the
+        // same `Ledger::import_floor_factor_from_inputs` consensus uses.
         let import_floor = import_floor_factor_from_outputs(&tx.outputs, ledger)
-            .map_err(MempoolError::LedgerError)?;
+            .map_err(MempoolError::LedgerError)?
+            .max(
+                ledger
+                    .import_floor_factor_from_inputs(&tx)
+                    .map_err(|e| MempoolError::LedgerError(e.to_string()))?,
+            );
         let demurrage_factor = demurrage_factor.max(import_floor);
 
         // Demurrage is priced at the inclusion height (tip + 1) inside
