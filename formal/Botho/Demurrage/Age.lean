@@ -1,9 +1,9 @@
 import Botho.Basic
 
 /-!
-Executable age order statistic for `cluster-tax::ring_elapsed_quantile` (#1993).
-Values are retained in the input but ignored. Natural subtraction models
-saturated ages, and standard list sorting is independent of Rust's sort.
+Executable elapsed-age helpers: value-independent quantile (#1993) and exact
+value-weighted centroid (#1998). Natural subtraction models saturated ages;
+standard list sorting is independent of Rust's sort.
 Finite DRT correspondence is separate from model proofs; no theorem is added.
 -/
 namespace Botho.Demurrage
