@@ -67,6 +67,151 @@ export interface SendRpc {
    * double-spend its own output). Order is preserved to match the input list.
    */
   areKeyImagesSpent(keyImages: string[]): Promise<KeyImageSpentStatus[]>
+  /**
+   * Quote a signed draft (`txHex`, as for `tx_submit`) with the node's
+   * `estimateFee` RPC (`tx_hex` form, #2001). The node prices it with its own
+   * consensus fee floor (`Ledger::consensus_fee_floor`) and relay floor, which
+   * include the demurrage, the class-exit charge (#1685) and the import floor
+   * read from the inputs (#1687). Those depend on the draft's ring and on
+   * node-side cluster wealth, so no client-side estimate can see them; since
+   * protocol 10.0.0 a spend that skips this quote is refused as `Fee too low`.
+   *
+   * When present, {@link buildSendTransaction} signs, quotes and re-signs at
+   * `resignFee` until the fee settles. Every production send path must supply
+   * it ({@link quoteDraftFeeVia} builds it from a JSON-RPC caller); it is
+   * optional only so offline test doubles can sign a single pass.
+   */
+  quoteDraftFee?(txHex: string): Promise<DraftFeeQuote>
+}
+
+/**
+ * The node's quote for a signed draft: `estimateFee` with `tx_hex` (#2001).
+ * Mirrors `botho_wallet::fee_estimation::DraftFeeQuote`.
+ */
+export interface DraftFeeQuote {
+  /** `max(relayFeeFloor, MIN_TX_FEE)`: the least fee the node admits. */
+  minimumFee: bigint
+  /** The block-validity floor at the next height. */
+  consensusFeeFloor: bigint
+  /** The relay admission floor (>= the consensus floor). */
+  relayFeeFloor: bigint
+  /** A draft whose fee is at least this is priced. */
+  settleFee: bigint
+  /** The fee to re-sign at when the draft does not settle. */
+  resignFee: bigint
+  /** The fee the quoted draft carries (absent on a test double). */
+  txFee?: bigint
+}
+
+/** Most sign-quote passes before a send gives up (as `botho send`). */
+export const MAX_FEE_PASSES = 8
+
+/** {@link FeeAboveApprovedError.code}, stable across bundles (#2001). */
+export const FEE_ABOVE_APPROVED = 'FEE_ABOVE_APPROVED'
+
+/**
+ * The node's fee floor for this send exceeds the fee the user approved
+ * (`maxFee`), so {@link buildSendTransaction} stopped BEFORE signing at it
+ * (#2001). Nothing above `approvedFee` was signed, quoted or submitted. The UI
+ * must show `requiredFee` (and, for a sweep, the reduced amount) and ask the
+ * user again; on approval it rebuilds with `fee = maxFee = requiredFee`.
+ */
+export class FeeAboveApprovedError extends Error {
+  readonly code = FEE_ABOVE_APPROVED
+  constructor(
+    /** The fee the node requires (its `resignFee`: floor plus headroom). */
+    readonly requiredFee: bigint,
+    /** The fee the user approved (`maxFee`). */
+    readonly approvedFee: bigint,
+  ) {
+    super(
+      `The node's fee floor requires ${requiredFee} picocredits, above the approved ` +
+        `${approvedFee}; nothing was submitted. Confirm the higher fee to continue.`,
+    )
+    this.name = 'FeeAboveApprovedError'
+  }
+}
+
+/**
+ * True for a {@link FeeAboveApprovedError}, including one from another copy
+ * of this module (bundles may duplicate the class, so match on `code`).
+ */
+export function isFeeAboveApprovedError(e: unknown): e is FeeAboveApprovedError {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    (e as { code?: unknown }).code === FEE_ABOVE_APPROVED &&
+    typeof (e as { requiredFee?: unknown }).requiredFee === 'bigint'
+  )
+}
+
+/** Most times a send re-asks the user for a higher fee before giving up. */
+export const MAX_FEE_RECONFIRMS = 3
+
+/**
+ * Run a priced build under user fee consent (#2001). `build(fee)` must call
+ * {@link buildSendTransaction} with `fee` AND `maxFee` both set to `fee`, so
+ * nothing above the approved fee is ever signed. When the node requires more,
+ * `reconfirm(requiredFee, approvedFee)` asks the user; on approval the build
+ * reruns at exactly `requiredFee`, on refusal `onReject()` is thrown. The
+ * caller submits only the returned result, whose fee is the last approved fee.
+ */
+export async function buildWithFeeConsent<T>(opts: {
+  /** The fee the user already approved. */
+  approvedFee: bigint
+  build: (fee: bigint) => Promise<T>
+  reconfirm: (requiredFee: bigint, approvedFee: bigint) => Promise<boolean>
+  onReject: () => Error
+  maxReconfirms?: number
+}): Promise<{ result: T; fee: bigint }> {
+  const limit = opts.maxReconfirms ?? MAX_FEE_RECONFIRMS
+  let fee = opts.approvedFee
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return { result: await opts.build(fee), fee }
+    } catch (e) {
+      if (!isFeeAboveApprovedError(e) || attempt >= limit) throw e
+      if (!(await opts.reconfirm(e.requiredFee, fee))) throw opts.onReject()
+      fee = e.requiredFee
+    }
+  }
+}
+
+/**
+ * Parse the node's `estimateFee` (`tx_hex`) result into a {@link DraftFeeQuote},
+ * every fee through `BigInt(String(..))` (#2001). Throws when a field is
+ * missing (a node that predates the draft quote).
+ */
+export function parseDraftFeeQuote(raw: unknown): DraftFeeQuote {
+  const r = (raw ?? {}) as Record<string, unknown>
+  const big = (key: string): bigint => {
+    const v = r[key]
+    if (typeof v !== 'number' && typeof v !== 'string' && typeof v !== 'bigint') {
+      throw new Error(
+        `Node fee quote is missing ${key}: the node predates estimateFee tx_hex (#2001)`,
+      )
+    }
+    return BigInt(String(v))
+  }
+  return {
+    minimumFee: big('minimumFee'),
+    consensusFeeFloor: big('consensusFeeFloor'),
+    relayFeeFloor: big('relayFeeFloor'),
+    settleFee: big('settleFee'),
+    resignFee: big('resignFee'),
+    txFee: r.txFee === undefined ? undefined : big('txFee'),
+  }
+}
+
+/**
+ * Build {@link SendRpc.quoteDraftFee} from a JSON-RPC caller: `estimateFee`
+ * with `tx_hex` (#2001).
+ */
+export function quoteDraftFeeVia(
+  call: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+): (txHex: string) => Promise<DraftFeeQuote> {
+  return async (txHex: string) =>
+    parseDraftFeeQuote(await call('estimateFee', { tx_hex: txHex }))
 }
 
 /** The spent/pending status of a single key image, as returned by the node. */
@@ -501,8 +646,30 @@ export interface BuildSendParams {
   senderKemPublicKey: string
   /** Amount to send, in picocredits. */
   amount: bigint
-  /** Fee, in picocredits. Must be >= the network minimum. */
+  /**
+   * Seed fee, in picocredits (>= the network minimum). With
+   * {@link SendRpc.quoteDraftFee} the send re-signs at the node's quote
+   * until the fee settles, so the paid fee ({@link BuildSendResult.fee}) may
+   * be higher (#2001), but never above {@link BuildSendParams.maxFee}.
+   */
   fee: bigint
+  /**
+   * The most fee the user approved, in picocredits (#2001). The sign-quote
+   * loop never signs above it: when the node's quote (with headroom) exceeds
+   * it, the build throws a {@link FeeAboveApprovedError} carrying the
+   * required fee before signing again, so a hostile or buggy node cannot
+   * spend the wallet into fees, and inputs are only ever selected for
+   * `amount + fee` with `fee <= maxFee`. Defaults to `fee`: a caller that
+   * shows `fee` for confirmation pays exactly what it showed.
+   */
+  maxFee?: bigint
+  /**
+   * Sweep mode: keep `amount + fee` fixed, so a re-sign at a higher quoted fee
+   * lowers the amount sent instead of needing more inputs (#2001). A claim
+   * link sweeps its whole balance this way; the paid amount is
+   * {@link BuildSendResult.amount}.
+   */
+  subtractFeeFromAmount?: boolean
   /**
    * Optional BRIDGE DEPOSIT memo (hex-encoded 64 bytes) to embed on the
    * recipient output. This is a DEDICATED channel for a BTH→wBTH bridge deposit
@@ -525,6 +692,13 @@ export interface BuildSendResult {
   inputs: OwnedOutput[]
   /** Total picocredits of the selected inputs. */
   inputTotal: bigint
+  /** The fee the signed tx pays (the settled node quote, #2001). */
+  fee: bigint
+  /**
+   * The amount the recipient output carries: `amount`, or with
+   * `subtractFeeFromAmount` the original `amount + fee` less the paid fee.
+   */
+  amount: bigint
 }
 
 function toBigInt(v: bigint | number): bigint {
@@ -560,8 +734,11 @@ export async function buildSendTransaction(
 ): Promise<BuildSendResult> {
   const { keys, recipient, senderKemPublicKey, amount, fee, bridgeDepositMemo, rpc } =
     params
+  const spendTotal = amount + fee
+  const maxFee = params.maxFee ?? fee
 
   if (amount <= 0n) throw new Error('Amount must be greater than 0')
+  if (fee > maxFee) throw new FeeAboveApprovedError(fee, maxFee)
   if (!recipient.kem_public_key) {
     throw new Error(
       'Recipient address has no ML-KEM key: it is a retired v1 / classical-only ' +
@@ -626,98 +803,127 @@ export async function buildSendTransaction(
     seenInputs.add(input.targetKey)
     return true
   })
-  const target = amount + fee
-  const inputs = selectInputs(supported, target)
-  if (!inputs) {
-    if (supported.length !== spendable.length) {
-      throw new Error('Legacy lottery payouts cannot be spent independently yet')
+  const signAt = (
+    fee: bigint,
+  ): { txHex: string; inputs: OwnedOutput[]; inputTotal: bigint; amount: bigint } => {
+    const amount = params.subtractFeeFromAmount ? spendTotal - fee : params.amount
+    if (amount <= 0n) {
+      throw new Error(`The amount does not cover the node's fee floor (fee ${fee} picocredits)`)
     }
-    const have = supported.reduce((s, o) => s + toBigInt(o.amount), 0n)
-    throw new Error(
-      `Insufficient funds: need ${target} picocredits (amount + fee), have ${have}`,
+    const target = amount + fee
+    const inputs = selectInputs(supported, target)
+    if (!inputs) {
+      if (supported.length !== spendable.length) {
+        throw new Error('Legacy lottery payouts cannot be spent independently yet')
+      }
+      const have = supported.reduce((s, o) => s + toBigInt(o.amount), 0n)
+      throw new Error(
+        `Insufficient funds: need ${target} picocredits (amount + fee), have ${have}`,
+      )
+    }
+    const inputTotal = inputs.reduce((s, o) => s + toBigInt(o.amount), 0n)
+
+    // 3. Gather decoys. A decoy ring member only needs to be a valid on-chain
+    // output that is NOT one of the real inputs being spent — the node's own
+    // decoy selector likewise excludes only the real inputs (see
+    // `decoy_selection.rs` `select_decoys`, which filters by `exclude_keys` =
+    // the real inputs). In particular decoys MAY be the wallet's own other
+    // outputs; requiring foreign-only decoys would make a solo-mined / low-
+    // traffic chain unspendable. We still drop the all-zero genesis placeholder.
+    // Lottery payouts (legacy AND V2) stay out of the decoy set for now, matching
+    // the native wallet's initial V2 policy (#1642).
+    const inputKeys = new Set(inputs.map((o) => o.targetKey))
+    const isZeroKey = (k: string) => /^0+$/.test(k)
+    const decoyPool = [...canonical.values()].filter(
+      (c) =>
+        c.lottery !== true &&
+        !isV2LotteryPayout(c) &&
+        !inputKeys.has(c.targetKey) &&
+        !isZeroKey(c.targetKey),
     )
-  }
-  const inputTotal = inputs.reduce((s, o) => s + toBigInt(o.amount), 0n)
+    // Per-input decoy selection (#1693, #1692): confirmed (>= 10 blocks), drawn
+    // uniformly with a CSPRNG from one random-offset ±5% age window that holds
+    // the real input's age at a uniform position, nearest-age fill when the
+    // window is thin — the same policy as the native
+    // `GammaDecoySelector::select_decoys_for_input`. Replaces the
+    // former chain-ordered `pool[(i*k + j) % len]` window that gave every ring
+    // the same oldest outputs. Heights are mandatory: a missing height fails the
+    // send closed rather than silently reverting to chain order.
+    const spendInputs: SpendInput[] = inputs.map((input) => {
+      const original = canonical.get(input.targetKey)
+      if (!original) throw new Error('Selected input is missing from the chain scan')
+      const realAge = outputAge(original, height)
+      const decoys = selectDecoysForInput(decoyPool, decoysPerInput, realAge, height)
+      return {
+        target_key: input.targetKey,
+        public_key: input.publicKey,
+        amount: toBigInt(input.amount),
+        subaddress_index: toBigInt(input.subaddressIndex),
+        // Hybrid one-time-key recovery inputs (#988): the output's tx position
+        // (bound into the 6.0.0 one-time key) and its ML-KEM ciphertext, both
+        // preserved from the scan. Without these a hybrid input would sign with
+        // the wrong one-time key and fail CLSAG verification.
+        output_index: input.outputIndex ?? 0,
+        kem_ciphertext: input.kemCiphertext ?? null,
+        // V2 lottery payout input: the signer recovers x = x_base + T and checks
+        // x·G == P before signing (#1645).
+        lottery_context: input.lotteryContext ?? null,
+        // The input's stored cluster tags, which the signer's outputs inherit
+        // (protocol 10.0.0 retained-weight floor, #1687).
+        cluster_tags: inputClusterTags(original),
+        decoys: decoys.map((d) => ({
+          target_key: d.targetKey,
+          public_key: d.publicKey,
+          amount: toBigInt(d.amount),
+        })),
+      }
+    })
 
-  // 3. Gather decoys. A decoy ring member only needs to be a valid on-chain
-  // output that is NOT one of the real inputs being spent — the node's own
-  // decoy selector likewise excludes only the real inputs (see
-  // `decoy_selection.rs` `select_decoys`, which filters by `exclude_keys` =
-  // the real inputs). In particular decoys MAY be the wallet's own other
-  // outputs; requiring foreign-only decoys would make a solo-mined / low-
-  // traffic chain unspendable. We still drop the all-zero genesis placeholder.
-  // Lottery payouts (legacy AND V2) stay out of the decoy set for now, matching
-  // the native wallet's initial V2 policy (#1642).
-  const inputKeys = new Set(inputs.map((o) => o.targetKey))
-  const isZeroKey = (k: string) => /^0+$/.test(k)
-  const decoyPool = [...canonical.values()].filter(
-    (c) =>
-      c.lottery !== true &&
-      !isV2LotteryPayout(c) &&
-      !inputKeys.has(c.targetKey) &&
-      !isZeroKey(c.targetKey),
-  )
-  // Per-input decoy selection (#1693, #1692): confirmed (>= 10 blocks), drawn
-  // uniformly with a CSPRNG from one random-offset ±5% age window that holds
-  // the real input's age at a uniform position, nearest-age fill when the
-  // window is thin — the same policy as the native
-  // `GammaDecoySelector::select_decoys_for_input`. Replaces the
-  // former chain-ordered `pool[(i*k + j) % len]` window that gave every ring
-  // the same oldest outputs. Heights are mandatory: a missing height fails the
-  // send closed rather than silently reverting to chain order.
-  const spendInputs: SpendInput[] = inputs.map((input) => {
-    const original = canonical.get(input.targetKey)
-    if (!original) throw new Error('Selected input is missing from the chain scan')
-    const realAge = outputAge(original, height)
-    const decoys = selectDecoysForInput(decoyPool, decoysPerInput, realAge, height)
-    return {
-      target_key: input.targetKey,
-      public_key: input.publicKey,
-      amount: toBigInt(input.amount),
-      subaddress_index: toBigInt(input.subaddressIndex),
-      // Hybrid one-time-key recovery inputs (#988): the output's tx position
-      // (bound into the 6.0.0 one-time key) and its ML-KEM ciphertext, both
-      // preserved from the scan. Without these a hybrid input would sign with
-      // the wrong one-time key and fail CLSAG verification.
-      output_index: input.outputIndex ?? 0,
-      kem_ciphertext: input.kemCiphertext ?? null,
-      // V2 lottery payout input: the signer recovers x = x_base + T and checks
-      // x·G == P before signing (#1645).
-      lottery_context: input.lotteryContext ?? null,
-      // The input's stored cluster tags, which the signer's outputs inherit
-      // (protocol 10.0.0 retained-weight floor, #1687).
-      cluster_tags: inputClusterTags(original),
-      decoys: decoys.map((d) => ({
-        target_key: d.targetKey,
-        public_key: d.publicKey,
-        amount: toBigInt(d.amount),
-      })),
+    const request: SignRequest = {
+      spendPrivateKey: keys.spendPrivateKey,
+      viewPrivateKey: keys.viewPrivateKey,
+      // The wallet seed (when supplied) enables hybrid spend-key recovery for
+      // 6.0.0 outputs inside the signer (#988).
+      seed: keys.seed ?? '',
+      inputs: spendInputs,
+      recipient,
+      senderKemPublicKey,
+      amount,
+      fee,
+      createdAtHeight: height,
+      // Thread the (optional) bridge-deposit memo through to the signer so a
+      // bridge deposit carries the order memo the watcher matches on (#1037).
+      // Free-text UI notes never reach here — they use a separate cosmetic
+      // channel and are not embedded on-chain.
+      bridgeDepositMemo,
     }
-  })
 
-  const request: SignRequest = {
-    spendPrivateKey: keys.spendPrivateKey,
-    viewPrivateKey: keys.viewPrivateKey,
-    // The wallet seed (when supplied) enables hybrid spend-key recovery for
-    // 6.0.0 outputs inside the signer (#988).
-    seed: keys.seed ?? '',
-    inputs: spendInputs,
-    recipient,
-    senderKemPublicKey,
-    amount,
-    fee,
-    createdAtHeight: height,
-    // Thread the (optional) bridge-deposit memo through to the signer so a
-    // bridge deposit carries the order memo the watcher matches on (#1037).
-    // Free-text UI notes never reach here — they use a separate cosmetic
-    // channel and are not embedded on-chain.
-    bridgeDepositMemo,
+    // 4. Build + CLSAG-sign inside wasm. The signer self-verifies the produced tx
+    // against the node's verifier before returning, so a returned hex is a tx the
+    // node should accept (subject to mempool policy like double-spend checks).
+    const txHex = signer.buildAndSign(request)
+
+    return { txHex, inputs, inputTotal, amount }
   }
 
-  // 4. Build + CLSAG-sign inside wasm. The signer self-verifies the produced tx
-  // against the node's verifier before returning, so a returned hex is a tx the
-  // node should accept (subject to mempool policy like double-spend checks).
-  const txHex = signer.buildAndSign(request)
-
-  return { txHex, inputs, inputTotal }
+  // 5. Price against the node's own fee floor (#2001): sign, quote the draft,
+  // re-sign at the quote until the fee settles. Each pass reselects inputs
+  // for the new amount + fee and draws a fresh ring. The node is not trusted
+  // with the fee: every pass signs at most `maxFee` (the user-approved fee),
+  // so a quote above it stops the loop with a typed error BEFORE signing at
+  // it, and inputs are never selected for more than `amount + maxFee`. The
+  // paid fee is the fee this wallet signed, never the node's `txFee` echo.
+  let passFee = fee
+  for (let pass = 0; pass < MAX_FEE_PASSES; pass++) {
+    const signed = signAt(passFee)
+    if (!rpc.quoteDraftFee) return { ...signed, fee: passFee }
+    const quote = await rpc.quoteDraftFee(signed.txHex)
+    if (passFee >= quote.settleFee) return { ...signed, fee: passFee }
+    const next = quote.resignFee > passFee ? quote.resignFee : passFee + 1n
+    if (next > maxFee) throw new FeeAboveApprovedError(next, maxFee)
+    passFee = next
+  }
+  throw new Error(
+    `Could not settle a fee meeting the node's fee floor after ${MAX_FEE_PASSES} passes`,
+  )
 }

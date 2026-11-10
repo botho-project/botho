@@ -15,7 +15,8 @@ from unittest.mock import patch
 import prefund
 from controller import SPENT_AUDIT_IMAGES
 from lottery import PROTOCOL_VERSION
-from prefund import Prefunder, SIGNER_FIELDS, latest_deadline, load_manifest
+from test_admission_throughput import settling_quote
+from prefund import Prefunder, SIGNER_FIELDS, SIGNER_OPTIONAL, latest_deadline, load_manifest
 from runtime import Gate, HOSTS, Quota, Rpc
 from selection import choose
 from test_targets import targets
@@ -45,6 +46,7 @@ class Fleet:
         self.chain_info_override = {}
         self.pending_override = set()  # mined images a lagging mempool still reports (#1956)
         self.submits, self.requests, self.submit_hook = [], [], None
+        self.quotes, self.quote_hook = [], None
         self.counter = 0
         self.coinbase_to = None
         # Decoy density: unrelated outputs per block, and the funding wallet's
@@ -114,6 +116,12 @@ class Fleet:
                     **self.receipt_override.get(host, {})}
         if method == 'fee_getRate':
             return {'baseRate': 1}
+        if method == 'estimateFee':
+            # #2001: the producer quotes the draft (an artifact is the tx JSON).
+            assert host == PRODUCER
+            fee = json.loads(bytes.fromhex(params['tx_hex']))['fee']
+            self.quotes.append(fee)
+            return self.quote_hook(fee) if self.quote_hook else settling_quote(fee)
         if method == 'tx_submit':
             assert write and host == PRODUCER
             tx = json.loads(bytes.fromhex(params['tx_hex']))
@@ -143,7 +151,8 @@ class Fleet:
 
     async def signer(self, request):
         operation = request['operation']
-        assert set(request) == {'operation'} | SIGNER_FIELDS[operation], request.keys()
+        required = {'operation'} | SIGNER_FIELDS[operation]
+        assert required <= set(request) <= required | SIGNER_OPTIONAL.get(operation, set()), request.keys()
         self.requests.append(('signer', operation))
         if operation in ('scan', 'restore_check'):
             address, owned = self.scan(request['wallet'], request['blocks'])
@@ -209,7 +218,8 @@ class Fleet:
             assert not state['spent'] and not state['pending'] and state['spentHeight'] is None
             assert request['height'] - output['utxo']['created_at'] >= 10
             selected.append(output)
-        fee = 10**6 * (len(selected) + len(grants))
+        # A re-sign carries the producer's quoted fee as its floor (#2001).
+        fee = max(10**6 * (len(selected) + len(grants)), request.get('min_fee', 0))
         self.batch_fees.append(fee)
         total = sum(o['utxo']['amount'] for o in selected)
         principal = sum(g['amount'] for g in grants)
@@ -312,7 +322,8 @@ class SignerContractTests(unittest.TestCase):
         for name, fields in re.findall(r'(\w+) \{(.*?)\n    \}', body, re.S):
             snake = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
             found[snake] = set(re.findall(r'^\s*(\w+):', fields, re.M))
-        self.assertEqual(found, SIGNER_FIELDS)
+        self.assertEqual(found, {op: fields | SIGNER_OPTIONAL.get(op, set())
+                                 for op, fields in SIGNER_FIELDS.items()})
 
     def test_campaign_transfers_keep_the_single_recipient_signer_path(self):
         # #1937 batches are prefund-only: the controller still signs every
@@ -329,10 +340,55 @@ class SignerContractTests(unittest.TestCase):
         source = Path(prefund.__file__).read_text()
         imported = set(re.findall(r'^(?:from|import) (\w+)', source, re.M))
         local = {p.stem for p in Path(prefund.__file__).parent.glob('*.py')}
-        self.assertLessEqual(imported & local, {'controller', 'lottery', 'plan', 'runtime', 'selection'})
+        self.assertLessEqual(imported & local, {'controller', 'fee_quote', 'lottery', 'plan', 'runtime', 'selection'})
         self.assertFalse({'qualification', 'fast_timing', 'manifest_limits'} & imported)
         for module in imported - local:
             __import__(module)  # standard library only
+
+
+class FeeQuoteTests(PrefundBase):
+    """#2001: every grant batch is priced against the producer's fee floor."""
+
+    def test_underpaying_draft_is_moved_aside_and_resigned_at_the_quote(self):
+        floor = 5 * 10**8  # under the plan's max_single_signed_fee
+
+        def quote(fee):
+            # The producer's 10.0.0 floor (#1685/#1687) is far above the
+            # signer's local estimate until a re-sign carries it.
+            return {'minimumFee': floor, 'consensusFeeFloor': floor, 'relayFeeFloor': floor,
+                    'settleFee': floor + floor // 64, 'resignFee': floor + 2 * (floor // 64),
+                    'txFee': fee, 'feeSettles': fee >= floor + floor // 64}
+        self.fleet.quote_hook = quote
+        p = self.prefunder()
+        self.offer_one(p)
+        row = p.records[0]
+        resign = floor + 2 * (floor // 64)
+        self.assertEqual(row['fee'], resign)
+        self.assertEqual(self.fleet.quotes[:2], [self.fleet.batch_fees[0], resign])
+        self.assertEqual(len(row['underpaid_drafts']), 1)
+        self.assertEqual(row['underpaid_drafts'][0]['fee'], self.fleet.batch_fees[0])
+        self.assertEqual(row['fee_floor_quote']['settleFee'], floor + floor // 64)
+        state = Path(self.m['state_dir'])
+        # The underpaid draft is kept for audit, outside artifacts/, and was
+        # never submitted; only the settled batch was.
+        self.assertEqual(sorted(x.name for x in (state / 'underpaid').iterdir()), ['batch-0000.bin'])
+        self.assertEqual(self.fleet.submits, [row['hash']])
+        # A restart finds no orphan signed artifact.
+        self.assertEqual(len(self.prefunder().records), 1)
+
+    def test_a_floor_above_the_single_fee_limit_holds(self):
+        floor = int(self.plan['limits']['max_single_signed_fee_picocredits']) + 1
+
+        def quote(fee):
+            return {'minimumFee': floor, 'consensusFeeFloor': floor, 'relayFeeFloor': floor,
+                    'settleFee': floor, 'resignFee': floor, 'txFee': fee}
+        self.fleet.quote_hook = quote
+        p = self.prefunder()
+        with self.assertRaisesRegex(Gate, 'exceeds max_single_signed_fee'):
+            for _ in range(30):
+                self.tick(p)
+                self.advance()
+        self.assertFalse(self.fleet.submits)
 
 
 class ManifestTests(PrefundBase):

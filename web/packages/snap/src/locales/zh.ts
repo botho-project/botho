@@ -29,6 +29,10 @@ export const zh: Record<keyof typeof en, string> = {
   'send.networkFee': '网络手续费',
   'send.total': '合计',
   'send.recipient': '收款人',
+  'fee.raisedHeading': '更高的网络手续费',
+  'fee.raisedBody': '节点对此交易要求的手续费高于你批准的金额。尚未发送任何内容。批准新的手续费以继续。',
+  'fee.approved': '已批准的手续费',
+  'fee.required': '所需手续费',
 
   'history.heading': '交易历史',
   'history.empty': '暂无交易。你收到的付款将显示在此处。',
@@ -66,4 +70,5 @@ export const zh: Record<keyof typeof en, string> = {
   'error.rejectMnemonic': '用户拒绝显示恢复助记词。',
   'error.rejectSend': '用户拒绝了发送。',
   'error.rejectClaim': '用户拒绝了领取。',
+  'error.rejectFee': '用户拒绝了更高的网络手续费。未发送任何内容。',
 };

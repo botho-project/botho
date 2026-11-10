@@ -1,5 +1,6 @@
 """Early safety holds must retain the full denominator and accounting limits."""
 
+from test_admission_throughput import settling_quote
 import asyncio
 import hashlib
 import json
@@ -13,6 +14,13 @@ from discovery import DiscoveryController
 from reporting import heap_evidence, heap_growth
 from runtime import HOSTS, Gate, Journal
 
+
+
+def quarantine_reasons(journal, identifier):
+    """``artifact_quarantined`` event reasons for ``identifier`` (#2001)."""
+    return [json.loads(detail)["reason"] for (detail,) in journal.db.execute(
+        "SELECT detail FROM events WHERE intent=? AND state='artifact_quarantined'",
+        (identifier,))]
 
 class StopRun(Exception):
     pass
@@ -318,6 +326,8 @@ class TerminalReportingTests(unittest.TestCase):
         async def rpc(host, method, params=None, **_):
             if method == "fee_getRate":
                 return {"baseRate": 1}
+            if method == "estimateFee":
+                return settling_quote(signed["fee"])
             if method == "tx_submit":
                 return {"txHash": signed["hash"]}
             raise AssertionError(method)
@@ -362,6 +372,7 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(
             (directory / "expired/rehearsal-00411.bin").read_bytes(), payload
         )
+        self.assertEqual(quarantine_reasons(self.c.j, "rehearsal-00411"), ["signing_timeout"])
         del self.c.report
         with patch("controller.time.time", return_value=1122):
             report = self.c.report()
@@ -405,6 +416,7 @@ class TerminalReportingTests(unittest.TestCase):
             sorted(p.name for p in (directory / "expired").iterdir()),
             ["rehearsal-00411.bin", "rehearsal-00411.partial"],
         )
+        self.assertEqual(quarantine_reasons(self.c.j, "rehearsal-00411"), ["unprepared_restart"])
         evidence = self.c.report()["artifact_evidence"]
         self.assertEqual(evidence["orphaned_signed"], 0)
         self.assertEqual(evidence["ambiguous_signed"], 0)
@@ -446,7 +458,12 @@ class TerminalReportingTests(unittest.TestCase):
         self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
         self.c.blocks, self.c.spent = [], []
         self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
-        self.c.rpc = Mock(call=AsyncMock(return_value={"baseRate": 1}))
+        async def rpc(host, method, params=None, **_):
+            if method == "estimateFee":
+                return settling_quote(100_000_000)
+            return {"baseRate": 1}
+
+        self.c.rpc = Mock(call=AsyncMock(side_effect=rpc))
         self.c.submit_prepared = AsyncMock()
         self.c.j.clock = lambda: 1001
 
@@ -466,6 +483,115 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(
             (directory / "expired/rehearsal-00411.bin").read_bytes(), b"stale"
         )
+        self.assertEqual(quarantine_reasons(self.c.j, "rehearsal-00411"), ["unprepared_retry"])
+
+    def test_prepare_resigns_an_underpaying_draft_at_the_node_quote(self):
+        """#2001: the real Controller.prepare quotes each signed draft with
+        ``estimateFee`` on the intent's ingress; an underpaying draft is
+        quarantined (never submitted) and re-signed with ``min_fee``."""
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.set("status", "setup")
+        self.c.gate = Mock()
+        self.c.sync = AsyncMock(return_value=100)
+        self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
+        self.c.blocks, self.c.spent = [], []
+        self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
+        self.c.submit_prepared = AsyncMock()
+        self.c.j.clock = lambda: 1001
+        floor = 2_000_000_074
+        resign = floor + 2 * (floor // 64)
+        requests, quoted = [], []
+
+        async def sign(request):
+            requests.append(dict(request))
+            fee = max(100_000_000, request.get("min_fee", 0))
+            Path(request["artifact"]).write_bytes(b"%d" % fee)
+            return {"artifact": request["artifact"], "hash": "%064x" % fee,
+                    "fee": fee, "baseline_fee": fee, "fee_multiplier": 1,
+                    "bytes": 5, "input_count": 1, "selected": [{"id": "owned-input"}]}
+
+        async def rpc(host, method, params=None, **_):
+            if method == "estimateFee":
+                fee = int(bytes.fromhex(params["tx_hex"]))
+                quoted.append((host, fee))
+                return {"minimumFee": floor, "consensusFeeFloor": floor,
+                        "relayFeeFloor": floor, "settleFee": floor + floor // 64,
+                        "resignFee": resign, "txFee": fee}
+            return {"baseRate": 1}
+
+        self.c.native = AsyncMock(side_effect=sign)
+        self.c.rpc = Mock(call=AsyncMock(side_effect=rpc))
+        with patch("controller.time.time", return_value=1001):
+            self.assertTrue(asyncio.run(self.c.prepare("rehearsal-00411", 1, 8)))
+        self.assertNotIn("min_fee", requests[0])
+        self.assertEqual(requests[1]["min_fee"], resign)
+        ingress = self.c.choose_ingress("rehearsal-00411")
+        self.assertEqual(quoted, [(ingress, 100_000_000), (ingress, resign)])
+        row = self.c.j.intent("rehearsal-00411")
+        self.assertEqual(row["state"], "prepared")
+        self.assertEqual(row["fee"], resign)
+        info = json.loads(row["info"])
+        self.assertEqual([d["fee"] for d in info["underpaid_drafts"]], [100_000_000])
+        self.assertEqual(info["fee_floor_quote"]["resignFee"], resign)
+        self.assertEqual((directory / "rehearsal-00411.bin").read_bytes(), b"%d" % resign)
+        self.assertEqual((directory / "expired/rehearsal-00411.bin").read_bytes(), b"100000000")
+        # #2001 follow-up 4: evidence tells an underpaid draft from a timeout.
+        self.assertEqual(quarantine_reasons(self.c.j, "rehearsal-00411"), ["underpaid_draft"])
+        self.c.submit_prepared.assert_awaited_once()
+
+    def test_prepare_skips_when_fee_pricing_runs_past_the_signing_allowance(self):
+        """#2001 follow-ups 4 and 6: a pricing loop that reaches the commit
+        deadline stops before re-signing; the intent is skipped (not held),
+        nothing is reserved or submitted, and the quarantine events tell the
+        underpaid draft apart from the signing timeout."""
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.set("status", "setup")
+        self.c.gate = Mock()
+        self.c.sync = AsyncMock(return_value=100)
+        self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
+        self.c.blocks, self.c.spent = [], []
+        self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
+        self.c.submit_prepared = AsyncMock()
+        self.c.j.clock = lambda: 1001
+        floor = 2_000_000_074
+        now = [1001.0]
+        signed = []
+
+        async def sign(request):
+            fee = max(100_000_000, request.get("min_fee", 0))
+            signed.append(fee)
+            Path(request["artifact"]).write_bytes(b"%d" % fee)
+            return {"artifact": request["artifact"], "hash": "%064x" % fee,
+                    "fee": fee, "baseline_fee": fee, "fee_multiplier": 1,
+                    "bytes": 5, "input_count": 1, "selected": [{"id": "owned-input"}]}
+
+        async def rpc(host, method, params=None, **_):
+            if method == "estimateFee":
+                now[0] += 10_000  # far past any commit deadline
+                fee = int(bytes.fromhex(params["tx_hex"]))
+                return {"minimumFee": floor, "consensusFeeFloor": floor,
+                        "relayFeeFloor": floor, "settleFee": floor + floor // 64,
+                        "resignFee": floor + 2 * (floor // 64), "txFee": fee}
+            return {"baseRate": 1}
+
+        self.c.native = AsyncMock(side_effect=sign)
+        self.c.rpc = Mock(call=AsyncMock(side_effect=rpc))
+        with patch("controller.time.time", side_effect=lambda: now[0]):
+            self.assertFalse(asyncio.run(self.c.prepare("rehearsal-00411", 1, 8)))
+        self.assertEqual(signed, [100_000_000])
+        row = self.c.j.intent("rehearsal-00411")
+        self.assertEqual(row["state"], "skipped")
+        self.assertIn("allowance", row["reason"])
+        self.assertIsNone(row["prepared"])
+        self.c.submit_prepared.assert_not_awaited()
+        self.assertEqual(self.c.j.get("status"), "setup")
+        self.assertEqual(quarantine_reasons(self.c.j, "rehearsal-00411"), ["underpaid_draft"])
+        self.assertEqual(
+            sorted(p.name for p in (directory / "expired").iterdir()), ["rehearsal-00411.bin"])
 
     def test_unavailable_artifact_directory_preserves_historical_journal_counts(self):
         report = self.early_hold()

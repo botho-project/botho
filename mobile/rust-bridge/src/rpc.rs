@@ -194,6 +194,20 @@ impl NodeRpc {
             .map_err(|e| format!("invalid chain_areKeyImagesSpent response: {e}"))
     }
 
+    /// Quote a signed draft (hex, as for `tx_submit`) with the node's
+    /// `estimateFee` `tx_hex` form (#2001): the fee the node's consensus fee
+    /// floor (`Ledger::consensus_fee_floor`) and relay floor require of it.
+    pub async fn quote_draft_fee(
+        &self,
+        tx_hex: &str,
+    ) -> Result<botho_wallet::fee_estimation::DraftFeeQuote, String> {
+        let result = self
+            .call("estimateFee", json!({ "tx_hex": tx_hex }))
+            .await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("invalid estimateFee draft quote (node predates #2001?): {e}"))
+    }
+
     /// Submit a hex-encoded signed transaction, returning its tx hash.
     pub async fn submit_transaction(&self, tx_hex: &str) -> Result<String, String> {
         let result = self.call("tx_submit", json!({ "tx_hex": tx_hex })).await?;
