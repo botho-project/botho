@@ -323,12 +323,25 @@ Rust helper and built Lean codec receive 27 explicit numerical vectors and
 are bounded to 0..=64 with full-width scalars and deliberately sampled positive
 mixed ages/interior ranks. Both production callers currently use 10,000 bps
 (maximum age), read from source rather than exercised as complete validators.
-This is finite correspondence evidence, with no new listed theorem,
-extraction-equivalence or generic panic/reachability claim; see
+The #1993 increment supplied finite correspondence evidence, with no listed
+theorem, extraction-equivalence or generic panic/reachability claim; see
 [the quantile domain and controls](DEMURRAGE.md#ring-age-quantile-model-and-drt-1993).
 The linked normal-source receipt at `7eb426d8` completed 270,000 comparisons
 and 225 replays with zero mismatches; final PR CI is separate from that
 historical control-workflow checkout and its captured dependency inputs.
+
+The subsequent #2008 increment adds four **proven (model)** full-Nat quantile
+properties: arbitrary per-position value independence under equal creation-height
+sequences, whole-pair permutation, monotonicity under the sole premise `q1 ≤ q2`,
+and an unconditional bound by current height. They cover arbitrary finite lists,
+empty/future-height cases, zero/beyond-u64 values and q outside 0–10,000. Zero-valued
+members still count and can yield a positive quantile. Eight unnamed kernel-checked
+examples supplement the proofs, including both interior nearest-rank thresholds.
+All 253 approved statement records and canonical executable definitions remain
+unchanged. Rust/Lean correspondence stays **tested**; no universal Rust/extraction,
+width/panic/allocation/cardinality, fee/principal/privacy-economic or accepted/genesis
+reachability result follows. The other #1711 obligations remain open. See
+[the four exact contracts and provenance](DEMURRAGE.md#proven-elapsed-quantile-model-properties-2008).
 
 
 `ringElapsedCentroid` (#1998) adds the 28th scalar DRT leg and repairs the

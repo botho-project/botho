@@ -4,9 +4,13 @@ import Botho.Basic
 Executable elapsed-age helpers: value-independent quantile (#1993) and exact
 value-weighted centroid (#1998). Natural subtraction models saturated ages;
 standard list sorting is independent of Rust's sort.
-The centroid has four full-Nat model proofs: pair permutation, zero-value
-insertion, positive value scaling and the current-height bound. Finite DRT
-correspondence with Rust remains separate; the quantile has no property proof here.
+The centroid's pair permutation, zero-value insertion, positive value scaling
+and current-height bound are proven (model). The quantile's value independence,
+pair permutation, quantile monotonicity and height bound are also proven (model).
+These quantify over arbitrary finite lists and full Nat values/heights, including
+empty lists, zero values and future creation heights. Finite Rust/Lean DRT remains
+tested correspondence; universal Rust/extraction, width/panic/allocation/cardinality
+safety, fee policy and accepted/genesis reachability remain separate obligations.
 -/
 namespace Botho.Demurrage
 
@@ -101,5 +105,166 @@ example : ringElapsedCentroid ([(2, 1), (3, 7)].map (fun m => (7 * m.1, m.2))) 1
 example : ringElapsedCentroid
     ([(2, 1), (3, 7)].map (fun m => (18446744073709551616 * m.1, m.2))) 10 =
     ringElapsedCentroid [(2, 1), (3, 7)] 10 := by decide
+
+
+private theorem quantile_sorted (ages : List Nat) :
+    ages.mergeSort.Pairwise (· ≤ ·) := by
+  have h := List.pairwise_mergeSort (le := fun a b : Nat => a ≤ b)
+    (by intros; simp_all; omega) (by intros; simp; omega) ages
+  simpa using h
+
+/-- Each value may change independently; only the creation-height sequence matters. -/
+theorem ringElapsedQuantile_value_independent
+    (members revalued : List (Nat × Nat)) (currentHeight quantileBps : Nat)
+    (hheights : members.map Prod.snd = revalued.map Prod.snd) :
+    ringElapsedQuantile members currentHeight quantileBps =
+      ringElapsedQuantile revalued currentHeight quantileBps := by
+  have hages := congrArg (List.map (fun h => currentHeight - h)) hheights
+  simp only [List.map_map, Function.comp_def] at hages
+  simp only [ringElapsedQuantile, hages]
+
+/-- Sorting removes the ordering of complete value/creation-height pairs. -/
+theorem ringElapsedQuantile_perm
+    (members reordered : List (Nat × Nat)) (currentHeight quantileBps : Nat)
+    (hp : List.Perm members reordered) :
+    ringElapsedQuantile members currentHeight quantileBps =
+      ringElapsedQuantile reordered currentHeight quantileBps := by
+  have hsort : (members.map (fun m => currentHeight - m.2)).mergeSort =
+      (reordered.map (fun m => currentHeight - m.2)).mergeSort := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · exact quantile_sorted _
+    · exact (List.mergeSort_perm _ _).trans
+        ((hp.map (fun m => currentHeight - m.2)).trans (List.mergeSort_perm _ _).symm)
+  simp only [ringElapsedQuantile, hsort]
+
+/-- Clamping and saturated rank subtraction preserve quantile order. -/
+theorem ringElapsedQuantile_mono_quantile
+    (members : List (Nat × Nat)) (currentHeight q1 q2 : Nat)
+    (hq : q1 ≤ q2) :
+    ringElapsedQuantile members currentHeight q1 ≤
+      ringElapsedQuantile members currentHeight q2 := by
+  let ages := (members.map (fun m => currentHeight - m.2)).mergeSort
+  let index := fun q => min (((min q 10000 * ages.length + 9999) / 10000) - 1)
+    (ages.length - 1)
+  change ages.getD (index q1) 0 ≤ ages.getD (index q2) 0
+  by_cases hempty : ages = []
+  · simp [hempty]
+  · have hn : 0 < ages.length := List.length_pos_iff.mpr hempty
+    have hi1 : index q1 < ages.length := by
+      have := Nat.min_le_right (((min q1 10000 * ages.length + 9999) / 10000) - 1)
+        (ages.length - 1)
+      dsimp [index]
+      omega
+    have hi2 : index q2 < ages.length := by
+      have := Nat.min_le_right (((min q2 10000 * ages.length + 9999) / 10000) - 1)
+        (ages.length - 1)
+      dsimp [index]
+      omega
+    have hclamp : min q1 10000 ≤ min q2 10000 := by omega
+    have hdiv : (min q1 10000 * ages.length + 9999) / 10000 ≤
+        (min q2 10000 * ages.length + 9999) / 10000 :=
+      Nat.div_le_div_right (Nat.add_le_add_right
+        (Nat.mul_le_mul_right ages.length hclamp) 9999)
+    have hi : index q1 ≤ index q2 := by
+      dsimp [index]
+      omega
+    rw [← List.getElem_eq_getD (h := hi1) 0, ← List.getElem_eq_getD (h := hi2) 0]
+    by_cases heq : index q1 = index q2
+    · simp [heq]
+    · exact List.Pairwise.rel_getElem_of_lt hi1 hi2 (quantile_sorted _)
+        (by omega)
+
+/-- Every saturated age, and the empty-list fallback, is at most the current height. -/
+theorem ringElapsedQuantile_le_height
+    (members : List (Nat × Nat)) (currentHeight quantileBps : Nat) :
+    ringElapsedQuantile members currentHeight quantileBps ≤ currentHeight := by
+  let ages := (members.map (fun m => currentHeight - m.2)).mergeSort
+  let i := min (((min quantileBps 10000 * ages.length + 9999) / 10000) - 1)
+    (ages.length - 1)
+  change ages.getD i 0 ≤ currentHeight
+  by_cases hi : i < ages.length
+  · rw [← List.getElem_eq_getD (h := hi) 0]
+    have hm : ages[i] ∈ members.map (fun m => currentHeight - m.2) :=
+      List.mem_mergeSort.mp (List.getElem_mem hi)
+    obtain ⟨m, _, he⟩ := List.mem_map.mp hm
+    rw [← he]
+    exact Nat.sub_le _ _
+  · simp [List.getD, hi]
+
+-- Quantile boundary examples are kernel-checked, unnamed and not listed claims.
+example : ringElapsedQuantile [] 100 20000 = 0 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
+
+example : ringElapsedQuantile [(2, 0), (3, 7)] 0 10000 = 0 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
+
+example : ringElapsedQuantile [(2, 11), (3, 20)] 10 10000 = 0 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
+
+-- Equal old values may be replaced independently, including zero and beyond u64.
+example : ringElapsedQuantile [(5, 1), (5, 7)] 10 7500 =
+    ringElapsedQuantile [(0, 1), (18446744073709551616, 7)] 10 7500 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
+
+-- Zero-valued members still count, so a zero-total ring can have positive age.
+example : ringElapsedQuantile [(0, 1), (0, 7)] 10 5000 = 3 := by
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil,
+    List.mergeSort_nil, List.mergeSort_pair] <;> decide
+
+-- The complete-pair permutation preserves duplicate pairs and their multiplicity.
+example : ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 =
+    ringElapsedQuantile [(3, 80), (2, 90), (1, 70), (2, 90)] 100 7500 ∧
+    ringElapsedQuantile [(1, 70), (2, 90), (2, 90), (3, 80)] 100 7500 = 20 := by
+  have hsort : ([30, 10, 10, 20] : List Nat).mergeSort = [10, 10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  have hreordered : ([20, 10, 30, 10] : List Nat).mergeSort = [10, 10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil, hsort, hreordered]
+  decide
+
+-- Unsorted ages [30, 10, 20] cross the two interior nearest-rank thresholds.
+example : ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 3333 = 10 ∧
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 3334 = 20 ∧
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6666 = 20 ∧
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 6667 = 30 := by
+  have hsort : ([30, 10, 20] : List Nat).mergeSort = [10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil, hsort]
+  decide
+
+example : ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 0 = 10 ∧
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 10000 = 30 ∧
+    ringElapsedQuantile [(1, 70), (2, 90), (3, 80)] 100 20000 = 30 := by
+  have hsort : ([30, 10, 20] : List Nat).mergeSort = [10, 20, 30] := by
+    apply List.Perm.eq_of_pairwise (le := fun a b : Nat => a ≤ b)
+    · intro a b _ _ hab hba
+      exact Nat.le_antisymm hab hba
+    · exact quantile_sorted _
+    · decide
+    · exact (List.mergeSort_perm _ _).trans (by decide)
+  simp only [ringElapsedQuantile, List.map_cons, List.map_nil, hsort]
+  decide
 
 end Botho.Demurrage

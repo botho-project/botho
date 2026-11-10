@@ -317,3 +317,9 @@ import Botho
 #print axioms Botho.Demurrage.ringElapsedCentroid_insert_zero
 #print axioms Botho.Demurrage.ringElapsedCentroid_scale_values
 #print axioms Botho.Demurrage.ringElapsedCentroid_le_height
+
+-- Botho.Demurrage.Age (#2008; proven (model), full-Nat elapsed-quantile properties)
+#print axioms Botho.Demurrage.ringElapsedQuantile_value_independent
+#print axioms Botho.Demurrage.ringElapsedQuantile_perm
+#print axioms Botho.Demurrage.ringElapsedQuantile_mono_quantile
+#print axioms Botho.Demurrage.ringElapsedQuantile_le_height
