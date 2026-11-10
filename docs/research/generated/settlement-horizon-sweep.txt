@@ -108,11 +108,11 @@ How much residual redistribution gain survives if only a FRACTION of the top dec
 | min-centroid decoys | 1yr | +0.0838 | +0.0141 | +0.0696 | 98372.43 | 54847.01 | FAIL |
 | min-centroid decoys | 5yr | +0.0838 | +0.0718 | +0.0120 | 98372.43 | 54847.01 | PASS |
 
-### Launch start: epoch 0 (height 0, first year demurrage-free; 100% adoption)
+### Launch start: epoch 0 (height 0, first year free of in-class demurrage; settlement priced from block 1, #1685; 100% adoption)
 
 | horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | burned (escape, BTH) | burned (hold, BTH) | uncollected (hold, BTH) | floor |
 |---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|---------------------:|-------------------:|------------------------:|:-----:|
-| 1yr (1.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.73 | 0.00 | 24417.93 | 55968.53 | FAIL |
-| 5yr (5.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.73 | 0.00 | 24417.93 | 55968.53 | FAIL |
+| 1yr (1.00yr) | 0.7344 | 0.8032 | +0.0688 | +0.0830 | +0.0142 | 15184.00 | 97671.73 | 3796.00 | 24417.93 | 55968.53 | FAIL |
+| 5yr (5.00yr) | 0.7344 | 0.7451 | +0.0107 | +0.0830 | +0.0723 | 75920.00 | 97671.73 | 18980.00 | 24417.93 | 55968.53 | PASS |
 
 

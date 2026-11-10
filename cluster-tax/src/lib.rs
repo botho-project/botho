@@ -131,7 +131,8 @@ pub use crypto::{
 pub use demurrage::{
     capitalized_reset_charge, demurrage_charge, demurrage_settlement_charge,
     ring_centroid_implied_factor, ring_elapsed_centroid, ring_elapsed_quantile,
-    spend_demurrage_charge, BLOCKS_PER_YEAR_5S, FACTOR_SCALE, SETTLEMENT_HORIZON_BLOCKS,
+    spend_demurrage_charge, spend_demurrage_charge_with_exit_rate, BLOCKS_PER_YEAR_5S,
+    FACTOR_SCALE, SETTLEMENT_HORIZON_BLOCKS,
 };
 pub use dynamic_fee::{DynamicFeeBase, DynamicFeeState, FeeSuggestion};
 pub use entropy_decay::{

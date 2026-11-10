@@ -283,8 +283,9 @@ pub fn analyze_structuring(
 /// Each hop is a 1-input / 1-output self-transfer of the whole principal at
 /// zero ring age (the cheapest shape for the attacker). Tag decay lowers the
 /// output's claimed cluster wealth below the input's, so each hop is a class
-/// **downgrade** and pays the capitalized reset charge (#925) once demurrage is
-/// active — exactly as `Ledger::consensus_fee_floor` prices it. The benefit of
+/// **downgrade** and pays the capitalized reset charge (#925) at the
+/// exit-pricing rate, which applies from block 1 (#1685) — exactly as
+/// `Ledger::consensus_fee_floor` prices it. The benefit of
 /// washing is (a) a lower size fee on every future transaction and (b) lower
 /// accrued demurrage on the held principal.
 #[derive(Debug, Clone)]
@@ -307,11 +308,13 @@ pub struct ConsensusWashTradingAnalysis {
     pub total_fees_fraction: f64,
     /// Fee saved on each future 1-in/2-out transfer (pico, under the mode).
     pub fee_savings_per_tx_pico: i128,
-    /// Accrued demurrage saved per year of holding the principal (pico).
+    /// Accrued demurrage saved per year of holding the principal (pico), at
+    /// the in-class rate once demurrage is active (epoch 1 on).
     pub demurrage_savings_per_year_pico: u128,
     /// Future transfers until the per-tx fee savings repay the wash.
     pub break_even_transactions: Option<u128>,
-    /// Years of holding until the demurrage savings repay the wash.
+    /// Years of active demurrage (epoch 1 on) until the savings repay the
+    /// wash.
     pub break_even_years: Option<f64>,
 }
 
@@ -382,7 +385,12 @@ pub fn analyze_wash_trading_consensus(
     };
     let fee_savings_per_tx_pico = future_fee(w0) - future_fee(w_n);
 
-    let rate = params.demurrage_rate_bps(height);
+    // Savings are in-class demurrage avoided per year of ACTIVE demurrage. In
+    // epoch 0 the in-class rate is 0, so nothing is saved until the holiday
+    // ends; from then on the attacker saves at the epoch-1 rate. Pricing the
+    // savings at that rate keeps the break-even meaningful at `--height 1`,
+    // where the wash itself is charged at the exit-pricing rate (#1685).
+    let rate = params.demurrage_rate_bps(height.max(params.first_demurrage_height()));
     let bpy = params.blocks_per_year;
     let demurrage_savings_per_year_pico = (demurrage_charge(principal_pico, f0, bpy, rate, bpy)
         as u128)
@@ -572,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn consensus_wash_prices_downgrade_when_demurrage_active() {
+    fn consensus_wash_prices_downgrade_from_block_one() {
         use crate::{consensus_fee::FeeModelMode, fee_curve::PICO_PER_BTH};
         let p = ConsensusFeeParams::mainnet(FeeModelMode::ConsensusOnly);
         let w = 10_000_000 * PICO_PER_BTH;
@@ -590,7 +598,12 @@ mod tests {
         // The capitalized charge prices ~SETTLEMENT_HORIZON years of saved
         // demurrage, so washing cannot repay in under a year.
         assert!(active.break_even_years.unwrap() > 1.0, "{active:?}");
+        // #1685: the downgrade is an exit charge, priced at the exit-pricing
+        // rate from block 1, so the epoch-0 wash costs what the epoch-1 wash
+        // does (it used to be free under the in-class holiday).
         let epoch0 = analyze_wash_trading_consensus(w, principal, 50_000, 20, 1, &p);
-        assert_eq!(epoch0.hop_demurrage_pico, 0);
+        assert!(epoch0.hop_demurrage_pico > 0, "{epoch0:?}");
+        assert_eq!(epoch0.hop_demurrage_pico, active.hop_demurrage_pico);
+        assert_eq!(epoch0.break_even_years, active.break_even_years);
     }
 }

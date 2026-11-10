@@ -33,6 +33,30 @@ consensus batch (#1683).
   remains the size-based `consensus_fee_floor`; `MIN_TX_FEE` (1e8 pico) is
   still checked only at mempool admission. See
   `docs/decisions/0014-min-tx-fee-relay-policy.md`.
+- **Exit pricing has no epoch-0 holiday (#1685).** The #925 class-downgrade
+  charge, the #831 settlement charge and the ADR-0007 bridge-import toll (all
+  the capitalized reset over `SETTLEMENT_HORIZON_BLOCKS`) read the in-class
+  rate `demurrage_rate_bps`, which is 0 below block 6,307,200. So for the
+  whole first halving epoch (about 315M BTH) any wealthy coin could drop to
+  background, settle or shed an import tag for the base fee alone. Per the
+  operator ruling of 2026-11-09 (option 2), they now read a new accessor,
+  `MonetaryPolicy::exit_pricing_rate_bps`: the same ratified 200 bps, active
+  from block 1. Ordinary in-class demurrage keeps its epoch-0 rate of 0 and
+  `demurrage_rate_bps` is unchanged; no constant value changes. Block
+  validation (`consensus_fee_floor`), mempool admission (`relay_demurrage`)
+  and the sims' `consensus_fee_model` all call one new kernel,
+  `spend_demurrage_charge_with_exit_rate` (accrued at the in-class rate,
+  capitalized at the exit rate), so relay and blocks cannot diverge. From
+  epoch 1 on the floor is unchanged. Consequences: in epoch 0, any spend
+  whose declared output class is below its ring/import floor (wallet tag
+  decay, background outputs, settlements) now pays the capitalized charge,
+  so the faucet (`faucet_request`) and the testnet-only
+  `dev_settleToBackground` RPC now price their transactions at the consensus
+  floor plus headroom (the `botho send` loop) instead of a fixed
+  `MIN_TX_FEE`. Re-run sweeps and
+  goldens: `settlement-horizon-sweep` launch start, `wash-trading --height
+  1`, and the epoch-0 notes in `bridge-import-calibration.md` and
+  `consensus-fee-model-sim-verdicts.md`.
 
 ## Protocol 9.0.0 (unreleased, in progress)
 

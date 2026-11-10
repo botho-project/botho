@@ -212,5 +212,5 @@ The module doc in `m2_production.rs` lists them in full. Most lean in the mechan
 ## What this does not decide
 
 - Whether to add a redistribution source (for example, weighting the draw against hashpower, a lottery share not proportional to output count, or a real per-output floor), or to restate the M2 criterion: **#1727**.
-- Splitting to farm the lottery: #1682. Decoy dilution of the floor: #1686. Dropping tags in one transaction: #1687. The epoch-0 holiday: #1685.
+- Splitting to farm the lottery: #1682. Decoy dilution of the floor: #1686. Dropping tags in one transaction: #1687. The epoch-0 holiday: #1685 (decided 2026-11-09: exit charges priced from block 1 in protocol 10.0.0; these runs predate it and charged no downgrade in year 0).
 - No node or consensus code changed. The only non-sim change is a drift test in `botho/src/monetary.rs` that pins the new `cluster_tax::mainnet_monetary_policy` mirror to the node's policy.

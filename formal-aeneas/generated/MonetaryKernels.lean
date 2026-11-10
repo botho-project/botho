@@ -238,7 +238,7 @@ structure monetary.MonetaryPolicy where
   expected_fee_burn_rate_bps : Std.U32
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::tail_emission_start_height]:
-    Source: 'cluster-tax/src/monetary.rs', lines 231:4-233:5
+    Source: 'cluster-tax/src/monetary.rs', lines 238:4-240:5
     Visibility: public -/
 def monetary.MonetaryPolicy.tail_emission_start_height
   (self : monetary.MonetaryPolicy) : Result Std.U64 := do
@@ -246,21 +246,21 @@ def monetary.MonetaryPolicy.tail_emission_start_height
   self.halving_interval * i
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_bps::LOTTERY_EMISSION_MAX_BPS]
-    Source: 'cluster-tax/src/monetary.rs', lines 262:8-262:52 -/
+    Source: 'cluster-tax/src/monetary.rs', lines 269:8-269:52 -/
 @[global_simps, irreducible]
 def monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_MAX_BPS
   : Std.U32 :=
   5000#u32
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_bps::LOTTERY_EMISSION_STEP_BPS]
-    Source: 'cluster-tax/src/monetary.rs', lines 260:8-260:53 -/
+    Source: 'cluster-tax/src/monetary.rs', lines 267:8-267:53 -/
 @[global_simps, irreducible]
 def monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_STEP_BPS
   : Std.U32 :=
   1000#u32
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_bps]:
-    Source: 'cluster-tax/src/monetary.rs', lines 258:4-274:5
+    Source: 'cluster-tax/src/monetary.rs', lines 265:4-281:5
     Visibility: public -/
 def monetary.MonetaryPolicy.lottery_emission_bps
   (self : monetary.MonetaryPolicy) (height : Std.U64) : Result Std.U32 := do
@@ -279,7 +279,7 @@ def monetary.MonetaryPolicy.lottery_emission_bps
       monetary.MonetaryPolicy.lottery_emission_bps.LOTTERY_EMISSION_MAX_BPS)
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::lottery_emission_share]:
-    Source: 'cluster-tax/src/monetary.rs', lines 278:4-280:5
+    Source: 'cluster-tax/src/monetary.rs', lines 285:4-287:5
     Visibility: public -/
 def monetary.MonetaryPolicy.lottery_emission_share
   (self : monetary.MonetaryPolicy) (height : Std.U64) (reward : Std.U64) :
@@ -293,7 +293,7 @@ def monetary.MonetaryPolicy.lottery_emission_share
   ok (UScalar.cast .U64 i4)
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::is_halving_phase]:
-    Source: 'cluster-tax/src/monetary.rs', lines 307:4-309:5
+    Source: 'cluster-tax/src/monetary.rs', lines 350:4-352:5
     Visibility: public -/
 def monetary.MonetaryPolicy.is_halving_phase
   (self : monetary.MonetaryPolicy) (height : Std.U64) : Result Bool := do
@@ -301,7 +301,7 @@ def monetary.MonetaryPolicy.is_halving_phase
   ok (height < i)
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::halving_reward]:
-    Source: 'cluster-tax/src/monetary.rs', lines 313:4-320:5
+    Source: 'cluster-tax/src/monetary.rs', lines 356:4-363:5
     Visibility: public -/
 def monetary.MonetaryPolicy.halving_reward
   (self : monetary.MonetaryPolicy) (height : Std.U64) :
@@ -316,7 +316,7 @@ def monetary.MonetaryPolicy.halving_reward
   else ok none
 
 /-- [bth_cluster_tax::monetary::{bth_cluster_tax::monetary::MonetaryPolicy}::calculate_tail_reward_u128]:
-    Source: 'cluster-tax/src/monetary.rs', lines 346:4-365:5
+    Source: 'cluster-tax/src/monetary.rs', lines 389:4-408:5
     Visibility: public -/
 def monetary.MonetaryPolicy.calculate_tail_reward_u128
   (self : monetary.MonetaryPolicy) (supply_at_transition : Std.U128) :

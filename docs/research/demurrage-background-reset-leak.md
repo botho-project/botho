@@ -1,7 +1,7 @@
 # Demurrage Background-Reset Leak — Verdict
 
 **Issue**: [#834](https://github.com/botho-project/botho/issues/834)
-**Status**: **VERDICT — leak is REAL (option (a))**. An unpriced class transition.
+**Status**: **VERDICT — leak is REAL (option (a))**. An unpriced class transition. Priced by #925; the epoch-0 residual closed by #1685 (protocol 10.0.0; see "Epoch-0 residual" below).
 **Date**: 2026-07-14
 **Related**: ADR 0003 (demurrage-settlement on-ramp), #831 (settlement charge), #713/#581 (cluster-tag inheritance bound)
 **Evidence**: `cluster-tax/src/demurrage.rs::tests::demurrage_background_reset_leak_is_real` (permanent regression test)
@@ -144,6 +144,45 @@ ring floor, which for a genuine background spend is already 1× → no charge).
 **Fix issue**: [#925](https://github.com/botho-project/botho/issues/925) —
 *price the demurrage class transition on deflating spends*, filed as the fix for
 this leak and marked mainnet-blocking (`priority:high` + `loom:urgent`).
+
+## Epoch-0 residual: closed in protocol 10.0.0 (#1685)
+
+The #925 fix priced the class transition, but at the in-class demurrage rate
+`MonetaryPolicy::demurrage_rate_bps(height)`, which is **0 below block
+6,307,200** (the epoch-0 bootstrap holiday, `cluster-tax/src/monetary.rs`). So
+for the whole first halving epoch (about 315M BTH minted, 51.6% of Phase-1
+supply) the leak above stayed open: the capitalized reset, the #831 settlement
+charge and the ADR-0007 bridge-import toll were all zero, and any wealthy coin
+could drop to background, settle or shed an import tag for the base fee alone.
+The #1695 re-runs measured it: 50 wash hops on a 100M-BTH cluster at height 1
+cost 255,242 pico in total and shed the factor from 5.949× to 5.692×, against
+94,816 BTH for the same run at the first epoch-1 block.
+
+**Ruling (operator, 2026-11-09, option 2 on #1685):** decouple exit pricing from
+the holiday. Protocol 10.0.0 adds `MonetaryPolicy::exit_pricing_rate_bps`,
+the same ratified 200 bps with no epoch-0 gate, and the consensus kernel
+`spend_demurrage_charge_with_exit_rate` charges
+
+```
+max(demurrage_charge(.., elapsed, demurrage_rate_bps(h), ..),           // in-class accrual
+    capitalized_reset_charge(.., SETTLEMENT_HORIZON_BLOCKS,
+                             exit_pricing_rate_bps(h), ..))             // priced exit
+```
+
+Block validation (`Ledger::consensus_fee_floor`), mempool admission
+(`relay_demurrage`) and the sims' `consensus_fee_model` all call that one
+kernel. In-class demurrage keeps its epoch-0 rate of 0, so miners are still not
+charged for holding bootstrap coinbases; no ratified constant changed.
+
+Evidence: `bug_1685_epoch0_downgrade_pays_capitalized_reset_at_height_1`
+(`botho/src/ledger/store.rs`) asserts that the young 5.745× coin of the table
+above, spent to background at **height 1**, pays exactly the capitalized reset
+(the same charge as in epoch 1). Sibling tests pin the in-class holiday
+(`bug_1685_epoch0_in_class_hold_still_pays_no_demurrage`), the epoch-0
+settlement charge and the epoch-0 import toll. The re-run `wash-trading
+--height 1` now pays the same 94,816 BTH as the epoch-1 run and breaks even
+after the same 5 years of active demurrage
+(`docs/research/consensus-fee-model-sim-verdicts.md`).
 
 ## Reproduction
 

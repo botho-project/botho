@@ -5232,7 +5232,8 @@ mod tests {
     /// `Ledger::consensus_fee_floor` within 1 pico across background,
     /// mid-wealth, high-wealth (accrued demurrage), memo, n_out > 10 (the
     /// `min(n,10)²` cap), young-coin downgrade (capitalized term) and
-    /// bridge-import-floor transactions. The vectors are recomputed from the
+    /// bridge-import-floor transactions, plus epoch-0 in-class, downgrade and
+    /// import-floor vectors (#1685). The vectors are recomputed from the
     /// ledger every run, so drift on either side fails CI.
     #[test]
     fn consensus_fee_model_matches_ledger_floor_golden_vectors() {
@@ -5254,6 +5255,7 @@ mod tests {
         ledger.record_bridge_import_cluster_for_test(11).unwrap();
 
         let h = 8_000_000u64; // epoch 1: demurrage active
+        let e0 = 1_000_000u64; // epoch 0: in-class holiday, exit pricing on
         let memo = || {
             Some(
                 bth_transaction_clsag::EncryptedMemo::from_bytes(
@@ -5326,6 +5328,29 @@ mod tests {
                 ring: vec![(10 * bth, h - 10, 11, 40)],
                 outputs: vec![mk_tagged_output(9 * bth, 131, full_tag(11))],
                 height: h,
+                expect_demurrage: true,
+            },
+            // #1685: epoch 0. In-class accrual is on holiday; the exit charges
+            // (downgrade, import toll) are priced at the exit-pricing rate.
+            Vector {
+                name: "epoch 0: high-wealth old in-class (holiday)",
+                ring: vec![(100_000 * bth, 0, 7, 50), (5 * bth, e0, 0, 51)],
+                outputs: vec![mk_tagged_output(90_000 * bth, 132, full_tag(7))],
+                height: e0,
+                expect_demurrage: false,
+            },
+            Vector {
+                name: "epoch 0: young wealthy -> background downgrade",
+                ring: (0..11u8).map(|i| (100 * bth, e0, 7, 52 + i)).collect(),
+                outputs: vec![mk_tagged_output(90 * bth, 133, ClusterTagVector::empty())],
+                height: e0,
+                expect_demurrage: true,
+            },
+            Vector {
+                name: "epoch 0: bridge-import floor",
+                ring: vec![(10 * bth, e0 - 10, 11, 63)],
+                outputs: vec![mk_tagged_output(9 * bth, 134, full_tag(11))],
+                height: e0,
                 expect_demurrage: true,
             },
         ];
@@ -5743,6 +5768,178 @@ mod tests {
                 .is_ok(),
             "a settlement paying exactly the floor is accepted by the fee gate"
         );
+    }
+
+    // ---- #1685: exit pricing has no epoch-0 holiday ----
+
+    /// #1685 (protocol 10.0.0): at height 1 — deep in the epoch-0 demurrage
+    /// holiday — the consensus floor still prices a young 5.745× coin spent to
+    /// background at the full capitalized reset, read at the exit-pricing rate
+    /// (200 bps). Before 10.0.0 the charge read `demurrage_rate_bps` (0 in
+    /// epoch 0) and the downgrade cost only the base fee.
+    #[test]
+    fn bug_1685_epoch0_downgrade_pays_capitalized_reset_at_height_1() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+            .unwrap();
+        let policy = crate::monetary::mainnet_policy();
+        let block_height = 1u64;
+        assert_eq!(policy.demurrage_rate_bps(block_height), 0, "epoch 0");
+        assert_eq!(policy.exit_pricing_rate_bps(block_height), 200);
+
+        let mut specs = vec![(100_000_000u64, block_height, 7u64, 240u8)];
+        for i in 0..10u8 {
+            specs.push((100_000_000, block_height, 7, 241 + i));
+        }
+        let ring = seed_ring_utxos(&ledger, &specs);
+        let output_sum = 90_000_000u64;
+        let outputs = vec![mk_tagged_output(output_sum, 140, ClusterTagVector::empty())];
+        let tx = mk_transfer_tx(ring, outputs, 0);
+
+        let demurrage =
+            ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx);
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let floor_factor =
+            bth_cluster_tax::ring_centroid_implied_factor(&[(output_sum, 10u128.pow(19))], &curve);
+        assert_eq!(floor_factor, 5745, "10M-BTH cluster floors at 5.745×");
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let expected = bth_cluster_tax::capitalized_reset_charge(
+            output_sum,
+            floor_factor,
+            bth_cluster_tax::demurrage::FACTOR_SCALE,
+            bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+            policy.exit_pricing_rate_bps(block_height),
+            bpy,
+        );
+        assert!(expected > 0, "capitalized_reset_charge > 0 at height 1");
+        assert_eq!(
+            demurrage, expected,
+            "epoch-0 downgrade priced at the exit rate"
+        );
+        // Same price as the identical spend in epoch 1 (no holiday).
+        let h1 = policy.halving_interval;
+        let dir1 = tempdir().unwrap();
+        let ledger1 = Ledger::open(dir1.path()).unwrap();
+        ledger1
+            .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+            .unwrap();
+        let specs1: Vec<_> = specs.iter().map(|&(a, _, c, k)| (a, h1, c, k)).collect();
+        let ring1 = seed_ring_utxos(&ledger1, &specs1);
+        let tx1 = mk_transfer_tx(
+            ring1,
+            vec![mk_tagged_output(output_sum, 140, ClusterTagVector::empty())],
+            0,
+        );
+        assert_eq!(
+            ledger1.consensus_fee_floor(&tx1, h1).unwrap() - base_only_fee(&ledger1, &tx1),
+            demurrage
+        );
+    }
+
+    /// #1685: ordinary in-class demurrage keeps its epoch-0 holiday. A coin
+    /// held ~6M blocks in a 10M-BTH cluster and spent in-class pays no
+    /// demurrage in epoch 0; the same hold in epoch 1 pays accrued demurrage.
+    #[test]
+    fn bug_1685_epoch0_in_class_hold_still_pays_no_demurrage() {
+        let policy = crate::monetary::mainnet_policy();
+        let age = 6_000_000u64;
+        let demurrage_at = |start: u64| {
+            let dir = tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            ledger
+                .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+                .unwrap();
+            let ring = seed_ring_utxos(&ledger, &[(100_000_000, start, 7, 250)]);
+            let tx = mk_transfer_tx(
+                ring,
+                vec![mk_tagged_output(90_000_000, 141, full_tag(7))],
+                0,
+            );
+            ledger.consensus_fee_floor(&tx, start + age).unwrap() - base_only_fee(&ledger, &tx)
+        };
+        assert!(age < policy.halving_interval);
+        assert_eq!(demurrage_at(0), 0, "in-class hold is free in epoch 0");
+        assert!(
+            demurrage_at(policy.halving_interval) > 0,
+            "the same hold accrues in epoch 1"
+        );
+    }
+
+    /// #1685: the #831 settlement charge applies at height 1, equal to
+    /// `demurrage_settlement_charge` at the exit-pricing rate.
+    #[test]
+    fn bug_1685_epoch0_settlement_is_priced_at_height_1() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+            .unwrap();
+        let policy = crate::monetary::mainnet_policy();
+        let block_height = 1u64;
+        let ring = seed_ring_utxos(&ledger, &[(100_000_000, block_height, 7, 251)]);
+        let output_sum = 90_000_000u64;
+        let outputs = vec![mk_tagged_output(output_sum, 142, ClusterTagVector::empty())];
+        let tx = mk_settlement_tx(ring, outputs, 0, output_sum);
+
+        let charge =
+            ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx);
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let floor_factor =
+            bth_cluster_tax::ring_centroid_implied_factor(&[(output_sum, 10u128.pow(19))], &curve);
+        let expected = bth_cluster_tax::demurrage_settlement_charge(
+            output_sum,
+            floor_factor,
+            policy.exit_pricing_rate_bps(block_height),
+            bpy,
+        );
+        assert!(expected > 0, "epoch-0 settlement must cost > 0");
+        assert_eq!(charge, expected);
+    }
+
+    /// #1685: the ADR-0007 bridge-import toll (the capitalized downgrade from
+    /// the import floor `F` to the plain-curve claim) applies at height 1.
+    #[test]
+    fn bug_1685_epoch0_import_toll_is_priced_at_height_1() {
+        use bth_cluster_tax::{FeeConfig, PICO_PER_BTH};
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let bth = PICO_PER_BTH as u64;
+        ledger
+            .set_cluster_wealth_for_test(11, 50 * PICO_PER_BTH)
+            .unwrap();
+        ledger.record_bridge_import_cluster_for_test(11).unwrap();
+        let policy = crate::monetary::mainnet_policy();
+        let block_height = 1u64;
+        let ring = seed_ring_utxos(&ledger, &[(10 * bth, 0, 11, 252)]);
+        let tx = mk_transfer_tx(ring, vec![mk_tagged_output(9 * bth, 143, full_tag(11))], 0);
+
+        let toll =
+            ledger.consensus_fee_floor(&tx, block_height).unwrap() - base_only_fee(&ledger, &tx);
+        let fc = FeeConfig::default();
+        let claimed = fc.cluster_factor(
+            ledger
+                .effective_cluster_wealth_from_outputs(&tx.outputs)
+                .unwrap(),
+        );
+        let import_floor = ledger
+            .import_floor_factor_from_outputs(&tx.outputs)
+            .unwrap();
+        assert_eq!(import_floor, bth_cluster_tax::BRIDGE_IMPORT_FACTOR_FLOOR);
+        assert!(claimed < import_floor, "plain-curve claim sits below F");
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let expected = bth_cluster_tax::capitalized_reset_charge(
+            9 * bth,
+            import_floor,
+            claimed,
+            bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+            policy.exit_pricing_rate_bps(block_height),
+            bpy,
+        );
+        assert!(expected > 0, "epoch-0 import toll must be priced");
+        assert_eq!(toll, expected);
     }
 
     /// Tag-rewrite rule / anti-laundering: a settlement whose output still

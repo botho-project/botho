@@ -184,6 +184,13 @@ impl Default for MonetaryPolicy {
     }
 }
 
+/// The ratified annual demurrage rate at maximum cluster factor, in basis
+/// points (2%/year at factor 6, #351). Shared by
+/// [`MonetaryPolicy::demurrage_rate_bps`] (in-class demurrage, zero in epoch
+/// 0) and [`MonetaryPolicy::exit_pricing_rate_bps`] (exit charges, active from
+/// block 1, #1685) so the two can never disagree on the value.
+const DEMURRAGE_RATE_BPS: u32 = 200;
+
 impl MonetaryPolicy {
     /// Create policy with Bitcoin-like parameters (10 min blocks, 4 year
     /// halvings).
@@ -293,11 +300,47 @@ impl MonetaryPolicy {
     /// (experiments/ANALYSIS.md): demurrage is load-bearing for the
     /// Δgini > 0.05 criterion at miner-viable emission fractions.
     ///
+    /// This is the rate for ORDINARY in-class demurrage only (the accrued
+    /// holding charge). The three exit charges (the #925 downgrade charge,
+    /// the #831 settlement charge and the ADR-0007 bridge-import toll) read
+    /// [`Self::exit_pricing_rate_bps`] instead, which has no epoch-0 holiday
+    /// (#1685, protocol 10.0.0).
+    ///
     /// CONSENSUS-CRITICAL: pure integer math.
     pub fn demurrage_rate_bps(&self, height: u64) -> u32 {
-        const DEMURRAGE_RATE_BPS: u32 = 200;
-
         if self.halving_interval == 0 || height < self.halving_interval {
+            return 0;
+        }
+        DEMURRAGE_RATE_BPS
+    }
+
+    /// Annual rate, in basis points at maximum cluster factor, at which the
+    /// consensus fee floor prices a permanent **exit from a wealth class**:
+    /// the #925 capitalized downgrade charge, the #831 settlement charge and
+    /// the ADR-0007 bridge-import toll (all three are
+    /// [`crate::capitalized_reset_charge`] over the shared
+    /// [`crate::SETTLEMENT_HORIZON_BLOCKS`]).
+    ///
+    /// Unlike [`Self::demurrage_rate_bps`] there is no epoch-0 holiday: the
+    /// full 200 bps applies from block 1 (#1685, operator ruling 2026-11-09,
+    /// protocol 10.0.0). The holiday exists so miners are not charged for
+    /// holding their bootstrap coinbases; it was never meant to make leaving
+    /// a wealth class free. With a zero exit rate in epoch 0, any wealthy coin
+    /// could drop to background, settle or shed an import tag for only the
+    /// base fee during the first ~315M BTH of issuance.
+    ///
+    /// The rate value is the same ratified 200 bps as in-class demurrage; only
+    /// the epoch-0 gate differs. A degenerate `halving_interval == 0` policy
+    /// still disables it, matching [`Self::demurrage_rate_bps`] (the
+    /// "demurrage off" configuration some sims and tests use).
+    ///
+    /// Takes the height (unused today) so every caller reads it the same way
+    /// as [`Self::demurrage_rate_bps`] and a future schedule needs no
+    /// signature change.
+    ///
+    /// CONSENSUS-CRITICAL: pure integer math.
+    pub fn exit_pricing_rate_bps(&self, _height: u64) -> u32 {
+        if self.halving_interval == 0 {
             return 0;
         }
         DEMURRAGE_RATE_BPS
@@ -1023,6 +1066,33 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(zero_policy.demurrage_rate_bps(12345), 0);
+    }
+
+    /// #1685: exit pricing has no epoch-0 holiday. The in-class rate stays 0
+    /// in epoch 0; the exit rate is the same 200 bps from block 1.
+    #[test]
+    fn exit_pricing_rate_has_no_epoch_zero_holiday() {
+        let policy = MonetaryPolicy {
+            initial_reward: 1000,
+            halving_interval: 100,
+            halving_count: 3,
+            ..Default::default()
+        };
+        for h in [0u64, 1, 99, 100, 1_000_000, u64::MAX] {
+            assert_eq!(policy.exit_pricing_rate_bps(h), 200, "height {h}");
+            // Same ratified value as in-class demurrage once it is active.
+            assert_eq!(
+                policy.exit_pricing_rate_bps(h),
+                policy.demurrage_rate_bps(h.max(100))
+            );
+        }
+        assert_eq!(policy.demurrage_rate_bps(1), 0, "in-class holiday kept");
+
+        let zero_policy = MonetaryPolicy {
+            halving_interval: 0,
+            ..Default::default()
+        };
+        assert_eq!(zero_policy.exit_pricing_rate_bps(12345), 0);
     }
 
     #[test]
@@ -1890,6 +1960,7 @@ mod tests {
                 p.demurrage_rate_bps(height),
                 if height < h { 0 } else { 200 }
             );
+            assert_eq!(p.exit_pricing_rate_bps(height), 200, "#1685");
         }
         assert_eq!(
             (0..5)

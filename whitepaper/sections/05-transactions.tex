@@ -301,7 +301,8 @@ The cluster tag system resists common attacks:
     decay tags 5\% per transfer, and consensus accepts dropped tags, so the
     binding cost of shedding a high factor is the class-downgrade charge
     (Section~\ref{sec:demurrage-class-transition}), not time (as built,
-    pending \#1687; that charge is zero in epoch~0, pending \#1685).
+    pending \#1687; since protocol 10.0.0 that charge applies from block~1,
+    \#1685).
   \item \textbf{Mixing through exchanges}: Reduces cluster concentration
     over time, but requires actual economic activity (legitimate use case).
 \end{itemize}
@@ -408,7 +409,7 @@ fees than direct transfer, with overhead $\Omega(n \cdot s_{\text{tx}} \cdot b \
 tags. Consensus enforces only that they claim no \emph{more} cluster mass than
 the inputs (Section~\ref{sec:tag-decay}), so the theorem and corollary hold
 for wallets that write inherited tags; a modified wallet may write empty tags
-and pay only the class-downgrade charge (pending \#1687, \#1686, \#1685). The
+and pay only the class-downgrade charge (pending \#1687, \#1686). The
 size-fee model $b \cdot s \cdot \phi$ is the consensus floor; at today's
 constants the flat relay minimum of $10^{8}$ pico-BTH per transaction exceeds
 it for ordinary transactions, so the factor term rarely binds in practice
