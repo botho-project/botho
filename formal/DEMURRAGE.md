@@ -275,7 +275,7 @@ target/release/botho-formal-drt --cases 100000 --seed 1711 \
 
 This is a partial #1711 contribution. The unconditional principal bound
 remains refuted. Reset/settlement/spend property proofs (the later #1985 model/DRT increment
-is below), elapsed-centroid/quantile property proofs, monotonicity of other kernels, adversarial dilution,
+is below), quantile property proofs, monotonicity of other kernels, adversarial dilution,
 fee-floor bounds, binary fuzz-corpus replay and reachable transaction/block
 witnesses remain outstanding. Do not mark #1711 complete on these results
 or weaken its targets silently.
@@ -399,8 +399,8 @@ and nightly-helper checks are not a million-case execution claim.
 No theorem, extraction equivalence, universal permutation/value-independence,
 generic overflow/allocation/panic freedom or accepted-chain reachability
 result is added. #1711 retains those proof/reachability obligations, the
-elapsed-centroid property proofs (its later arithmetic/model/DRT increment is
-below), dilution, fee-floor composition and binary fuzz-corpus replay. Historical
+other elapsed-centroid obligations beyond the four full-Nat properties proved
+in #2004 below, dilution, fee-floor composition and binary fuzz-corpus replay. Historical
 receipts above remain historical; final-head receipts are on the child PR.
 
 On 2026-11-09, [formal gates](https://github.com/botho-project/botho/actions/runs/42711257939)
@@ -482,10 +482,58 @@ resolved dependency graph or executable; normal CI and diagnostic runs are
 identified separately. Historical fixtures, receipts, controls, theorem
 lists and statement records remain unchanged.
 
-This adds arithmetic repair, an executable model and finite correspondence
-and mutation evidence. No universal Rust-equivalence, permutation/scaling,
-panic/allocation/cardinality or accepted/genesis-chain reachability proof is
-added. Production validation and relay still select `ring_elapsed_quantile`
+The #1998 increment adds arithmetic repair, an executable model and finite
+correspondence and mutation evidence; it adds no listed model theorem. The
+four subsequent #2004 model proofs below leave Rust/extraction equivalence,
+machine-width/panic/allocation/cardinality safety and accepted/genesis-chain
+reachability unproved. Production validation and relay still select `ring_elapsed_quantile`
 at 10,000 bps; the centroid is a public helper and simulation comparison
 kernel (the ledger occurrence is a test). No accepted-chain exploit is
 established. #1711 remains open for its separate proof and policy questions.
+
+### Proven elapsed-centroid model properties (#2004)
+
+Four claims about the unchanged canonical `ringElapsedCentroid` are now
+**proven (model)** and listed in `Theorems.lean`:
+
+| Theorem | Full-Nat contract |
+| --- | --- |
+| `ringElapsedCentroid_perm` | Any permutation of complete `(value, creationHeight)` pairs preserves the result. |
+| `ringElapsedCentroid_insert_zero` | A zero-value pair with any creation height can be inserted between arbitrary prefix and suffix lists. |
+| `ringElapsedCentroid_scale_values` | Multiplying every value by the same `k` preserves the result, assuming solely `0 < k`. |
+| `ringElapsedCentroid_le_height` | The result is at most current height, unconditionally. |
+
+These quantify over arbitrary finite lists and all natural values/heights,
+without positive-total, u64-width, nonoverflow or 64-member premises. Empty
+and all-zero rings return zero; future creation heights have saturated age
+zero. Unnamed kernel-checked examples cover those boundaries, zero current
+height, middle insertion, pair permutation, the unequal-weight fractional
+mean `27 / 5`, and positive scaling whose values exceed u64.
+
+The reviewed statements were merged first in [PR #2005](https://github.com/botho-project/botho/pull/2005)
+at `90a7fb8b2f8817293e699ae797f78a9359ebf955`; this increment preserves all
+249 complete records. The proof source was retained separately at
+`c3da7077422cc72bd71273c56f3b98cded305e5d` (tree
+`fb54ebf01aa180741ffe650360b6c794d2eb044d`). Its independent proposal
+[run 42755505776](https://github.com/botho-project/botho/actions/runs/42755505776)
+compiled the proofs and generated matching records, but the workflow failed
+at the expected missing-record self-test and skipped isolated verification.
+It is historical proposal evidence; the implementing PR records its own
+final-head build and isolated verification against the records-bearing base.
+
+The #1998 finite Rust/Lean correspondence remains **tested**, separate from
+these universal Nat model proofs. Its final normal [DRT run 42736471238](https://github.com/botho-project/botho/actions/runs/42736471238)
+reported 280,000 comparisons, 245 replays and zero mismatches at reviewed head
+`56cb51f37bc0e6964401b339d82453d1f20f5ed8`, using identical-tree checkout
+`786bc9f994c783408d1dd46b0a12c837ee525a18`. Original
+[report artifact 13727407395](https://github.com/botho-project/botho/actions/runs/42736471238/artifacts/13727407395)
+has ZIP SHA-256 `f31f5e5595fc6618b46b9f2e255fa119224867b6446e4b82141217f2ca0b0ccc`;
+this is a historical run, not execution of the #2004 proof head. The final diff preserves the executable
+Age declarations and Rust/DRT sources, fixtures and budgets; source identity
+does not imply equal resolved dependencies or binaries across runs. The
+historical runs above retain their original scopes and provenance. No new
+Rust/extraction equivalence or machine-width/panic/allocation/cardinality/
+reachability proof follows from these properties. The height bound concerns
+the elapsed centroid only; neither it nor positive scaling proves accepted-chain
+fee behavior, a principal bound or general factor dilution resistance.
+Quantile properties and the remaining #1711 obligations stay separate.
