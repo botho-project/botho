@@ -237,3 +237,74 @@ def exactSpendCharge (value inputFactor outputFactor elapsed rate year : Nat) : 
     (exactResetCharge value inputFactor outputFactor 31536000 rate year)
 
 end Botho.Demurrage
+
+namespace Botho.Demurrage
+
+-- Proposal for the six full-Nat composition contracts in #2014/#2015.
+-- These are properties of the canonical models, independently of Rust DRT.
+private theorem exactResetCharge_eq_sub
+    (value inputFactor outputFactor horizon rate year : Nat) :
+    exactResetCharge value inputFactor outputFactor horizon rate year =
+      exactCharge value inputFactor horizon rate year -
+        exactCharge value outputFactor horizon rate year := by
+  unfold exactResetCharge
+  split
+  next h =>
+    have hc := exactCharge_mono_factor value inputFactor outputFactor horizon rate year h
+    omega
+  next => rfl
+
+/-- Reset is monotone in the raw input factor, including either guard branch. -/
+theorem exactResetCharge_mono_input_factor
+    (value outputFactor horizon rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactResetCharge value f1 outputFactor horizon rate year ≤
+      exactResetCharge value f2 outputFactor horizon rate year := by
+  rw [exactResetCharge_eq_sub, exactResetCharge_eq_sub]
+  have h := exactCharge_mono_factor value f1 f2 horizon rate year hf
+  omega
+
+/-- Reset is antitone in the raw output factor, including both clamp plateaus. -/
+theorem exactResetCharge_antitone_output_factor
+    (value inputFactor horizon rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactResetCharge value inputFactor f2 horizon rate year ≤
+      exactResetCharge value inputFactor f1 horizon rate year := by
+  rw [exactResetCharge_eq_sub, exactResetCharge_eq_sub]
+  have h := exactCharge_mono_factor value f1 f2 horizon rate year hf
+  omega
+
+/-- Settlement inherits input-factor monotonicity at its fixed production horizon. -/
+theorem exactSettlementCharge_mono_input_factor
+    (value rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactSettlementCharge value f1 rate year ≤
+      exactSettlementCharge value f2 rate year := by
+  exact exactResetCharge_mono_input_factor value 1000 31536000 rate year f1 f2 hf
+
+/-- Both obligations in spend are monotone in the input factor. -/
+theorem exactSpendCharge_mono_input_factor
+    (value outputFactor elapsed rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactSpendCharge value f1 outputFactor elapsed rate year ≤
+      exactSpendCharge value f2 outputFactor elapsed rate year := by
+  have ha := exactCharge_mono_factor value f1 f2 elapsed rate year hf
+  have hr := exactResetCharge_mono_input_factor value outputFactor 31536000 rate year f1 f2 hf
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> split <;> omega
+
+/-- Raising the output factor can only lower spend's reset obligation. -/
+theorem exactSpendCharge_antitone_output_factor
+    (value inputFactor elapsed rate year f1 f2 : Nat) (hf : f1 ≤ f2) :
+    exactSpendCharge value inputFactor f2 elapsed rate year ≤
+      exactSpendCharge value inputFactor f1 elapsed rate year := by
+  have hr := exactResetCharge_antitone_output_factor value inputFactor 31536000 rate year f1 f2 hf
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> split <;> omega
+
+/-- Accrued elapsed time is monotone; the reset horizon remains fixed. -/
+theorem exactSpendCharge_mono_elapsed
+    (value inputFactor outputFactor rate year t1 t2 : Nat) (ht : t1 ≤ t2) :
+    exactSpendCharge value inputFactor outputFactor t1 rate year ≤
+      exactSpendCharge value inputFactor outputFactor t2 rate year := by
+  have ha := exactCharge_mono_elapsed value inputFactor t1 t2 rate year ht
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> split <;> omega
+
+end Botho.Demurrage
