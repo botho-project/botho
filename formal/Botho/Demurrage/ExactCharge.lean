@@ -387,3 +387,130 @@ example : exactResetCharge 18446744073709551615 6000 3500 315360000 200 6307200 
     exactResetCharge 18446744073709551615 6000 3500 630720000 200 6307200 = 0 := by decide
 
 end Botho.Demurrage
+
+namespace Botho.Demurrage
+
+/-- A sufficient rate-time budget bounds the charge by principal on all Nat
+inputs, including zero year, both factor clamps and the final u64 cap. -/
+theorem exactCharge_le_value_of_rate_time
+    (value factor elapsed rate year : Nat)
+    (h : rate * elapsed ≤ 10000 * year) :
+    exactCharge value factor elapsed rate year ≤ value := by
+  have hp : clampN 1000 6000 factor - 1000 ≤ 5000 := by
+    unfold clampN
+    split <;> (try split) <;> omega
+  have hn : value * rate * (clampN 1000 6000 factor - 1000) * elapsed ≤
+      (10000 * 5000 * year) * value := by
+    simpa only [Nat.mul_assoc, Nat.mul_comm, Nat.mul_left_comm] using
+      Nat.mul_le_mul_left value (Nat.mul_le_mul h hp)
+  have hq := Nat.div_le_of_le_mul hn
+  unfold exactCharge minN
+  split <;> omega
+
+/-- Generic reset retains its caller-supplied horizon. Natural subtraction
+and the raw guard can only lower the input-factor charge. -/
+theorem exactResetCharge_le_value_of_rate_time
+    (value inputFactor outputFactor horizon rate year : Nat)
+    (h : rate * horizon ≤ 10000 * year) :
+    exactResetCharge value inputFactor outputFactor horizon rate year ≤ value := by
+  have hc := exactCharge_le_value_of_rate_time value inputFactor horizon rate year h
+  unfold exactResetCharge
+  split <;> omega
+
+/-- Settlement uses the literal 31,536,000-block reset horizon independently
+of the caller's year parameter. Its rate-time budget is sufficient. -/
+theorem exactSettlementCharge_le_value_of_rate_time
+    (value inputFactor rate year : Nat)
+    (h : rate * 31536000 ≤ 10000 * year) :
+    exactSettlementCharge value inputFactor rate year ≤ value := by
+  exact exactResetCharge_le_value_of_rate_time value inputFactor 1000 31536000 rate year h
+
+/-- The canonical single-rate spend maximum is bounded when each of its two
+obligations has a sufficient budget. This does not model the epoch-0 wrapper. -/
+theorem exactSpendCharge_le_value_of_rate_times
+    (value inputFactor outputFactor elapsed rate year : Nat)
+    (hElapsed : rate * elapsed ≤ 10000 * year)
+    (hReset : rate * 31536000 ≤ 10000 * year) :
+    exactSpendCharge value inputFactor outputFactor elapsed rate year ≤ value := by
+  have ha := exactCharge_le_value_of_rate_time value inputFactor elapsed rate year hElapsed
+  have hr := exactResetCharge_le_value_of_rate_time value inputFactor outputFactor
+    31536000 rate year hReset
+  simp only [exactSpendCharge, Nat.max_def]
+  split <;> omega
+
+/-- The unchanged current kernel refutes an unconditional principal bound.
+This model witness makes no accepted-ledger or genesis-reachability claim. -/
+theorem exactCharge_exceeds_value :
+    exactCharge 1000000 6000 (51 * 6307200) 200 6307200 = 1020000 ∧
+      1000000 < exactCharge 1000000 6000 (51 * 6307200) 200 6307200 := by decide
+
+-- Budget equality at 50 default years; the registered witness uses 51.
+example : exactCharge 1000000 6000 (50 * 6307200) 200 6307200 ≤ 1000000 := by
+  exact exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide)
+example : exactCharge 1000000 6000 (50 * 6307200) 200 6307200 = 1000000 := by decide
+
+-- The budget is sufficient only: its failure need not exceed principal.
+example : ¬ (200 * (51 * 6307200) ≤ 10000 * 6307200) ∧
+    exactCharge 1000000 3500 (51 * 6307200) 200 6307200 = 510000 ∧
+    exactCharge 1000000 3500 (51 * 6307200) 200 6307200 ≤ 1000000 := by decide
+
+-- Zero year needs no extra positivity premise; a zero rate supplies its budget.
+example (v f t : Nat) : exactCharge v f t 0 0 ≤ v := by
+  exact exactCharge_le_value_of_rate_time _ _ _ _ _ (by simp)
+example (v i o : Nat) : exactSpendCharge v i o 0 0 0 ≤ v := by
+  exact exactSpendCharge_le_value_of_rate_times _ _ _ _ _ _ (by simp) (by simp)
+example (v f r : Nat) : exactCharge v f 0 r 0 ≤ v := by
+  exact exactCharge_le_value_of_rate_time _ _ _ _ _ (by simp)
+example (f : Nat) : exactCharge 0 f 1 10000 1 ≤ 0 := by
+  exact exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide)
+example (v f t y : Nat) : exactCharge v f t 0 y ≤ v := by
+  exact exactCharge_le_value_of_rate_time _ _ _ _ _ (by simp)
+
+-- The one-year 10,000-bps equality budget applies at every factor width.
+-- The earlier exact-value examples pin below/at/above each clamp endpoint.
+example (v f : Nat) : exactCharge v f 1 10000 1 ≤ v := by
+  exact exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide)
+example : exactCharge 5000 999 1 10000 1 ≤ 5000 ∧
+    exactCharge 5000 1000 1 10000 1 ≤ 5000 ∧
+    exactCharge 5000 1001 1 10000 1 ≤ 5000 := by
+  exact ⟨exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide),
+    exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide),
+    exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide)⟩
+example : exactCharge 5000 5999 1 10000 1 ≤ 5000 ∧
+    exactCharge 5000 6000 1 10000 1 ≤ 5000 ∧
+    exactCharge 5000 6001 1 10000 1 ≤ 5000 := by
+  exact ⟨exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide),
+    exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide),
+    exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide)⟩
+example : exactCharge 5000 (2 ^ 128) 1 10000 1 ≤ 5000 ∧
+    exactCharge 5000 (2 ^ 128) 1 10000 1 = 5000 := by
+  exact ⟨exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide), by decide⟩
+
+-- A generic horizon of 1 satisfies its own budget, regardless of production horizon.
+example : exactResetCharge 1000000 6000 1000 1 10000 1 ≤ 1000000 := by
+  exact exactResetCharge_le_value_of_rate_time _ _ _ _ _ _ (by decide)
+-- Raw equality/increase guards and a strict downgrade on the upper plateau
+-- are already pinned to zero above; all also satisfy this reset budget.
+example : exactResetCharge 1000000 6000 6000 1 10000 1 ≤ 1000000 ∧
+    exactResetCharge 1000000 6000 6001 1 10000 1 ≤ 1000000 ∧
+    exactResetCharge 1000000 7000 6500 1 10000 1 ≤ 1000000 := by
+  exact ⟨exactResetCharge_le_value_of_rate_time _ _ _ _ _ _ (by decide),
+    exactResetCharge_le_value_of_rate_time _ _ _ _ _ _ (by decide),
+    exactResetCharge_le_value_of_rate_time _ _ _ _ _ _ (by decide)⟩
+
+-- Caller year 3154 differs from the fixed horizon; the reset budget still holds.
+example : exactSettlementCharge 1000000 6000 1 3154 ≤ 1000000 ∧
+    exactSettlementCharge 1000000 6000 1 3154 = 999873 := by
+  exact ⟨exactSettlementCharge_le_value_of_rate_time _ _ _ _ (by decide), by decide⟩
+-- At zero elapsed the reset is positive, so spend is not bounded via elapsed alone.
+example : exactSpendCharge 1000000 6000 1000 0 200 6307200 ≤ 1000000 ∧
+    exactSpendCharge 1000000 6000 1000 0 200 6307200 = 100000 := by
+  exact ⟨exactSpendCharge_le_value_of_rate_times _ _ _ _ _ _ (by decide) (by decide),
+    by decide⟩
+
+-- Above-u64 principal hits the final cap while satisfying the equality budget.
+example : exactCharge (2 ^ 64) 6000 1 10000 1 ≤ 2 ^ 64 ∧
+    exactCharge (2 ^ 64) 6000 1 10000 1 = U64_MAX := by
+  exact ⟨exactCharge_le_value_of_rate_time _ _ _ _ _ (by decide), by decide⟩
+
+end Botho.Demurrage
