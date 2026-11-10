@@ -65,9 +65,9 @@ class PlanHeadroomTests(unittest.TestCase):
 
 
 class PrefundSizingTests(unittest.TestCase):
-    """The x-series manifest shape: 64 wallets x 32 grants of 5x10^10."""
+    """The x-series manifest shape: 64 wallets x the plan's pinned prefund (#2023)."""
 
-    def manifest(self, grants, amount):
+    def manifest(self, grants, amount, pinned=True):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -79,6 +79,8 @@ class PrefundSizingTests(unittest.TestCase):
             return str(path)
 
         plan = x_series()
+        if not pinned:
+            del plan["prefund"]
         plan["endpoints"] = [t["rpc_url"] for t in targets()]
         plan_bytes = json.dumps(plan).encode()
         wallets = [
@@ -109,19 +111,24 @@ class PrefundSizingTests(unittest.TestCase):
         path.chmod(0o600)
         return path
 
-    def test_64_wallets_keep_x1_principal_and_inventory_depth(self):
-        m, plan = load_manifest(self.manifest(32, 5 * 10**10))
+    def test_64_wallets_take_the_pinned_10_0_0_shape(self):
+        # #2023: 40 grants of 2e10, so a payment moves little value under the
+        # 10.0.0 exit charge; batches are capped separately from max_single.
+        m, plan = load_manifest(self.manifest(40, 2 * 10**10))
         grants = plan["wallets"]["count"] * m["grants_per_wallet"]
-        self.assertEqual(grants, 2048)
-        self.assertEqual(grants * m["grant_picocredits"], 1024 * 10**11)
+        self.assertEqual(grants, 2560)
+        self.assertEqual(grants * m["grant_picocredits"], 512 * 10**11)
         self.assertLessEqual(
-            grants * int(plan["limits"]["max_single_signed_fee_picocredits"]),
+            -(-grants // 15) * int(plan["prefund"]["max_batch_fee_picocredits"]),
             int(plan["limits"]["max_signed_fee_picocredits"]),
         )
+        # The pre-10.0.0 x-series manifest no longer matches the plan.
+        with self.assertRaisesRegex(Gate, "plan prefund block"):
+            load_manifest(self.manifest(32, 5 * 10**10))
 
     def test_x1_grant_size_at_64_wallets_exceeds_principal(self):
         with self.assertRaisesRegex(Gate, "max_principal"):
-            load_manifest(self.manifest(32, 10**11))
+            load_manifest(self.manifest(32, 10**11, pinned=False))
 
 
 class Clock:

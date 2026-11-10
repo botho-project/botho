@@ -75,6 +75,13 @@ SIGNER_FIELDS = {
 SIGNER_OPTIONAL = {'prepare': {'min_fee'}, 'prepare_grants': {'min_fee'}}
 # stress.rs MAX_GRANT_OUTPUTS: consensus MAX_OUTPUTS (16) less one change output.
 GRANTS_PER_BATCH = 15
+# Deepest grant batch (#2023 review): a coinbase is depth 0, a batch is one more
+# than its deepest funding input, and its change keeps the batch's depth. The
+# prefunder spends coinbases first and never change at this depth, so one
+# coinbase cluster's cumulative wealth stays at most
+# coinbase x sum((1 - decay)^k, k = 0..MAX_FUNDING_DEPTH) (142.6 BTH), the ring
+# floor payment_shape prices every batch against.
+MAX_FUNDING_DEPTH = 2
 MANIFEST_FIELDS = {
     'schema_version', 'plan_file', 'plan_sha256', 'targets', 'tls_ca_file', 'tls_ca_sha256',
     'signer', 'signer_sha256', 'producer_role', 'funding_wallet', 'wallets',
@@ -135,6 +142,25 @@ def latest_deadline(plan, infrastructure_end):
             - rehearsal['drain_seconds'] - MATURITY_SECONDS)
 
 
+def batch_fee_cap(plan):
+    """The per-batch fee cap: the plan's pinned prefund cap, else max_single (#2023).
+
+    Since protocol 10.0.0 a batch owes the class-exit charge on the whole
+    coinbase it spends (#1685): one 50 BTH coinbase moved at a single wallet
+    hop already prices at about 1e9, over the x-series ``max_single`` that
+    campaign payments keep. ``plan["prefund"]["max_batch_fee_picocredits"]``
+    caps batches separately; ``payment_shape.prefund_check`` prices it.
+    """
+    pinned = plan.get('prefund')
+    if pinned is None:
+        return int(plan['limits']['max_single_signed_fee_picocredits'])
+    return int(pinned['max_batch_fee_picocredits'])
+
+
+def batch_count(grants):
+    return -(-grants // GRANTS_PER_BATCH)
+
+
 def check_opening_balances(balances, plan):
     """The exact launch.json rule from DiscoveryController and staging.prepare()."""
     need(isinstance(balances, list) and len(balances) == plan['wallets']['count']
@@ -180,6 +206,14 @@ def load_manifest(path):
          'campaign and funding wallets must be distinct')
     limits, wallet_plan = plan['limits'], plan['wallets']
     grants, amount = m['grants_per_wallet'], m['grant_picocredits']
+    pinned = plan.get('prefund')
+    if pinned is not None:
+        # The plan pins the payment shape it was fee-checked for (#2023).
+        need(isinstance(pinned, dict) and grants == pinned.get('grants_per_wallet')
+             and str(amount) == pinned.get('grant_picocredits')
+             and str(pinned.get('max_batch_fee_picocredits', '')).isdecimal()
+             and 0 < int(pinned['max_batch_fee_picocredits']) <= 10**12,
+             'grants_per_wallet and grant_picocredits must equal the plan prefund block')
     need(type(grants) is int and grants >= wallet_plan['min_mature_utxos_per_wallet'],
          'grants_per_wallet below min_mature_utxos_per_wallet: every grant is one future input')
     max_fee = int(limits['max_single_signed_fee_picocredits'])
@@ -188,9 +222,9 @@ def load_manifest(path):
          'grant below the largest transfer plus the maximum signed fee')
     need(count * grants * amount <= int(plan['funding']['max_principal_picocredits']),
          'prefund principal exceeds max_principal_picocredits')
-    # One maximum fee per grant: batching (#1937) signs fewer transactions, each
-    # still capped at max_single_signed_fee, so this bound only gets looser.
-    need(count * grants * max_fee <= int(limits['max_signed_fee_picocredits']),
+    # One capped fee per batch (#1937): each batch is signed once, priced at the
+    # node quote and refused above batch_fee_cap (#2023).
+    need(batch_count(count * grants) * batch_fee_cap(plan) <= int(limits['max_signed_fee_picocredits']),
          'worst-case prefund fees exceed max_signed_fee_picocredits')
     need(isinstance(m['state_dir'], str) and Path(m['state_dir']).is_absolute(), 'absolute state_dir required')
     for field in ('deadline', 'infrastructure_end'):
@@ -287,7 +321,7 @@ class Prefunder(Controller):
         self.funding = self.count
         self.wallets = [dict(w) for w in manifest['wallets']] + [dict(manifest['funding_wallet'])]
         self.total = self.count * manifest['grants_per_wallet']
-        self.max_fee = int(plan['limits']['max_single_signed_fee_picocredits'])
+        self.max_fee = batch_fee_cap(plan)
         # Never trust persisted blocks or inventory: the first sync is a full rescan.
         self.blocks, self.inventory, self.spent = [], [[] for _ in self.wallets], []
         self.inventory_initialized = False
@@ -457,6 +491,38 @@ class Prefunder(Controller):
     def is_award(output, awards):
         return bool(output['utxo'].get('lottery')) or output['id'] in awards
 
+    def funding_depths(self):
+        """Each grant batch's depth by transaction hash (MAX_FUNDING_DEPTH)."""
+        depths = {}
+        for r in self.records:
+            depths[r['hash']] = 1 + max((depths.get(s['id'].split(':')[0], 0) for s in r['selected']),
+                                        default=0)
+        return depths
+
+    def funding_rank(self):
+        """Funding order (#2023 review): mature coinbases first, then shallower change.
+
+        Largest value first within each. Smallest-cover selection would spend a
+        batch's change (about 4.97e13) before a fresh 50 BTH coinbase and chain
+        one coinbase cluster through batch after batch; cluster wealth only
+        accumulates, and a value-weighted ring floor then prices a fresh
+        coinbase's batch against that wealth. Change at MAX_FUNDING_DEPTH,
+        lottery awards and anything else are never funding inputs.
+        """
+        depths, awards = self.funding_depths(), self.award_ids()
+
+        def rank(output):
+            utxo = output['utxo']
+            if self.is_award(output, awards):
+                return None
+            if utxo.get('coinbase'):
+                return (0, -utxo['amount'])
+            depth = depths.get(bytes(utxo['tx_hash']).hex())
+            if depth is None or depth >= MAX_FUNDING_DEPTH:
+                return None
+            return (depth, -utxo['amount'])
+        return rank
+
     # ---- opening ---------------------------------------------------------
 
     async def opening_snapshot(self):
@@ -472,7 +538,7 @@ class Prefunder(Controller):
         owned = self.inventory[self.funding]
         spendable = sum(o['utxo']['amount'] for o in self.unspent_setup_inputs(self.funding))
         principal = self.total * self.m['grant_picocredits']
-        needed = principal + self.total * self.max_fee
+        needed = principal + batch_count(self.total) * self.max_fee
         if spendable < needed:
             # Nothing is at stake before the opening: wait for coinbase
             # maturity rather than hold, but never past the write deadline.
@@ -533,8 +599,11 @@ class Prefunder(Controller):
         height = await self.sync()
         grants = self.batch_grants(self.granted())
         amount = sum(g['amount'] for g in grants)
-        # choose() adds one max_single_signed_fee, which also caps the batch fee.
-        selected, evidence = choose(self, self.funding, height, amount)
+        # choose() reserves one max_single_signed_fee; widen it to the batch cap
+        # (#2023) so the inputs always cover the batch plus its capped fee.
+        headroom = self.max_fee - int(limits['max_single_signed_fee_picocredits'])
+        selected, evidence = choose(self, self.funding, height, amount + max(0, headroom),
+                                    rank=self.funding_rank())
         self.j.set('selection_latest', evidence)
         if not selected:
             return False  # Funding inputs or change are maturing; wait.
@@ -578,7 +647,8 @@ class Prefunder(Controller):
         info = await sign_priced(sign, quote_draft, discard, artifact)
         # From here a signed artifact exists. Any refusal leaves it as an orphan,
         # which holds every later start until an operator reviews it.
-        need(0 < info['fee'] <= self.max_fee, 'signed grant fee exceeds max_single_signed_fee')
+        need(0 < info['fee'] <= self.max_fee, 'signed grant fee exceeds max_single_signed_fee '
+             '(or the plan prefund max_batch_fee_picocredits)')
         need(info['bytes'] <= limits['max_signed_transaction_bytes'], 'signed grant byte budget')
         need([s['id'] for s in info['selected']] == [o['id'] for o in selected]
              and info['key_images'] == [s['key_image'] for s in info['selected']], 'signer changed the inputs')
