@@ -338,3 +338,10 @@ import Botho
 #print axioms Botho.Demurrage.exactSettlementCharge_le_value_of_rate_time
 #print axioms Botho.Demurrage.exactSpendCharge_le_value_of_rate_times
 #print axioms Botho.Demurrage.exactCharge_exceeds_value
+
+-- Botho.Demurrage.RingFloor (#2032/#2017; proposal, five full-Nat properties)
+#print axioms Botho.Demurrage.inputFloorWealth_ge_spent
+#print axioms Botho.Demurrage.inputFloorWealth_insert_other
+#print axioms Botho.Demurrage.inputFloorWealth_insert_same_mono
+#print axioms Botho.Demurrage.ringFloorWealth_ge_spent_mean
+#print axioms Botho.Demurrage.ringFloorWealth_insert_zero
