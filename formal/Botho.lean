@@ -24,6 +24,7 @@ import Botho.Lottery.Determinism
 import Botho.Quorum.Fbas
 import Botho.Demurrage.Counterexamples
 import Botho.Demurrage.Exact
+import Botho.Demurrage.RingFloor
 import Botho.Demurrage.ExactCharge
 import Botho.Demurrage.Age
 import Botho.Lottery.Sybil

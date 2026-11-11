@@ -68,6 +68,10 @@ const LEGS: &[(&str, LegFn)] = &[
         demurrage::RingFactor::NAME,
         runner::run::<demurrage::RingFactor>,
     ),
+    (
+        demurrage::RingFloor::NAME,
+        runner::run::<demurrage::RingFloor>,
+    ),
     (legs::SeedV2::NAME, runner::run::<legs::SeedV2>),
     (legs::IsEligible::NAME, runner::run::<legs::IsEligible>),
     (

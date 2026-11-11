@@ -124,20 +124,32 @@ pub struct SpendRing<'a> {
     pub members: &'a [(u64, &'a [TagPair])],
 }
 
-/// The members that can be the spent one: those whose amount equals the
-/// pseudo-output amount, or every member if none does.
-pub fn spend_candidates<'a>(ring: &SpendRing<'a>) -> Vec<&'a [TagPair]> {
-    let matching: Vec<&'a [TagPair]> = ring
-        .members
+/// The spend-candidate selection shared by every rule that reads a ring
+/// (#1687 tag rules, #1686 ring floor): the payloads of the members whose
+/// amount equals `pseudo_amount`, or of every member if none does (only
+/// reachable when C3 did not run). `members` are `(amount, payload)`, so the
+/// tag rules pass tags and the ring floor passes effective wealth, and both
+/// agree on which members can be the spent coin.
+pub fn amount_matched<T>(pseudo_amount: u64, members: &[(u64, T)]) -> Vec<&T> {
+    let matching: Vec<&T> = members
         .iter()
-        .filter(|(amount, _)| *amount == ring.pseudo_amount)
-        .map(|(_, tags)| *tags)
+        .filter(|(amount, _)| *amount == pseudo_amount)
+        .map(|(_, payload)| payload)
         .collect();
     if matching.is_empty() {
-        ring.members.iter().map(|(_, tags)| *tags).collect()
+        members.iter().map(|(_, payload)| payload).collect()
     } else {
         matching
     }
+}
+
+/// The members that can be the spent one: those whose amount equals the
+/// pseudo-output amount, or every member if none does ([`amount_matched`]).
+pub fn spend_candidates<'a>(ring: &SpendRing<'a>) -> Vec<&'a [TagPair]> {
+    amount_matched(ring.pseudo_amount, ring.members)
+        .into_iter()
+        .copied()
+        .collect()
 }
 
 /// A vector's total weight on `cluster` (duplicate entries summed), capped at

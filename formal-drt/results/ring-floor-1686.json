@@ -1,0 +1,37 @@
+{
+  "cases_per_leg": 100000,
+  "legs": [
+    {
+      "cases": 100000,
+      "classes": {
+        "empty": 1198,
+        "weighted numerator exceeds u128 (pre-#1876 saturated)": 74424,
+        "weighted numerator fits u128": 24378
+      },
+      "compared": 100000,
+      "leg": "ring_centroid_factor",
+      "mismatches": [],
+      "replayed": 8,
+      "rust": "bth_cluster_tax::ring_centroid_implied_factor",
+      "seconds": 12.609320375,
+      "shrink_attempts": 0
+    },
+    {
+      "cases": 100000,
+      "classes": {
+        "an input with no matching member (fallback)": 46196,
+        "multi-input, matched": 20036,
+        "no value": 20400,
+        "single input, matched": 13368
+      },
+      "compared": 100000,
+      "leg": "ring_floor_factor",
+      "mismatches": [],
+      "replayed": 0,
+      "rust": "bth_cluster_tax::amount_matched_ring_floor_factor",
+      "seconds": 16.171955458,
+      "shrink_attempts": 0
+    }
+  ],
+  "seed": "1686"
+}

@@ -275,6 +275,13 @@ def dispatch (fn : String) (a : Json) : Dec Json := do
     -- Protocol 9.0.0 (#1876): the exact centroid. The pre-fix saturating
     -- `ringFactor` stays in the model as the historical witness only.
     pure (encNat (Botho.Demurrage.ringFactorExact members))
+  | "ring_floor_factor" =>
+    -- Protocol 10.0.0 (#1686): the amount-matched ring floor.
+    let inputs ← (← arr a "inputs").mapM fun i => do
+      let members ← (← arr i "members").mapM fun m => do
+        pure (← nat m "amount", ← nat m "wealth")
+      pure (← nat i "pseudo_amount", members)
+    pure (encNat (Botho.Demurrage.ringFloorFactor inputs))
   | "lottery_seed_v2" =>
     pure (encBytes (lotterySeedV2 shaOnly (← bytes a "pow_hash") (← bytes a "prev_hash")
       (← nat a "height")))

@@ -310,9 +310,12 @@ pub struct ConsensusFeeInputs {
     /// The spender-declared output class.
     pub claimed: ClaimedClass,
     /// The composed input-class floor factor the spender cannot rewrite —
-    /// `max(ring_centroid_implied_factor, bridge-import floor)` in
-    /// `FACTOR_SCALE`. Use `FACTOR_SCALE` (1×) for "no floor"; the model takes
-    /// `max(claimed_factor, floor)` exactly as the ledger does.
+    /// `max(amount_matched_ring_floor_factor, bridge-import floor)` in
+    /// `FACTOR_SCALE`. The ring term (#1686) takes, per input, the largest
+    /// wealth among ring members whose amount equals the pseudo-output amount,
+    /// averages those maxima weighted by pseudo-output amount, and maps the
+    /// mean through the curve. Use `FACTOR_SCALE` (1×) for "no floor"; the
+    /// model takes `max(claimed_factor, floor)` exactly as the ledger does.
     pub floor: u64,
     /// Max-quantile ring age in blocks (`ring_elapsed_quantile` at
     /// [`CONSENSUS_RING_AGE_QUANTILE_BPS`]).

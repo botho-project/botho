@@ -285,15 +285,20 @@ places:
     against the committed per-cluster wealth
     (\path{effective_cluster_wealth_from_outputs},
     \path{validation.rs}).
-  \item \textbf{Ring floor for demurrage}: the demurrage factor is floored at
-    the \emph{value-weighted centroid} of the ring members' effective
-    cluster wealth, mapped through the factor curve
-    (\path{ring_centroid_floored_factor}, \path{validation.rs};
-    \path{ring_centroid_implied_factor},
-    \path{cluster-tax/src/demurrage.rs}). It is a mean, not the maximum
-    factor among ring members. Because the spender chooses the decoys,
-    high-value low-factor decoys can pull the floor down (as built, pending
-    \#1686).
+  \item \textbf{Ring floor for demurrage}: the demurrage factor is floored
+    at a factor read from the rings (protocol 10.0.0, \#1686, ADR~0015). For
+    each input, take the \emph{largest} effective cluster wealth among the
+    ring members whose amount equals the input's pseudo-output amount (the
+    members that can be the spent coin); average these per-input values
+    weighted by pseudo-output amount; map the result through the factor curve
+    (\path{amount_matched_ring_floor_factor},
+    \path{cluster-tax/src/ring_floor.rs}; called from
+    \path{ring_floored_factor_for_tx}, \path{validation.rs}). The spent
+    member is always one of its input's candidates, so decoys cannot lower
+    the floor, and a decoy of a different amount cannot raise it. Before
+    10.0.0 the floor was the value-weighted mean over every ring member
+    (\path{ring_centroid_implied_factor}), which high-value background decoys
+    diluted.
   \item \textbf{Inflation guard}: output tags may not claim more per-cluster
     mass than the per-ring maximum of the inputs
     (Section~\ref{sec:tag-decay}).

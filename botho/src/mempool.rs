@@ -956,8 +956,7 @@ impl Mempool {
         // background decoys cannot drag demurrage to zero (audit cycle 6 H2,
         // design #574 item B2).
         let claimed_factor = self.fee_config.cluster_factor(cluster_wealth);
-        let demurrage_factor =
-            self.ring_centroid_floored_factor(&ring_tags, claimed_factor, ledger)?;
+        let demurrage_factor = self.ring_floored_factor(&tx, claimed_factor, ledger)?;
 
         // ADR 0007 (#938): the bridge-import floor. Mirror the consensus fee
         // floor's ≥F clamp on imported-wealth outputs so relay never admits a
@@ -999,7 +998,7 @@ impl Mempool {
         // block validation (Bitcoin's min-relay-fee vs. consensus-validity split).
         //
         // Both sides compute the SAME base curve and the SAME demurrage kernel
-        // (`ring_elapsed_quantile@max` + `ring_centroid_floored_factor`) at the
+        // (`ring_elapsed_quantile@max` + `ring_floored_factor_for_tx`) at the
         // SAME `inclusion_height` (tip + 1, the height block validation prices
         // at); the ONLY structural difference is the congestion
         // term: the mempool multiplies in `dynamic_base = compute_base(..)` while
@@ -1092,8 +1091,9 @@ impl Mempool {
     /// Returns the potential input sum, the public (value, creation
     /// height) of every resolved ring member (which feeds the demurrage
     /// elapsed-time centroid), and the (cluster tags, value) of every resolved
-    /// ring member (which feeds the cluster-factor floor — see
-    /// [`Mempool::ring_centroid_floored_factor`]).
+    /// ring member (which feeds the Rule 2 relay check and the ring tag
+    /// plausibility check; the cluster-factor floor resolves its own members
+    /// per input, see [`Mempool::ring_floored_factor`]).
     #[allow(clippy::type_complexity)]
     fn validate_clsag_inputs(
         &self,
@@ -1211,42 +1211,33 @@ impl Mempool {
         Ok((potential_input_sum, ring_members, all_ring_tags))
     }
 
-    /// Floor a spender-claimed cluster factor at the factor implied by the
-    /// ring centroid (audit cycle 6 H2, design #574 item B2).
+    /// Floor a spender-claimed cluster factor at the ring floor (audit cycle
+    /// 6 H2, design #574 item B2).
     ///
     /// The `claimed_factor` is derived from the transaction's spender-authored
     /// OUTPUT tags, so on its own it is gameable: a wealthy spender can tag
     /// outputs as background and pay ~zero demurrage. This raises it to at
     /// least the factor implied by the RING MEMBERS' own (public,
-    /// inherited) cluster tags, which the spender cannot rewrite. Fresh
-    /// background decoys can no longer drive the factor below what the ring
-    /// composition implies.
+    /// inherited) cluster tags, which the spender cannot rewrite.
     ///
-    /// Per-cluster wealth is resolved from the ledger **fail-closed** (a DB
-    /// read error propagates as `LedgerError` rather than silently
-    /// defaulting to zero wealth, which would lower the floor — matching
-    /// the M7 fix in [`effective_cluster_wealth_from_outputs`]). The factor
-    /// math is the consensus-safe, integer-only, node-local-state-free
-    /// helper [`bth_cluster_tax::ring_centroid_implied_factor`] (via the
-    /// shared [`Ledger::ring_centroid_floored_factor`]), which item B4 can
-    /// reuse on the consensus path.
-    fn ring_centroid_floored_factor(
+    /// One implementation for relay and consensus: this delegates to
+    /// [`Ledger::ring_floored_factor_for_tx`], the method
+    /// `Ledger::consensus_fee_floor` calls, so both resolve the same members
+    /// and run the same pure kernel
+    /// ([`bth_cluster_tax::amount_matched_ring_floor_factor`], protocol
+    /// 10.0.0, #1686: per input the max over the amount-matched members,
+    /// value-weighted by pseudo-output amount). Per-cluster wealth is
+    /// resolved **fail-closed** (a DB read error propagates as `LedgerError`
+    /// rather than defaulting to zero wealth, which would lower the floor —
+    /// matching the M7 fix in [`effective_cluster_wealth_from_outputs`]).
+    fn ring_floored_factor(
         &self,
-        ring_tags: &[(bth_transaction_types::ClusterTagVector, u64)],
+        tx: &Transaction,
         claimed_factor: u64,
         ledger: &Ledger,
     ) -> Result<u64, MempoolError> {
-        let ring_members: Vec<(u64, &bth_transaction_types::ClusterTagVector)> = ring_tags
-            .iter()
-            .map(|(tags, value)| (*value, tags))
-            .collect();
-
         ledger
-            .ring_centroid_floored_factor(
-                claimed_factor,
-                &ring_members,
-                &self.fee_config.cluster_curve,
-            )
+            .ring_floored_factor_for_tx(claimed_factor, tx, &self.fee_config.cluster_curve)
             .map_err(|e| MempoolError::LedgerError(e.to_string()))
     }
 
@@ -2917,27 +2908,22 @@ mod tests {
             .iter()
             .fold(0u64, |acc, o| acc.saturating_add(o.amount));
 
-        // Ring members: (value, created_at) for the age quantile, plus tags for
-        // the factor floor — resolved from the committed UTXO set, exactly as
-        // the mempool does inside validate_clsag_inputs.
+        // Ring members: (value, created_at) for the age quantile — resolved
+        // from the committed UTXO set, exactly as the mempool does inside
+        // validate_clsag_inputs. The factor floor resolves its own members per
+        // input through the same ledger method relay admission calls.
         let mut ring_members: Vec<(u64, u64)> = Vec::new();
-        let mut ring_tags: Vec<(ClusterTagVector, u64)> = Vec::new();
         for input in tx.inputs.clsag() {
             for member in &input.ring {
                 if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
                     ring_members.push((utxo.output.amount, utxo.created_at));
-                    ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
                 }
             }
         }
 
         let claimed_factor = fee_config.cluster_factor(cluster_wealth);
-        let ring_refs: Vec<(u64, &ClusterTagVector)> = ring_tags
-            .iter()
-            .map(|(tags, value)| (*value, tags))
-            .collect();
         let demurrage_factor = ledger
-            .ring_centroid_floored_factor(claimed_factor, &ring_refs, &fee_config.cluster_curve)
+            .ring_floored_factor_for_tx(claimed_factor, tx, &fee_config.cluster_curve)
             .unwrap();
 
         // The real relay pricing path (tip + 1 clock and rate), shared with
@@ -3115,7 +3101,7 @@ mod tests {
                 key_image: [0u8; 32],
                 commitment_key_image: [0u8; 32],
                 clsag_signature: Vec::new(),
-                pseudo_output_amount: 0,
+                pseudo_output_amount: 100_000_000, // the spent coin (#1686)
             }]),
             outputs: vec![TxOutput {
                 amount: 90_000_000,

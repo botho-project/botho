@@ -1,13 +1,13 @@
 # Ring-Floor Adversarial-Dilution Sweep (#1686)
 
-**Status:** exploration record for the operator's ruling on #1686. The sim changes; consensus code does not.
-**Date:** 2026-11-09.
+**Status:** ruled and implemented. This was the exploration record for the operator's ruling on #1686. The operator ruled for (b) `match-max`, composed per input (2026-11-10, ADR 0015), and protocol 10.0.0 implements it. The sweep has been re-run against the production kernel, which is the `node 10.0.0` column of every table. See [Re-run against the 10.0.0 node rule](#re-run-against-the-1000-node-rule).
+**Date:** 2026-11-09 (exploration), 2026-11-10 (re-run against the node rule).
 **Parent:** epic #1683, the design-confidence parity review.
 **Operator direction:** "explore before ruling" (#1686, 2026-11-09).
 
 ## Question
 
-The #925 downgrade charge floors a spend's declared output factor at a factor implied by the ring. The node computes that floor with `ring_centroid_implied_factor`, which is the value-weighted mean of the ring members' cluster wealth (`botho/src/ledger/store/validation.rs`, `ring_centroid_floored_factor`). The spender picks the decoys, so high-value background decoys dilute the charge.
+The #925 downgrade charge floors a spend's declared output factor at a factor implied by the ring. Through protocol 9.x the node computed that floor with `ring_centroid_implied_factor`, which is the value-weighted mean of the ring members' cluster wealth (`botho/src/ledger/store/validation.rs`, then `ring_centroid_floored_factor`). The spender picks the decoys, so high-value background decoys dilute the charge. Protocol 10.0.0 replaces it (ADR 0015).
 
 This sweep compares four candidate floor rules on four axes:
 - dilution;
@@ -17,12 +17,13 @@ This sweep compares four candidate floor rules on four axes:
 
 | id | rule |
 |---|---|
-| (a) `mean` | current: value-weighted mean of member wealth (the shipped kernel, pinned bit for bit by a test) |
+| (a) `mean` | the pre-10.0.0 node rule: value-weighted mean of member wealth (the old kernel, pinned bit for bit by a test) |
 | (b) `match-mean` | value-weighted mean over members whose amount equals the input's `pseudo_output_amount` |
 | (b) `match-max` | maximum over those amount-matched members |
 | (c) `max` | maximum member factor over the whole ring (the rule `ring-signature-tag-propagation.md` chose; `ring_cluster_factor` computes it in f64 and has no caller) |
 | (d) `p50` / `p90` / `p95` | unweighted nearest-rank quantile of member factors (same convention as `ring_elapsed_quantile`). At ring 20, `p95` is the second-highest member |
 | (d) `vw-median` | value-weighted median of member wealth |
+| `node 10.0.0` | the 10.0.0 node rule as the node runs it: the production kernel `bth_cluster_tax::amount_matched_ring_floor_wealth` (`cluster-tax/src/ring_floor.rs`), which is (b) `match-max` composed per input by `pseudo_output_amount` |
 
 Every rule produces a floor wealth, which goes through the production `ClusterFactorCurve` once. The charge is the node's own `spend_demurrage_charge`, composed as `max(claimed, floor)`.
 
@@ -33,7 +34,7 @@ cargo build --release -p bth-cluster-tax --features cli --bin cluster-tax-sim
 target/release/cluster-tax-sim honest-overcharge-sweep --adversarial-dilution
 ```
 
-- The run was at commit `7d1295de` plus this change and takes about 11 s on an Apple M-series release build.
+- The exploration ran at commit `7d1295de` plus PR #1995. The re-run against the node rule (the `node 10.0.0` column) ran on the #1686 implementation branch. Each takes about 10 s on an Apple M-series release build.
 - The seed is pinned (`SEED = 0xB07A_1686` in `cluster-tax/src/simulation/downgrade_overcharge_sweep/dilution.rs`). The production-route rings use `sample_route_ring_ages` with the same seed.
 - The output is byte-identical across runs. The golden is `docs/research/generated/ring-floor-dilution-sweep.txt`, and CI regenerates it (`scripts/research/check_research_tables.py`). Every table below is pasted verbatim from it.
 - `--ring-size N` changes the ring size; the default is the node's 20.
@@ -65,26 +66,26 @@ target/release/cluster-tax-sim honest-overcharge-sweep --adversarial-dilution
 
 Attacker: 1000 BTH in a 10000000-BTH cluster (undiluted floor 5.745×, charge 9.49% of value), split into k coins, each spent young to a background output in a ring of 20 whose 19 decoys are background coins worth D BTH. `D = coin` sets every decoy to the coin's own amount. Pass bar (#1686): ≥ 95% in every cell.
 
-| k / coin / D | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| 1 / 1000 BTH / 10 | 99.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 100.0% |
-| 1 / 1000 BTH / 2000 | 66.6% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 1 / 1000 BTH / 100000 | 11.9% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 1 / 1000 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 10 / 100 BTH / 10 | 95.8% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 10 / 100 BTH / 2000 | 33.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 10 / 100 BTH / 100000 | 3.2% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 10 / 100 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 100 / 10 BTH / 10 | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 100 / 10 BTH / 2000 | 9.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 100 / 10 BTH / 100000 | 0.7% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 100 / 10 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 1000 / 1 BTH / 10 | 43.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 1000 / 1 BTH / 2000 | 1.7% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 1000 / 1 BTH / 100000 | 0.0% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| 1000 / 1 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| **worst cell** | **0.0%** | **76.2%** | **100.0%** | **100.0%** | **0.0%** | **0.0%** | **0.0%** | **0.0%** |
-| **passes ≥ 95%** | no | no | yes | yes | no | no | no | no |
+| k / coin / D | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 / 1000 BTH / 10 | 99.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 100.0% | 100.0% |
+| 1 / 1000 BTH / 2000 | 66.6% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 1 / 1000 BTH / 100000 | 11.9% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 1 / 1000 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 10 / 100 BTH / 10 | 95.8% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 10 / 100 BTH / 2000 | 33.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 10 / 100 BTH / 100000 | 3.2% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 10 / 100 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 100 / 10 BTH / 10 | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 100 / 10 BTH / 2000 | 9.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 100 / 10 BTH / 100000 | 0.7% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 100 / 10 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 1000 / 1 BTH / 10 | 43.3% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 1000 / 1 BTH / 2000 | 1.7% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 1000 / 1 BTH / 100000 | 0.0% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| 1000 / 1 BTH / = coin | 76.2% | 76.2% | 100.0% | 100.0% | 0.0% | 0.0% | 0.0% | 0.0% | 100.0% |
+| **worst cell** | **0.0%** | **76.2%** | **100.0%** | **100.0%** | **0.0%** | **0.0%** | **0.0%** | **0.0%** | **100.0%** |
+| **passes ≥ 95%** | no | no | yes | yes | no | no | no | no | yes |
 
 Floor factor under (a) `mean` per cell (reproduces #1686's table):
 
@@ -101,54 +102,54 @@ Rings from the #1757 production pickers (`sample_route_ring_ages`, gamma-spend r
 
 #### 2a. False-positive rate (charged above the oracle)
 
-| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| node / c=0%, decay=5%, round=0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% |
-| node / c=1%, decay=5%, round=0% | 15.0% | 0.0% | 0.0% | 15.0% | 0.0% | 0.1% | 1.6% | 12.8% |
-| node / c=5%, decay=5%, round=0% | 54.3% | 0.0% | 0.0% | 54.5% | 0.0% | 5.9% | 21.1% | 47.7% |
-| node / c=10%, decay=5%, round=0% | 76.2% | 0.0% | 0.0% | 76.7% | 0.0% | 25.6% | 50.0% | 69.7% |
+| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| node / c=0%, decay=5%, round=0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| node / c=1%, decay=5%, round=0% | 15.0% | 0.0% | 0.0% | 15.0% | 0.0% | 0.1% | 1.6% | 12.8% | 0.0% |
+| node / c=5%, decay=5%, round=0% | 54.3% | 0.0% | 0.0% | 54.5% | 0.0% | 5.9% | 21.1% | 47.7% | 0.0% |
+| node / c=10%, decay=5%, round=0% | 76.2% | 0.0% | 0.0% | 76.7% | 0.0% | 25.6% | 50.0% | 69.7% | 0.0% |
 
 #### 2b. Mean over-charge on false-positive spends (% of coin value)
 
-| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| node / c=0%, decay=5%, round=0% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% |
-| node / c=1%, decay=5%, round=0% | 6.09% | 0.00% | 0.00% | 6.49% | 0.00% | 4.56% | 4.86% | 6.38% |
-| node / c=5%, decay=5%, round=0% | 6.62% | 0.00% | 0.00% | 7.06% | 0.00% | 4.74% | 5.74% | 6.32% |
-| node / c=10%, decay=5%, round=0% | 7.18% | 0.00% | 0.00% | 7.64% | 0.00% | 5.01% | 6.18% | 6.33% |
+| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| node / c=0%, decay=5%, round=0% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% |
+| node / c=1%, decay=5%, round=0% | 6.09% | 0.00% | 0.00% | 6.49% | 0.00% | 4.56% | 4.86% | 6.38% | 0.00% |
+| node / c=5%, decay=5%, round=0% | 6.62% | 0.00% | 0.00% | 7.06% | 0.00% | 4.74% | 5.74% | 6.32% | 0.00% |
+| node / c=10%, decay=5%, round=0% | 7.18% | 0.00% | 0.00% | 7.64% | 0.00% | 5.01% | 6.18% | 6.33% | 0.00% |
 
 #### 2c. Aggregate over-charge (% of all honest value moved)
 
-| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| node / c=0%, decay=5%, round=0% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% |
-| node / c=1%, decay=5%, round=0% | 0.370% | 0.000% | 0.000% | 0.402% | 0.000% | 0.000% | 0.038% | 0.317% |
-| node / c=5%, decay=5%, round=0% | 1.529% | 0.000% | 0.000% | 1.655% | 0.000% | 0.109% | 0.528% | 1.226% |
-| node / c=10%, decay=5%, round=0% | 2.359% | 0.000% | 0.000% | 2.558% | 0.000% | 0.525% | 1.303% | 1.826% |
+| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| node / c=0%, decay=5%, round=0% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% | 0.000% |
+| node / c=1%, decay=5%, round=0% | 0.370% | 0.000% | 0.000% | 0.402% | 0.000% | 0.000% | 0.038% | 0.317% | 0.000% |
+| node / c=5%, decay=5%, round=0% | 1.529% | 0.000% | 0.000% | 1.655% | 0.000% | 0.109% | 0.528% | 1.226% | 0.000% |
+| node / c=10%, decay=5%, round=0% | 2.359% | 0.000% | 0.000% | 2.558% | 0.000% | 0.525% | 1.303% | 1.826% | 0.000% |
 
 #### 2d. Honest collection (total charge / oracle charge; < 100% = honest decay downgrades under-priced)
 
-| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| node / c=0%, decay=5%, round=0% | 99.9% | 100.0% | 100.0% | 100.0% | 99.9% | 99.9% | 99.9% | 100.0% |
-| node / c=1%, decay=5%, round=0% | 448.3% | 100.0% | 100.0% | 478.0% | 99.9% | 100.0% | 135.2% | 398.1% |
-| node / c=5%, decay=5%, round=0% | 1539.1% | 100.0% | 100.0% | 1657.2% | 99.9% | 202.2% | 596.7% | 1253.4% |
-| node / c=10%, decay=5%, round=0% | 2320.1% | 100.0% | 100.0% | 2507.5% | 99.9% | 594.1% | 1325.8% | 1818.8% |
+| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| node / c=0%, decay=5%, round=0% | 99.9% | 100.0% | 100.0% | 100.0% | 99.9% | 99.9% | 99.9% | 100.0% | 100.0% |
+| node / c=1%, decay=5%, round=0% | 448.3% | 100.0% | 100.0% | 478.0% | 99.9% | 100.0% | 135.2% | 398.1% | 100.0% |
+| node / c=5%, decay=5%, round=0% | 1539.1% | 100.0% | 100.0% | 1657.2% | 99.9% | 202.2% | 596.7% | 1253.4% | 100.0% |
+| node / c=10%, decay=5%, round=0% | 2320.1% | 100.0% | 100.0% | 2507.5% | 99.9% | 594.1% | 1325.8% | 1818.8% | 100.0% |
 
 #### 2e. Route check: false-positive rate on every production route
 
-| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| node / c=5%, decay=5%, round=0% | 54.3% | 0.0% | 0.0% | 54.5% | 0.0% | 5.9% | 21.1% | 47.7% |
-| cli / c=5%, decay=5%, round=0% | 55.5% | 0.0% | 0.0% | 55.8% | 0.0% | 6.7% | 20.8% | 49.4% |
-| web / c=5%, decay=5%, round=0% | 55.0% | 0.0% | 0.0% | 55.1% | 0.0% | 6.2% | 21.3% | 48.5% |
+| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| node / c=5%, decay=5%, round=0% | 54.3% | 0.0% | 0.0% | 54.5% | 0.0% | 5.9% | 21.1% | 47.7% | 0.0% |
+| cli / c=5%, decay=5%, round=0% | 55.5% | 0.0% | 0.0% | 55.8% | 0.0% | 6.7% | 20.8% | 49.4% | 0.0% |
+| web / c=5%, decay=5%, round=0% | 55.0% | 0.0% | 0.0% | 55.1% | 0.0% | 6.2% | 21.3% | 48.5% | 0.0% |
 
 #### 2f. Sensitivity (node route): false-positive rate / collection
 
-| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median |
-|---|---|---|---|---|---|---|---|---|
-| node / c=5%, decay=0%, round=0% | 54.3% / 1538.3% | 0.0% / 100.0% | 0.0% / 100.0% | 54.5% / 1656.1% | 0.0% / 100.0% | 5.9% / 202.4% | 21.1% / 596.7% | 47.7% / 1253.2% |
-| node / c=5%, decay=5%, round=25% | 54.3% / 1333.2% | 1.1% / 182.5% | 1.1% / 192.3% | 54.5% / 1435.4% | 0.0% / 99.9% | 5.9% / 187.3% | 21.1% / 525.6% | 47.4% / 1084.3% |
+| route / population | (a) mean | (b) match-mean | (b) match-max | (c) max | (d) p50 | (d) p90 | (d) p95 | (d) vw-median | node 10.0.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| node / c=5%, decay=0%, round=0% | 54.3% / 1538.3% | 0.0% / 100.0% | 0.0% / 100.0% | 54.5% / 1656.1% | 0.0% / 100.0% | 5.9% / 202.4% | 21.1% / 596.7% | 47.7% / 1253.2% | 0.0% / 100.0% |
+| node / c=5%, decay=5%, round=25% | 54.3% / 1333.2% | 1.1% / 182.5% | 1.1% / 192.3% | 54.5% / 1435.4% | 0.0% / 99.9% | 5.9% / 187.3% | 21.1% / 525.6% | 47.4% / 1084.3% | 1.1% / 192.3% |
 
 ### 3. Privacy and decoy diversity on the same rings
 
@@ -165,7 +166,7 @@ Rings from the #1757 production pickers (`sample_route_ring_ages`, gamma-spend r
 
 ### 4. Multi-input composition (honest two-input blend)
 
-2000 honest spends on node-route rings (c=5%, decay=5%, round=0%): one 10M-class whale coin plus one background coin of the same amount, declared at the decayed 50/50 blend. Pooled = all 40 members in one statistic (the node today); per-input = one floor per ring, combined by the public `pseudo_output_amount`s.
+2000 honest spends on node-route rings (c=5%, decay=5%, round=0%): one 10M-class whale coin plus one background coin of the same amount, declared at the decayed 50/50 blend. Pooled = all 40 members in one statistic (the node before 10.0.0); per-input = one floor per ring, combined by the public `pseudo_output_amount`s. `node 10.0.0` runs the production kernel, which composes per input itself, so both of its columns are the same.
 
 | rule | pooled FP rate | pooled over-charge (% of value) | pooled collection | per-input FP rate | per-input over-charge (% of value) | per-input collection |
 |---|---|---|---|---|---|---|
@@ -177,6 +178,7 @@ Rings from the #1757 production pickers (`sample_route_ring_ages`, gamma-spend r
 | (d) p90 | 0.2% | 0.000% | 100.0% | 0.1% | 0.000% | 99.9% |
 | (d) p95 | 10.9% | 0.009% | 104.9% | 4.9% | 0.006% | 103.0% |
 | (d) vw-median | 14.6% | 0.016% | 108.4% | 16.6% | 0.025% | 113.6% |
+| node 10.0.0 | 0.0% | 0.000% | 100.0% | 0.0% | 0.000% | 100.0% |
 
 ### 5. Confidential-amounts compatibility (#902)
 
@@ -190,8 +192,22 @@ Rings from the #1757 production pickers (`sample_route_ring_ages`, gamma-spend r
 | (d) p90 | no | no | yes |
 | (d) p95 | no | no | yes |
 | (d) vw-median | yes | no | no |
+| node 10.0.0 | yes | yes | no |
+
+## Re-run against the 10.0.0 node rule
+
+The `node 10.0.0` column runs the production kernel the node calls (`amount_matched_ring_floor_wealth`, through `ValidationReads::ring_floored_factor_for_tx`). A unit test (`node_rule_is_per_input_match_max`) pins it bit for bit to (b) `match-max` composed per input, on single rings, unmatched pseudo amounts and two-input spends. In every table it matches the recommended rule:
+
+- **Dilution:** 100.0% of the undiluted charge in every cell, including `D = coin`. Passes the ≥ 95% bar.
+- **Honest over-charge:** 0.0% false positives at every contamination level and on every production route; 1.1% with 25% round amounts (2f). Collection is 100.0% (2d).
+- **Multi-input:** 0.0% false positives and exact collection on honest two-input class blends. The kernel composes per input, so it shows the same numbers in the pooled column.
+- **CT:** reads member amounts and the pseudo amount, so it is not computable under confidential amounts. ADR 0015 records the successor.
+
+The store test `consensus_fee_floor_factor_floor_resists_value_dilution` (`botho/src/ledger/store.rs`) checks the same thing through `consensus_fee_floor` itself: #1686's three table rows (floors 4162, 1441 and 1000 under the old rule) all pay the undiluted 5.745× charge.
 
 ## Reading the results
+
+This section and the ranking below are the exploration's analysis (2026-11-09), kept as the record of the ruling. In them, "today" and "the node" mean the pre-10.0.0 rule (a).
 
 ### Dilution
 
@@ -275,4 +291,5 @@ This agrees with the 2026-11-01 decision comment (option 2 now, with max-over-ri
 - The UTXO population is a synthetic mix (c, value ranges, round-amount share), not chain data. Absolute false-positive rates scale with c. The ranking does not change across c ∈ {1%, 5%, 10%}.
 - The multi-input row models only an equal-value two-input blend.
 - An attacker who merges the wealthy coin with **their own** large background input legitimately dilutes the blended tags. Every per-input rule prices that blend as designed. It is a property of tag inheritance, not of the ring floor, and is not measured here.
-- The store test `consensus_fee_floor_factor_floor_resists_value_dilution` and the consensus change are deliberately not part of this change. They follow the ruling and need a protocol bump (10.0.0 or 11.0.0, #1683).
+- The exploration (PR #1995) carried no consensus change. The rule was ruled on 2026-11-10 and ships in the protocol 10.0.0 batch with the store test `consensus_fee_floor_factor_floor_resists_value_dilution`.
+- Pricing the honest decay downgrade exactly has a second-order effect the oracle does not show: every hop that lowers a wealthy coin's class, including the wallet's 5% tag decay, now pays its capitalized share. The bridge-import sweep shows the cumulative cost (`bridge-import-calibration.md` §0).

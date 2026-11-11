@@ -349,7 +349,8 @@ pub fn demurrage_settlement_charge(
 /// same [`SETTLEMENT_HORIZON_BLOCKS`]).
 ///
 /// `input_floor_factor` is the composed ring floor the spender cannot rewrite
-/// (`max(claimed, ring_centroid_implied_factor, import_floor)`),
+/// (`max(claimed, amount_matched_ring_floor_factor, import_floor)`; the ring
+/// term is the amount-matched per-input max of #1686),
 /// `output_factor` is the spender-declared output factor. A downgrade is
 /// exactly `output_factor < input_floor_factor`; a background→background spend
 /// floors at 1× on both sides and pays zero.
