@@ -132,7 +132,7 @@ theorem inputFloorWealth_insert_same_mono
       rcases List.mem_append.mp hparts.1 with hl | hr
       · exact List.mem_append.mpr (Or.inl hl)
       · exact List.mem_append.mpr (Or.inr (List.mem_cons_of_mem _ hr))
-    simpa [← heq] using hm'
+    simpa only [← heq] using hm'
   exact inputFloorWealth_ge_spent p m.2 _ hmem
 
 -- This is an equality proof about the existing fold, not a replacement model.
