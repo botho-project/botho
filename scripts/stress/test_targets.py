@@ -3,7 +3,9 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -50,7 +52,7 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
         response.headers = {}
         seen = []
         c.rpc.opener.open = Mock(side_effect=lambda request, **kw: (seen.append(request.full_url) or response))
-        proc = Mock(returncode=0, communicate=AsyncMock(return_value=(b'[]', b'')))
+        proc = Mock(returncode=0, communicate=AsyncMock(return_value=(b'[{"at":1}]', b'')))
         with patch('controller.asyncio.create_subprocess_exec', AsyncMock(return_value=proc)) as ssh:
             for role in HOSTS:
                 await c.rpc.call(role, 'node_getStatus')
@@ -62,6 +64,68 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('StrictHostKeyChecking=yes', call.args)
             self.assertIn('UserKnownHostsFile='+self.config['known_hosts'], call.args)
             self.assertEqual(call.args[1:3], ('-F', '/dev/null'))
+
+    async def test_controller_waits_for_real_observer_first_export(self):
+        c = self.controller()
+        c.j.set('status', 'setup')
+        sample = [{'at': 1, 'pid': 123}]
+        export = Path(__file__).with_name('observer.py')
+        spawn = asyncio.create_subprocess_exec
+
+        async def local_export(*args, **kwargs):
+            self.assertEqual(args[-1], self.config['targets'][0]['observer_ssh_target'])
+            return await spawn(sys.executable, str(export), 'export', '--state', str(self.state), **kwargs)
+
+        def publish_first_sample(delay):
+            self.assertEqual(delay, 10)
+            (self.state/'latest.json').write_text(json.dumps(sample))
+
+        with patch('controller.asyncio.create_subprocess_exec', side_effect=local_export) as ssh, \
+                patch('controller.asyncio.sleep', side_effect=publish_first_sample):
+            self.assertEqual(await c.observer(HOSTS[0]), sample)
+        self.assertEqual(ssh.await_count, 2)
+        row, = c.j.db.execute("SELECT detail FROM events WHERE state='observer_export_failed'")
+        self.assertEqual(json.loads(row[0]), {
+            'attempt': 1, 'host': HOSTS[0], 'returncode': os.EX_TEMPFAIL,
+            'retry': True, 'stderr_tail': 'observer latest.json missing',
+        })
+
+    async def test_observer_persistent_and_midrun_failures_retain_bounded_diagnostics(self):
+        c = self.controller()
+        host = HOSTS[0]
+        err = b'discard-this-prefix' + b'x' * 500 + b' final error'
+        for status, baseline, rc, expected_attempts in [
+                ('setup', None, os.EX_TEMPFAIL, 3), ('setup', {'pid': 123}, os.EX_TEMPFAIL, 1),
+                ('running', None, os.EX_TEMPFAIL, 1), ('setup', None, 255, 1)]:
+            with self.subTest(status=status, baseline=baseline, rc=rc):
+                c.j.set('status', status)
+                c.j.set('baseline:'+host, baseline)
+                c.j.db.execute('DELETE FROM events')
+                proc = Mock(returncode=rc, communicate=AsyncMock(return_value=(b'', err)))
+                with patch('controller.asyncio.create_subprocess_exec', return_value=proc) as ssh, \
+                        patch('controller.asyncio.sleep', new_callable=AsyncMock) as sleep:
+                    with self.assertRaises(Gate) as caught:
+                        await c.observer(host)
+                self.assertIn(f'{host}, attempt {expected_attempts}, rc={rc}', str(caught.exception))
+                self.assertIn('final error', str(caught.exception))
+                self.assertNotIn('discard-this-prefix', str(caught.exception))
+                self.assertEqual(ssh.await_count, expected_attempts)
+                self.assertEqual(sleep.await_count, expected_attempts - 1)
+                events = [json.loads(row[0]) for row in c.j.db.execute(
+                    "SELECT detail FROM events WHERE state='observer_export_failed' ORDER BY rowid")]
+                self.assertEqual([e['retry'] for e in events], [True]*(expected_attempts - 1) + [False])
+                self.assertEqual(events[-1]['stderr_tail'], err[-512:].decode())
+
+    async def test_invalid_observer_output_fails_without_retry(self):
+        c = self.controller()
+        c.j.set('status', 'setup')
+        for out in (b'null', b'[]', b'{}', b'[1]', b'bad json', b'x' * (128*1024 + 1)):
+            with self.subTest(sample=out[:10]):
+                proc = Mock(returncode=0, communicate=AsyncMock(return_value=(out, b'')))
+                with patch('controller.asyncio.create_subprocess_exec', return_value=proc) as ssh:
+                    with self.assertRaises(Gate):
+                        await c.observer(HOSTS[0])
+                ssh.assert_awaited_once()
 
     async def test_new_endpoints_without_complete_mapping_fail_before_io(self):
         for value in [None, [], targets()[:4], list(reversed(targets()))]:

@@ -634,6 +634,16 @@ billing. Complete provisioning, prefunding, output maturity, signer installation
 RPC/observer access and artifact pinning **before** this short qualification
 window. Stage into new run-specific paths/accounts, never an old journal.
 
+The controller waits for each observer's first sample during setup. If the
+restricted export reports that `latest.json` is missing (exit 75) and the host
+has no recorded baseline, it retries twice at ten-second intervals. Each read
+has a ten-second timeout. Hosts are polled in parallel and the first successful
+fleet check still requires fresh samples from all five. After a baseline exists,
+a missing export holds the run on the first failure. Other nonzero exits also
+hold immediately, subject to the existing exception for hosts expected down.
+The `observer_export_failed` journal event records the host, attempt, exit code,
+last 512 bytes of stderr and retry decision.
+
 All ordinary rehearsal gates remain: measured submission cadence and receipts,
 exact full-scan accounting, post-rehearsal input/decoy inventory, fresh fee
 observations from all five nodes, and the final health/admission gate. A pass

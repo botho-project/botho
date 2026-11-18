@@ -119,7 +119,12 @@ if __name__ == '__main__':
     state = Path(args.state)
     if args.mode == 'export':
         # No caller-controlled paths, command parsing, arbitrary arguments or shell.
-        data = (state/'latest.json').read_bytes()
+        try:
+            with (state/'latest.json').open('rb') as latest:
+                data = latest.read(128*1024 + 1)
+        except FileNotFoundError:
+            print('observer latest.json missing', file=sys.stderr)
+            sys.exit(os.EX_TEMPFAIL)
         if len(data) > 128*1024:
             raise SystemExit('oversized observer export')
         sys.stdout.buffer.write(data)

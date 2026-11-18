@@ -700,19 +700,45 @@ class Controller:
         return await asyncio.to_thread(run)
 
     async def observer(self, host):
-        proc = await asyncio.create_subprocess_exec('ssh','-F','/dev/null','-i',self.config['observer_key'],
-            '-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',
-            '-o','UserKnownHostsFile='+self.config['known_hosts'],self.targets[host]['observer_ssh_target'],
-            stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        command = ('ssh', '-F', '/dev/null', '-i', self.config['observer_key'],
+                   '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+                   '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5',
+                   '-o', 'UserKnownHostsFile='+self.config['known_hosts'],
+                   self.targets[host]['observer_ssh_target'])
+        for attempt in range(1, 4):
+            proc = await asyncio.create_subprocess_exec(
+                *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), 10)
+            except BaseException:
+                if proc.returncode is None:
+                    proc.kill()
+                await proc.wait()
+                raise
+            if proc.returncode == 0:
+                break
+            # Only a fresh setup can race the first atomic latest.json write.
+            retry = (proc.returncode == os.EX_TEMPFAIL and attempt < 3
+                     and self.j.get('status') == 'setup'
+                     and self.j.get('baseline:'+host) is None)
+            tail = err[-512:].decode('utf-8', errors='replace').strip()
+            self.j.event(None, 'observer_export_failed', {
+                'host': host, 'attempt': attempt, 'returncode': proc.returncode,
+                'stderr_tail': tail, 'retry': retry,
+            })
+            if not retry:
+                raise Gate(f'restricted observer export failed: {host}, attempt {attempt}, '
+                           f'rc={proc.returncode}, stderr={ascii(tail)}')
+            await asyncio.sleep(10)
+        if len(out) > 128*1024:
+            raise Gate('oversized observer export: '+host)
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(),10)
-        except BaseException:
-            proc.kill()
-            await proc.wait()
-            raise
-        if proc.returncode or len(out)>128*1024:
-            raise Gate('restricted observer export failed: '+host)
-        return json.loads(out)
+            records = json.loads(out)
+        except ValueError as error:
+            raise Gate('invalid observer JSON: '+host) from error
+        if not isinstance(records, list) or not records or not all(isinstance(row, dict) for row in records):
+            raise Gate('invalid observer sample list: '+host)
+        return records
 
     async def monitor(self):
         while not self.closed:
