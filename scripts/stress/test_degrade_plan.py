@@ -111,12 +111,16 @@ class DegradePlanTests(unittest.TestCase):
             ]
         )
 
-    def test_x_series_changes_only_the_opt_in_phases_and_degrade_block(self):
+    def test_x_series_changes_only_the_qualification_settings_and_candidate_pin(self):
         base, plan = load("testnet-discovery-v2.json"), self.plan()
         for key in set(base) | set(plan):
             if key not in ("faults", "phases", "degrade", "limits", "rehearsal", "wallets",
-                           "lottery_v2", "prefund"):
+                           "lottery_v2", "prefund", "protocol", "node_commit"):
                 self.assertEqual(plan[key], base[key], key)
+        # The discovery reference retains its historical digest. The x2
+        # template identifies the binary exercised by the payment controls.
+        self.assertEqual(plan["node_commit"], "c9212bac5f11ef32ffaab251b96c08887e8682dc")
+        self.assertEqual(plan["protocol"], "10.0.0")
         # #2023: x-series pins its prefund shape for the 10.0.0 fee floor.
         self.assertNotIn("prefund", base)
         self.assertEqual(set(plan["prefund"]), {"grants_per_wallet", "grant_picocredits",
