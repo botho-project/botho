@@ -119,9 +119,12 @@ def unit_text(item, observer=False):
     command = (f'{package}/observer.py run --state {state}' if observer else
                f'{package}/controller.py run --state {state}')
     condition = ''
-    if 'prefund_setup_start' in item and not observer:
-        condition = (f'ExecCondition=/usr/bin/python3 {package}/prefund_handoff.py --state {state}\n'
-                     f"TimeoutStartSec={item['runtime_max_seconds']}\n")
+    if 'prefund_setup_start' in item:
+        start = math.ceil(item['prefund_setup_start'])
+        condition = f'ExecCondition=/usr/bin/python3 -c "import sys,time; sys.exit(time.time() < {start})"\n'
+        if not observer:
+            condition += (f'ExecCondition=/usr/bin/python3 {package}/prefund_handoff.py --state {state}\n'
+                          f"TimeoutStartSec={item['runtime_max_seconds']}\n")
     return f'''[Unit]
 Description=Bounded isolated Botho {'observer' if observer else 'campaign'}
 After=network-online.target
@@ -157,6 +160,7 @@ def timer_text(item):
 Description=Start the isolated qualification unit {item['unit']} at its fixed setup time
 [Timer]
 OnCalendar={start:%Y-%m-%d %H:%M:%S} UTC
+OnActiveSec=1s
 Unit={item['unit']}
 AccuracySec=1s
 Persistent=true

@@ -250,8 +250,10 @@ class HandoffTests(unittest.TestCase):
                 )
                 self.assertIn("OnCalendar=1970-01-01 00:16:40 UTC", meta["timer"])
                 self.assertIn("Persistent=true", meta["timer"])
+                self.assertIn("OnActiveSec=1s", meta["timer"])
                 self.assertIn("Unit=" + result["unit"], meta["timer"])
-                self.assertEqual("ExecCondition=" in meta["unit"], index == 0)
+                self.assertIn("sys.exit(time.time() < 1000)", meta["unit"])
+                self.assertEqual("prefund_handoff.py --state" in meta["unit"], index == 0)
                 self.assertEqual(
                     "package/prefund_handoff.py" in archive.getnames(), index == 0
                 )
