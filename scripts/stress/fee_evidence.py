@@ -117,6 +117,29 @@ def summarize_fees(rows, quotes):
     }
 
 
+def selected_value(info):
+    selected = info.get("selected")
+    if (not isinstance(selected, list) or not selected
+            or type(info.get("input_count")) is not int or len(selected) != info["input_count"]):
+        return None
+    if any(not isinstance(o, dict) or type(o.get("amount")) is not int
+           or o["amount"] <= 0 for o in selected):
+        return None
+    return sum(o["amount"] for o in selected)
+
+
+def complete_percentile(samples, signed):
+    result = {"signed": signed, "samples": len(samples), "p99": None}
+    if samples and len(samples) == signed:
+        result["p99"] = sorted(samples, key=lambda pair: pair[0])[(99 * signed + 99) // 100 - 1][1]
+    return result
+
+
+def resign_fee(relay_floor):
+    """The wallet envelope, pinned against the Rust fee-shape golden rows."""
+    return max(RELAY_MIN_TX_FEE, min(2**64 - 1, relay_floor + 2 * (relay_floor // 64)))
+
+
 def floor_quote_summary(records, *, per_input_value):
     """Nearest-rank p99 of settling node quotes, once per signed transaction.
 
@@ -134,24 +157,52 @@ def floor_quote_summary(records, *, per_input_value):
         fee = quote.get("resignFee") if isinstance(quote, dict) else None
         if type(fee) is not int or fee <= 0:
             continue
-        moved = 1
+        moved = selected_value(info) if per_input_value else 1
+        if moved is None:
+            continue
+        observation = {"resign_fee_picocredits": fee}
         if per_input_value:
-            selected = info.get("selected")
-            if (not isinstance(selected, list) or not selected
-                    or type(info.get("input_count")) is not int
-                    or len(selected) != info["input_count"]):
-                continue
-            if any(not isinstance(o, dict) or type(o.get("amount")) is not int
-                   or o["amount"] <= 0 for o in selected):
-                continue
-            moved = sum(o["amount"] for o in selected)
-        samples.append((Fraction(fee, moved), fee, moved))
+            observation["selected_input_picocredits"] = moved
+        samples.append(((Fraction(fee, moved), fee, moved), observation))
+    return complete_percentile(samples, signed)
 
-    result = {"signed": signed, "samples": len(samples), "p99": None}
-    if not samples or len(samples) != signed:
-        return result
-    _, fee, moved = sorted(samples)[(99 * signed + 99) // 100 - 1]
-    result["p99"] = {"resign_fee_picocredits": fee}
-    if per_input_value:
-        result["p99"]["selected_input_picocredits"] = moved
-    return result
+
+def payment_relay_summary(records):
+    """Rank the raw node floor per picocredit of actual outputs, including change."""
+    samples = []
+    signed = 0
+    max_selected = 0
+    for info in records:
+        signed += 1
+        if not isinstance(info, dict):
+            continue
+        moved = selected_value(info)
+        fee = info.get("fee")
+        quote = info.get("fee_floor_quote")
+        if not isinstance(quote, dict) or moved is None or type(fee) is not int or not 0 < fee < moved < 2**64:
+            continue
+        floor = quote.get("relayFeeFloor")
+        consensus = quote.get("consensusFeeFloor")
+        if type(floor) is not int or type(consensus) is not int or not 0 < consensus <= floor < 2**64:
+            continue
+        minimum = max(RELAY_MIN_TX_FEE, floor)
+        settle = max(RELAY_MIN_TX_FEE, min(2**64 - 1, floor + floor // 64))
+        if (any(type(quote.get(k)) is not int for k in ("minimumFee", "settleFee", "resignFee"))
+                or quote.get("minimumFee") != minimum or quote.get("settleFee") != settle
+                or quote.get("resignFee") != resign_fee(floor) or fee < settle):
+            continue
+        if info["input_count"] > 4:
+            continue
+        output_value = moved - fee
+        if "outputs" in info:
+            outputs = info["outputs"]
+            if (not isinstance(outputs, list) or not 1 <= len(outputs) <= 2
+                    or any(not isinstance(o, dict) or type(o.get("amount")) is not int or o["amount"] <= 0
+                           for o in outputs) or sum(o["amount"] for o in outputs) != output_value):
+                continue
+        max_selected = max(max_selected, moved)
+        # A capitalized downgrade subtracts two individually floored charges.
+        # Its unrounded value is less than the observed charge plus one.
+        samples.append(((Fraction(floor + 1, output_value), floor, output_value),
+                        {"relay_floor_picocredits": floor, "output_value_picocredits": output_value}))
+    return {**complete_percentile(samples, signed), "max_selected_input_picocredits": max_selected or None}

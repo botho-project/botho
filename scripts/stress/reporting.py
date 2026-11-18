@@ -8,7 +8,7 @@ import os
 import resource
 import stat
 import time
-from fee_evidence import floor_quote_summary
+from fee_evidence import floor_quote_summary, payment_relay_summary
 from lottery import award_spend_expectation
 from plan import expand
 from runtime import HOSTS, atomic, digest
@@ -300,13 +300,12 @@ def rehearsal_summary(journal, plan, artifacts=None):
     # Present only under the plan opt-in (#1613): never readable as a pass.
     acceptance = journal.get("rehearsal_acceptance")
     accepted = {"accepted_as": acceptance["accepted_as"]} if acceptance else {}
+    signed = [json.loads(r["info"]) for r in rows if r["prepared"] is not None]
     return {
         **result,
         **accepted,
-        "fee_floor_quotes": floor_quote_summary(
-            (json.loads(r["info"]) for r in rows if r["prepared"] is not None),
-            per_input_value=True,
-        ),
+        "fee_floor_quotes": floor_quote_summary(signed, per_input_value=True),
+        "payment_relay_floors": payment_relay_summary(signed),
         "expected": expected,
         "offered": len(rows),
         "not_yet_offered": max(0, expected - len(rows)),
@@ -506,6 +505,7 @@ def controller_report(self):
         "end": self.j.get("end"),
         "plan_sha256": digest(self.plan),
         "node_sha256": self.config.get("node_sha256"),
+        "signer_sha256": self.config.get("signer_sha256"),
         "counts": counts,
         "submitted_to_reconciled_seconds": latency("submitted"),
         "nominal_campaign_offers": nominal,

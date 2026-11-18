@@ -85,8 +85,8 @@ plan block `"lottery_v2": {"min_received_for_spend": N}`. A journal without
 the marker (an older harness) reports `not_evaluated`.
 
 **Lottery preflight.** Before a campaign or a prefund starts, every node must
-report `getChainInfo.lotteryRules == 2` and `protocolVersion == "7.0.0"`. A V1
-or pre-7.0.0 node refuses the start before anything is written. The result is
+report `getChainInfo.lotteryRules == 2` and `protocolVersion == "10.0.0"`.
+A mismatch holds setup before a transaction is signed. The result is
 recorded once in the journal (`lottery_preflight`); afterwards the per-tick
 identity check pins the same binary.
 
@@ -1128,41 +1128,56 @@ on the value moved, not congestion. x2's fee-tier evidence
 (`fee_evidence`, `raw_wire_density`) therefore measures a mix of congestion
 and exit pricing; `baseline_fee` is the node quote.
 
-**Freeze the plan from the rehearsal.** Before freezing the x2 plan, take the
-99th percentile of the journaled `fee_floor_quote.resignFee` per BTH moved
-(per unit of the selected inputs' value) from the Part A rehearsal on the
-pinned build. Multiplied by 4 (the top tier) and by the shape's moved value
-(8×10^10 for every payment shape: a one-input payment can spend a probe's
-change, see above), it must
-stay under `max_single_signed_fee_picocredits` with the same factor-2 margin;
-for batches, the p99 batch quote must stay under `max_batch_fee_picocredits`.
-If not, shrink `grant_picocredits` (and re-run `plan.py`) rather than raising
-`max_single`.
+**Freeze the plan from the rehearsal.** Use the settling quotes from the
+completed Part A on the pinned build. For each signed payment the node records
+`relayFeeFloor`, its size charge plus its economic charge before applying the
+wallet minimum. The economic charge uses the sum of the outputs, including
+change. The signed inputs less the paid fee give that value exactly.
 
-Use the exact staged rehearsal plan, its controller report, and its
-`funding-health.json` to calculate the measured bounds.
+Rank the payments by `(relayFeeFloor + 1) / output_value` and take the
+nearest-rank p99. The extra picocredit accounts for integer rounding when the
+node subtracts the two charges in a class downgrade. Multiply that ratio by
+the larger of the planned maximum (80 billion picocredits in x2) and the
+largest input total actually observed in Part A, and round up. This includes
+any additional value from a lottery award.
+
+Add the largest size charge for the planned input counts, at two outputs,
+zero memos, maximum cluster factor and maximum congestion base. The
+Rust-generated fee table prices this at 7,416,000 picocredits for x2. The
+observed ratio also includes the original size charge, so this estimate makes
+an allowance for both the observed and target sizes. Apply the wallet's
+`resign_fee` to the resulting raw floor, including its fixed 100,000,000
+minimum. Multiply the result by the highest tier (4) and the safety margin
+(2). It must fit the 1,000,000,000 payment cap. Compare the p99 absolute
+batch `resignFee` directly with the separate prefund cap.
+
+This projects the economic rates sampled in the rehearsal. A change in ring
+wealth, class mix or age distribution can change those rates during the full
+campaign. Every individual signed fee remains subject to its plan cap.
 
 ```sh
 python3 scripts/stress/payment_shape.py --plan rehearsal_only-plan.json \
   --rehearsal-report report.json --funding-health funding-health.json
 ```
 
-Both reports count signed transactions with a settling node quote. The
-controller ranks payments by the exact ratio of the quote to the sum of
-selected inputs. Prefund ranks the absolute batch quotes. Both use
-nearest-rank p99. The command exits successfully when both measurements are
-complete and every projected fee fits its cap. A report from a different
-plan is rejected. Supplying just the funding report shows the batch result
-while the payment measurement is pending.
+Use the original staged plan. The command checks each report's plan digest
+and the number of observations, and exits successfully when both measured
+bounds fit. A funding report alone shows the batch result. A rehearsal report
+missing the raw relay observations yields an incomplete payment measurement.
+The numbers can be reconstructed from the signed rows in the original journal.
 
-The fixed relay minimum matters for small grants. A 100,000,000-picocredit
-quote on 20,000,000,000 picocredits of inputs projects to 3,200,000,000
-for an 80,000,000,000-picocredit payment shape at tier 4 with the factor-2
-margin. If the rehearsal p99 reaches that ratio, the projection exceeds
-the 1,000,000,000 cap even when individual transfers settled within it.
-The offline preflight reports this lower bound for its modeled input selection
-in `coverage.rehearsal_relay_minimum_projection`. The fleet report supplies
-the observed quotes and selected values.
+For the 72-hour candidate, add `--campaign-plan campaign-plan.json` and
+`--campaign-pin pin.json`. The command compares the node and signer hashes in
+the installation pin with Part A, checks its wallet, funding and payment
+settings, and replays the candidate's full workload. The resulting receipt
+identifies the exact candidate plan by its file digest. Each fleet supplies
+its own deployment endpoints and genesis.
+
+The report also shows the former total-quote projection for comparison.
+Scaling a fixed 100,000,000 minimum from a 20-billion input to an 80-billion
+input produced a 3.2-billion projection at tier 4 with margin 2. The wallet
+applies that minimum once per transaction. The fixed minimum contributes
+800,000,000 picocredits at that tier and margin.
 
 ### In-flight accounting and measured ramp ceiling
 

@@ -2,6 +2,8 @@
   "generator": "cargo test -p bth-cluster-tax --test stress_fee_shape (#2023)",
   "height": 50000,
   "pico_per_bth": 1000000000000,
+  "payment_base_ceiling_by_input_count": [2376000, 4056000, 5736000, 7416000],
+  "relay_min_tx_fee": 100000000,
   "coinbase_picocredits": 50000000000000,
   "wallet_decay_rate": 50000,
   "tag_weight_scale": 1000000,

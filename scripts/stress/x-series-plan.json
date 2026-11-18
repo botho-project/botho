@@ -6,10 +6,10 @@
   "duration_hours": 72,
   "setup_deadline_hours": 8,
   "drain_minutes": 30,
-  "node_commit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+  "node_commit": "c9212bac5f11ef32ffaab251b96c08887e8682dc",
   "network": "botho-testnet",
   "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
-  "protocol": "6.0.0",
+  "protocol": "10.0.0",
   "endpoints": [
     "https://n1.discovery.internal/rpc",
     "https://n2.discovery.internal/rpc",

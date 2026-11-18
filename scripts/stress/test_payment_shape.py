@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import payment_shape as ps
-from fee_evidence import floor_quote_summary
+from fee_evidence import RELAY_MIN_TX_FEE, floor_quote_summary, payment_relay_summary, resign_fee
 from plan import expand
 from reporting import rehearsal_summary
 from runtime import Journal, digest
@@ -36,12 +36,15 @@ class MeasuredFeesTests(unittest.TestCase):
         self.plan = {**PLAN, "execution_mode": "rehearsal_only"}
         self.raw = json.dumps(self.plan, indent=2).encode()
         self.info = {"selected": [{"amount": 20_000_000_000}], "input_count": 1,
-                     "fee_floor_quote": {"resignFee": 100_000_000}, "fee": 400_000_000,
+                     "fee_floor_quote": {"resignFee": 100_000_000, "minimumFee": 100_000_000,
+                                         "settleFee": 100_000_000, "relayFeeFloor": 400_000,
+                                         "consensusFeeFloor": 400_000}, "fee": 400_000_000,
                      "amount": 1_000_000_000}
         offers = len(ps.rehearsal_events(self.plan))
         self.rehearsal = {"plan_sha256": digest(self.plan), "status": "rehearsal_complete",
                           "qualification_status": "accepted_generator_limited",
                           "rehearsal": {"reconciled": offers,
+                                        "payment_relay_floors": payment_relay_summary([self.info] * offers),
                                         "fee_floor_quotes": floor_quote_summary([self.info] * offers, per_input_value=True)}}
         batch_count = ps.batches(self.plan)
         self.funding = {"plan_sha256": hashlib.sha256(self.raw).hexdigest(), "batches": batch_count,
@@ -57,7 +60,9 @@ class MeasuredFeesTests(unittest.TestCase):
                 journal.offer(identifier, kind, 0, "wallet-1", "wallet-2", 1_000_000_000)
                 if prepared is not None:
                     journal.transition(identifier, "prepared", prepared=prepared, info=self.info)
-            quotes = rehearsal_summary(journal, self.plan)["fee_floor_quotes"]
+            summary = rehearsal_summary(journal, self.plan)
+            self.assertEqual(summary["payment_relay_floors"], payment_relay_summary([self.info]))
+            quotes = summary["fee_floor_quotes"]
             self.assertEqual(quotes, floor_quote_summary([self.info], per_input_value=True))
             journal.transition("u", "prepared", prepared=3, info={"fee": 400_000_000})
             self.assertEqual(rehearsal_summary(journal, self.plan)["fee_floor_quotes"],
@@ -85,16 +90,99 @@ class MeasuredFeesTests(unittest.TestCase):
 
     def test_measured_floor_and_batch_are_compared_on_different_bases(self):
         result = ps.measured_fee_check(self.raw, self.rehearsal, self.funding)
-        self.assertEqual(result["status"], "over_cap")
-        self.assertEqual(result["shapes"][0]["required_picocredits"], 3_200_000_000)
+        self.assertEqual(result["status"], "within_cap")
+        self.assertEqual(result["shapes"][0]["required_picocredits"], 800_000_000)
+        self.assertEqual(result["shapes"][0]["legacy_total_quote_projection_picocredits"], 3_200_000_000)
         self.assertEqual(result["shapes"][-1]["required_picocredits"], 100_000_000)
-        # Exactly at the cap with tier and margin. One picocredit above is held.
-        p99 = self.rehearsal["rehearsal"]["fee_floor_quotes"]["p99"]
-        p99["selected_input_picocredits"] = 64_000_000_000
+        # Exercise the exact decision boundary at tier 4 and a factor-2 margin.
+        p99 = self.rehearsal["rehearsal"]["payment_relay_floors"]["p99"]
+        projected_value = result["shapes"][0]["moved_picocredits"]
+        p99["output_value_picocredits"] = projected_value - 1
+        self.rehearsal["rehearsal"]["payment_relay_floors"]["max_selected_input_picocredits"] = projected_value
+        cap = result["shapes"][0]["cap_picocredits"]
+        base = result["shapes"][0]["base_ceiling_picocredits"]
+        low, high = 0, cap
+        while low + 1 < high:
+            mid = (low + high) // 2
+            if 8 * resign_fee(mid) <= cap:
+                low = mid
+            else:
+                high = mid
+        p99["relay_floor_picocredits"] = low - base - 2
         self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "within_cap")
-        p99["selected_input_picocredits"] -= 1
-        self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["shapes"][0]["required_picocredits"],
-                         1_000_000_001)
+        p99["relay_floor_picocredits"] += 1
+        self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "over_cap")
+
+    def test_missing_raw_or_inconsistent_settling_quote_stays_incomplete(self):
+        p99 = payment_relay_summary([self.info])["p99"]
+        self.assertEqual(p99, {"relay_floor_picocredits": 400_000, "output_value_picocredits": 19_600_000_000})
+        for changed in ({"relayFeeFloor": True}, {"relayFeeFloor": 500}, {"settleFee": 99_999_999},
+                        {"resignFee": 99_999_999}, {"minimumFee": None}):
+            bad = {**self.info, "fee_floor_quote": {**self.info["fee_floor_quote"], **changed}}
+            self.assertEqual(payment_relay_summary([self.info, bad]), {"signed": 2, "samples": 1, "p99": None,
+                                                     "max_selected_input_picocredits": 20_000_000_000})
+        for bad in (dict(self.info, fee=20_000_000_000), dict(self.info, fee=99_999_999),
+                    dict(self.info, outputs=[{"amount": 1}]),
+                    dict(self.info, selected=[{"amount": 20_000_000_000}] * 5, input_count=5)):
+            self.assertIsNone(payment_relay_summary([bad])["p99"])
+        self.rehearsal["rehearsal"]["payment_relay_floors"]["max_selected_input_picocredits"] = 81_000_000_000
+        row = ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["shapes"][0]
+        self.assertEqual(row["moved_picocredits"], 81_000_000_000)
+        del self.rehearsal["rehearsal"]["payment_relay_floors"]
+        self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "incomplete")
+
+    def test_raw_floor_p99_orders_by_actual_output_value(self):
+        # One outlier has the same input total and raw floor but less change.
+        low = dict(self.info, fee=200_000_000)
+        high = dict(self.info, fee=800_000_000)
+        typical = dict(self.info, outputs=[{"amount": 1_000_000_000}, {"amount": 18_600_000_000}])
+        result = payment_relay_summary([high, typical] + [low] * 98)
+        self.assertEqual(result["samples"], 100)
+        self.assertEqual(result["p99"], {"relay_floor_picocredits": 400_000,
+                                          "output_value_picocredits": 19_600_000_000})
+
+    def test_rust_wallet_envelope_and_projection_cover_direct_prices(self):
+        self.assertEqual(RELAY_MIN_TX_FEE, GOLDEN["relay_min_tx_fee"])
+        for row in GOLDEN["rows"]:
+            self.assertEqual(resign_fee(row["relay_floor_max"]), row["resign_fee"])
+        self.assertEqual(resign_fee(2**64 - 1), 2**64 - 1)
+        base = max(GOLDEN["payment_base_ceiling_by_input_count"])
+        payments = [r for r in GOLDEN["rows"] if r["outputs"] == 2]
+        target = 80_000_000_000
+        direct = {}
+        for r in payments:
+            if r["moved"] == target:
+                key = (r["wealth_bth"], r["depth"])
+                direct[key] = max(direct.get(key, 0), r["resign_fee"])
+        cap = int(PLAN["limits"]["max_single_signed_fee_picocredits"])
+        verdicts = set()
+        for r in payments:
+            bound = resign_fee(ps.projected_relay_floor(r["relay_floor_max"], r["moved"], target, base))
+            actual = direct[r["wealth_bth"], r["depth"]]
+            self.assertGreaterEqual(bound, actual, r)
+            verdicts.add((actual * 8 <= cap, bound * 8 <= cap))
+        self.assertIn((True, True), verdicts)
+        self.assertIn((False, False), verdicts)
+        self.assertNotIn((False, True), verdicts)
+
+    def test_campaign_requires_matching_payloads_and_economic_settings(self):
+        candidate = {**PLAN, "endpoints": list(PLAN["endpoints"]), "genesis": "a" * 64}
+        pin = {"commit": candidate["node_commit"], "node_sha256": "b" * 64, "signer_sha256": "c" * 64}
+        self.rehearsal.update(node_sha256=pin["node_sha256"], signer_sha256=pin["signer_sha256"])
+        def check(c, p):
+            return ps.campaign_fee_check(self.raw, self.rehearsal, self.funding, json.dumps(c).encode(), p)
+        good = check(candidate, pin)
+        self.assertEqual(good["status"], "within_cap")
+        self.assertEqual(good["campaign"]["replayed_payments_including_rehearsal"], 22240)
+        for key in ("commit", "node_sha256", "signer_sha256"):
+            with self.assertRaisesRegex(ValueError, "campaign .*differs"):
+                check(candidate, {**pin, key: "d" * len(pin[key])})
+        with self.assertRaisesRegex(ValueError, "differs from rehearsal: prefund"):
+            check({**candidate, "prefund": {**candidate["prefund"], "grant_picocredits": "16000000000"}}, pin)
+        with self.assertRaisesRegex(ValueError, "payment cap differs"):
+            check({**candidate, "limits": {**candidate["limits"], "max_single_signed_fee_picocredits": "2000000000"}}, pin)
+        with self.assertRaisesRegex(ValueError, "72-hour campaign"):
+            check(self.plan, pin)
 
     def test_only_finished_and_matching_reports_support_the_comparison(self):
         self.assertEqual(ps.measured_fee_check(self.raw, funding=self.funding)["status"], "incomplete")

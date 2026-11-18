@@ -165,6 +165,29 @@ fn render(rows: &[Row]) -> String {
     );
     out.push_str(&format!("  \"height\": {HEIGHT},\n"));
     out.push_str(&format!("  \"pico_per_bth\": {PICO_PER_BTH},\n"));
+    // Bounded stress payments have one to four inputs, payment and change,
+    // and no memos. Price their size component at the maximum wealth factor
+    // and congestion base independently of the rehearsal's ring samples.
+    let config = FeeConfig::default();
+    let base_ceiling = (1..=4)
+        .map(|inputs| {
+            config.minimum_fee_dynamic_with_outputs(
+                TransactionType::Hidden,
+                consensus_tx_size_bytes(inputs, 2, 0),
+                u128::MAX,
+                2,
+                0,
+                DynamicFeeBase::default().base_max,
+            )
+        })
+        .collect::<Vec<_>>();
+    out.push_str(&format!(
+        "  \"payment_base_ceiling_by_input_count\": {base_ceiling:?},\n"
+    ));
+    out.push_str(&format!(
+        "  \"relay_min_tx_fee\": {},\n",
+        bth_cluster_tax::RELAY_MIN_TX_FEE
+    ));
     // Epoch 0 pays no lottery emission share: a coinbase is the whole reward.
     out.push_str(&format!(
         "  \"coinbase_picocredits\": {},\n",
