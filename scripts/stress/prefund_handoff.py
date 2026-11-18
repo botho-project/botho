@@ -1,4 +1,4 @@
-"""Open a prestaged rehearsal after its fixed start and verified prefunding."""
+"""Open a prestaged qualification after its fixed start and verified prefunding."""
 
 import argparse
 from contextlib import closing
@@ -77,7 +77,7 @@ def confirmed_launch(launch, manifest, health_raw, balances_raw, checked_at):
 
 def check_window(state, launch, setup_end, now):
     if now >= launch["infrastructure_end"]:
-        raise Gate("fixed rehearsal window has expired")
+        raise Gate("fixed infrastructure window has expired")
     if now < setup_end:
         return
     # A published launch alone can survive a crash before ExecStart. Only the
@@ -93,7 +93,7 @@ def check_window(state, launch, setup_end, now):
             ).fetchone()
         if row and json.loads(row[0]) == digest(json.loads(recorded.read_bytes())):
             return
-    raise Gate("fixed rehearsal window has expired")
+    raise Gate("fixed setup window has expired")
 
 
 def handoff(state, pending):
@@ -101,7 +101,7 @@ def handoff(state, pending):
     start = launch["setup_start"]
     stop = state / "STOP"
     if time.time() < start:
-        raise Gate("fixed rehearsal setup has not started")
+        raise Gate("fixed setup window has not started")
     manifest_raw = Path(pending["manifest"]).read_bytes()
     if sha256(manifest_raw) != pending["manifest_sha256"]:
         raise Gate("installed prefund manifest differs from staged pin")

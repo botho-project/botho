@@ -149,6 +149,30 @@ class HandoffTests(unittest.TestCase):
         wait.assert_called_once()
         self.assertTrue((self.state / "launch.json").is_file())
 
+    def test_campaign_handoff_preserves_the_full_lifetime_and_requires_timely_funding(self):
+        from prefund import latest_deadline
+        self.plan.update(execution_mode="campaign", setup_deadline_hours=8)
+        self.plan_raw = json.dumps(self.plan, indent=2).encode()
+        Path(self.profile["plan_file"]).write_bytes(self.plan_raw)
+        self.profile.update(execution_mode="campaign", end=1000 + 81 * 3600)
+        self.manifest.update(plan_sha256=gate.sha256(self.plan_raw), infrastructure_end=self.profile["end"],
+                             deadline=1000 + 5 * 3600)
+        self.manifest_file.write_text(json.dumps(self.manifest))
+        self.health.update(plan_sha256=self.manifest["plan_sha256"], at=1000 + 3 * 3600)
+        pending = self.prepare()
+        self.assertEqual(pending["launch"]["setup_start"], 1000)
+        self.assertEqual(pending["launch"]["infrastructure_end"], self.profile["end"])
+        self.assertEqual(pending["launch"]["execution_mode"], "campaign")
+        with self.assertRaisesRegex(Gate, "completion record"):
+            self.run_gate(pending, self.manifest["deadline"])
+        self.fund()
+        self.run_gate(pending, self.health["at"] + 1)
+        self.assertEqual(json.loads((self.state / "launch.json").read_bytes())["opening_balances"], self.balances)
+        self.manifest["deadline"] = latest_deadline(self.plan, self.profile["end"]) + 1
+        self.manifest_file.write_text(json.dumps(self.manifest))
+        with self.assertRaisesRegex(Gate, "prefund deadlines"):
+            staging.prepare(self.profile)
+
     def test_missing_expired_wrong_or_unreconciled_funding(self):
         pending = self.prepare()
         for label, now, change in (

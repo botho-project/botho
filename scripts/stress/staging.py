@@ -154,7 +154,7 @@ UnsetEnvironment=SSH_AUTH_SOCK SSH_AGENT_PID
 def timer_text(item):
     start = datetime.fromtimestamp(math.ceil(item['prefund_setup_start']), timezone.utc)
     return f"""[Unit]
-Description=Start the isolated rehearsal unit {item['unit']} at its fixed setup time
+Description=Start the isolated qualification unit {item['unit']} at its fixed setup time
 [Timer]
 OnCalendar={start:%Y-%m-%d %H:%M:%S} UTC
 Unit={item['unit']}
@@ -166,11 +166,11 @@ WantedBy=timers.target
 
 
 def prefund_template(profile, plan, plan_raw, launch):
-    """Bind the controller-side prefunder to this exact rehearsal and wallet order."""
+    """Bind the controller-side prefunder to the staged plan and wallet order."""
     from prefund import MANIFEST_FIELDS, check_opening_balances, latest_deadline
 
-    need(plan.get('schema_version') == 2 and plan.get('execution_mode') == 'rehearsal_only'
-         and plan['funding']['mode'] == 'prefunded_isolated', 'prefund handoff requires an isolated rehearsal')
+    need(plan.get('schema_version') == 2 and plan['funding']['mode'] == 'prefunded_isolated',
+         'prefund handoff requires an isolated prefunded plan')
     need('opening_balances' not in profile, 'choose recorded balances or a prefund handoff')
     source = profile['prefund_handoff']
     need(isinstance(source, dict) and set(source) == {'local_manifest', 'remote_manifest'},
@@ -188,7 +188,7 @@ def prefund_template(profile, plan, plan_raw, launch):
          'prefund plan, targets, artifacts or wallet order differ')
     deadline = manifest['deadline']
     need(manifest['infrastructure_end'] == profile['end'] and type(deadline) in (float, int)
-         and 0 < deadline <= latest_deadline(plan, profile['end']), 'prefund deadlines differ from rehearsal')
+         and 0 < deadline <= latest_deadline(plan, profile['end']), 'prefund deadlines differ from staged plan')
     grants, amount = manifest['grants_per_wallet'], manifest['grant_picocredits']
     need(type(grants) is int and grants > 0 and type(amount) is int and amount > 0, 'invalid prefund grants')
     if 'prefund' in plan:
@@ -206,8 +206,6 @@ def prepare(profile):
     plan_raw = read_file(profile['plan_file'])
     plan = json.loads(plan_raw)
     deferred = 'prefund_handoff' in profile
-    if deferred:
-        need(plan.get('execution_mode') == 'rehearsal_only', 'prefund handoff requires a rehearsal')
     expand(plan)
     mapping = campaign_targets({'targets': profile['targets']}, plan)
     need(all(t['rpc_url'] != 'https://'+role+'/rpc' for role,t in mapping.items()),
