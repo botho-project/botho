@@ -16,6 +16,7 @@ import stat
 import subprocess
 import tarfile
 
+from fleet_provision import RUN_ID
 from observer import absolute_path, node_config
 from plan import expand
 from runtime import Gate, HOSTS, campaign_targets, campaign_tls_context, parse_hosts, validate_ssh_target
@@ -36,6 +37,44 @@ def read_file(path, private=False):
     if private:
         need(info.st_mode & 0o077 == 0, 'private input must be owner-only')
     return path.read_bytes()
+
+
+def part_a_fee_sources(campaign_plan, rehearsal_plan, rehearsal_report, funding_health):
+    """Freeze local inputs when the operator assembles the campaign profile."""
+    sources = {'campaign_plan_sha256': hashlib.sha256(read_file(str(campaign_plan))).hexdigest()}
+    for key, path in (('plan', rehearsal_plan), ('report', rehearsal_report), ('funding', funding_health)):
+        path = str(Path(path).absolute())
+        sources[key] = {'file': path, 'sha256': hashlib.sha256(read_file(path)).hexdigest()}
+    return sources
+
+
+def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256):
+    """Recompute the Part A fee decision on the bytes going into this bundle."""
+    fleet = RUN_ID.fullmatch(profile['run_id'])
+    campaign = plan.get('execution_mode', 'campaign') == 'campaign'
+    required = (fleet and fleet['n'] == '2' and campaign and plan.get('schema_version') == 2
+                and plan.get('protocol') == '10.0.0')
+    evidence = profile.get('part_a_fee_evidence')
+    if evidence is None:
+        need(not required, 'x2 campaign requires Part A fee evidence')
+        return None
+    from payment_shape import campaign_fee_check
+
+    need(campaign and isinstance(evidence, dict), 'Part A fee evidence requires a campaign profile')
+    need(evidence.get('campaign_plan_sha256') == hashlib.sha256(plan_raw).hexdigest(),
+         'campaign plan differs from the frozen fee evidence')
+    inputs, hashes = {}, {}
+    for key in ('plan', 'report', 'funding'):
+        item = evidence.get(key)
+        need(isinstance(item, dict) and isinstance(item.get('file'), str), 'missing Part A fee input: ' + key)
+        inputs[key] = read_file(item['file'])
+        hashes[key] = hashlib.sha256(inputs[key]).hexdigest()
+        need(hashes[key] == item.get('sha256'), 'Part A fee input changed: ' + key)
+    pin = {'commit': plan['node_commit'], 'node_sha256': profile['node_sha256'], 'signer_sha256': signer_sha256}
+    receipt = campaign_fee_check(inputs['plan'], json.loads(inputs['report']), json.loads(inputs['funding']),
+                                 plan_raw, pin)
+    need(receipt['status'] == 'within_cap', 'Part A fee decision: ' + receipt['status'])
+    return {**receipt, 'part_a_input_sha256': hashes}
 
 
 def user(value):
@@ -208,6 +247,8 @@ def prepare(profile):
             need(name in resolved, 'target absent from unit-scoped hosts file')
     need(ipaddress.ip_address(profile['controller_ip']).is_private, 'private controller address required')
     signer = read_file(profile['signer'])
+    signer_sha256 = hashlib.sha256(signer).hexdigest()
+    fee_receipt = campaign_fee_receipt(profile, plan, plan_raw, signer_sha256)
     wallets = profile['wallets']
     wallet_count = plan['wallets']['count']
     need(len(wallets)==wallet_count and len({w['address'] for w in wallets})==wallet_count and len({w['key'] for w in wallets})==wallet_count, 'manifest requires distinct wallet addresses and files')
@@ -221,7 +262,7 @@ def prepare(profile):
     package, state = controller['package'], controller['state']
     launch = {'run_id':run_id, 'setup_start':profile['setup_start'], 'infrastructure_end':profile['end'],
               'targets':profile['targets'], 'signer':package+'/botho-stress-wallet',
-              'signer_sha256':hashlib.sha256(signer).hexdigest(), 'adapter_source':profile['adapter_source'],
+              'signer_sha256':signer_sha256, 'adapter_source':profile['adapter_source'],
               'node_sha256':profile['node_sha256'], 'controller_files':{n:hashlib.sha256(b).hexdigest() for n,b in code.items()},
               'observer_key':state+'/observer_key', 'known_hosts':package+'/known_hosts',
               'known_hosts_sha256':hashlib.sha256(known_hosts).hexdigest(),
@@ -240,7 +281,9 @@ def prepare(profile):
     files = {'package/'+n:(b,0o644) for n,b in code.items()}
     files.update({'package/botho-stress-wallet':(signer,0o755), 'package/hosts':(hosts,0o644),
                   'package/known_hosts':(known_hosts,0o644), 'state/observer_key':(observer_key,0o600),
-                  'state/plan.json':(json.dumps(plan).encode(),0o600)})
+                  'state/plan.json':(plan_raw,0o600)})
+    if fee_receipt is not None:
+        files['state/part-a-fees.json'] = (json.dumps(fee_receipt, sort_keys=True).encode(), 0o600)
     if 'tls_ca_file' in profile or 'tls_ca_sha256' in profile:
         campaign_tls_context(profile)  # Checks digest and parses CA; verification never disabled.
         ca = read_file(profile['tls_ca_file'])
@@ -251,7 +294,6 @@ def prepare(profile):
     if deferred:
         template = prefund_template(profile, plan, plan_raw, launch)
         files['state/prefund-handoff.json'] = (json.dumps(template).encode(), 0o600)
-        files['state/plan.json'] = (plan_raw, 0o600)
     else:
         files['state/launch.json'] = (json.dumps(launch).encode(),0o600)
     bundles = [(controller, files, False)]

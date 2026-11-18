@@ -12,7 +12,7 @@ import payment_shape as ps
 from fee_evidence import RELAY_MIN_TX_FEE, floor_quote_summary, payment_consensus_summary, resign_fee
 from plan import expand
 from reporting import rehearsal_summary
-from runtime import Journal, digest
+from runtime import Gate, Journal, digest
 import prefund
 from selection import CONSOLIDATE_INPUTS, cover, ranked
 
@@ -197,6 +197,90 @@ class MeasuredFeesTests(unittest.TestCase):
         self.rehearsal["plan_sha256"] = self.funding["plan_sha256"]
         with self.assertRaisesRegex(ValueError, "rehearsal report plan digest"):
             ps.measured_fee_check(self.raw, self.rehearsal)
+
+    def staging_profile(self):
+        import staging
+        from test_staging import StagingTests
+
+        fixture = StagingTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        profile = json.loads(json.dumps(fixture.p).replace("campaign-test", "q20261118-x2-endurance-a"))
+        candidate = dict(PLAN, endpoints=[t["rpc_url"] for t in profile["targets"]], genesis="e" * 64)
+        Path(profile["plan_file"]).write_text(json.dumps(candidate, indent=2) + "\n")
+        profile["isolated_discovery"] = True
+        profile["opening_balances"] = [800_000_000_000] * 64
+        for index in range(len(profile["wallets"]), 64):
+            key = fixture.root / f"wallet-{index}"
+            key.write_text(f"test wallet {index}")
+            key.chmod(0o600)
+            profile["wallets"].append({"address": str(index), "key": str(key)})
+        self.rehearsal.update(run_id="separate-rehearsal-a", node_sha256=profile["node_sha256"],
+                              signer_sha256=hashlib.sha256(Path(profile["signer"]).read_bytes()).hexdigest())
+        inputs = [fixture.root / name for name in ("part-a.json", "report.json", "funding.json")]
+        for path, raw in zip(inputs, (self.raw, json.dumps(self.rehearsal).encode(), json.dumps(self.funding).encode())):
+            path.write_bytes(raw)
+        profile["part_a_fee_evidence"] = staging.part_a_fee_sources(profile["plan_file"], *inputs)
+        return fixture, profile, inputs
+
+    def test_stages_exact_campaign_bytes_and_recomputed_fee_receipt(self):
+        import staging
+        import tarfile
+
+        fixture, profile, inputs = self.staging_profile()
+        fixture.profile.write_text(json.dumps(profile))
+        output = fixture.root / "staged"
+        with patch("staging.subprocess.run") as remote:
+            staging.stage(fixture.profile, output)
+        remote.assert_not_called()
+        self.assertEqual(len(list(output.glob("*.tar"))), 6)
+        with tarfile.open(next(output.glob("*-0.tar"))) as archive:
+            plan_raw = archive.extractfile("state/plan.json").read()
+            receipt = json.load(archive.extractfile("state/part-a-fees.json"))
+        self.assertEqual(plan_raw, Path(profile["plan_file"]).read_bytes())
+        self.assertEqual(receipt["campaign"]["plan_file_sha256"], hashlib.sha256(plan_raw).hexdigest())
+        self.assertEqual(receipt["part_a_input_sha256"],
+                         {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in zip(("plan", "report", "funding"), inputs)})
+        self.assertEqual(receipt["status"], "within_cap")
+        self.assertEqual(receipt["campaign"]["replayed_payments_including_rehearsal"], 22240)
+
+    def test_campaign_stage_stops_before_ssh_or_archiving_for_invalid_fees(self):
+        import staging
+
+        fixture, profile, inputs = self.staging_profile()
+        output = fixture.root / "staged"
+        def refuses(candidate, message):
+            fixture.profile.write_text(json.dumps(candidate))
+            with patch("staging.subprocess.run") as remote, self.assertRaisesRegex((Gate, ValueError), message):
+                staging.stage(fixture.profile, output, execute=True)
+            remote.assert_not_called()
+            self.assertFalse(output.exists())
+        refuses({k: v for k, v in profile.items() if k != "part_a_fee_evidence"}, "requires Part A")
+        refuses({**profile, "node_sha256": "1" * 64}, "node_sha256")
+        plan_path = Path(profile["plan_file"])
+        raw = plan_path.read_bytes()
+        plan_path.write_bytes(raw + b" ")
+        refuses(profile, "campaign plan differs")
+        plan_path.write_bytes(raw)
+        signer = Path(profile["signer"])
+        raw = signer.read_bytes()
+        signer.write_bytes(raw + b" ")
+        refuses(profile, "signer_sha256")
+        signer.write_bytes(raw)
+        for key, path in zip(("plan", "report", "funding"), inputs):
+            raw = path.read_bytes()
+            path.write_bytes(raw + b" ")
+            refuses(profile, "input changed: " + key)
+            path.write_bytes(raw)
+        for status in ("incomplete", "over_cap"):
+            amended = copy.deepcopy(self.rehearsal)
+            if status == "incomplete":
+                amended["status"] = "held"
+            else:
+                amended["rehearsal"]["payment_consensus_floors"]["p99"]["consensus_floor_picocredits"] = 10**9
+            inputs[1].write_text(json.dumps(amended))
+            profile["part_a_fee_evidence"] = staging.part_a_fee_sources(profile["plan_file"], *inputs)
+            refuses(profile, "Part A fee decision: " + status)
 
 
 class GoldenTests(unittest.TestCase):

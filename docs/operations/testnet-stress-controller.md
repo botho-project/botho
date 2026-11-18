@@ -1176,6 +1176,17 @@ settings, and replays the candidate's full workload. The resulting receipt
 identifies the exact candidate plan by its file digest. Each fleet supplies
 its own deployment endpoints and genesis.
 
+When assembling the protocol-10 x2 campaign deployment profile, supply the
+three original Part A files. The operator's `assemble.py deploy-profile`
+accepts `--part-a-fees REHEARSAL_PLAN REPORT FUNDING_HEALTH` and records
+their absolute paths and SHA-256 digests, plus the candidate plan digest, in
+`part_a_fee_evidence`. The local and executing forms of `deploy.py stage`
+recompute the decision using the actual signer bytes and the configured
+node digest before writing bundles or contacting the hosts. A successful
+stage puts the exact campaign plan and the resulting `part-a-fees.json`
+in the controller state directory. The receipt includes the digests of the
+three Part A inputs and the fee decision for each cap.
+
 The report also shows the former total-quote projection for comparison.
 Scaling a fixed 100,000,000 minimum from a 20-billion input to an 80-billion
 input produced a 3.2-billion projection at tier 4 with margin 2. The wallet
