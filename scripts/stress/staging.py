@@ -3,10 +3,12 @@
 All profile validation and local artifact reads complete before SSH. Operators
 supply fresh wallets/accounts and an independent absolute host shutdown policy.
 """
+from datetime import datetime, timezone
 import hashlib
 import io
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -75,6 +77,10 @@ def unit_text(item, observer=False):
     package, state = item['package'], item['state']
     command = (f'{package}/observer.py run --state {state}' if observer else
                f'{package}/controller.py run --state {state}')
+    condition = ''
+    if 'prefund_setup_start' in item and not observer:
+        condition = (f'ExecCondition=/usr/bin/python3 {package}/prefund_handoff.py --state {state}\n'
+                     f"TimeoutStartSec={item['runtime_max_seconds']}\n")
     return f'''[Unit]
 Description=Bounded isolated Botho {'observer' if observer else 'campaign'}
 After=network-online.target
@@ -83,7 +89,7 @@ Type=simple
 User={item['user']}
 Group={item['user']}
 UMask=0077
-ExecStart=/usr/bin/python3 {command}
+{condition}ExecStart=/usr/bin/python3 {command}
 Restart=on-failure
 RestartSec=5
 RuntimeMaxSec={item.get('runtime_max_seconds',295200)}
@@ -104,12 +110,63 @@ UnsetEnvironment=SSH_AUTH_SOCK SSH_AGENT_PID
 '''
 
 
+def timer_text(item):
+    start = datetime.fromtimestamp(math.ceil(item['prefund_setup_start']), timezone.utc)
+    return f"""[Unit]
+Description=Start the isolated rehearsal unit {item['unit']} at its fixed setup time
+[Timer]
+OnCalendar={start:%Y-%m-%d %H:%M:%S} UTC
+Unit={item['unit']}
+AccuracySec=1s
+Persistent=true
+[Install]
+WantedBy=timers.target
+"""
+
+
+def prefund_template(profile, plan, plan_raw, launch):
+    """Bind the controller-side prefunder to this exact rehearsal and wallet order."""
+    from prefund import MANIFEST_FIELDS, check_opening_balances, latest_deadline
+
+    need(plan.get('schema_version') == 2 and plan.get('execution_mode') == 'rehearsal_only'
+         and plan['funding']['mode'] == 'prefunded_isolated', 'prefund handoff requires an isolated rehearsal')
+    need('opening_balances' not in profile, 'choose recorded balances or a prefund handoff')
+    source = profile['prefund_handoff']
+    need(isinstance(source, dict) and set(source) == {'local_manifest', 'remote_manifest'},
+         'prefund handoff requires local_manifest and remote_manifest')
+    raw = read_file(source['local_manifest'], private=True)
+    manifest = json.loads(raw)
+    need(isinstance(manifest, dict) and set(manifest) == MANIFEST_FIELDS, 'incomplete prefund manifest')
+    remote = absolute_path(source['remote_manifest'])
+    absolute_path(manifest['state_dir'])
+    need(manifest['schema_version'] == 1 and manifest['plan_sha256'] == hashlib.sha256(plan_raw).hexdigest()
+         and manifest['targets'] == launch['targets'] and manifest['signer_sha256'] == launch['signer_sha256']
+         and re.fullmatch(r'[0-9a-f]{64}', str(manifest['tls_ca_sha256']))
+         and manifest['tls_ca_sha256'] == profile.get('tls_ca_sha256')
+         and [w['address'] for w in manifest['wallets']] == [w['address'] for w in launch['wallets']],
+         'prefund plan, targets, artifacts or wallet order differ')
+    deadline = manifest['deadline']
+    need(manifest['infrastructure_end'] == profile['end'] and type(deadline) in (float, int)
+         and 0 < deadline <= latest_deadline(plan, profile['end']), 'prefund deadlines differ from rehearsal')
+    grants, amount = manifest['grants_per_wallet'], manifest['grant_picocredits']
+    need(type(grants) is int and grants > 0 and type(amount) is int and amount > 0, 'invalid prefund grants')
+    if 'prefund' in plan:
+        need(grants == plan['prefund']['grants_per_wallet'] and str(amount) == plan['prefund']['grant_picocredits'],
+             'prefund grants differ from plan')
+    check_opening_balances([grants * amount] * len(launch['wallets']), plan)
+    return {'manifest': remote, 'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'launch': launch}
+
+
 def prepare(profile):
     """Return sealed component bundles in memory; no files, SSH or units written."""
     need(profile.get('schema_version') == 1, 'unsupported deployment profile')
     run_id = profile['run_id']
     need(isinstance(run_id, str) and re.fullmatch(r'[a-z][a-z0-9-]{7,63}', run_id), 'invalid run_id')
-    plan = json.loads(read_file(profile['plan_file']))
+    plan_raw = read_file(profile['plan_file'])
+    plan = json.loads(plan_raw)
+    deferred = 'prefund_handoff' in profile
+    if deferred:
+        need(plan.get('execution_mode') == 'rehearsal_only', 'prefund handoff requires a rehearsal')
     expand(plan)
     mapping = campaign_targets({'targets': profile['targets']}, plan)
     need(all(t['rpc_url'] != 'https://'+role+'/rpc' for role,t in mapping.items()),
@@ -120,11 +177,13 @@ def prepare(profile):
     validate_lifetime(plan, {**profile, 'infrastructure_end':profile['end']})
     runtime_limit = int(profile['end']-profile['setup_start'])
     controller = dict(profile['controller'], runtime_max_seconds=runtime_limit)
+    need('prefund_setup_start' not in controller, 'prefund_setup_start is set by staging')
     component(controller, run_id)
     need(controller['deploy_ssh_target'] != 'loom-worker-1', 'dedicated deployment target required')
     observers = [dict(item, runtime_max_seconds=runtime_limit) for item in profile['observers']]
     need(len(observers)==5 and [o['role'] for o in observers]==list(HOSTS), 'five ordered observer deployments required')
     for item in observers:
+        need('prefund_setup_start' not in item, 'prefund_setup_start is set by staging')
         component(item, run_id)
         node_config(item['node'])
         need(set(item['node']) == {'node_unit','binary_path','data_dir','config_path','node_key_path'}, 'complete explicit observer node paths required')
@@ -155,6 +214,10 @@ def prepare(profile):
     wallet_files = [read_file(w['key'], private=True) for w in wallets]
     need(len(set(wallet_files))==wallet_count, 'wallet files must be distinct')
     code = {name: (SOURCE/name).read_bytes() for name in CODE}
+    if deferred:
+        code['prefund_handoff.py'] = (SOURCE/'prefund_handoff.py').read_bytes()
+        for item in [controller, *observers]:
+            item['prefund_setup_start'] = profile['setup_start']
     package, state = controller['package'], controller['state']
     launch = {'run_id':run_id, 'setup_start':profile['setup_start'], 'infrastructure_end':profile['end'],
               'targets':profile['targets'], 'signer':package+'/botho-stress-wallet',
@@ -166,10 +229,12 @@ def prepare(profile):
               'wallets':[{'address':w['address'], 'key':state+f'/wallets/wallet-{i}.mnemonic'} for i,w in enumerate(wallets)]}
     if plan.get('schema_version') == 2:
         need(profile.get('isolated_discovery') is True, 'explicit isolated discovery opt-in required')
-        balances = profile.get('opening_balances')
-        need(isinstance(balances,list) and len(balances)==wallet_count and all(type(x) is int and x>0 for x in balances), 'exact opening balances required')
-        need(sum(balances)<=int(plan['funding']['max_principal_picocredits']), 'opening principal cap')
-        launch.update(isolated_discovery=True, opening_balances=balances)
+        launch['isolated_discovery'] = True
+        if not deferred:
+            balances = profile.get('opening_balances')
+            need(isinstance(balances,list) and len(balances)==wallet_count and all(type(x) is int and x>0 for x in balances), 'exact opening balances required')
+            need(sum(balances)<=int(plan['funding']['max_principal_picocredits']), 'opening principal cap')
+            launch['opening_balances'] = balances
         if 'execution_mode' in profile:
             launch['execution_mode'] = profile['execution_mode']
     files = {'package/'+n:(b,0o644) for n,b in code.items()}
@@ -183,7 +248,12 @@ def prepare(profile):
         files['package/ca.pem'] = (ca,0o644)
     for i,data in enumerate(wallet_files):
         files[f'state/wallets/wallet-{i}.mnemonic'] = (data,0o600)
-    files['state/launch.json'] = (json.dumps(launch).encode(),0o600)
+    if deferred:
+        template = prefund_template(profile, plan, plan_raw, launch)
+        files['state/prefund-handoff.json'] = (json.dumps(template).encode(), 0o600)
+        files['state/plan.json'] = (plan_raw, 0o600)
+    else:
+        files['state/launch.json'] = (json.dumps(launch).encode(),0o600)
     bundles = [(controller, files, False)]
     for item in observers:
         config = dict(item['node'], end=profile['end'])
@@ -216,9 +286,11 @@ with tarfile.open(fileobj=io.BytesIO(data)) as tar:
  item=meta['item']; account=pwd.getpwnam(item['user'])
  state=pathlib.Path(item['state']);package=pathlib.Path(item['package'])
  unit=pathlib.Path('/etc/systemd/system')/item['unit']
+ units={unit:meta['unit']}
+ if 'timer' in meta:units[unit.with_suffix('.timer')]=meta['timer']
  destinations={n:(state/n[6:] if n.startswith('state/') else package/n[8:] if n.startswith('package/') else pathlib.Path(item[n])) for n in meta['files']}
  keys=destinations.get('authorized_keys_file');replaced=None
- for path in [state,package,unit,*[p for n,p in destinations.items() if not n.startswith(('state/','package/'))]]:
+ for path in [state,package,*units,*[p for n,p in destinations.items() if not n.startswith(('state/','package/'))]]:
   if path==keys and meta.get('replace_authorized_keys') is True and path.exists() and not path.is_symlink():
    info=path.lstat()
    assert path.is_file() and info.st_uid==0 and info.st_nlink==1, 'existing authorized keys file is not a root-owned regular file'
@@ -229,11 +301,12 @@ with tarfile.open(fileobj=io.BytesIO(data)) as tar:
   hint=' (an earlier staging attempt? rerun with --replace-observer-keys)' if path==keys else ''
   assert not path.exists() and not path.is_symlink(), 'destination exists: '+str(path)+hint
   assert not any(p.is_symlink() for p in path.parents), 'symlink parent'
- for path in [package,unit,*[p for n,p in destinations.items() if not n.startswith(('state/','package/'))]]:
+ for path in [package,*units,*[p for n,p in destinations.items() if not n.startswith(('state/','package/'))]]:
   for parent in path.parents:
    if parent.exists():assert parent.stat().st_uid==0 and parent.stat().st_mode & 0o022==0, 'control parent writable by non-root'
- status=subprocess.run(['systemctl','show',item['unit'],'-p','LoadState'],capture_output=True,text=True)
- assert status.stdout.strip()=='LoadState=not-found', 'service name already exists'
+ for path in units:
+  status=subprocess.run(['systemctl','show',path.name,'-p','LoadState'],capture_output=True,text=True)
+  assert status.stdout.strip()=='LoadState=not-found', 'unit name already exists'
  package.mkdir(parents=True,mode=0o755)
  state.mkdir(parents=True,mode=0o700);os.chown(state,account.pw_uid,account.pw_gid)
  for name,mode in meta['files'].items():
@@ -252,13 +325,15 @@ with tarfile.open(fileobj=io.BytesIO(data)) as tar:
   if name.startswith('state/'):os.chown(path,account.pw_uid,account.pw_gid)
  for name in ('artifacts','probes','reports') if not meta['observer'] else ():
   path=state/name;path.mkdir(mode=0o700);os.chown(path,account.pw_uid,account.pw_gid)
- with unit.open('x') as output:output.write(meta['unit']);output.flush();os.fsync(output.fileno())
- os.chmod(unit,0o644)
+ for path,content in units.items():
+  with path.open('x') as output:output.write(content);output.flush();os.fsync(output.fileno())
+  os.chmod(path,0o644)
 subprocess.run(['systemctl','daemon-reload'],check=True)
-result=subprocess.run(['systemctl','is-active',item['unit']],capture_output=True,text=True)
-assert result.stdout.strip() in ('inactive','unknown'), 'staged unit unexpectedly active'
-enabled=subprocess.run(['systemctl','is-enabled',item['unit']],capture_output=True,text=True)
-assert enabled.stdout.strip() in ('disabled','static'), 'staged unit unexpectedly enabled'
+for path in units:
+ result=subprocess.run(['systemctl','is-active',path.name],capture_output=True,text=True)
+ assert result.stdout.strip() in ('inactive','unknown'), 'staged unit unexpectedly active'
+ enabled=subprocess.run(['systemctl','is-enabled',path.name],capture_output=True,text=True)
+ assert enabled.stdout.strip() in ('disabled','static'), 'staged unit unexpectedly enabled'
 archive.unlink()
 print(json.dumps({'unit':item['unit'],'status':'staged-inactive','archive_sha256':SHA,'replaced_authorized_keys_sha256':replaced}))
 '''
@@ -283,11 +358,15 @@ def stage(profile_path, output, execute=False, replace_observer_keys=False):
             with tarfile.open(fileobj=stream,mode='w') as tar:
                 meta = {'item':item,'observer':observer,'files':{n:m for n,(_,m) in files.items()},'unit':unit_text(item,observer),
                         'replace_authorized_keys':bool(replace_observer_keys and observer)}
+                if 'prefund_setup_start' in item:
+                    meta['timer'] = timer_text(item)
                 for name,(data,mode) in dict(files, **{'install.json':(json.dumps(meta).encode(),0o600)}).items():
                     info=tarfile.TarInfo(name);info.size=len(data);info.mode=mode
                     tar.addfile(info,io.BytesIO(data))
         sha=hashlib.sha256(archive.read_bytes()).hexdigest()
         results.append({'archive':str(archive),'sha256':sha,'target':item['deploy_ssh_target'],'unit':item['unit']})
+        if 'prefund_setup_start' in item:
+            results[-1]['timer'] = str(Path(item['unit']).with_suffix('.timer'))
         if execute:
             options=['-F','/dev/null','-i',profile['operator_identity'],'-o','IdentitiesOnly=yes','-o','BatchMode=yes',
                      '-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+profile['operator_known_hosts'],'-o','ConnectTimeout=15']

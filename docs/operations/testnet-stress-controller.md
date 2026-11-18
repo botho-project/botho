@@ -660,6 +660,24 @@ qualification journal fails its immutable digest check. A qualification pass is
 initial generator evidence, not proof of sustained 72-hour capacity or production
 congestion/priority coverage.
 
+### Staging a rehearsal while prefunding is in progress
+
+A protocol-10 rehearsal on November 11 finished funding 64 wallets before its deadline. The operator laptop restarted before staging, and the rehearsal window expired. For an isolated `rehearsal_only` plan, the staging profile can now reference the controller's prefund manifest while funding is still in progress.
+
+Use `prefund_handoff` in place of `opening_balances` in the staging profile. `local_manifest` names the operator's copy of the exact manifest bytes installed on the controller. Its internal paths refer to the controller. `remote_manifest` names that installed file. For example,
+
+```json
+"prefund_handoff": {
+  "local_manifest": "/operator/fleet/rehearsal_only-prefund-manifest.json",
+  "remote_manifest": "/var/lib/botho-prefund-example/manifest.json"
+}
+```
+
+1. Stage the profile using the normal `deploy.py stage` command. Each of the six entries in `staging-manifest.json` names its service and timer. Staging installs both inactive.
+2. Complete the observer SSH configuration. On each host, enable and start its named timer with `systemctl enable --now <timer>`. Verify all six show the frozen setup time in UTC. Start the existing prefund service before its deadline. The operator laptop can disconnect once that service is running and all six timers are armed.
+3. At setup time the five observers start sampling. The controller waits for `funding-health.json` and `opening_balances.json` from the pinned prefunder. It checks the exact plan, wallet order, grant counts, per-wallet principal, accounting and completion time. It then publishes `launch.json` once. The controller performs its normal independent ledger scan, checks inventory and waits for the observers before admission.
+4. A skipped controller start leaves a timestamped `prefund-handoff-held-*.json` in its state directory. A late initial start honors the original setup deadline. A restart of an admitted rehearsal checks the same launch and funding records. Retain the prefunder's state through the end of the run.
+
 ### Inventory and short rehearsal prerequisites
 
 Use the existing explicit `deploy.py stage --profile ... --output ...` path,
