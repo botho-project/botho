@@ -67,6 +67,18 @@ def check_archive_index(archive, expected):
 
 def verify(archive, binary, analyzer=None):
     """Replay the checked-out analyzer on the bytes identified by each collector."""
+    # A detached export is assembled in a temporary directory before it is
+    # published. Its final receipt carries checks that raw samples cannot show.
+    detached = (archive / "driver-config.json").is_file() or (
+        archive.parent / "operator-runner" / "driver-config.json"
+    ).is_file()
+    if detached and (
+        archive.name != "outcome"
+        or not (archive.parent / "final-receipt.json").is_file()
+    ):
+        raise ValueError(
+            "detached memory run has no published outcome with a final receipt"
+        )
     manifest = archive / "manifest.json"
     plan = json.loads(manifest.read_text())
     validate_manifest(plan)
@@ -242,6 +254,12 @@ def bind(fleet, campaign_id, archive=None, binary=None, analyzer=None, *, roles=
         raise ValueError(
             "qualified inputs differ from the payment fleet's frozen receipt"
         )
+    # The directory entry must survive a reboot after the provider call.
+    directory = os.open(fleet, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
     return receipt
 
 

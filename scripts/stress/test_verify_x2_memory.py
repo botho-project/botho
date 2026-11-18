@@ -45,6 +45,15 @@ class QualificationBindingTests(unittest.TestCase):
         )
         self.assertEqual(saved["receipt"], receipt)
 
+    def test_detached_export_without_final_receipt_is_held(self):
+        for folder in ("outcome", ".outcome-partial"):
+            with self.subTest(folder=folder):
+                archive = self.root / folder
+                archive.mkdir()
+                (archive / "driver-config.json").write_text("{}")
+                with self.assertRaisesRegex(ValueError, "published outcome"):
+                    verify(archive, self.binary)
+
     def test_absent_archive_cannot_create_receipt(self):
         with self.assertRaisesRegex(ValueError, "requires"):
             bind(self.root, self.run)
