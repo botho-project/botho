@@ -1129,12 +1129,14 @@ on the value moved, not congestion. x2's fee-tier evidence
 and exit pricing; `baseline_fee` is the node quote.
 
 **Freeze the plan from the rehearsal.** Use the settling quotes from the
-completed Part A on the pinned build. For each signed payment the node records
-`relayFeeFloor`, its size charge plus its economic charge before applying the
-wallet minimum. The economic charge uses the sum of the outputs, including
-change. The signed inputs less the paid fee give that value exactly.
+completed Part A on the pinned build. For each signed payment the node
+quotes the same economic charge at two fee bases. `consensusFeeFloor`
+includes the size charge at the fixed consensus base. `relayFeeFloor`
+includes it at the current relay base. The economic charge uses the sum
+of the outputs, including change. The signed inputs less the paid fee
+give that value exactly.
 
-Rank the payments by `(relayFeeFloor + 1) / output_value` and take the
+Rank the payments by `(consensusFeeFloor + 1) / output_value` and take the
 nearest-rank p99. The extra picocredit accounts for integer rounding when the
 node subtracts the two charges in a class downgrade. Multiply that ratio by
 the larger of the planned maximum (80 billion picocredits in x2) and the
@@ -1144,8 +1146,9 @@ any additional value from a lottery award.
 Add the largest size charge for the planned input counts, at two outputs,
 zero memos, maximum cluster factor and maximum congestion base. The
 Rust-generated fee table prices this at 7,416,000 picocredits for x2. The
-observed ratio also includes the original size charge, so this estimate makes
-an allowance for both the observed and target sizes. Apply the wallet's
+observed ratio already includes the small fixed-base size charge. This
+allows for the target size and peak congestion independently of the
+congestion at the time of measurement. Apply the wallet's
 `resign_fee` to the resulting raw floor, including its fixed 100,000,000
 minimum. Multiply the result by the highest tier (4) and the safety margin
 (2). It must fit the 1,000,000,000 payment cap. Compare the p99 absolute
@@ -1163,7 +1166,7 @@ python3 scripts/stress/payment_shape.py --plan rehearsal_only-plan.json \
 Use the original staged plan. The command checks each report's plan digest
 and the number of observations, and exits successfully when both measured
 bounds fit. A funding report alone shows the batch result. A rehearsal report
-missing the raw relay observations yields an incomplete payment measurement.
+missing the raw consensus observations yields an incomplete payment measurement.
 The numbers can be reconstructed from the signed rows in the original journal.
 
 For the 72-hour candidate, add `--campaign-plan campaign-plan.json` and

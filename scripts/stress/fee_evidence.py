@@ -167,8 +167,8 @@ def floor_quote_summary(records, *, per_input_value):
     return complete_percentile(samples, signed)
 
 
-def payment_relay_summary(records):
-    """Rank the raw node floor per picocredit of actual outputs, including change."""
+def payment_consensus_summary(records):
+    """Rank the fixed-base consensus floor per picocredit of outputs, including change."""
     samples = []
     signed = 0
     max_selected = 0
@@ -203,6 +203,6 @@ def payment_relay_summary(records):
         max_selected = max(max_selected, moved)
         # A capitalized downgrade subtracts two individually floored charges.
         # Its unrounded value is less than the observed charge plus one.
-        samples.append(((Fraction(floor + 1, output_value), floor, output_value),
-                        {"relay_floor_picocredits": floor, "output_value_picocredits": output_value}))
+        samples.append(((Fraction(consensus + 1, output_value), consensus, output_value),
+                        {"consensus_floor_picocredits": consensus, "output_value_picocredits": output_value}))
     return {**complete_percentile(samples, signed), "max_selected_input_picocredits": max_selected or None}

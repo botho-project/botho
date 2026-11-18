@@ -8,7 +8,7 @@ import os
 import resource
 import stat
 import time
-from fee_evidence import floor_quote_summary, payment_relay_summary
+from fee_evidence import floor_quote_summary, payment_consensus_summary
 from lottery import award_spend_expectation
 from plan import expand
 from runtime import HOSTS, atomic, digest
@@ -305,7 +305,7 @@ def rehearsal_summary(journal, plan, artifacts=None):
         **result,
         **accepted,
         "fee_floor_quotes": floor_quote_summary(signed, per_input_value=True),
-        "payment_relay_floors": payment_relay_summary(signed),
+        "payment_consensus_floors": payment_consensus_summary(signed),
         "expected": expected,
         "offered": len(rows),
         "not_yet_offered": max(0, expected - len(rows)),

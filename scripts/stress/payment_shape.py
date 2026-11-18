@@ -30,7 +30,7 @@ that shape against the plan before anything is staged:
     The bound on every member therefore bounds this mean too. Rows that
     declare background against a wealthy ring (``exit``) are reported, not
     gated: the operator freezes the plan from the Part A rehearsal's p99
-    raw relay floor per unit of output value instead.
+    fixed-base consensus floor per unit of output value instead.
 
 ``coverage``
     Replays the rehearsal and the plan's whole 72 h schedule (``expand``'s
@@ -297,14 +297,14 @@ def projected_payment_fee(quote, selected_value, shape_value, tier):
     return (numerator + selected_value - 1) // selected_value
 
 
-def projected_relay_floor(raw_floor, output_value, shape_value, base_ceiling):
+def projected_relay_floor(consensus_floor, output_value, shape_value, base_ceiling):
     """Conservative floor for a move of shape_value at the sampled economic rate.
 
-    Retain the entire observed size charge in the ratio. Add the target's
+    Retain the size charge at the fixed consensus base in the ratio. Add the target's
     maximum size charge separately to cover changes in input count and relay
     congestion. Round up for the integer demurrage and exit calculations.
     """
-    numerator = (raw_floor + 1) * shape_value
+    numerator = (consensus_floor + 1) * shape_value
     return base_ceiling + (numerator + output_value - 1) // output_value
 
 
@@ -449,7 +449,7 @@ def preflight(plan):
             "fee_margin": FEE_MARGIN, "gated_depth": GATED_DEPTH,
             "ring_gated_to_bth": round(ring_bound_bth(golden), 3),
             "note": "exit rows are reported, not gated: freeze the plan from the Part A "
-                    "rehearsal's p99 raw relay floor per unit of output value on the pinned build"}
+                    "rehearsal's p99 fixed-base consensus floor per unit of output value on the pinned build"}
 
 
 def measured_fee_check(plan_bytes, rehearsal=None, funding=None):
@@ -468,13 +468,13 @@ def measured_fee_check(plan_bytes, rehearsal=None, funding=None):
         result["qualification_status"] = rehearsal.get("qualification_status")
         summary = rehearsal["rehearsal"]
         result["payment_fee_floor_quotes"] = summary.get("fee_floor_quotes")
-        result["payment_relay_floors"] = summary.get("payment_relay_floors")
+        result["payment_consensus_floors"] = summary.get("payment_consensus_floors")
         if (rehearsal.get("status") == "rehearsal_complete"
                 and rehearsal.get("qualification_status") in ("passed", "accepted_generator_limited")):
             expected = (plan["rehearsal"]["duration_seconds"] - 120) // plan["rehearsal"]["interval_seconds"]
             require(summary.get("reconciled") == expected, "completed rehearsal counts differ from plan")
-            payment_quotes = complete_p99(summary.get("payment_relay_floors"), expected,
-                                          "relay_floor_picocredits", "output_value_picocredits")
+            payment_quotes = complete_p99(summary.get("payment_consensus_floors"), expected,
+                                          "consensus_floor_picocredits", "output_value_picocredits")
             legacy_quotes = complete_p99(summary.get("fee_floor_quotes"), expected,
                                          "resign_fee_picocredits", "selected_input_picocredits")
     if funding is not None:
@@ -490,7 +490,7 @@ def measured_fee_check(plan_bytes, rehearsal=None, funding=None):
     payment_value = max(shape[3] for shape in shapes if shape[6] is None)
     planned_value = payment_value
     if payment_quotes:
-        observed_value = result["payment_relay_floors"].get("max_selected_input_picocredits")
+        observed_value = result["payment_consensus_floors"].get("max_selected_input_picocredits")
         require(type(observed_value) is int and payment_quotes[1] < observed_value < 2**64,
                 "invalid maximum observed selected input value")
         payment_value = max(planned_value, observed_value)

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import payment_shape as ps
-from fee_evidence import RELAY_MIN_TX_FEE, floor_quote_summary, payment_relay_summary, resign_fee
+from fee_evidence import RELAY_MIN_TX_FEE, floor_quote_summary, payment_consensus_summary, resign_fee
 from plan import expand
 from reporting import rehearsal_summary
 from runtime import Journal, digest
@@ -44,7 +44,7 @@ class MeasuredFeesTests(unittest.TestCase):
         self.rehearsal = {"plan_sha256": digest(self.plan), "status": "rehearsal_complete",
                           "qualification_status": "accepted_generator_limited",
                           "rehearsal": {"reconciled": offers,
-                                        "payment_relay_floors": payment_relay_summary([self.info] * offers),
+                                        "payment_consensus_floors": payment_consensus_summary([self.info] * offers),
                                         "fee_floor_quotes": floor_quote_summary([self.info] * offers, per_input_value=True)}}
         batch_count = ps.batches(self.plan)
         self.funding = {"plan_sha256": hashlib.sha256(self.raw).hexdigest(), "batches": batch_count,
@@ -61,7 +61,7 @@ class MeasuredFeesTests(unittest.TestCase):
                 if prepared is not None:
                     journal.transition(identifier, "prepared", prepared=prepared, info=self.info)
             summary = rehearsal_summary(journal, self.plan)
-            self.assertEqual(summary["payment_relay_floors"], payment_relay_summary([self.info]))
+            self.assertEqual(summary["payment_consensus_floors"], payment_consensus_summary([self.info]))
             quotes = summary["fee_floor_quotes"]
             self.assertEqual(quotes, floor_quote_summary([self.info], per_input_value=True))
             journal.transition("u", "prepared", prepared=3, info={"fee": 400_000_000})
@@ -95,10 +95,10 @@ class MeasuredFeesTests(unittest.TestCase):
         self.assertEqual(result["shapes"][0]["legacy_total_quote_projection_picocredits"], 3_200_000_000)
         self.assertEqual(result["shapes"][-1]["required_picocredits"], 100_000_000)
         # Exercise the exact decision boundary at tier 4 and a factor-2 margin.
-        p99 = self.rehearsal["rehearsal"]["payment_relay_floors"]["p99"]
+        p99 = self.rehearsal["rehearsal"]["payment_consensus_floors"]["p99"]
         projected_value = result["shapes"][0]["moved_picocredits"]
         p99["output_value_picocredits"] = projected_value - 1
-        self.rehearsal["rehearsal"]["payment_relay_floors"]["max_selected_input_picocredits"] = projected_value
+        self.rehearsal["rehearsal"]["payment_consensus_floors"]["max_selected_input_picocredits"] = projected_value
         cap = result["shapes"][0]["cap_picocredits"]
         base = result["shapes"][0]["base_ceiling_picocredits"]
         low, high = 0, cap
@@ -108,37 +108,37 @@ class MeasuredFeesTests(unittest.TestCase):
                 low = mid
             else:
                 high = mid
-        p99["relay_floor_picocredits"] = low - base - 2
+        p99["consensus_floor_picocredits"] = low - base - 2
         self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "within_cap")
-        p99["relay_floor_picocredits"] += 1
+        p99["consensus_floor_picocredits"] += 1
         self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "over_cap")
 
     def test_missing_raw_or_inconsistent_settling_quote_stays_incomplete(self):
-        p99 = payment_relay_summary([self.info])["p99"]
-        self.assertEqual(p99, {"relay_floor_picocredits": 400_000, "output_value_picocredits": 19_600_000_000})
+        p99 = payment_consensus_summary([self.info])["p99"]
+        self.assertEqual(p99, {"consensus_floor_picocredits": 400_000, "output_value_picocredits": 19_600_000_000})
         for changed in ({"relayFeeFloor": True}, {"relayFeeFloor": 500}, {"settleFee": 99_999_999},
                         {"resignFee": 99_999_999}, {"minimumFee": None}):
             bad = {**self.info, "fee_floor_quote": {**self.info["fee_floor_quote"], **changed}}
-            self.assertEqual(payment_relay_summary([self.info, bad]), {"signed": 2, "samples": 1, "p99": None,
+            self.assertEqual(payment_consensus_summary([self.info, bad]), {"signed": 2, "samples": 1, "p99": None,
                                                      "max_selected_input_picocredits": 20_000_000_000})
         for bad in (dict(self.info, fee=20_000_000_000), dict(self.info, fee=99_999_999),
                     dict(self.info, outputs=[{"amount": 1}]),
                     dict(self.info, selected=[{"amount": 20_000_000_000}] * 5, input_count=5)):
-            self.assertIsNone(payment_relay_summary([bad])["p99"])
-        self.rehearsal["rehearsal"]["payment_relay_floors"]["max_selected_input_picocredits"] = 81_000_000_000
+            self.assertIsNone(payment_consensus_summary([bad])["p99"])
+        self.rehearsal["rehearsal"]["payment_consensus_floors"]["max_selected_input_picocredits"] = 81_000_000_000
         row = ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["shapes"][0]
         self.assertEqual(row["moved_picocredits"], 81_000_000_000)
-        del self.rehearsal["rehearsal"]["payment_relay_floors"]
+        del self.rehearsal["rehearsal"]["payment_consensus_floors"]
         self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "incomplete")
 
-    def test_raw_floor_p99_orders_by_actual_output_value(self):
+    def test_consensus_floor_p99_orders_by_actual_output_value(self):
         # One outlier has the same input total and raw floor but less change.
         low = dict(self.info, fee=200_000_000)
         high = dict(self.info, fee=800_000_000)
         typical = dict(self.info, outputs=[{"amount": 1_000_000_000}, {"amount": 18_600_000_000}])
-        result = payment_relay_summary([high, typical] + [low] * 98)
+        result = payment_consensus_summary([high, typical] + [low] * 98)
         self.assertEqual(result["samples"], 100)
-        self.assertEqual(result["p99"], {"relay_floor_picocredits": 400_000,
+        self.assertEqual(result["p99"], {"consensus_floor_picocredits": 400_000,
                                           "output_value_picocredits": 19_600_000_000})
 
     def test_rust_wallet_envelope_and_projection_cover_direct_prices(self):
@@ -157,13 +157,13 @@ class MeasuredFeesTests(unittest.TestCase):
         cap = int(PLAN["limits"]["max_single_signed_fee_picocredits"])
         verdicts = set()
         for r in payments:
-            bound = resign_fee(ps.projected_relay_floor(r["relay_floor_max"], r["moved"], target, base))
+            bound = resign_fee(ps.projected_relay_floor(r["consensus_floor"], r["moved"], target, base))
             actual = direct[r["wealth_bth"], r["depth"]]
             self.assertGreaterEqual(bound, actual, r)
             verdicts.add((actual * 8 <= cap, bound * 8 <= cap))
         self.assertIn((True, True), verdicts)
         self.assertIn((False, False), verdicts)
-        self.assertNotIn((False, True), verdicts)
+        self.assertEqual(verdicts, {(False, False), (True, True)})
 
     def test_campaign_requires_matching_payloads_and_economic_settings(self):
         candidate = {**PLAN, "endpoints": list(PLAN["endpoints"]), "genesis": "a" * 64}
