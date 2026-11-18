@@ -1,6 +1,11 @@
 """Fee claims require observed evidence; nominal fee tiers prove no ordering."""
 
+from fractions import Fraction
+
 from runtime import Gate
+
+# bth_cluster_tax::RELAY_MIN_TX_FEE, also enforced by the offline signer.
+RELAY_MIN_TX_FEE = 100_000_000
 
 
 def signed_fee_evidence(info, requested):
@@ -10,7 +15,7 @@ def signed_fee_evidence(info, requested):
     if requested not in (1, 2, 4) or info["fee_multiplier"] != requested:
         raise Gate("signer fee tier differs from request")
     if (
-        info["baseline_fee"] < 100_000_000
+        info["baseline_fee"] < RELAY_MIN_TX_FEE
         or info["fee"] < info["baseline_fee"] * requested
     ):
         raise Gate("signed fee is below multiplied production floor")
@@ -20,7 +25,7 @@ def signed_fee_evidence(info, requested):
         "raw_wire_density": info["fee"] / info["bytes"],
         "baseline_fee": info["baseline_fee"],
         "fee_multiplier": requested,
-        "floor_masked": info["baseline_fee"] == 100_000_000,
+        "floor_masked": info["baseline_fee"] == RELAY_MIN_TX_FEE,
         "dust_absorbed": info["fee"] - info["baseline_fee"] * requested,
     }
 
@@ -110,3 +115,43 @@ def summarize_fees(rows, quotes):
         "paid_fee_total": sum(r["fee"] for r, _ in confirmed),
         "coverage_complete": False,
     }
+
+
+def floor_quote_summary(records, *, per_input_value):
+    """Nearest-rank p99 of settling node quotes, once per signed transaction.
+
+    Payment observations are ranked by the exact ratio of re-sign quote to
+    selected input value (including change). Prefund uses the absolute quote.
+    Partial archives retain their counts and cannot yield a qualifying p99.
+    """
+    samples = []
+    signed = 0
+    for info in records:
+        signed += 1
+        if not isinstance(info, dict):
+            continue
+        quote = info.get("fee_floor_quote")
+        fee = quote.get("resignFee") if isinstance(quote, dict) else None
+        if type(fee) is not int or fee <= 0:
+            continue
+        moved = 1
+        if per_input_value:
+            selected = info.get("selected")
+            if (not isinstance(selected, list) or not selected
+                    or type(info.get("input_count")) is not int
+                    or len(selected) != info["input_count"]):
+                continue
+            if any(not isinstance(o, dict) or type(o.get("amount")) is not int
+                   or o["amount"] <= 0 for o in selected):
+                continue
+            moved = sum(o["amount"] for o in selected)
+        samples.append((Fraction(fee, moved), fee, moved))
+
+    result = {"signed": signed, "samples": len(samples), "p99": None}
+    if not samples or len(samples) != signed:
+        return result
+    _, fee, moved = sorted(samples)[(99 * signed + 99) // 100 - 1]
+    result["p99"] = {"resign_fee_picocredits": fee}
+    if per_input_value:
+        result["p99"]["selected_input_picocredits"] = moved
+    return result

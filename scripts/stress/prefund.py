@@ -51,6 +51,7 @@ import time
 from urllib.parse import urlsplit
 
 from controller import Controller
+from fee_evidence import floor_quote_summary
 from lottery import lottery_rows
 from plan import expand
 from runtime import (Gate, HOSTS, Journal, Quota, Rpc, atomic, campaign_targets,
@@ -838,6 +839,7 @@ class Prefunder(Controller):
                   'grant_picocredits': self.m['grant_picocredits'],
                   'principal': report['principal'], 'fees': report['fees'],
                   'max_fee': max(r['fee'] for r in self.records), 'accounting': report,
+                  'fee_floor_quotes': floor_quote_summary(self.records, per_input_value=False),
                   'opening_balances': balances, 'opening_lottery_balances': lottery_balances,
                   'completed_before_deadline': self.clock() < self.m['deadline'],
                   'inventory_readiness': {'status': 'ready' if all(r['ready'] for r in readiness) else

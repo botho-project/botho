@@ -48,8 +48,11 @@ that shape against the plan before anything is staged:
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
+
+from fee_evidence import RELAY_MIN_TX_FEE
 
 GOLDEN = Path(__file__).with_name("fixtures") / "fee-shape-golden.json"
 # stress.rs `deserialize_fee_multiplier`: the signer's fee tiers.
@@ -288,6 +291,11 @@ def gated_fee(golden, inputs, moved, tier):
     return FEE_MARGIN * tier * max(r["resign_fee"] for r in rows if r["depth"] == GATED_DEPTH)
 
 
+def projected_payment_fee(quote, selected_value, shape_value, tier):
+    numerator = quote * shape_value * tier * FEE_MARGIN
+    return (numerator + selected_value - 1) // selected_value
+
+
 def coverage(plan, events=None, golden=None):
     """Replay the rehearsal and campaign through selection.cover; returns evidence.
 
@@ -318,6 +326,7 @@ def coverage(plan, events=None, golden=None):
     wallets = [[output(grant, float("-inf")) for _ in range(grants)] for _ in range(count)]
     failures, multi, moved, spends, fees = [], 0, 0, 0, 0
     moved_by_inputs, worst_fee = {}, 0
+    rehearsal_moved = []
     for event in sorted(rehearsal_events(plan) + list(events), key=lambda e: e["offset_seconds"]):
         at = event["offset_seconds"]
         sender = int(event["sender"].split("-")[1]) - 1
@@ -334,6 +343,8 @@ def coverage(plan, events=None, golden=None):
         spends += 1
         multi += len(selected) > 1
         total = sum(o["utxo"]["amount"] for o in selected)
+        if at < 0:  # Rehearsal offers precede campaign T0.
+            rehearsal_moved.append(total)
         moved = max(moved, total)
         moved_by_inputs[len(selected)] = max(moved_by_inputs.get(len(selected), 0), total)
         spend = {"at": at, "sender": event["sender"], "inputs": len(selected), "moved": total,
@@ -355,7 +366,18 @@ def coverage(plan, events=None, golden=None):
             wallets[sender].append(output(change, at + MATURITY_SECONDS))
         wallets[recipient].append(output(amount, at + MATURITY_SECONDS))
     balances = [sum(o["utxo"]["amount"] for o in w) for w in wallets]
-    return {"payments": spends + len(failures), "covered": spends, "uncovered": len(failures),
+    projection = None
+    if rehearsal_moved:
+        # For a fixed quote the smallest input totals have the highest ratios.
+        # The nearest-rank p99 ratio uses the (N // 100 + 1)-th smallest total.
+        selected = sorted(rehearsal_moved)[len(rehearsal_moved) // 100]
+        largest = max(priced.values())
+        required = projected_payment_fee(RELAY_MIN_TX_FEE, selected, largest, max(TIERS))
+        projection = {"covered_rehearsal_offers": len(rehearsal_moved), "quote_picocredits": RELAY_MIN_TX_FEE,
+                      "p99_selected_input_picocredits": selected, "largest_shape_picocredits": largest,
+                      "minimum_projected_fee_picocredits": required, "cap_picocredits": max_single,
+                      "exceeds_cap_at_relay_minimum": required > max_single}
+    return {"rehearsal_relay_minimum_projection": projection, "payments": spends + len(failures), "covered": spends, "uncovered": len(failures),
             "first_uncovered": failures[0] if failures else None,
             "several_inputs": multi, "largest_value_moved": moved,
             "largest_value_moved_by_inputs": {str(k): v for k, v in sorted(moved_by_inputs.items())},
@@ -416,15 +438,89 @@ def preflight(plan):
                     "rehearsal's p99 quoted fee per BTH moved on the pinned build"}
 
 
+def measured_fee_check(plan_bytes, rehearsal=None, funding=None):
+    """Compare Part A settling quotes with the plan's payment and batch caps."""
+    from runtime import digest
+
+    plan = json.loads(plan_bytes)
+    require(plan.get("execution_mode") == "rehearsal_only", "expected the staged Part A plan")
+    result = {"plan_file_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+              "node_commit": plan["node_commit"]}
+    payment_quotes = batch_quotes = None
+    if rehearsal is not None:
+        require(rehearsal["plan_sha256"] == digest(plan), "rehearsal report plan digest mismatch")
+        result["rehearsal_run"] = rehearsal.get("run_id")
+        result["node_sha256"] = rehearsal.get("node_sha256")
+        result["qualification_status"] = rehearsal.get("qualification_status")
+        summary = rehearsal["rehearsal"]
+        result["payment_fee_floor_quotes"] = summary.get("fee_floor_quotes")
+        if (rehearsal.get("status") == "rehearsal_complete"
+                and rehearsal.get("qualification_status") in ("passed", "accepted_generator_limited")):
+            expected = (plan["rehearsal"]["duration_seconds"] - 120) // plan["rehearsal"]["interval_seconds"]
+            require(summary.get("reconciled") == expected, "completed rehearsal counts differ from plan")
+            payment_quotes = complete_p99(summary.get("fee_floor_quotes"), expected, per_input_value=True)
+    if funding is not None:
+        require(funding["plan_sha256"] == result["plan_file_sha256"], "funding health plan digest mismatch")
+        result["batch_fee_floor_quotes"] = funding.get("fee_floor_quotes")
+        if funding.get("completed_before_deadline") is True and funding.get("batches") == batches(plan):
+            batch_quotes = complete_p99(funding.get("fee_floor_quotes"), funding["batches"],
+                                        per_input_value=False)
+    shapes = planned_shapes(plan, load_golden())
+    # The Part A freeze applies the largest planned payment value to the
+    # common payment cap, including a one-input spend of a probe's change.
+    payment_value = max(shape[3] for shape in shapes if shape[6] is None)
+    payment_cap = int(plan["limits"]["max_single_signed_fee_picocredits"])
+    payment_bound = (projected_payment_fee(*payment_quotes, payment_value, max(TIERS))
+                     if payment_quotes else None)
+    amounts = [
+        {"shape": "payments", "moved_picocredits": payment_value, "tier": max(TIERS),
+         "margin": FEE_MARGIN, "required_picocredits": payment_bound, "cap_picocredits": payment_cap},
+        {"shape": "prefund batch", "required_picocredits": batch_quotes[0] if batch_quotes else None,
+         "cap_picocredits": prefund_shape(plan)[2]},
+    ]
+    for row in amounts:
+        required = row["required_picocredits"]
+        row["status"] = ("incomplete" if required is None else
+                         "within_cap" if required <= row["cap_picocredits"] else "over_cap")
+    result["shapes"] = amounts
+    statuses = {row["status"] for row in result["shapes"]}
+    result["status"] = ("over_cap" if "over_cap" in statuses else
+                        "incomplete" if "incomplete" in statuses else "within_cap")
+    return result
+
+
+def complete_p99(summary, expected, *, per_input_value):
+    if not summary or summary.get("p99") is None:
+        return None
+    require(type(expected) is int and expected > 0 and
+            all(type(summary.get(key)) is int and summary[key] == expected for key in ("signed", "samples")),
+            "p99 sample counts differ from the completed transaction count")
+    p99 = summary["p99"]
+    fee = p99["resign_fee_picocredits"]
+    moved = p99["selected_input_picocredits"] if per_input_value else 1
+    require(all(type(value) is int and value > 0 for value in (fee, moved)), "invalid p99 observation")
+    return fee, moved
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--plan", type=Path, default=Path(__file__).with_name("x-series-plan.json"))
+    parser.add_argument("--rehearsal-report", type=Path, help="Part A controller report for a measured fee check")
+    parser.add_argument("--funding-health", type=Path, help="same fleet's prefund health report")
     args = parser.parse_args()
     try:
-        result = preflight(json.loads(args.plan.read_text()))
-    except (ValueError, KeyError, TypeError) as error:
+        measured = args.rehearsal_report is not None or args.funding_health is not None
+        if measured:
+            result = measured_fee_check(args.plan.read_bytes(),
+                                        json.loads(args.rehearsal_report.read_text()) if args.rehearsal_report else None,
+                                        json.loads(args.funding_health.read_text()) if args.funding_health else None)
+        else:
+            result = preflight(json.loads(args.plan.read_text()))
+    except (ValueError, KeyError, TypeError, OSError) as error:
         parser.error(str(error))
     print(json.dumps(result, indent=2))
+    if measured and result["status"] != "within_cap":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

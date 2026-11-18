@@ -1139,6 +1139,31 @@ for batches, the p99 batch quote must stay under `max_batch_fee_picocredits`.
 If not, shrink `grant_picocredits` (and re-run `plan.py`) rather than raising
 `max_single`.
 
+Use the exact staged rehearsal plan, its controller report, and its
+`funding-health.json` to calculate the measured bounds.
+
+```sh
+python3 scripts/stress/payment_shape.py --plan rehearsal_only-plan.json \
+  --rehearsal-report report.json --funding-health funding-health.json
+```
+
+Both reports count signed transactions with a settling node quote. The
+controller ranks payments by the exact ratio of the quote to the sum of
+selected inputs. Prefund ranks the absolute batch quotes. Both use
+nearest-rank p99. The command exits successfully when both measurements are
+complete and every projected fee fits its cap. A report from a different
+plan is rejected. Supplying just the funding report shows the batch result
+while the payment measurement is pending.
+
+The fixed relay minimum matters for small grants. A 100,000,000-picocredit
+quote on 20,000,000,000 picocredits of inputs projects to 3,200,000,000
+for an 80,000,000,000-picocredit payment shape at tier 4 with the factor-2
+margin. If the rehearsal p99 reaches that ratio, the projection exceeds
+the 1,000,000,000 cap even when individual transfers settled within it.
+The offline preflight reports this lower bound for its modeled input selection
+in `coverage.rehearsal_relay_minimum_projection`. The fleet report supplies
+the observed quotes and selected values.
+
 ### In-flight accounting and measured ramp ceiling
 
 `max_inflight` counts only work that is not yet confirmed on every host:

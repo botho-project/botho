@@ -1,13 +1,18 @@
 """x-series payment shape under the 10.0.0 fee floor (#2023). Offline only."""
 
 import copy
+import hashlib
 import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import payment_shape as ps
+from fee_evidence import floor_quote_summary
 from plan import expand
+from reporting import rehearsal_summary
+from runtime import Journal, digest
 import prefund
 from selection import CONSOLIDATE_INPUTS, cover, ranked
 
@@ -24,6 +29,86 @@ def plan(**prefund):
 
 def out(i, amount):
     return {"id": "%04d" % i, "utxo": {"amount": amount}}
+
+
+class MeasuredFeesTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = {**PLAN, "execution_mode": "rehearsal_only"}
+        self.raw = json.dumps(self.plan, indent=2).encode()
+        self.info = {"selected": [{"amount": 20_000_000_000}], "input_count": 1,
+                     "fee_floor_quote": {"resignFee": 100_000_000}, "fee": 400_000_000,
+                     "amount": 1_000_000_000}
+        offers = len(ps.rehearsal_events(self.plan))
+        self.rehearsal = {"plan_sha256": digest(self.plan), "status": "rehearsal_complete",
+                          "qualification_status": "accepted_generator_limited",
+                          "rehearsal": {"reconciled": offers,
+                                        "fee_floor_quotes": floor_quote_summary([self.info] * offers, per_input_value=True)}}
+        batch_count = ps.batches(self.plan)
+        self.funding = {"plan_sha256": hashlib.sha256(self.raw).hexdigest(), "batches": batch_count,
+                        "completed_before_deadline": True,
+                        "fee_floor_quotes": floor_quote_summary([self.info] * batch_count, per_input_value=False)}
+
+    def test_report_counts_only_signed_rehearsal_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = Journal(Path(tmp) / "journal.sqlite")
+            self.addCleanup(journal.db.close)
+            for identifier, kind, prepared in (("p", "rehearsal", 0), ("u", "rehearsal", None),
+                                                ("c", "campaign", 1)):
+                journal.offer(identifier, kind, 0, "wallet-1", "wallet-2", 1_000_000_000)
+                if prepared is not None:
+                    journal.transition(identifier, "prepared", prepared=prepared, info=self.info)
+            quotes = rehearsal_summary(journal, self.plan)["fee_floor_quotes"]
+            self.assertEqual(quotes, floor_quote_summary([self.info], per_input_value=True))
+            journal.transition("u", "prepared", prepared=3, info={"fee": 400_000_000})
+            self.assertEqual(rehearsal_summary(journal, self.plan)["fee_floor_quotes"],
+                             {"signed": 2, "samples": 1, "p99": None})
+
+    def test_exact_nearest_rank_for_payment_ratio_and_absolute_batch(self):
+        # These ratios differ beyond double precision. Rank 99 of 100 must
+        # take the second-largest ratio, even when the largest has a lower fee.
+        n = 2**60
+        rows = [dict(self.info, selected=[{"amount": n}, {"amount": i}], input_count=2,
+                     fee_floor_quote={"resignFee": n}) for i in range(1, 100)]
+        rows.append(dict(self.info, selected=[{"amount": n-1}], fee_floor_quote={"resignFee": n-1}))
+        self.assertEqual(floor_quote_summary(rows, per_input_value=True)["p99"],
+                         {"resign_fee_picocredits": n, "selected_input_picocredits": n+1})
+        rows = [{"fee_floor_quote": {"resignFee": i}} for i in range(100, 0, -1)]
+        self.assertEqual(floor_quote_summary(rows, per_input_value=False)["p99"], {"resign_fee_picocredits": 99})
+
+    def test_incomplete_observations_and_historical_paid_fee_only(self):
+        for bad in (dict(self.info, input_count=True), dict(self.info, selected=[]),
+                    dict(self.info, selected=[{"amount": 0}]), dict(self.info, input_count=2),
+                    dict(self.info, fee_floor_quote=None), {"fee": 800_000_000}):
+            self.assertEqual(floor_quote_summary([self.info, bad], per_input_value=True),
+                             {"signed": 2, "samples": 1, "p99": None})
+        self.assertEqual(floor_quote_summary([], per_input_value=True), {"signed": 0, "samples": 0, "p99": None})
+
+    def test_measured_floor_and_batch_are_compared_on_different_bases(self):
+        result = ps.measured_fee_check(self.raw, self.rehearsal, self.funding)
+        self.assertEqual(result["status"], "over_cap")
+        self.assertEqual(result["shapes"][0]["required_picocredits"], 3_200_000_000)
+        self.assertEqual(result["shapes"][-1]["required_picocredits"], 100_000_000)
+        # Exactly at the cap with tier and margin. One picocredit above is held.
+        p99 = self.rehearsal["rehearsal"]["fee_floor_quotes"]["p99"]
+        p99["selected_input_picocredits"] = 64_000_000_000
+        self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "within_cap")
+        p99["selected_input_picocredits"] -= 1
+        self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["shapes"][0]["required_picocredits"],
+                         1_000_000_001)
+
+    def test_only_finished_and_matching_reports_support_the_comparison(self):
+        self.assertEqual(ps.measured_fee_check(self.raw, funding=self.funding)["status"], "incomplete")
+        self.rehearsal["status"] = "held"
+        self.assertEqual(ps.measured_fee_check(self.raw, self.rehearsal, self.funding)["status"], "incomplete")
+        self.rehearsal["status"] = "rehearsal_complete"
+        self.rehearsal["rehearsal"]["reconciled"] = 2
+        with self.assertRaisesRegex(ValueError, "counts differ"):
+            ps.measured_fee_check(self.raw, self.rehearsal, self.funding)
+        with self.assertRaisesRegex(ValueError, "funding health plan digest"):
+            ps.measured_fee_check(self.raw + b" ", funding=self.funding)
+        self.rehearsal["plan_sha256"] = self.funding["plan_sha256"]
+        with self.assertRaisesRegex(ValueError, "rehearsal report plan digest"):
+            ps.measured_fee_check(self.raw, self.rehearsal)
 
 
 class GoldenTests(unittest.TestCase):
@@ -133,6 +218,11 @@ class CoverageTests(unittest.TestCase):
         replay = ps.coverage(PLAN)
         self.assertEqual(replay["uncovered"], 0)
         self.assertEqual(replay["payments"], 21880 + 360)
+        projection = replay["rehearsal_relay_minimum_projection"]
+        self.assertEqual(projection["covered_rehearsal_offers"], 360)
+        self.assertEqual(projection["quote_picocredits"], min(r["resign_fee"] for r in GOLDEN["rows"]))
+        self.assertEqual(projection["minimum_projected_fee_picocredits"], 3_200_000_000)
+        self.assertTrue(projection["exceeds_cap_at_relay_minimum"])
         # The four-input probes move the most: four whole grants. Their change
         # (up to 7.68e10) is later spent as one input: the free-shape bound is
         # the probe's, not 4 x need (#2023 review).

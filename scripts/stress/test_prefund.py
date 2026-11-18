@@ -340,7 +340,8 @@ class SignerContractTests(unittest.TestCase):
         source = Path(prefund.__file__).read_text()
         imported = set(re.findall(r'^(?:from|import) (\w+)', source, re.M))
         local = {p.stem for p in Path(prefund.__file__).parent.glob('*.py')}
-        self.assertLessEqual(imported & local, {'controller', 'fee_quote', 'lottery', 'plan', 'runtime', 'selection'})
+        self.assertLessEqual(imported & local, {'controller', 'fee_evidence', 'fee_quote', 'lottery',
+                                                'plan', 'runtime', 'selection'})
         self.assertFalse({'qualification', 'fast_timing', 'manifest_limits'} & imported)
         for module in imported - local:
             __import__(module)  # standard library only
@@ -642,6 +643,9 @@ class EndToEndTests(PrefundBase):
         self.assertEqual(health['accounting']['difference'], 0)
         self.assertEqual(health['grants'], 512)
         self.assertEqual(health['batches'], 35)
+        quotes = sorted(r['fee_floor_quote']['resignFee'] for r in p.records)
+        self.assertEqual(health['fee_floor_quotes'], {'samples': 35, 'signed': 35,
+                         'p99': {'resign_fee_picocredits': quotes[-1]}})
         self.assertEqual(health['fees'], sum(self.fleet.batch_fees))
         self.assertGreater(health['accounting']['coinbase_lottery_inflow'], 0)
         self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [16] * 32)

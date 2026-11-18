@@ -8,6 +8,7 @@ import os
 import resource
 import stat
 import time
+from fee_evidence import floor_quote_summary
 from lottery import award_spend_expectation
 from plan import expand
 from runtime import HOSTS, atomic, digest
@@ -302,6 +303,10 @@ def rehearsal_summary(journal, plan, artifacts=None):
     return {
         **result,
         **accepted,
+        "fee_floor_quotes": floor_quote_summary(
+            (json.loads(r["info"]) for r in rows if r["prepared"] is not None),
+            per_input_value=True,
+        ),
         "expected": expected,
         "offered": len(rows),
         "not_yet_offered": max(0, expected - len(rows)),
@@ -500,6 +505,7 @@ def controller_report(self):
         "start": self.j.get("start"),
         "end": self.j.get("end"),
         "plan_sha256": digest(self.plan),
+        "node_sha256": self.config.get("node_sha256"),
         "counts": counts,
         "submitted_to_reconciled_seconds": latency("submitted"),
         "nominal_campaign_offers": nominal,
