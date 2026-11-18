@@ -121,7 +121,7 @@ def unit_text(item, observer=False):
     condition = ''
     if 'prefund_setup_start' in item:
         start = math.ceil(item['prefund_setup_start'])
-        condition = f'ExecCondition=/usr/bin/python3 -c "import sys,time; sys.exit(time.time() < {start})"\n'
+        condition = f"ExecCondition=/bin/bash -c '(( EPOCHSECONDS >= {start} ))'\n"
         if not observer:
             condition += (f'ExecCondition=/usr/bin/python3 {package}/prefund_handoff.py --state {state}\n'
                           f"TimeoutStartSec={item['runtime_max_seconds']}\n")
