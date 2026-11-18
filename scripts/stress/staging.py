@@ -17,6 +17,7 @@ import subprocess
 import tarfile
 
 from fleet_provision import RUN_ID
+from lottery import PROTOCOL_VERSION
 from observer import absolute_path, node_config
 from plan import expand
 from runtime import Gate, HOSTS, campaign_targets, campaign_tls_context, parse_hosts, validate_ssh_target
@@ -52,11 +53,12 @@ def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256):
     """Recompute the Part A fee decision on the bytes going into this bundle."""
     fleet = RUN_ID.fullmatch(profile['run_id'])
     campaign = plan.get('execution_mode', 'campaign') == 'campaign'
-    required = (fleet and fleet['n'] == '2' and campaign and plan.get('schema_version') == 2
-                and plan.get('protocol') == '10.0.0')
+    x2 = fleet is not None and fleet['n'] == '2' and plan.get('schema_version') == 2
     evidence = profile.get('part_a_fee_evidence')
+    if x2 or evidence is not None:
+        need(plan.get('protocol') == PROTOCOL_VERSION, 'plan protocol differs from controller preflight')
     if evidence is None:
-        need(not required, 'x2 campaign requires Part A fee evidence')
+        need(not (x2 and campaign), 'x2 campaign requires Part A fee evidence')
         return None
     from payment_shape import campaign_fee_check
 

@@ -261,6 +261,10 @@ class MeasuredFeesTests(unittest.TestCase):
         raw = plan_path.read_bytes()
         plan_path.write_bytes(raw + b" ")
         refuses(profile, "campaign plan differs")
+        old = json.loads(raw)
+        old["protocol"] = "6.0.0"
+        plan_path.write_text(json.dumps(old))
+        refuses({k: v for k, v in profile.items() if k != "part_a_fee_evidence"}, "protocol differs")
         plan_path.write_bytes(raw)
         signer = Path(profile["signer"])
         raw = signer.read_bytes()

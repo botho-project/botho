@@ -1185,7 +1185,9 @@ recompute the decision using the actual signer bytes and the configured
 node digest before writing bundles or contacting the hosts. A successful
 stage puts the exact campaign plan and the resulting `part-a-fees.json`
 in the controller state directory. The receipt includes the digests of the
-three Part A inputs and the fee decision for each cap.
+three Part A inputs and the fee decision for each cap. Both x2 deployment
+modes check the plan's protocol against the protocol its controller expects
+from all five validators at startup.
 
 The report also shows the former total-quote projection for comparison.
 Scaling a fixed 100,000,000 minimum from a 20-billion input to an 80-billion
