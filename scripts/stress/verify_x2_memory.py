@@ -226,6 +226,13 @@ def bind(fleet, campaign_id, archive=None, binary=None, analyzer=None, *, roles=
         inventory = archive / "inventory.json"
         if not inventory.is_file():
             inventory = fleet.parent / run / "inventory.json"
+        if (
+            not inventory.is_file()
+            and archive.name == "outcome"
+            and (archive.parent / "final-receipt.json").is_file()
+        ):
+            # The recovery copy keeps the inventory beside the sealed outcome.
+            inventory = archive.parent / "inventory.json"
         receipt["validator_types"] = check_fleet_shape(
             json.loads(inventory.read_text()), run, roles
         )

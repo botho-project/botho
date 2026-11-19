@@ -109,6 +109,38 @@ class QualificationBindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "final receipt"):
             check_archive_index(archive, {})
 
+    def test_recovered_outcome_supplies_inventory_for_fresh_operator(self):
+        run = "q20261107-x2-memqual9"
+        fleet = self.root / "fresh-operator" / self.run
+        fleet.mkdir(parents=True)
+        archive = self.root / "evidence" / run / "outcome"
+        archive.mkdir(parents=True)
+        inventory = [
+            {
+                "role": f"n{i}",
+                "id": str(i),
+                "type": "large",
+                "hostname": f"n{i}.{run}.internal",
+            }
+            for i in range(1, 6)
+        ]
+        roles = [{"role": n["role"], "type": n["type"]} for n in inventory]
+        sidecar = archive.parent / "inventory.json"
+        sidecar.write_text(json.dumps(inventory))
+        with patch("verify_x2_memory.verify", return_value={"qualification_run": run}):
+            with self.assertRaises(FileNotFoundError):
+                bind(fleet, self.run, archive, self.binary, roles=roles)
+            (archive.parent / "final-receipt.json").write_text("{}")
+            receipt = bind(fleet, self.run, archive, self.binary, roles=roles)
+            self.assertEqual(
+                receipt["validator_types"], {n["role"]: "large" for n in roles}
+            )
+            self.assertEqual(bind(fleet, self.run, roles=roles), receipt)
+            inventory[2]["hostname"] = "n3.other.internal"
+            sidecar.write_text(json.dumps(inventory))
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                bind(fleet, self.run, roles=roles)
+
 
 if __name__ == "__main__":
     unittest.main()

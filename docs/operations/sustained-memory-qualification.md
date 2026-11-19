@@ -529,11 +529,12 @@ and five sets of samples.
 The x2 operator's `provision.py execute` accepts `--memory-evidence` and
 `--node`. It checks the recorded instance types against the planned five
 validator roles and saves `payment-memory-qualification.json` before its
-first provider call. If the archive omits `inventory.json`, the operator
-uses the inventory retained under the qualification run ID. A retry replays
-the retained inputs. The node installer checks the selected binary and the
-sealed package against the same digest before transfer. Use the separate
-payment rehearsal and campaign reports to assess those workloads.
+first provider call. It reads `inventory.json` from the archive or the
+operator's qualification fleet directory. On a fresh operator, a recovered
+`outcome/` can use the copy beside its verified `final-receipt.json`.
+A retry replays the retained inputs. The node installer checks the selected
+binary and the sealed package against the same digest before transfer. Use
+the separate payment rehearsal and campaign reports to assess those workloads.
 
 ### Inference limits
 
