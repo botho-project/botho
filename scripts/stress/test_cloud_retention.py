@@ -1,16 +1,20 @@
 import copy
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import fleet_provision
 from cloud_retention import (PROJECT, ROLES, apply_plan, backup, evidence, evidence_roots, inventory,
-                             lock_state_roots, make_plan)
+                             digest, lock_state_roots, make_plan, record_disposition)
 
 
 def tagged(**values):
@@ -241,6 +245,249 @@ class RetentionTests(unittest.TestCase):
         self.unused()
         self.nodes[0]['LaunchTime'] = '2026-10-01T02:00:00+00:00'
         self.assertEqual(self.plan()['volume_count'], 0)
+
+    def infrastructure(self):
+        self.run = 'q20261001-a'
+        self.started = 1790816400
+        self.put('infrastructure-plan.json', {'run_id': self.run, 'created_at': self.started - 3600})
+        (self.root / 'supervisor-held.json').unlink()
+
+    @staticmethod
+    def tar(members):
+        content = io.BytesIO()
+        with tarfile.open(fileobj=content, mode='w:gz') as archive:
+            for name, raw in members.items():
+                entry = tarfile.TarInfo(name)
+                entry.size = len(raw)
+                archive.addfile(entry, io.BytesIO(raw))
+        return content.getvalue()
+
+    def host_archives(self, attempts, wrong_marker=None):
+        state = {}
+        for suffix, properties in attempts.items():
+            attempt = self.run + suffix
+            prefix = f'var/lib/botho-controller-{attempt}/'
+            state[prefix + 'active-plan.json'] = b'{}'
+            if properties is not None:
+                report = dict(run_id=attempt, status='incomplete', setup_start=self.started, start=None,
+                              at=self.started + 120)
+                report.update(properties)
+                state[prefix + 'report.json'] = json.dumps(report).encode()
+        manifest = {}
+        for role in ROLES:
+            members = {'./markers/role': (wrong_marker if role == 'n3' and wrong_marker else role).encode(),
+                       './markers/run-id': self.run.encode(),
+                       './state.tar.gz': self.tar(state if role == 'controller' else {})}
+            path = self.root / 'final-evidence' / (role + '.tar.gz')
+            path.write_bytes(self.tar(members))
+            manifest[role] = digest(path)
+        self.put('final-evidence-manifest.json', manifest)
+
+    def refresh(self):
+        self.e = evidence(self.root)
+        self.now = max(self.e['archived_at'], self.e.get('verified_at', 0)) + 90000
+        return self.plan()
+
+    def test_all_archived_attempts_held_before_t0(self):
+        self.infrastructure()
+        self.host_archives({'-a': {'status': 'held'}, '-b': {}})
+        plan = self.refresh()
+        self.assertEqual(self.e['kind'], 'held_before_t0')
+        self.assertEqual(plan['volume_count'], 6)
+        dest = backup(plan['fleets'][0], Path(self.tmp.name) / 'secondary')
+        self.assertEqual(evidence(dest)['proof_sha256'], self.e['proof_sha256'])
+        self.nodes[1]['LaunchTime'] = '2026-10-01T03:00:00Z'
+        self.assertEqual(self.plan()['volume_count'], 0)
+
+    def test_open_foreign_or_started_attempt_defeats_hold(self):
+        self.infrastructure()
+        for properties in (None, {'start': self.started}, {'run_id': 'other'}, {'status': 'running'}):
+            with self.subTest(properties=properties):
+                self.host_archives({'-a': {}, '-b': properties})
+                with self.assertRaises(RuntimeError):
+                    evidence(self.root)
+
+    def test_cannot_publish_hold_after_started_campaign(self):
+        self.infrastructure()
+        self.host_archives({'-a': {'start': self.started}})
+        with self.assertRaisesRegex(RuntimeError, 'before T0'):
+            self.record('held_before_t0')
+        self.assertFalse((self.root / 'retirement.json').exists())
+
+    def test_archive_marker_must_match_role(self):
+        self.infrastructure()
+        self.host_archives({'-a': {}}, wrong_marker='n2')
+        with self.assertRaisesRegex(RuntimeError, 'marker mismatch'):
+            evidence(self.root)
+
+    def test_unstaged_without_report_needs_operator_decision(self):
+        self.infrastructure()
+        self.host_archives({})
+        plan = self.refresh()
+        self.assertEqual(plan['volume_count'], 0)
+        self.assertIn('no terminal controller report', plan['retained'][0]['reason'])
+        self.put('retirement.json', {'state': 'unknown'})
+        with self.assertRaisesRegex(RuntimeError, 'Unrecognized operator disposition'):
+            evidence(self.root)
+        (self.root / 'retirement.json').unlink()
+        self.record('held_before_t0')
+        self.assertEqual(self.refresh()['volume_count'], 6)
+        self.host_archives({'-a': {'start': self.started}})
+        with self.assertRaisesRegex(RuntimeError, 'before T0'):
+            evidence(self.root)
+
+    def memory_files(self, detached=True, status='passed', manifest_alias=False):
+        self.infrastructure()
+        (self.root / 'final-evidence-manifest.json').unlink()
+        folder = self.root / 'outcome' if detached else self.root
+        folder.mkdir(exist_ok=True)
+        def write(name, value):
+            (folder / name).write_text(json.dumps(value))
+        roles = sorted(ROLES - {'controller'})
+        manifest = dict(campaign_id=self.run, started_at_unix_s=self.started, source_revision='revision',
+                        artifact_sha256='artifact', nodes=[dict(node_id=r, chain_id=self.run, host_id='host-' + r) for r in roles])
+        manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        observations = []
+        names = []
+        for role in roles:
+            name = f'{role}-{role}.jsonl'
+            summary = f'{role}-{role}.summary.json'
+            write(name, {'node_id': role})
+            raw_hash = digest(folder / name)
+            write(summary, dict(nodes=[role], manifest_sha256=manifest_hash, out_sha256=raw_hash))
+            observations.append(dict(path='/collector/' + name, sha256=raw_hash))
+            names.extend((name, summary))
+        write('manifest.json', manifest)
+        manifest_name = 'n1-manifest.json' if manifest_alias else 'manifest.json'
+        if manifest_alias:
+            write(manifest_name, manifest)
+        write('analysis.json', dict(manifest_sha256=manifest_hash, status=status,
+                                    nodes={role: {} for role in roles}, observation_files=observations))
+        names.extend((manifest_name, 'analysis.json'))
+        if detached:
+            result = dict(run=self.run, commit='revision', artifact_sha256='artifact', status=status, at=self.started + 50)
+            write('result.json', result)
+            names.append('result.json')
+        index = folder / 'SHA256SUMS'
+        index.write_text(''.join(f'{digest(folder / name)}  {name}\n' for name in names))
+        if detached:
+            self.put('final-receipt.json', dict(result, checksum_index_sha256=digest(index)))
+        return folder
+
+    def test_detached_memory_eligible_after_age_and_fully_backed_up(self):
+        folder = self.memory_files()
+        self.assertIn(self.root, list(evidence_roots([Path(self.tmp.name)])))
+        plan = self.refresh()
+        self.assertEqual(self.e['kind'], 'memory')
+        self.assertEqual(plan['volume_count'], 6)
+        destination = Path(self.tmp.name) / 'secondary'
+        retained = Path(backup(plan['fleets'][0], destination))
+        self.assertEqual(digest(retained / 'outcome/n3-n3.jsonl'), digest(folder / 'n3-n3.jsonl'))
+        (retained / 'outcome/n3-n3.jsonl').write_bytes(b'corrupt')
+        with patch('cloud_retention.inventory', return_value=(self.nodes, self.volumes)), patch('cloud_retention.time.time', return_value=self.now):
+            with self.assertRaisesRegex(RuntimeError, 'Existing backup checksum'):
+                apply_plan(plan, lambda *args: self.fail('Unexpected cloud mutation'), destination, self.tmp.name)
+        self.now = self.e['archived_at'] + 100
+        self.assertEqual(self.plan()['volume_count'], 0)
+
+    def test_hardlinked_memory_log_is_not_an_independent_backup(self):
+        folder = self.memory_files()
+        plan = self.refresh()
+        destination = Path(self.tmp.name) / 'secondary'
+        target = destination / self.root.name / 'outcome'
+        target.mkdir(parents=True)
+        os.link(folder / 'n1-n1.jsonl', target / 'n1-n1.jsonl')
+        with self.assertRaisesRegex(RuntimeError, 'share the same file'):
+            backup(plan['fleets'][0], destination)
+
+    def test_flat_incomplete_memory_with_collector_manifest(self):
+        self.memory_files(detached=False, status='incomplete', manifest_alias=True)
+        plan = self.refresh()
+        self.assertEqual(plan['volume_count'], 6)
+        dest = backup(plan['fleets'][0], Path(self.tmp.name) / 'secondary')
+        self.assertEqual(evidence(dest)['proof_sha256'], self.e['proof_sha256'])
+        (self.root / 'manifest.json').write_bytes(b'{}')
+        with self.assertRaisesRegex(RuntimeError, 'collector copy'):
+            evidence(self.root)
+
+    def test_memory_rejects_cross_run_receipt_and_unindexed_file(self):
+        folder = self.memory_files()
+        saved = json.loads((self.root / 'final-receipt.json').read_text())
+        self.put('final-receipt.json', dict(saved, run='q20261002-b'))
+        with self.assertRaisesRegex(RuntimeError, 'driver receipt'):
+            evidence(self.root)
+        self.put('final-receipt.json', saved)
+        (folder / 'extra').touch()
+        with self.assertRaisesRegex(RuntimeError, 'Unindexed'):
+            evidence(self.root)
+
+    def test_memory_rejects_missing_role_even_with_rehashed_index(self):
+        folder = self.memory_files(detached=False)
+        index = folder / 'SHA256SUMS'
+        index.write_text(''.join(line for line in index.read_text().splitlines(True) if 'n3-n3.jsonl' not in line))
+        with self.assertRaisesRegex(RuntimeError, 'Unverified collector'):
+            evidence(self.root)
+
+    def test_memory_rejects_paths_outside_evidence(self):
+        folder = self.memory_files(detached=False)
+        index = folder / 'SHA256SUMS'
+        external = Path(self.tmp.name) / 'external'
+        external.write_text('sample')
+        (folder / 'alias').symlink_to(external)
+        for name in ('../external', str(external), 'alias'):
+            with self.subTest(name=name):
+                index.write_text(f'{digest(external)}  {name}\n')
+                with self.assertRaises(RuntimeError):
+                    evidence(self.root)
+
+    def record(self, state='lost_after_deployment', reason='Fixture controller stopped during funding'):
+        return record_disposition(self.root, state, 'fixture operator', reason,
+                                  'Fixture node journals and partial output', [])
+
+    def test_local_disposition_cli_idempotent_and_preserves_recovered_files(self):
+        self.infrastructure()
+        (self.root / 'final-evidence-manifest.json').unlink()
+        (self.root / 'outcome').mkdir()
+        (self.root / 'outcome/n1-n1.jsonl').write_text('partial')
+        cli = Path(__file__).with_name('cloud_retention.py')
+        args = [sys.executable, str(cli), 'record-disposition', '--root', str(self.root),
+                '--state', 'aborted_after_deployment', '--decided-by', 'fixture operator',
+                '--reason', 'Fixture boot failed', '--disk-contents', 'Partial collector and six host archives']
+        subprocess.run(args, check=True, capture_output=True)
+        path = self.root / 'retirement.json'
+        first = path.read_bytes()
+        subprocess.run(args, check=True, capture_output=True)
+        self.assertEqual(first, path.read_bytes())
+        self.assertNotEqual(subprocess.run([*args[:-1], 'Conflicting inventory'], capture_output=True).returncode, 0)
+        plan = self.refresh()
+        self.assertEqual(plan['volume_count'], 6)
+        self.assertEqual(self.e['kind'], 'aborted_after_deployment')
+        dest = Path(backup(plan['fleets'][0], Path(self.tmp.name) / 'secondary'))
+        self.assertEqual((dest / 'outcome/n1-n1.jsonl').read_text(), 'partial')
+        self.assertEqual(digest(dest / 'final-evidence/n5.tar.gz'), digest(self.root / 'final-evidence/n5.tar.gz'))
+        (self.root / 'outcome/new-recovered-log').touch()
+        with self.assertRaisesRegex(RuntimeError, 'omits collected evidence'):
+            evidence(self.root)
+
+    def test_loss_requires_identity_decision_and_preserved_evidence(self):
+        self.infrastructure()
+        (self.root / 'final-evidence-manifest.json').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'Missing operator disposition'):
+            self.record(reason=' ')
+        self.assertFalse((self.root / 'retirement.json').exists())
+        self.record()
+        plan = self.refresh()
+        self.assertEqual(plan['fleets'][0]['evidence']['kind'], 'lost_after_deployment')
+        raw = json.loads((self.root / 'retirement.json').read_text())
+        for changes in ({'instances': {}}, {'run': 'different'}, {'at': 1}, {'decided_by': ''}, {'disk_contents': ''}):
+            with self.subTest(changes=changes):
+                self.put('retirement.json', dict(raw, **changes))
+                with self.assertRaises(RuntimeError):
+                    evidence(self.root)
+        self.put('retirement.json', raw)
+        (self.root / 'final-evidence/n5.tar.gz').write_bytes(b'different')
+        with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+            evidence(self.root)
 
     def test_cloud_change_before_apply_never_terminates(self):
         plan = self.plan()

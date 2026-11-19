@@ -1314,13 +1314,11 @@ these offline checks.
 
 Stopped EC2 instances still incur EBS storage charges. For disposable
 qualification fleets, use `scripts/stress/cloud_retention.py` after archival.
-Its default mode writes a plan; `--apply` terminates eligible stopped instances
-and deletes their released disks. It requires an explicit AWS account, profile,
-region, local state directories, backup directory, and a new output directory.
-Repeat `--state-root` for each place run directories are kept. Each may be a
-run directory or a directory of runs; any child holding
-`final-evidence-manifest.json` or `retirement.json` is checked, whatever its
-name:
+The default mode writes a plan. With `--apply`, the tool terminates eligible
+stopped instances and deletes their released disks. Provide the AWS account,
+profile, region, evidence directories, backup directory and a new output
+directory. Repeat `--state-root` for each fleet directory or parent directory
+of fleets. Include the memory archive roots as well as the controller archives.
 
 ```sh
 python3 scripts/stress/cloud_retention.py \
@@ -1330,16 +1328,44 @@ python3 scripts/stress/cloud_retention.py \
   --output "$BOTHO_RETENTION_RESULT" --min-age-hours 24
 ```
 
-Only qualification fleets are eligible: those tagged `project=botho` with
-`Purpose=qualification`, or the legacy `Project=botho-qualification`. Testnet
-nodes tagged `project=botho` without that purpose are never selected. Every instance
-must be stopped and match a six-role local inventory, terminal evidence, and
-six verified archives. A second archive copy is verified before termination.
-Cloud state, tags, roles, disk attachments, and archive identity are rechecked
-before each fleet is removed. The newest cloud fleet is always retained for
-diagnosis, even if it failed. Public nodes, other projects, snapshots, and
-fleets with missing evidence are excluded. The default archive retention
-window is 24 hours; reducing it to zero is for reviewed one-time cleanup.
+Eligible fleets carry `project=botho` and `Purpose=qualification`, or the
+legacy `Project=botho-qualification` tag. All six stopped instances and their
+disks must match the local run inventory and recorded final state. The newest
+fleet in the region stays available for diagnosis. The default retention
+window is 24 hours. Before termination the tool verifies a second copy and
+rechecks cloud state, tags, disk attachments and archive identity.
+
+The following records establish what happened to a deployed fleet.
+
+- A completed or supervisor-held campaign has the six checksummed host
+  archives and its terminal record.
+- For a campaign held before T0, the tool reads the run and role markers in
+  all six archives. Each controller attempt must have a terminal report with
+  an empty campaign start. If staging stopped before any attempt, the fleet
+  stays on hold until the operator records that decision.
+- A memory run has a manifest, the analyzer result, and five collector logs
+  and summaries bound by SHA-256. The detached driver also seals the contents
+  of `outcome/` in `final-receipt.json`. Older flat archives use their local
+  checksum index. The analyzer's original qualification result is preserved,
+  including a failed or incomplete result.
+- When an operator declares a deployed run lost or aborted, record who made
+  the decision, the reason, what the disks contained, and which files were
+  recovered. The local command below records that decision once, bound to the
+  six instance IDs. Use a path relative to the run directory for each
+  additional file to preserve. Available host archives and collector output
+  are included automatically.
+
+```sh
+python3 scripts/stress/cloud_retention.py record-disposition \
+  --root "$RUN_DIR" --state lost_after_deployment --decided-by "$OPERATOR" \
+  --reason "$OBSERVED_REASON" --disk-contents "$DISK_INVENTORY" \
+  --preserve "$RECOVERED_LOG"
+```
+
+The other disposition states are `aborted_after_deployment` and
+`held_before_t0`. A recorded hold requires all six host archives. A later
+instance launch invalidates the earlier terminal proof. Review the resulting
+plan and the preserved files before applying it.
 
 For periodic operation, run the same command with `--apply` from the operator
 host, using a unique output directory each time. A lock in each state root
