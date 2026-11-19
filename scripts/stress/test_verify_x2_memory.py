@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import patch
 
 from verify_x2_memory import (
@@ -53,6 +54,56 @@ class QualificationBindingTests(unittest.TestCase):
                 (archive / "driver-config.json").write_text("{}")
                 with self.assertRaisesRegex(ValueError, "published outcome"):
                     verify(archive, self.binary)
+
+    def test_verified_relocation_persists_after_original_disk_is_lost(self):
+        original = self.root / "primary"
+        mirror = self.root / "mirror"
+        for archive in (original, mirror):
+            archive.mkdir()
+            (archive / "manifest.json").write_bytes(b"original cohort")
+        replacement = mirror / "node"
+        replacement.write_bytes(self.binary.read_bytes())
+
+        def replay(archive, binary, analyzer):
+            return {
+                "manifest_sha256": file_hash(archive / "manifest.json"),
+                "artifact_sha256": file_hash(binary),
+            }
+
+        with patch("verify_x2_memory.verify", side_effect=replay):
+            receipt = bind(self.root, self.run, original, self.binary)
+            original.rename(self.root / "disconnected")
+            self.binary.unlink()
+            bind(self.root, self.run, mirror, replacement)
+            self.assertEqual(bind(self.root, self.run), receipt)
+            wrong = self.root / "different-node"
+            wrong.write_bytes(b"different candidate")
+            with self.assertRaisesRegex(ValueError, "frozen receipt"):
+                bind(self.root, self.run, binary=wrong)
+            self.assertEqual(bind(self.root, self.run), receipt)
+
+    def test_concurrent_archive_and_binary_changes_both_survive(self):
+        receipt = {"artifact_sha256": file_hash(self.binary)}
+        with patch("verify_x2_memory.verify", return_value=receipt):
+            bind(self.root, self.run, self.root, self.binary)
+        both_started = Barrier(2)
+
+        def replay(archive, binary, analyzer):
+            both_started.wait(timeout=5)
+            return receipt
+
+        archive = self.root / "mirror"
+        binary = self.root / "relocated-node"
+        with (
+            patch("verify_x2_memory.verify", side_effect=replay),
+            ThreadPoolExecutor(2) as pool,
+        ):
+            a = pool.submit(bind, self.root, self.run, archive=archive)
+            b = pool.submit(bind, self.root, self.run, binary=binary)
+            self.assertEqual(a.result(), b.result())
+        with patch("verify_x2_memory.verify", return_value=receipt) as verifier:
+            bind(self.root, self.run)
+            verifier.assert_called_once_with(archive.resolve(), binary.resolve(), None)
 
     def test_absent_archive_cannot_create_receipt(self):
         with self.assertRaisesRegex(ValueError, "requires"):

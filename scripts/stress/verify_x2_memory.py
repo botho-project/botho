@@ -2,6 +2,7 @@
 """Check a candidate node against the original five-collector x2 minting run."""
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -207,9 +208,29 @@ def check_fleet_shape(inventory, run, roles):
     return expected
 
 
+def write_binding(path, binding, *, replace):
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False, mode="w") as tmp:
+        try:
+            json.dump(binding, tmp, indent=2, sort_keys=True)
+            tmp.write("\n")
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            if replace:
+                os.replace(tmp.name, path)
+            else:
+                try:
+                    os.link(tmp.name, path)
+                except FileExistsError:
+                    pass  # Another operator published the initial receipt.
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
+
 def bind(fleet, campaign_id, archive=None, binary=None, analyzer=None, *, roles=None):
-    """Retain the qualified inputs once. Retries replay them before provisioning."""
+    """Freeze the qualification and remember verified paths for the next retry."""
     path = fleet / "payment-memory-qualification.json"
+    selected_archive = archive is not None
+    selected_binary = binary is not None
     previous = json.loads(path.read_text()) if path.exists() else None
     if archive is None and previous is not None:
         archive = Path(previous["archive"])
@@ -242,28 +263,25 @@ def bind(fleet, campaign_id, archive=None, binary=None, analyzer=None, *, roles=
         "binary": str(binary),
         "receipt": receipt,
     }
-    if previous is None:
-        # Publish a complete file without replacing a concurrent operator's pin.
-        with tempfile.NamedTemporaryFile(dir=fleet, delete=False, mode="w") as tmp:
-            try:
-                json.dump(binding, tmp, indent=2, sort_keys=True)
-                tmp.write("\n")
-                tmp.flush()
-                os.fsync(tmp.fileno())
-                try:
-                    os.link(tmp.name, path)
-                except FileExistsError:
-                    pass
-            finally:
-                os.unlink(tmp.name)
-        previous = json.loads(path.read_text())
-    if previous["fleet"] != campaign_id or previous["receipt"] != receipt:
-        raise ValueError(
-            "qualified inputs differ from the payment fleet's frozen receipt"
-        )
-    # The directory entry must survive a reboot after the provider call.
     directory = os.open(fleet, os.O_RDONLY | os.O_DIRECTORY)
     try:
+        # Replay outside the lock. Merge only explicitly verified locations so
+        # simultaneous archive and binary relocations preserve each other.
+        fcntl.flock(directory, fcntl.LOCK_EX)
+        if previous is None:
+            write_binding(path, binding, replace=False)
+        saved = json.loads(path.read_text())
+        if saved["fleet"] != campaign_id or saved["receipt"] != receipt:
+            raise ValueError(
+                "qualified inputs differ from the payment fleet's frozen receipt"
+            )
+        relocated = saved.copy()
+        if selected_archive:
+            relocated["archive"] = binding["archive"]
+        if selected_binary:
+            relocated["binary"] = binding["binary"]
+        if relocated != saved:
+            write_binding(path, relocated, replace=True)
         os.fsync(directory)
     finally:
         os.close(directory)
