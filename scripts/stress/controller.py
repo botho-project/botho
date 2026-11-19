@@ -1341,8 +1341,18 @@ class Controller:
         # (#1618). Inputs signed earlier in the pass are already reserved,
         # and an older height only delays maturity, so reuse never widens
         # selection; every gate below still runs per intent.
+        # Record the successful rehearsal attempt with the signed intent. A shared
+        # scan measures only the wait this particular payment actually experienced.
+        observe = row['kind'] == 'rehearsal'
+        if observe:
+            scan_requested_at = time.time()
+            scan_started = time.perf_counter()
         height = await (scan or self.sync)()
+        if observe:
+            scan_returned = time.perf_counter()
         selected = self.spendable(row['sender'],height,row['amount'],count)
+        if observe:
+            selection_finished = time.perf_counter()
         if not selected:
             self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height,
                 **self.j.get('selection_latest',{})})
@@ -1405,6 +1415,12 @@ class Controller:
             from fee_evidence import signed_fee_evidence
             info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
                         fee_quote=fee_rate, ingress_role=ingress)
+        if observe:
+            info['preparation_timing'] = {
+                'scan_requested_at': scan_requested_at,
+                'scan_wait_seconds': scan_returned - scan_started,
+                'input_selection_seconds': selection_finished - scan_returned,
+            }
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
                     scan_height=height,eligible_at=eligible_at,prepared_at=time.time())
         self.gate()
