@@ -1036,6 +1036,29 @@ class PinnedShapeTests(PrefundBase):
         self.assertEqual(prefund.batch_fee_cap(plan),
                          int(plan['limits']['max_single_signed_fee_picocredits']))
 
+    def test_pinned_funding_waits_for_all_receipts_before_pricing_the_next_batch(self):
+        pinned = self.plan['prefund']
+        self.m.update(grants_per_wallet=pinned['grants_per_wallet'],
+                      grant_picocredits=int(pinned['grant_picocredits']))
+        for _ in range(20):
+            self.fleet.output(1, self.m['funding_wallet']['address'], 16 * 10**11, coinbase=True)
+        p = self.prefunder()
+        self.offer_one(p)
+        first = p.records[0]['hash']
+        self.fleet.mine()
+        self.fleet.known_override[(HOSTS[-1], first)] = 'unknown'
+        self.now += 61
+        self.tick(p)
+        self.assertEqual(self.fleet.submits, [first])
+        self.assertEqual(len(p.records), 1)
+        self.fleet.known_override.clear()
+        self.advance()
+        self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        self.assertEqual(len(p.records[0]['receipts']), 5)
+        self.assertEqual(len(p.records), 2)
+        self.assertEqual(self.fleet.submits, [r['hash'] for r in p.records])
+
 
 class ReconcileTests(PrefundBase):
     def test_confirmed_grant_inputs_read_spent_past_the_spent_query_bound(self):
@@ -1222,6 +1245,48 @@ class QuotaDeferralTests(PrefundBase):
         self.assertEqual(sorted(self.fleet.submits), sorted(r['hash'] for r in p.records if
                                                             p.marker_path(r['index']).exists()))
         self.assertEqual(len(self.fleet.submits), len(set(self.fleet.submits)))
+
+    def test_reprice_defers_before_signing_the_next_draft(self):
+        p = self.reserving()
+        floor = 500_000_000
+
+        def quote(fee):
+            self.fill(p)
+            return {**settling_quote(floor), 'txFee': fee}
+
+        self.fleet.quote_hook = quote
+        with self.assertRaisesRegex(Quota, 'before re-signing'):
+            self.tick(p)
+        self.assertEqual(len(self.fleet.batch_fees), 1)
+        self.assertFalse(p.artifact_path(0).exists())
+        self.assertFalse(p.marker_path(0).exists())
+        self.assertFalse(self.fleet.submits)
+        self.fleet.quote_hook = None
+        self.advance()
+        self.tick(p)
+        self.assertEqual(len(p.records), 1)
+        self.assertSubmittedOnce(p)
+
+    def test_deferred_quote_preserves_each_unsubmitted_draft_across_restart(self):
+        def deferred(fee):
+            raise Quota('endpoint Retry-After')
+
+        self.fleet.quote_hook = deferred
+        for _ in range(2):
+            p = self.prefunder()
+            with self.assertRaisesRegex(Quota, 'Retry-After'):
+                self.tick(p)
+            self.assertFalse(p.artifact_path(0).exists())
+            self.assertFalse(p.marker_path(0).exists())
+            self.assertFalse(p.records)
+        drafts = [json.loads(path.read_bytes())['hash'] for path in p.unquoted.iterdir()]
+        self.assertEqual(len(set(drafts)), 2)
+        self.fleet.quote_hook = None
+        p = self.prefunder()
+        self.offer_one(p)
+        self.assertEqual(len(p.records), 1)
+        self.assertTrue(set(drafts).isdisjoint(self.fleet.submits))
+        self.assertSubmittedOnce(p)
 
     def test_judge_repro_budget_too_small_never_strands_a_grant(self):
         # The Judge's repro on PR #1596: the budget refuses the submit pre-check.

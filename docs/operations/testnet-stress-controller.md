@@ -998,10 +998,16 @@ reply marks the batch `unknown` and holds the run. A batch left unconfirmed for
 15 minutes after its submission also holds. Pacing follows the plan's
 `max_inflight` and `max_normal_submissions_per_minute`, counted in
 transactions. Nothing new is signed while any batch is uncertain or unsent.
+For plans with a pinned `prefund` shape, all five validators must confirm one
+funding batch before the prefunder prices the next. An earlier batch can change
+the cluster wealth used to calculate the next batch's fee floor.
 
 The producer's request budget (the same per-endpoint count and `Retry-After`
 backoff that `Rpc` enforces) is checked before signing, with room for
-`fee_getRate` and `tx_submit`. It is checked again just before the marker is
+`fee_getRate`, `estimateFee` and `tx_submit`. The prefunder checks again before
+each re-sign. If the quote itself is rate-limited, the signed draft goes to
+`unquoted/` for audit and the next tick can price a new draft.
+The budget is checked again just before the marker is
 written. If that second check defers the grant, its record stays `prepared` with
 no marker. Nothing was sent, so every later tick retries it, as
 `Controller.admission_tick()` does: once all five nodes report its hash
