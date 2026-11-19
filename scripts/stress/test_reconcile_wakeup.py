@@ -41,6 +41,7 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
         self.c.report = Mock(side_effect=self.finished)
         self.calls = []
         self.bad_receipt = self.bad_spent = False
+        self.receipt_fields = {}
         self.c.rpc = Mock(call=AsyncMock(side_effect=self.rpc))
 
     def finished(self):
@@ -54,7 +55,7 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
         if method == 'getTransaction':
             return {'txHash': 'aa' * 32, 'blockHeight': 100,
                 'fee': 11 if self.bad_receipt and host == HOSTS[-1] else 10,
-                'outputCount': 1, 'totalOutput': 1000}
+                'outputCount': 1, 'totalOutput': 1000, **self.receipt_fields}
         if method == 'chain_areKeyImagesSpent':
             return [{'keyImage': 'image', 'spent': not self.bad_spent}]
         raise AssertionError('unexpected RPC/write: ' + method)
@@ -143,6 +144,32 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
         await self.run_reconciler([])
         self.assertIn('receipt disagreement', self.c.j.get('reason'))
         self.assertEqual(self.calls, [])
+
+    async def test_agreed_receipt_count_must_match_signed_outputs_before_caching(self):
+        self.receipt_fields['outputCount'] = 2
+        await self.run_reconciler([(5, 100, True)])
+        self.assertEqual(self.c.j.intent('confirmed')['state'], 'accepted')
+        self.assertIn('signed outputs', self.c.j.get('reason'))
+        self.c.sync.assert_not_awaited()
+
+    async def test_saved_receipts_must_match_the_signed_total_on_resume(self):
+        info = self.save_confirmation()
+        for receipt in info['confirmed_receipts'].values():
+            receipt['totalOutput'] += 1
+        self.c.j.transition('confirmed', 'confirmed', info=info)
+        await self.run_reconciler([(5, 100, True)])
+        self.assertEqual(self.c.j.intent('confirmed')['state'], 'confirmed')
+        self.assertIn('signed outputs', self.c.j.get('reason'))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.c.j.db.execute('SELECT COUNT(*) FROM reservations').fetchone()[0], 1)
+
+    async def test_each_signed_payment_receipt_must_report_integer_values(self):
+        info = self.save_confirmation()
+        info['confirmed_receipts'][HOSTS[-1]]['outputCount'] = True
+        self.c.j.transition('confirmed', 'confirmed', info=info)
+        await self.run_reconciler([(5, 100, True)])
+        self.assertEqual(self.c.j.intent('confirmed')['state'], 'confirmed')
+        self.assertIn('integer', self.c.j.get('reason'))
 
     async def test_height_wakes_do_not_shift_unconfirmed_poll_deadline(self):
         await self.run_reconciler([(5, 99, True), (5, 99, True),

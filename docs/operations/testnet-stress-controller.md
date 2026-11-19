@@ -1356,8 +1356,11 @@ paid fee (which can absorb dust), and raw serialized-byte density. Raw wire
 fee/byte is **not** production mempool priority density: production also uses
 estimated size and the cluster factor. The controller quotes the actual chosen
 ingress before signing, observes `fee_getRate` on all five nodes, and journals
-per-block transaction counts/hashes and bounded observation gaps. Receipts verify
-the signed fee, recipient, change, and spent inputs on every node.
+per-block transaction counts/hashes and bounded observation gaps. For each
+controller-signed payment, the controller checks the validators' reported fee,
+output count and total output value against the signed transaction. Wallet
+scans verify the recipient and change. Each validator reports whether the
+selected inputs have been spent.
 
 These are separate claims:
 

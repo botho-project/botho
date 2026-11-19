@@ -179,6 +179,28 @@ DEGRADE_END_LEAD = 45
 MILESTONES = ('first_reachable_at', 'synced_at_tip_at', 'first_ballot_at', 'first_coinbase_at')
 
 
+def check_transaction_receipts(row, info, receipts):
+    """Check fleet agreement and the amounts recorded before submission."""
+    shapes = {(r.get('blockHeight'), r.get('fee'), r.get('outputCount'), r.get('totalOutput'))
+              for r in receipts}
+    if len(shapes) != 1:
+        raise Gate('fleet transaction receipt disagreement')
+    if any(r.get('txHash', row['hash']) != row['hash'] for r in receipts):
+        raise Gate('fleet transaction receipt hash mismatch')
+    if row['kind'] == 'funding':
+        # The public faucet signs these grants outside the controller.
+        return
+    if any(type(r.get(k)) is not int for r in receipts
+           for k in ('blockHeight', 'fee', 'outputCount', 'totalOutput')):
+        raise Gate('signed payment receipt must report integer height, fee, count and total')
+    _, fee, count, total = shapes.pop()
+    if fee != row['fee']:
+        raise Gate('node receipt fee differs from signed fee')
+    outputs = info['outputs']
+    if count != len(outputs) or total != sum(o['amount'] for o in outputs):
+        raise Gate('node receipt count or total differs from signed outputs')
+
+
 class Controller:
     def __init__(self, state):
         self.state = state
@@ -1582,10 +1604,7 @@ class Controller:
                     if not set(deferred) <= set(HOSTS) or set(saved) != set(HOSTS)-set(deferred):
                         raise Gate('incomplete saved confirmation receipts')
                     receipts = [saved[h] for h in HOSTS if h in saved]
-                    if len({(r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput')) for r in receipts}) != 1:
-                        raise Gate('fleet transaction receipt disagreement')
-                    if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
-                        raise Gate('fleet transaction receipt hash mismatch')
+                    check_transaction_receipts(row, info, receipts)
                     if fetch_receipts:
                         info.update(all_confirmed_at=time.time(),block_height=receipts[0]['blockHeight'],
                                     confirmed_receipts=saved)
@@ -1607,8 +1626,6 @@ class Controller:
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
                         raise Gate('recipient ownership/value reconciliation failed')
                     if row['kind'] != 'funding':
-                        if receipts[0]['fee'] != row['fee']:
-                            raise Gate('node receipt fee differs from signed fee')
                         for expected in info['outputs']:
                             owner = row['recipient'] if expected['index']==0 else row['sender']
                             found = [o for o in self.inventory[owner] if bytes(o['utxo']['tx_hash']).hex()==row['hash']
@@ -1669,11 +1686,7 @@ class Controller:
                 continue  # not caught up yet; the rejoin gate bounds this wait
             receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in hosts))
             saved = info['confirmed_receipts']
-            shape = lambda r: (r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput'))
-            if len({shape(r) for r in [*saved.values(),*receipts]}) != 1:
-                raise Gate('fleet transaction receipt disagreement')
-            if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
-                raise Gate('fleet transaction receipt hash mismatch')
+            check_transaction_receipts(row, info, [*saved.values(), *receipts])
             if row['kind'] != 'funding':
                 states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in hosts))
                 if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
