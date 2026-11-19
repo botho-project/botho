@@ -868,7 +868,7 @@ class DeadlineFitTests(PrefundBase):
     TOTAL = 64 * X2_GRANTS
     BATCHES = -(-TOTAL // 15)
 
-    def run_fresh_chain(self, tick_seconds):
+    def run_fresh_chain(self, tick_seconds, funding_coinbase_interval=1):
         """Prefund the plan's grants from height 0; returns the prefunder and first/last batch heights."""
         self.fleet = Fleet(self.plan, self.fleet.addresses)
         self.fleet.coinbase_to = self.m['funding_wallet']['address']
@@ -895,6 +895,9 @@ class DeadlineFitTests(PrefundBase):
         with contextlib.redirect_stdout(io.StringIO()), \
                 patch.object(prefund, 'choose', watched):  # funding-wait lines
             while not done:
+                self.fleet.coinbase_to = (self.m['funding_wallet']['address']
+                                          if (self.fleet.height + 1) % funding_coinbase_interval == 0
+                                          else 'other-miner')
                 self.fleet.mine(1)
                 for _ in range(self.BLOCK_SECONDS // tick_seconds):
                     self.now += tick_seconds
@@ -953,12 +956,13 @@ class DeadlineFitTests(PrefundBase):
             self.assertGreaterEqual(len(ready), wallets['min_mature_utxos_per_wallet'], evidence)
             self.assertTrue(probe, w)
 
-    def test_x_series_change_recycling_finishes_sooner(self):
-        # Ticking every 4 s, a batch's change (in a 16-output block) is
-        # itself spendable ~20 blocks later, so several batches land per block.
-        p, first, last = self.run_fresh_chain(4)
+    def test_x_series_recycles_change_when_funding_coinbases_are_sparse(self):
+        # Only every third coinbase belongs to the funding wallet. Mature
+        # change must cover the gaps even when ticks arrive faster than blocks.
+        p, first, last = self.run_fresh_chain(4, funding_coinbase_interval=3)
         self.assertEqual((p.granted(), len(p.records)), (self.TOTAL, self.BATCHES))
-        self.assertLess(last - first, self.BATCHES)
+        self.assertEqual(len({r['block_height'] for r in p.records}), self.BATCHES)
+        self.assertGreaterEqual(last - first, self.BATCHES - 1)
         # #2023 review: change is spent only when no mature coinbase is
         # eligible, and never past MAX_FUNDING_DEPTH, so each funding
         # cluster's wealth stays within payment_shape.ring_bound_bth.
