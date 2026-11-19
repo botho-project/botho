@@ -383,6 +383,13 @@ class CpuLimitTests(unittest.TestCase):
         root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'max 100000\n'})
         self.assertIsNone(cgroup_cpu_limit(root, proc))
 
+    def test_namespace_root_quota_applies_to_root_and_nested_services(self):
+        root, proc = self.cgroup({'cpu.max':'100000 100000\n'}, membership='0::/\n')
+        self.assertEqual(cgroup_cpu_limit(root, proc), 1)
+        root, proc = self.cgroup({'cpu.max':'200000 100000\n',
+                                  'system.slice/x1.service/cpu.max':'400000 100000\n'})
+        self.assertEqual(cgroup_cpu_limit(root, proc), 2)
+
     def test_missing_cgroup_files_fall_back(self):
         root, proc = self.cgroup({})
         self.assertIsNone(cgroup_cpu_limit(root, proc))

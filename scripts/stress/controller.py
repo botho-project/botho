@@ -102,7 +102,8 @@ def cgroup_cpu_limit(root='/sys/fs/cgroup', self_cgroup='/proc/self/cgroup'):
     """The tightest ``cpu.max`` on this process's cgroup v2 path, or ``None``.
 
     systemd's ``CPUQuota=`` lands in the unit's own ``cpu.max``; a parent
-    slice may be tighter, so every ancestor below the root is read too.
+    slice may be tighter. A container can expose its own limit at the mount
+    root, including when its membership is simply `/`.
     """
     try:
         lines = Path(self_cgroup).read_text().splitlines()
@@ -119,7 +120,7 @@ def cgroup_cpu_limit(root='/sys/fs/cgroup', self_cgroup='/proc/self/cgroup'):
         return None
     parts = [p for p in path.split('/') if p]
     limits = []
-    for depth in range(len(parts), 0, -1):
+    for depth in range(len(parts), -1, -1):
         try:
             text = (Path(root).joinpath(*parts[:depth]) / 'cpu.max').read_text()
         except OSError:
