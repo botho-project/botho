@@ -87,7 +87,7 @@ impl Node {
 
         // Open the ledger database (in same directory as config)
         let ledger_path = ledger_db_path_from_config(config_path);
-        let ledger = Ledger::open(&ledger_path)
+        let ledger = Ledger::open_for_network(&ledger_path, config.network_type())
             .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
         // Restore EmissionController from persisted chain state

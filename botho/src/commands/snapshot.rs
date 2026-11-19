@@ -13,11 +13,12 @@ use crate::{
 
 /// Create a snapshot of the current UTXO set.
 pub fn create(config_path: &Path, output: &str) -> Result<()> {
-    let _config =
+    let config =
         Config::load(config_path).context("Failed to load config. Run 'botho init' first.")?;
 
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path).context("Failed to open ledger")?;
+    let ledger = Ledger::open_for_network(&ledger_path, config.network_type())
+        .context("Failed to open ledger")?;
 
     let output_path = Path::new(output);
 
@@ -52,11 +53,12 @@ pub fn create(config_path: &Path, output: &str) -> Result<()> {
 
 /// Load a snapshot from a file.
 pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Result<()> {
-    let _config =
+    let config =
         Config::load(config_path).context("Failed to load config. Run 'botho init' first.")?;
 
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger = Ledger::open(&ledger_path).context("Failed to open ledger")?;
+    let ledger = Ledger::open_for_network(&ledger_path, config.network_type())
+        .context("Failed to open ledger")?;
 
     let input_path = Path::new(input);
 

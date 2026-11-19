@@ -58,8 +58,8 @@ pub fn run(
 
     // Open ledger
     let ledger_path = ledger_db_path_from_config(config_path);
-    let ledger =
-        Ledger::open(&ledger_path).map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
+    let ledger = Ledger::open_for_network(&ledger_path, config.network_type())
+        .map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
     let _ = private; // Deprecated: all transactions are now private
 
