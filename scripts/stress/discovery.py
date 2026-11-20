@@ -779,29 +779,26 @@ class DiscoveryController(Controller):
             ]
             if due:
                 raise Gate("deferred step receipts unverified at phase boundary: " + due[0]["id"])
-            earlier = self.j.rows("kind='campaign' AND offered<?", (boundary,))
-            failed = [
-                r
-                for r in earlier
-                if r["state"]
-                not in (
-                    "reconciled",
-                    "prepared",
-                    "submitting",
-                    "accepted",
-                    "unknown",
-                    "confirmed",
-                )
-            ]
-            if failed:
+            earlier_states = self.j.prior_campaign_states(boundary)
+            if earlier_states.difference(("prepared", "submitting", "accepted", "unknown", "confirmed")):
                 raise Gate("generator_limited: previous phase delivery incomplete")
-            if self.j.pending() or any(r["state"] != "reconciled" for r in earlier):
+            if earlier_states or self.j.has_pending():
                 self.j.set(
                     "boundary_drain", {"phase": phase["id"], "seconds": now - boundary}
                 )
                 if now - boundary > self.j.limits["start_slot_grace_seconds"]:
                     raise Gate("previous phase drain exceeded bounded grace")
                 return
+            # Only the correctness phase needs the signed input counts. Capture
+            # those counts before yielding to sync, as with the delivery states.
+            shapes = None
+            if self.j.get("active_phase") == "correctness":
+                shapes = {
+                    json.loads(row[0]).get("input_count")
+                    for row in self.j.db.execute(
+                        "SELECT info FROM intents WHERE kind='campaign' AND offered<?", (boundary,)
+                    )
+                }
             # Boundary scan (#1629): refetch and compare the whole output
             # history and recheck every key image, but extend wallet
             # ownership incrementally; a 64-wallet full restore_check grows
@@ -812,10 +809,8 @@ class DiscoveryController(Controller):
             scanned = time.time()
             self.accounting()
             accounted = time.time()
-            if self.j.get("active_phase") == "correctness":
-                shapes = {json.loads(r["info"]).get("input_count") for r in earlier}
-                if not {1, 2, 4} <= shapes:
-                    raise Gate("correctness shapes missing")
+            if shapes is not None and not {1, 2, 4} <= shapes:
+                raise Gate("correctness shapes missing")
             if phase["id"] == "recovery":
                 await self.restore_wallet(0)
                 self.j.set("restore_recovery", True)

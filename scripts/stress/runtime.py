@@ -303,6 +303,10 @@ class Journal:
                 id INTEGER PRIMARY KEY, at REAL NOT NULL, host TEXT NOT NULL,
                 method TEXT NOT NULL, bytes INTEGER NOT NULL, latency REAL, status TEXT);
             CREATE INDEX IF NOT EXISTS requests_window ON requests(host,at);
+            CREATE INDEX IF NOT EXISTS intents_unreconciled ON intents(state,kind,offered)
+                WHERE state!='reconciled';
+            CREATE INDEX IF NOT EXISTS intents_offer_queue ON intents(offered,id)
+                WHERE state IN ('planned','eligible');
         ''')
         if limits is not None:
             existing = self.get('limits_digest')
@@ -382,6 +386,19 @@ class Journal:
 
     def pending(self):
         return self.rows('state IN (' + ','.join('?' for _ in PENDING) + ')', PENDING)
+
+    def has_pending(self):
+        return self.db.execute(
+            "SELECT 1 FROM intents WHERE state!='reconciled' AND state IN ("
+            + ','.join('?' for _ in PENDING) + ') LIMIT 1', PENDING
+        ).fetchone() is not None
+
+    def prior_campaign_states(self, boundary):
+        """Only unfinished states from before the boundary affect the phase gate."""
+        return {row[0] for row in self.db.execute(
+            "SELECT DISTINCT state FROM intents WHERE state!='reconciled' "
+            "AND kind='campaign' AND offered<?", (boundary,)
+        )}
 
     def deferred_receipts(self):
         rows = self.rows('id IN (SELECT intent FROM receipt_candidates) '
