@@ -332,7 +332,7 @@ impl Database {
         b.validate()?;
         Self::write_budget(&tx, order, member, &b)?;
         let details = serde_json::json!({"member":member,"expected_revision":revision,"added_attempts":attempts,"added_transaction_fee_lamports":fees,"reason":reason,"legacy_prior_exposure_unknown":b.legacy_prior_exposure_unknown});
-        tx.execute("INSERT INTO audit_log(order_id,action,details,created_at) VALUES(?1,'solana_budget_extension',?2,?3)",params![order.to_string(),details.to_string(),chrono::Utc::now().timestamp()]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO audit_log(order_id,action,details,created_at) VALUES(?1,'solana_budget_extension',?2,?3)",params![order.to_string(),details.to_string(),time::Timestamp::now().as_seconds()]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }

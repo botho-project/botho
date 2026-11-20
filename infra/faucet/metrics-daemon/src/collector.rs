@@ -100,7 +100,7 @@ pub async fn collect_metrics(
 ) -> Result<usize> {
     // Round to nearest 5 minutes once, so all nodes in this tick share a
     // timestamp (one row per (node, timestamp)).
-    let now = chrono::Utc::now().timestamp();
+    let now = time::Timestamp::now().as_seconds();
     let rounded_ts = (now / 300) * 300;
 
     // Poll all nodes concurrently; a slow/down node must not block others.

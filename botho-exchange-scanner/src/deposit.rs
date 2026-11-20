@@ -55,7 +55,7 @@ impl DetectedDeposit {
             confirmations,
             target_key: hex::encode(target_key),
             public_key: hex::encode(public_key),
-            detected_at: chrono::Utc::now().to_rfc3339(),
+            detected_at: bth_util_utc::UtcTimestamp::now().to_rfc3339(),
         }
     }
 

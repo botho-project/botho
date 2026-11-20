@@ -379,7 +379,7 @@ impl BenchmarkReport {
             scenario: scenario.to_string(),
             conditions,
             results: Vec::new(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
+            timestamp: bth_util_utc::UtcTimestamp::now().to_rfc3339(),
             duration: Duration::ZERO,
         }
     }

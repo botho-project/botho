@@ -66,7 +66,6 @@ use bth_bridge_core::{
     AttestationSignature, BridgeConfig, BridgeOrder, Chain, MintAuthorization, OrderType,
     ReleaseAuthorization, SignatureScheme,
 };
-use chrono::Utc;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -621,7 +620,11 @@ impl FederationAttestationProvider {
         envelope: &AttestationEnvelope,
         order: &BridgeOrder,
     ) -> AttestationOutcome {
-        self.submit_attestation_at(envelope, order, Utc::now().timestamp().max(0) as u64)
+        self.submit_attestation_at(
+            envelope,
+            order,
+            time::Timestamp::now().as_seconds().max(0) as u64,
+        )
     }
 
     /// [`submit_attestation`](Self::submit_attestation) with an explicit
@@ -869,7 +872,7 @@ impl FederationAttestationProvider {
             return Ok(()); // already counted; do not burn another nonce
         }
 
-        let now = Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let envelope = sign_attestation_ed25519(
             kind,
             sk,
@@ -1137,7 +1140,7 @@ impl AttestationProvider for FederationAttestationProvider {
                             None => fed.nonce_source.safe_nonce().await?,
                         };
                         let kind = Self::mint_kind(order, Some(safe_nonce))?;
-                        let now = Utc::now().timestamp().max(0) as u64;
+                        let now = time::Timestamp::now().as_seconds().max(0) as u64;
                         let envelope = sign_attestation_secp256k1(
                             &kind,
                             signer,

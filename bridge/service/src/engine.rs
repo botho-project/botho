@@ -724,7 +724,7 @@ impl OrderProcessor {
             self.config.bridge.max_order_amount,
             self.config.bridge.daily_limit_per_address,
             self.config.bridge.global_daily_limit,
-            chrono::Utc::now().timestamp(),
+            time::Timestamp::now().as_seconds(),
         )? {
             LimitCheck::Reserved | LimitCheck::AlreadyReserved => Ok(true),
             LimitCheck::Rejected(violation) => {
@@ -761,7 +761,7 @@ impl OrderProcessor {
             {
                 continue;
             }
-            let age_secs = (chrono::Utc::now() - order.updated_at).num_seconds();
+            let age_secs = order.updated_at.elapsed().whole_seconds();
             self.db.log_audit(
                 Some(&order.id),
                 "stuck_order_alert",
@@ -2261,7 +2261,10 @@ mod tests {
         // Submitted tx that the (mock) chain keeps reporting as Pending —
         // without it confirm_mint would unwind the order instead.
         order.dest_tx = Some("0xstuck_mint_tx".to_string());
-        order.updated_at = chrono::Utc::now() - chrono::Duration::hours(3);
+        order.updated_at = bth_bridge_core::UtcTimestamp::from_unix_seconds(
+            time::Timestamp::now().as_seconds() - 3 * 3_600,
+        )
+        .unwrap();
         db.insert_order(&order).unwrap();
 
         processor.process_pending_orders().await.unwrap();
