@@ -1714,7 +1714,6 @@ class Controller:
         self.j.begin_submit(identifier,host,wire,info['burst'],self.commit_deadline(row,info))
         # Retain the durable marker's byte charge through receipt transitions.
         info = json.loads(self.j.intent(identifier)['info'])
-        self.j.set('last_write',time.time())
         if info.get('crash')=='submitting' and not self.j.get('crash:submitting'):
             # Crash after the durable marker. No retry is possible on recovery;
             # this intentionally ambiguous intent must become unresolved if absent.
@@ -1759,8 +1758,9 @@ class Controller:
             attempted = self.j.db.execute("SELECT COUNT(*) FROM intents WHERE submitted IS NOT NULL OR prepared IS NOT NULL").fetchone()[0]
             if attempted>=800:
                 raise Gate('chain write budget')
-            self.j.transition(identifier,'submitting',submitted=time.time(),ingress='faucet.botho.io')
-        self.j.set('last_write',time.time())
+            submitted = time.time()
+            self.j.transition(identifier,'submitting',submitted=submitted,ingress='faucet.botho.io')
+            self.j.set('last_write',submitted)
         try:
             result = await self.rpc.call('faucet.botho.io','faucet_request',
                 {'address':self.wallets[row['recipient']]['address']},timeout=90,write=True)

@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -56,10 +57,21 @@ class FundingTests(unittest.TestCase):
         self.now = 1811
         asyncio.run(self.c.setup_tick())
         self.assertEqual(self.j.intent('funding-02')['submitted'], 1811)
+        self.assertEqual(self.j.get('last_write'), 1811)
         self.assertEqual(self.j.intent('funding-02')['offered'], 1800)
         self.assertEqual(len(self.writes()), 1)
         asyncio.run(self.c.fund('funding-02'))
         self.assertEqual(len(self.writes()), 1)
+
+    def test_activity_record_failure_rolls_back_funding_marker_before_rpc(self):
+        self.offered()
+        self.j.db.execute("""CREATE TEMP TRIGGER reject_activity BEFORE INSERT ON meta
+            WHEN NEW.key='last_write' BEGIN SELECT RAISE(ABORT,'activity storage failed'); END""")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'activity storage failed'):
+            asyncio.run(self.c.fund('funding-02'))
+        self.assertEqual(self.j.intent('funding-02')['state'], 'planned')
+        self.assertIsNone(self.j.intent('funding-02')['submitted'])
+        self.assertFalse(self.writes())
 
     def test_expired_deferred_offer_is_skipped_without_replay(self):
         self.prior('funding-00', 8)

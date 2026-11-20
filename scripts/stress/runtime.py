@@ -354,12 +354,19 @@ class Journal:
 
     @contextlib.contextmanager
     def transaction(self):
-        self.db.execute('BEGIN IMMEDIATE')
+        # A transition can run alone or inside a larger reservation transaction.
+        nested = self.db.in_transaction
+        self.db.execute('SAVEPOINT journal_write' if nested else 'BEGIN IMMEDIATE')
         try:
             yield
-            self.db.execute('COMMIT')
+            self.db.execute('RELEASE journal_write' if nested else 'COMMIT')
         except BaseException:
-            self.db.execute('ROLLBACK')
+            if self.db.in_transaction:
+                if nested:
+                    self.db.execute('ROLLBACK TO journal_write')
+                    self.db.execute('RELEASE journal_write')
+                else:
+                    self.db.execute('ROLLBACK')
             raise
 
     def event(self, intent, state, detail):
@@ -384,9 +391,10 @@ class Journal:
         if 'info' in fields:
             fields['info'] = json.dumps(fields['info'])
         fields.update(state=state, reason=reason)
-        self.db.execute('UPDATE intents SET ' + ','.join(k+'=?' for k in fields) + ' WHERE id=?',
-                        (*fields.values(), identifier))
-        self.event(identifier, state, reason or {})
+        with self.transaction():
+            self.db.execute('UPDATE intents SET ' + ','.join(k+'=?' for k in fields) + ' WHERE id=?',
+                            (*fields.values(), identifier))
+            self.event(identifier, state, reason or {})
 
     def pending(self):
         return self.rows('state IN (' + ','.join('?' for _ in PENDING) + ')', PENDING)
@@ -486,7 +494,9 @@ class Journal:
                 raise Quota('wire byte budget')
             info = json.loads(row['info'])
             info['wire_bytes'] = wire_bytes
-            self.transition(identifier, 'submitting', submitted=self.clock(), ingress=host, info=info)
+            submitted = self.clock()
+            self.transition(identifier, 'submitting', submitted=submitted, ingress=host, info=info)
+            self.set('last_write', submitted)
 
     def finish(self, identifier, info):
         with self.transaction():
