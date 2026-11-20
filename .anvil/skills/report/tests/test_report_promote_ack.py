@@ -1,9 +1,13 @@
 """Tests for the structured-YAML ack-file parser in ``report-promote``.
 
 The parser lives at ``anvil/skills/report/lib/ack.py``. It implements
-the eight enumerated failure modes documented in
-``anvil/skills/report/commands/report-promote.md`` step 6 (the
-load-bearing rewrite from the legacy substring-match contract).
+the nine ``AckError.mode`` failure modes (the eight top-level checks
+enumerated in ``anvil/skills/report/commands/report-promote.md`` step
+6, with the ``sha256`` mismatch check split into fresh-file and
+stale-file variants). As of issue #1098, step 6 invokes this module's
+CLI shim (``main``, exercised by ``TestCli`` below) directly rather
+than re-deriving the algorithm in prose — this is the sole
+implementation of the contract.
 
 These are pure-unit tests — no network, no real PDF rendering. The
 sha256 contract is exercised against a synthetic one-byte PDF written
@@ -23,6 +27,7 @@ filename-collision across skills (see #58).
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 import time
@@ -42,6 +47,7 @@ from anvil.skills.report.lib.ack import (  # noqa: E402
     Ack,
     AckError,
     compute_pdf_sha256,
+    main,
     parse_ack_file,
 )
 
@@ -345,7 +351,119 @@ def test_report_promote_command_spec_has_structured_token_contract() -> None:
     assert "report_title" in text
     assert "recipient" in text
     assert "sha256" in text
-    # Eight failure-mode contract is named.
-    assert "Eight failure modes" in text or "eight failure modes" in text
     # The strengthened-path receipt label is registered.
     assert "ack-file (structured token)" in text
+
+
+def test_report_promote_command_spec_invokes_ack_cli_shim() -> None:
+    """Step 6 invokes ack.py's CLI shim instead of re-deriving the
+    algorithm in prose (issue #1098) — the two-implementation spec-drift
+    risk this issue closes.
+    """
+    cmd = (
+        _REPO_ROOT
+        / "anvil"
+        / "skills"
+        / "report"
+        / "commands"
+        / "report-promote.md"
+    )
+    text = cmd.read_text()
+    assert "anvil.skills.report.lib.ack" in text
+    # All nine AckError.mode values are named so an operator (or the
+    # last-resort manual-validation fallback) can dispatch on the exact
+    # failure without guessing.
+    for mode in (
+        "file_not_found",
+        "yaml_parse_error",
+        "missing_ack_key",
+        "missing_required_subkey",
+        "unknown_subkey",
+        "report_title_mismatch",
+        "recipient_mismatch",
+        "sha256_mismatch",
+        "sha256_mismatch_stale",
+        "stale_ack_file",
+    ):
+        assert mode in text, f"mode {mode!r} not documented in step 6"
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point (issue #1098)
+# ---------------------------------------------------------------------------
+
+
+class TestCli:
+    """Exercises ``main()`` — the ``python -m anvil.skills.report.lib.ack``
+    entry point ``report-promote.md`` step 6 now invokes instead of
+    hand-executing the parser inline.
+    """
+
+    def test_valid_ack_file_exits_zero_and_prints_json(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        _write_pdf(tmp_path)
+        ack_path = _write_ack(tmp_path, _valid_ack_body())
+        rc = main(
+            [
+                str(ack_path),
+                "--expected-title",
+                _TITLE,
+                "--expected-recipient",
+                _RECIPIENT,
+                "--expected-sha256",
+                _PDF_SHA256,
+            ]
+        )
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload == {
+            "report_title": _TITLE,
+            "recipient": _RECIPIENT,
+            "sha256": _PDF_SHA256,
+        }
+
+    def test_sha256_mismatch_exits_one_with_mode_specific_stderr(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        _write_pdf(tmp_path)
+        wrong_sha = "0" * 64
+        ack_path = _write_ack(tmp_path, _valid_ack_body(sha256=wrong_sha))
+        rc = main(
+            [
+                str(ack_path),
+                "--expected-title",
+                _TITLE,
+                "--expected-recipient",
+                _RECIPIENT,
+                "--expected-sha256",
+                _PDF_SHA256,
+            ]
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "mode=sha256_mismatch)" in err
+        assert "does not match the current report.pdf" in err
+
+    def test_missing_ack_file_exits_one_with_file_not_found_mode(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        rc = main(
+            [
+                str(tmp_path / "does-not-exist.yaml"),
+                "--expected-title",
+                _TITLE,
+                "--expected-recipient",
+                _RECIPIENT,
+                "--expected-sha256",
+                _PDF_SHA256,
+            ]
+        )
+        assert rc == 1
+        assert "mode=file_not_found)" in capsys.readouterr().err
+
+    def test_missing_required_flag_exits_two(self, tmp_path: Path) -> None:
+        ack_path = _write_ack(tmp_path, _valid_ack_body())
+        with pytest.raises(SystemExit) as exc_info:
+            main([str(ack_path), "--expected-title", _TITLE])
+        assert exc_info.value.code == 2

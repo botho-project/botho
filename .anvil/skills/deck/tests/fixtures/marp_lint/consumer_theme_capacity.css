@@ -1,0 +1,24 @@
+/* @theme fixture-consumer-theme */
+
+/* Minimal fixture standing in for a consumer brand theme with roomier
+ * geometry than the shipped anvil-deck theme (40px padding + smaller base
+ * font vs. anvil-deck's 56px padding + 26px font). Used by
+ * TestGeometryFromThemeContract / TestConsumerThemeCapacityRegression in
+ * test_marp_lint.py (issue #1150) — NOT a real, renderable theme.
+ */
+
+/* @anvil-capacity
+   top_padding_px: 40
+   bottom_padding_px: 40
+   body_line_height_px: 36
+   capacity_units: 18.0
+   ask_class_capacity_penalty_units: 1.5
+*/
+
+:root {
+  --fixture-brand-accent: #123456;
+}
+
+section {
+  padding: 40px;
+}

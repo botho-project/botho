@@ -77,7 +77,7 @@
     "word_count_delta": 278,
     "figures_carried_forward": {
       "from": "botho-from-the-basics.2/exhibits",
-      "note": "The five PNGs + .mmd sources rendered by the v2 figures phase are copied unchanged into this version's exhibits/ so the body's relative image references (exhibits/*.png) resolve for the PDF render; v2 remains untouched."
+      "note": "In the original dogfood run, the five PNGs + .mmd sources rendered by the v2 figures phase were copied unchanged into this version's exhibits/ so the body's relative image references (exhibits/*.png) resolved for the PDF render; v2 remained untouched. VENDORING NOTE (#1184): when this version was later trimmed to become the shipped anvil/skills/primer/examples/ worked example, the five PNGs (and the compiled PDF) were deliberately dropped to stay within the vendored-example size envelope -- only the .mmd sources ship under this tree's exhibits/ (see ../../expected-thread.N/README.md 'Provenance and what was trimmed', and exhibits/README.md). The body's inline exhibits/*.png references are therefore intentionally unresolved in this vendored copy; that is expected, not a regression -- see exhibits/README.md before re-filing."
     },
     "figures": {
       "rendered": [

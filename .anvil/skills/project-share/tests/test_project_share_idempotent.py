@@ -7,12 +7,12 @@ the rebuilt export (no stale folders — blow-away rebuild contract).
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from anvil.lib.testing import tree_hash as _tree_hash
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
@@ -21,15 +21,6 @@ from _project_share_skill_lib import orchestrate  # noqa: E402
 from _share_fixtures import brief_text, build_full_project  # noqa: E402
 
 NOW = datetime(2026, 6, 9, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _tree_hash(root: Path) -> dict:
-    out: dict = {}
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            rel = str(path.relative_to(root))
-            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return out
 
 
 class TestIdempotentRebuild(unittest.TestCase):

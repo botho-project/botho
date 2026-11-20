@@ -13,7 +13,6 @@ nothing is mutated.
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 import pytest
@@ -24,21 +23,13 @@ from _fixtures import (
     write_tag_map,
 )
 from _project_migrate_skill_lib import adopt_family
+from anvil.lib.testing import tree_hash as _tree_digest
 
 build_adopt_family_plan = adopt_family.build_adopt_family_plan
 load_tag_map = adopt_family.load_tag_map
 AdoptFamilyError = adopt_family.AdoptFamilyError
 
 ARTIFACT_TYPE = "ip-uspto-provisional"
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 class TestFileShape:
@@ -108,8 +99,8 @@ class TestMissingMapRefusal:
             project, artifact_type=ARTIFACT_TYPE
         )
         assert [d.slug for d in plan.documents] == [
-            "brasidas-a",
-            "brasidas-c",
+            "meridian-a",
+            "meridian-c",
         ]
         assert plan.tag_resolution == []
 
@@ -173,7 +164,7 @@ class TestSameDirCollision:
     def test_two_tags_to_one_canonical_on_same_dir_refused(
         self, tmp_path
     ):
-        # `.audit` + `.audit2` coexist on `Brasidas.C.7` — mapping both
+        # `.audit` + `.audit2` coexist on `Meridian.C.7` — mapping both
         # to `audit` collides.
         project = build_letter_family_threads(tmp_path)
         mapping = dict(DEFAULT_TAG_MAP, audit2="audit")
@@ -186,14 +177,14 @@ class TestSameDirCollision:
                 artifact_type=ARTIFACT_TYPE,
             )
         msg = str(excinfo.value)
-        assert "Brasidas.C.7" in msg
+        assert "Meridian.C.7" in msg
         assert "`audit`" in msg
         assert "audit2" in msg
         assert _tree_digest(project) == before
 
     def test_same_pair_on_different_dirs_accepted(self, tmp_path):
-        # DEFAULT_TAG_MAP maps `review` (on Brasidas.A.2) and
-        # `review-v2` (on Brasidas.C.5) both to `review` — legal,
+        # DEFAULT_TAG_MAP maps `review` (on Meridian.A.2) and
+        # `review-v2` (on Meridian.C.5) both to `review` — legal,
         # the version dirs differ.
         project = build_letter_family_threads(tmp_path)
         tag_map = write_tag_map(tmp_path / "tag-map.json", DEFAULT_TAG_MAP)
@@ -203,7 +194,7 @@ class TestSameDirCollision:
         targets = sorted(
             new for _, _, new in plan.tag_resolution if new.endswith("review")
         )
-        assert targets == ["brasidas-a.2.review", "brasidas-c.5.review"]
+        assert targets == ["meridian-a.2.review", "meridian-c.5.review"]
 
 
 class TestResolution:
@@ -214,7 +205,7 @@ class TestResolution:
             project, tag_map_path=tag_map, artifact_type=ARTIFACT_TYPE
         )
         resolution = {old: new for _, old, new in plan.tag_resolution}
-        assert resolution["Brasidas.C.5.review-v2"] == "brasidas-c.5.review"
+        assert resolution["Meridian.C.5.review-v2"] == "meridian-c.5.review"
 
     def test_identity_mappings_resolve_in_place(self, tmp_path):
         project = build_letter_family_threads(tmp_path)
@@ -223,9 +214,9 @@ class TestResolution:
             project, tag_map_path=tag_map, artifact_type=ARTIFACT_TYPE
         )
         resolution = {old: new for _, old, new in plan.tag_resolution}
-        assert resolution["Brasidas.C.7.s101"] == "brasidas-c.7.s101"
-        assert resolution["Brasidas.C.7.audit2"] == "brasidas-c.7.audit2"
+        assert resolution["Meridian.C.7.s101"] == "meridian-c.7.s101"
+        assert resolution["Meridian.C.7.audit2"] == "meridian-c.7.audit2"
         assert (
-            resolution["Brasidas.C.5.pre_flight"]
-            == "brasidas-c.5.pre_flight"
+            resolution["Meridian.C.5.pre_flight"]
+            == "meridian-c.5.pre_flight"
         )

@@ -19,14 +19,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent  # anvil/skills/deck/
 
 DECK_CSS = _SKILL_ROOT / "assets" / "anvil-deck.css"
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 def test_deck_css_exists() -> None:

@@ -31,6 +31,11 @@
 %%                      (792 x 612 pt). Useful for table-dense proposals where
 %%                      the wider text block lets columns breathe; default
 %%                      portrait keeps the Gossamer LAN worked example unchanged.
+%%   cost_basis       — quoted|estimated|none (default quoted; issue #840). Gates
+%%                      section 7's priced-table contract — see the section-7
+%%                      comment block below for the full three-way behavior.
+%%                      Default `quoted` keeps the Gossamer LAN worked example
+%%                      unchanged.
 
 \documentclass[{% if (orientation | default("portrait")) == "landscape" %}landscape{% endif %}]{anvil-proposal}
 
@@ -139,19 +144,43 @@
 
 {{ coverage | default("How the system covers its full required scope and the design rule that guarantees it (e.g. one access point per major room). State the dominant constraint that drives the rule, and how the count follows from it. Several paragraphs; a metricbox table of the options if useful.") }}
 
-%% ── 7. Bill of Materials ──────────────────────────────────────────────────────
-%% THE CENTRAL PROPOSAL ARTIFACT. A multi-section priced BOM + a labor estimate +
-%% a project total. Anchors rubric dimensions 4 (scope completeness) and 6 (cost
-%% credibility). The auditor verifies every line's Qty x Unit = Total, the
-%% section subtotals, and Materials + Labor = Project total.
+%% ── 7. Bill of Materials / Cost Basis ────────────────────────────────────────
+%% THE CENTRAL PROPOSAL ARTIFACT for a hardware-BOM proposal — but not every
+%% proposal prices hardware (issue #840). Gated on the brief's `cost_basis` key
+%% (quoted | estimated | none; default quoted):
+%%   - quoted (default): unchanged pre-#840 behavior. A multi-section priced BOM
+%%     + a labor estimate + a project total. Anchors rubric dimensions 4 (scope
+%%     completeness) and 6 (cost credibility). The auditor verifies every
+%%     line's Qty x Unit = Total, the section subtotals, and
+%%     Materials + Labor = Project total, and back-checks prices against
+%%     refs/ vendor quotes.
+%%   - estimated: the SAME three tables, but every subtotal caption and the
+%%     intro/notes prose are estimate-labelled — the figures are unsourced
+%%     internal engineering-effort estimates, not vendor quotes. Dim 6
+%%     calibrates on estimate-basis consistency (is the basis stated and
+%%     internally consistent?) rather than vendor sourceability; the auditor
+%%     does not back-check these prices against refs/ vendor quotes.
+%%   - none: the priced-table requirement is dropped entirely — this proposal
+%%     has no hardware BOM and no vendor quotes at all (e.g. a partnership /
+%%     integration / data-backed-challenge proposal). Commercial terms move to
+%%     Open Decisions (§10) instead.
+%% See `rubric.md` §"Dim 6 — `cost_basis` calibration" and
+%% `commands/proposal-audit.md` step 7 for the reviewer/auditor-side wiring.
+{% set cost_basis_resolved = cost_basis | default("quoted") -%}
+{% if cost_basis_resolved != "none" %}
 \section{Bill of Materials}
 
+{% if cost_basis_resolved == "estimated" -%}
+{{ bom_intro | default("ESTIMATE BASIS (not a vendor quote): the figures below are internal engineering-effort estimates. State the estimate basis explicitly (comparable prior work, engineering judgment, a named estimator) so the estimate is reproducible; do not present it as a sourced price.") }}
+{%- else -%}
 {{ bom_intro | default("The assumptions the BOM is sized against (zone count, endpoint count, labor rate). State them explicitly so the pricing is reproducible.") }}
+{%- endif %}
 
 %% Multi-section priced BOM. Use \multicolumn{4}{@{}l}{\textbf{Section}} rows to
 %% group lines; \addlinespace between groups; a bold Materials subtotal row above
 %% \bottomrule. Each line is Item & Qty & Unit & Total; the auditor checks
-%% Qty x Unit = Total per line and the subtotal arithmetic.
+%% Qty x Unit = Total per line and the subtotal arithmetic (quoted or estimated
+%% alike — arithmetic correctness is not gated on cost_basis).
 \begin{metricbox}
 \begin{tabularx}{\textwidth}{@{} X c r r @{}}
 \toprule
@@ -159,14 +188,18 @@
 \midrule
 {{ bom_table | default("\\multicolumn{4}{@{}l}{\\textbf{Core infrastructure}} \\\\\n\\addlinespace[2pt]\nPrimary component & 1 & \\$value & \\$value \\\\\nEndpoint component & 7 & \\$value & \\$value \\\\\n\\addlinespace[4pt]\n\\multicolumn{4}{@{}l}{\\textbf{Interfaces and consumables}} \\\\\n\\addlinespace[2pt]\nInterface component & 16 & \\$value & \\$value \\\\\nConsumables & 1 & \\$value & \\$value \\\\\n\\addlinespace[4pt]\n\\multicolumn{4}{@{}l}{\\textbf{Delivery capability --- tools}} \\\\\n\\addlinespace[2pt]\nCore tool & 1 & \\$value & \\$value \\\\") }}
 \midrule
-\textbf{Materials subtotal} & & & \textbf{ {{- materials_subtotal | default("\\$range") -}} } \\
+\textbf{Materials subtotal{% if cost_basis_resolved == "estimated" %} (estimated){% endif %}} & & & \textbf{ {{- materials_subtotal | default("\\$range") -}} } \\
 \bottomrule
 \end{tabularx}
 \end{metricbox}
 
 \subsection{Labor estimate}
 
+{% if cost_basis_resolved == "estimated" -%}
+{{ labor_intro | default("The estimate basis: the rate and skill level assumed, and how the hours were derived (comparable prior work, engineering judgment) absent a contractor quote.") }}
+{%- else -%}
 {{ labor_intro | default("The labor basis: the rate and the skill level assumed.") }}
+{%- endif %}
 
 \begin{metricbox}
 \begin{tabularx}{\textwidth}{@{} X r r @{}}
@@ -175,7 +208,7 @@
 \midrule
 {{ labor_table | default("Site survey and planning & 4--6 & \\$value \\\\\nHub installation & 3--4 & \\$value \\\\\nCore subsystem installation & 16--24 & \\$value \\\\\nEndpoint installation and configuration & 8--11 & \\$value \\\\\nTesting and verification & 4--6 & \\$value \\\\") }}
 \midrule
-\textbf{Labor subtotal} & \textbf{ {{- labor_hours_subtotal | default("hrs") -}} } & \textbf{ {{- labor_cost_subtotal | default("\\$range") -}} } \\
+\textbf{Labor subtotal{% if cost_basis_resolved == "estimated" %} (estimated){% endif %}} & \textbf{ {{- labor_hours_subtotal | default("hrs") -}} } & \textbf{ {{- labor_cost_subtotal | default("\\$range") -}} } \\
 \bottomrule
 \end{tabularx}
 \end{metricbox}
@@ -188,12 +221,26 @@
 Materials & {{ project_total_materials | default("\\$range") }} \\
 Labor & {{ project_total_labor | default("\\$range") }} \\
 \midrule
-\textbf{Total project cost} & \textbf{ {{- project_total | default("\\$range") -}} } \\
+\textbf{Total project cost{% if cost_basis_resolved == "estimated" %} (estimated){% endif %}} & \textbf{ {{- project_total | default("\\$range") -}} } \\
 \bottomrule
 \end{tabularx}
 \end{metricbox}
 
+{% if cost_basis_resolved == "estimated" -%}
+{{ cost_notes | default("ESTIMATE, NOT A QUOTE: every figure above is an unsourced internal engineering-effort estimate, captioned as such. State the estimate basis (comparable prior work, engineering judgment, a named estimator) and what would convert it to a sourced quote (a vendor RFQ, a contractor bid).") }}
+{%- else -%}
 {{ cost_notes | default("One paragraph on the cost shape: what dominates, the labor-vs-materials split, and the basis of the figures (planning ranges, vendor list prices, or quotes — not arbitrary).") }}
+{%- endif %}
+
+{% else %}
+%% cost_basis: none — no hardware BOM, no vendor quotes exist for this
+%% proposal. Drop the priced-table requirement; commercial terms are tracked
+%% as open questions in §10 rather than pre-committed line items here.
+\section{Cost Basis}
+
+{{ cost_basis_none_note | default("This proposal carries no hardware Bill of Materials and no vendor quotes (\\texttt{cost\\_basis: none}). Commercial terms, budget ranges, and pricing are open questions tracked in Open Decisions (\\S10), not pre-committed line items here.") }}
+
+{% endif %}
 
 %% ── 8. Installation / Operating Notes ─────────────────────────────────────────
 %% A description list of sequenced execution and operating guidance. Anchors

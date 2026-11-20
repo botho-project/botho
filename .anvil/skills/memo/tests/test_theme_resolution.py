@@ -173,12 +173,12 @@ class TestResolverFrameworkDefault(unittest.TestCase):
             _seed_consumer(consumer)
             # Write only styles.css under the theme; ask for template.tex.
             _write_theme_asset(
-                consumer, "sphere-semi", MEMO_ASSET_STYLES_CSS, "body{}"
+                consumer, "acme-semi", MEMO_ASSET_STYLES_CSS, "body{}"
             )
             tex_path = resolve_memo_asset(
                 MEMO_ASSET_TEMPLATE_TEX,
                 consumer_root=consumer,
-                theme_name="sphere-semi",
+                theme_name="acme-semi",
             )
             self.assertTrue(tex_path.is_file())
             self.assertEqual(tex_path.parent.name, "memo")
@@ -198,18 +198,18 @@ class TestResolverThemeTier(unittest.TestCase):
             _seed_consumer(consumer)
             written = _write_theme_asset(
                 consumer,
-                "sphere-semi",
+                "acme-semi",
                 MEMO_ASSET_STYLES_CSS,
-                "/* Sphere Semi brand styles */\n@page { margin: 1in; }\n",
+                "/* Acme Semi brand styles */\n@page { margin: 1in; }\n",
             )
             resolved = resolve_memo_asset(
                 MEMO_ASSET_STYLES_CSS,
                 consumer_root=consumer,
-                theme_name="sphere-semi",
+                theme_name="acme-semi",
             )
             self.assertEqual(resolved, written)
             # The resolved path's content matches what we wrote.
-            self.assertIn("Sphere Semi", resolved.read_text())
+            self.assertIn("Acme Semi", resolved.read_text())
 
     def test_template_html_theme_override(self):
         with TemporaryDirectory() as td:
@@ -234,14 +234,14 @@ class TestResolverThemeTier(unittest.TestCase):
             _seed_consumer(consumer)
             written = _write_theme_asset(
                 consumer,
-                "sphere-semi",
+                "acme-semi",
                 MEMO_ASSET_TEMPLATE_TEX,
-                "% Sphere Semi xelatex template\n",
+                "% Acme Semi xelatex template\n",
             )
             resolved = resolve_memo_asset(
                 MEMO_ASSET_TEMPLATE_TEX,
                 consumer_root=consumer,
-                theme_name="sphere-semi",
+                theme_name="acme-semi",
             )
             self.assertEqual(resolved, written)
 
@@ -327,7 +327,7 @@ class TestProjectBriefThemeField(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     project: demo
-                    theme: sphere-semi
+                    theme: acme-semi
                     documents:
                       - slug: memo
                         artifact_type: investment-memo
@@ -336,7 +336,7 @@ class TestProjectBriefThemeField(unittest.TestCase):
             )
             brief = load_project_brief(project)
             self.assertIsNotNone(brief)
-            self.assertEqual(brief.theme, "sphere-semi")
+            self.assertEqual(brief.theme, "acme-semi")
 
     def test_brief_with_empty_theme_field_is_normalized_to_none(self):
         with TemporaryDirectory() as td:
@@ -418,9 +418,9 @@ class TestProjectBriefThemeProgrammatic(unittest.TestCase):
         brief = ProjectBrief(
             project="demo",
             documents=[self._doc()],
-            theme="sphere-semi",
+            theme="acme-semi",
         )
-        self.assertEqual(brief.theme, "sphere-semi")
+        self.assertEqual(brief.theme, "acme-semi")
 
 
 if __name__ == "__main__":

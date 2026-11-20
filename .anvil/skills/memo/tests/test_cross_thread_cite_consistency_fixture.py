@@ -2,23 +2,23 @@
 
 Phase A of issue #236 ships the cross-thread cite consistency back-check as
 reviewer-prose-only (no Python detector module). The fixture under
-``tests/fixtures/cross_thread_cite_consistency/raytheon_brasidas_stale_anchor/``
-preserves the verbatim Studio canary worked example (the Raytheon-pitch
-memo.1 stale `brasidas-synthesis/memo.2 §3.1` cite) so that:
+``tests/fixtures/cross_thread_cite_consistency/northwind_meridian_stale_anchor/``
+preserves the verbatim Studio canary worked example (the Northwind-pitch
+memo.1 stale `meridian-synthesis/memo.2 §3.1` cite) so that:
 
 1. The expected ``_summary.md.cross_thread_cite_consistency`` block shape
    per AC6 of the issue #236 curation is locked as a schema contract.
 2. When a future Phase B issue lands an automated detector at
    ``anvil/skills/memo/lib/cross_thread_cite.py``, this fixture is the
    regression-test anchor (did the detector still catch the stale §3.1
-   anchor in brasidas_synthesis.2?).
+   anchor in meridian_synthesis.2?).
 3. A reviewer agent reading ``rubric.md`` §"Cross-thread citation
    back-check (dim 3)" has a worked example to ground the verdict-tag
    rubric against.
 
 Because Phase A has no Python detector to invoke, the tests here are
 **shape-only**: they assert that ``citing_memo.md`` and
-``cited_thread/brasidas_synthesis.2/memo.md`` are well-formed (the
+``cited_thread/meridian_synthesis.2/memo.md`` are well-formed (the
 canary cite-text is present verbatim in the citing memo; §3.1 is
 absent and §5.2 is present in the cited memo) and that
 ``expected_findings.json`` parses against the AC6 schema. Phase B's
@@ -47,9 +47,9 @@ _FIXTURE_DIR = (
     _HERE
     / "fixtures"
     / "cross_thread_cite_consistency"
-    / "raytheon_brasidas_stale_anchor"
+    / "northwind_meridian_stale_anchor"
 )
-_CITED_MEMO = _FIXTURE_DIR / "cited_thread" / "brasidas_synthesis.2" / "memo.md"
+_CITED_MEMO = _FIXTURE_DIR / "cited_thread" / "meridian_synthesis.2" / "memo.md"
 
 # Per AC6: the verdict tags and severity vocabularies are part of the
 # contract. The fixture must use these exact strings. The 4-valued
@@ -77,7 +77,7 @@ class TestFixtureFilesPresent(unittest.TestCase):
     def test_cited_thread_memo_md_exists(self) -> None:
         self.assertTrue(
             _CITED_MEMO.is_file(),
-            "fixture must contain cited_thread/brasidas_synthesis.2/memo.md",
+            "fixture must contain cited_thread/meridian_synthesis.2/memo.md",
         )
 
     def test_expected_findings_json_exists(self) -> None:
@@ -111,10 +111,10 @@ class TestCitingMemoPreservesCanaryCite(unittest.TestCase):
     def test_canary_cite_text_present_verbatim(self) -> None:
         # The canary cite IS the failure mode the fixture exists to
         # preserve. Per the issue body: the cite landed in
-        # raytheon-pitch memo.1 §2 as the location of the data-center
+        # northwind-pitch memo.1 §2 as the location of the data-center
         # disagreement framing. We pin the exact cite shape.
         self.assertIn(
-            "brasidas-synthesis/memo.2 §3.1",
+            "meridian-synthesis/memo.2 §3.1",
             self.memo_text,
             "citing_memo.md must contain the canary stale cite verbatim",
         )
@@ -126,7 +126,7 @@ class TestCitingMemoPreservesCanaryCite(unittest.TestCase):
         # per-instance per the rubric §"Cross-thread citation
         # back-check (dim 3)" §"Severity ladder"). At least two
         # occurrences MUST be present.
-        count = self.memo_text.count("brasidas-synthesis/memo.2 §3.1")
+        count = self.memo_text.count("meridian-synthesis/memo.2 §3.1")
         self.assertGreaterEqual(
             count,
             2,
@@ -145,7 +145,7 @@ class TestCitingMemoPreservesCanaryCite(unittest.TestCase):
 
 
 class TestCitedMemoEncodesAnchorMovement(unittest.TestCase):
-    """AC9 — ``cited_thread/brasidas_synthesis.2/memo.md`` encodes the
+    """AC9 — ``cited_thread/meridian_synthesis.2/memo.md`` encodes the
     anchor-movement canary: §3.1 is genuinely ABSENT (not just a
     placeholder header) and §5.2 carries the matching framing.
 
@@ -187,7 +187,7 @@ class TestCitedMemoEncodesAnchorMovement(unittest.TestCase):
 
     def test_section_5_2_carries_matching_framing(self) -> None:
         # The corrected anchor is §5.2 (per the canary report:
-        # brasidas-synthesis memo.1 → memo.2 moved the disagreement
+        # meridian-synthesis memo.1 → memo.2 moved the disagreement
         # framing from §5.4 to §5.2). The fixture must pin §5.2
         # as the location of the data-center disagreement framing
         # so that a reviewer (or future detector) re-pointing the
@@ -331,10 +331,10 @@ class TestExpectedFindingsParses(unittest.TestCase):
         )
 
 
-class TestRaytheonBrasidasCanaryFindings(unittest.TestCase):
+class TestNorthwindMeridianCanaryFindings(unittest.TestCase):
     """AC9 — the fixture encodes the Studio canary failure mode verbatim.
 
-    The Raytheon-pitch memo.1 → brasidas-synthesis.2 §3.1 stale-anchor
+    The Northwind-pitch memo.1 → meridian-synthesis.2 §3.1 stale-anchor
     catch is the worked-example anchor for the back-check. These tests
     pin the specific shape — the ANCHOR-MISSING-BUT-THREAD-PRESENT /
     important finding(s) on the stale §3.1 anchor — so that a future
@@ -365,12 +365,12 @@ class TestRaytheonBrasidasCanaryFindings(unittest.TestCase):
             1,
             "fixture must encode at least one ANCHOR-MISSING-BUT-"
             "THREAD-PRESENT / important finding (the stale §3.1 "
-            "anchor in brasidas_synthesis.2)",
+            "anchor in meridian_synthesis.2)",
         )
 
-    def test_missing_anchor_finding_names_brasidas_synthesis(self) -> None:
-        # The canary cite IS at brasidas-synthesis. The finding's
-        # cite_text or resolved_path must name brasidas-synthesis
+    def test_missing_anchor_finding_names_meridian_synthesis(self) -> None:
+        # The canary cite IS at meridian-synthesis. The finding's
+        # cite_text or resolved_path must name meridian-synthesis
         # explicitly to encode the canary.
         missing = [
             f
@@ -391,9 +391,9 @@ class TestRaytheonBrasidasCanaryFindings(unittest.TestCase):
             # friendly) but the cite uses a hyphen (anvil thread-
             # slug convention).
             self.assertTrue(
-                "brasidas-synthesis" in haystack
-                or "brasidas_synthesis" in haystack,
-                "the missing-anchor finding must name brasidas-synthesis "
+                "meridian-synthesis" in haystack
+                or "meridian_synthesis" in haystack,
+                "the missing-anchor finding must name meridian-synthesis "
                 "explicitly",
             )
 

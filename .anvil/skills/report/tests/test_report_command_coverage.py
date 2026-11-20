@@ -34,13 +34,13 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from anvil.lib.testing import read_text
+
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 
 RUBRIC_ID = "anvil-report-v2"
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestReportDraftSubjectTier(unittest.TestCase):
@@ -54,7 +54,7 @@ class TestReportDraftSubjectTier(unittest.TestCase):
 
     def test_invokes_resolver(self):
         self.assertIn("resolve_subject_voice_docs", self.text)
-        self.assertIn('voice_grounding.md', self.text)
+        self.assertIn("voice_grounding.md", self.text)
         self.assertIn('"Subject voice tier"', self.text)
 
     def test_records_per_subject_exemplar_map(self):
@@ -256,9 +256,7 @@ class TestReportPandocDefaultsParseContract(unittest.TestCase):
             )
             # The defaults file must PARSE + COMPILE (exit 0). A parse failure
             # surfaces as the "Aeson exception" this fix removes.
-            self.assertEqual(
-                proc.returncode, 0, f"pandoc failed: {proc.stderr[-800:]}"
-            )
+            self.assertEqual(proc.returncode, 0, f"pandoc failed: {proc.stderr[-800:]}")
             self.assertTrue(pdf.exists() and pdf.stat().st_size > 0)
 
             # Functional check: the "Page N of M" footer fired under

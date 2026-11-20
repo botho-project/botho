@@ -96,7 +96,7 @@ from anvil.skills.proposal.lib.synthesizer import (
 # Fixture: 12LP+ FinFET mask cost canary
 # ---------------------------------------------------------------------------
 
-THREAD = "raytheon-pitch-strategy"
+THREAD = "northwind-pitch-strategy"
 VERSION_N = 1
 
 
@@ -123,7 +123,7 @@ overhead on the 14/16nm process node.
 # The 12LP+ comment is one of two review findings; the dim-7 stylistic
 # comment is the non-clustering control.
 _REVIEW_COMMENTS_MD = """\
-# Review comments for raytheon-pitch-strategy.1
+# Review comments for northwind-pitch-strategy.1
 
 ## Dimension 6: substrate sourcing
 
@@ -152,7 +152,7 @@ unbenchmarked, dim 6) and one stylistic (lead-paragraph order, dim 7).
 # Audit sibling findings.md. The audit critic flags the same 12LP+
 # line from a sourceability angle (no citation walk possible).
 _AUDIT_FINDINGS_MD = """\
-# Audit findings for raytheon-pitch-strategy.1
+# Audit findings for northwind-pitch-strategy.1
 
 ### F: findings.12lp_line — \\$15-25M mask cost has no source citation [major,dim6]
 
@@ -173,7 +173,7 @@ One sourceability gap: §7.1 12LP+ mask cost lacks a public anchor.
 # Perspective sibling candidates.md. The perspective critic names the
 # same line from external substrate / market data — the third angle.
 _PERSPECTIVE_CANDIDATES_MD = """\
-# Perspective candidates for raytheon-pitch-strategy.1
+# Perspective candidates for northwind-pitch-strategy.1
 
 ### F: candidates.cluster_foundry_pricing — IBS \\$5M baseline anchor available; cite to ground the 12LP+ estimate [major,dim6]
 

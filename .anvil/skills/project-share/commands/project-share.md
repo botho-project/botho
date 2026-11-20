@@ -24,23 +24,57 @@ Dry-run is a **flag, not the default** (deliberate divergence from the bridge
 tools): this command only writes into a disposable, marker-guarded build dir,
 never into source-of-truth.
 
+## Runnable entry point
+
+The flow ships as a directly runnable argparse CLI, `lib/cli.py` (mirroring
+`memo/lib/render_phase.py`). From a **consumer repo root** (where anvil is
+installed under `.anvil/`):
+
+```
+python3 .anvil/anvil/skills/project-share/lib/cli.py <project-dir>             # build/rebuild
+python3 .anvil/anvil/skills/project-share/lib/cli.py <project-dir> --dry-run   # plan only, write nothing
+python3 .anvil/anvil/skills/project-share/lib/cli.py <project-dir> --zip       # also write the datestamped zip
+```
+
+From the **anvil source repo** the path is
+`anvil/skills/project-share/lib/cli.py` instead.
+
+The CLI bootstraps `sys.path` (walking up to the ancestor carrying
+`anvil/__init__.py`, so both layouts resolve) and loads the sibling `lib/`
+package under a synthetic name — no hand-rolled importlib driver needed. It
+prints the markdown report to stdout and exits nonzero when the run did not
+succeed (refused rebuild, verification failure, or an unresolved doc). If the
+anvil framework itself cannot be imported (e.g. pydantic missing because
+`uv sync --project .anvil` never ran), it prints a remediation and exits 1;
+under `uv`, invoke it as
+`uv run --project .anvil python .anvil/anvil/skills/project-share/lib/cli.py <project-dir>`.
+
 ## Procedure
 
 The whole flow is one library call — `orchestrate.run(project_dir,
-dry_run=..., zip_output=...)` from `anvil/skills/project-share/lib/`. The
-steps it composes:
+dry_run=..., zip_output=...)` from `anvil/skills/project-share/lib/`, wrapped
+by the `lib/cli.py` entry point above. The steps it composes:
 
 ### 1. Load config + BRIEF
 
 `config.load_export_config(project_dir)` parses the optional `export:` block
 from the BRIEF frontmatter (`order`, `include_research`, `include_refs`,
-`include_assets`, `strip`, `out` — all optional; zero-config exports
-everything in `documents:` order with the default strip list into `SHARE/`).
+`include_assets`, `strip`, `out`, `cover`, `cover_as` — all optional;
+zero-config exports everything in `documents:` order with the default strip
+list into `SHARE/`, and no cover file is copied).
 `load_project_brief_strict(project_dir)` supplies the `documents:` list.
 
+`cover` (issue #757) points at a recipient-facing cover note living OUTSIDE
+the out dir (e.g. a project-root file) that the apply step copies into the
+export root — as `README.md` by default, or the `cover_as` override — on
+every run, so it survives the marker-guarded blow-away rebuild and rides
+along in `--zip`.
+
 Hard errors at this step: missing `BRIEF.md`; malformed frontmatter; an
-`export:` block with unknown keys, a non-list `order`, or an `out` name
-containing path separators.
+`export:` block with unknown keys, a non-list `order`, an `out` name
+containing path separators, a `cover` path with a leading path separator
+or a `..` path-traversal component, or a `cover_as` name containing path
+separators.
 
 ### 2. Collect + plan
 
@@ -62,9 +96,16 @@ top-level PDFs (SHA-256).
   top-level files.
 - `NN-<slug>/refs/` from the thread root when `include_refs` and non-empty.
 - `research/` once at the export root when `include_research` and present.
+- The `export.cover` source file (when configured) as a top-level file at
+  the export root — sibling to `EXPORT.md`, not inside any `NN-<slug>/`
+  doc dir — named `cover_as` (default `README.md`).
 
 Hard errors at this step: `export.order` naming a slug not in `documents:`;
-`export.out` colliding with a document slug, `research/`, or `refs/`.
+`export.out` colliding with a document slug, `research/`, or `refs/`;
+`export.cover` not resolving to an existing file under the project root;
+`export.cover_as` colliding with a reserved top-level export-root name —
+the `EXPORT.md` marker, `research/`, or a planned `NN-<slug>/` doc
+directory.
 
 Per-doc resolution failures (unstarted thread; a dangling pinned symlink
 with no fallback) are NOT hard errors — they become findings; the other
@@ -73,8 +114,9 @@ docs still export; the run exits nonzero.
 ### 3. Report
 
 Print the markdown report: project root, out dir + its current guard state,
-ordering source, and per-doc sections (resolved version + resolution mode,
-file counts, refs counts, PDF fingerprints, notes). In `--dry-run` mode the
+ordering source, per-doc sections (resolved version + resolution mode, file
+counts, refs counts, PDF fingerprints, notes), and the cover-note source +
+destination when `export.cover` is configured. In `--dry-run` mode the
 command stops here — nothing is written.
 
 ### 4. Apply (marker-guarded blow-away rebuild)
@@ -102,6 +144,19 @@ planned file landed, no stripped or structurally-excluded name leaked, no
 critic-sibling-shaped directory anywhere. Failures are reported and exit
 nonzero.
 
+### 6. Citation lint (report only, issue #758)
+
+`citations.find_dangling_citations` scans every markdown file the plan
+copies (per-doc body + refs, and the shared `research/` pool) for
+citations — markdown links, `../` relative paths, bare backticked/prose
+filenames — that resolve to a real file in the project tree which is NOT
+part of this export's copy set (e.g. a thread body citing a project-root
+working document like `STRATEGIC-OPTIONS.md`). This runs against the
+plan's already-collected source files, so it fires in `--dry-run` mode
+too. Findings are **reported, never blocking** — the citation may be
+deliberate — and appear both in the run summary and in `EXPORT.md`'s
+`## Citations` section.
+
 ## Output
 
 In all modes the command prints a markdown report to stdout. In apply mode
@@ -115,6 +170,11 @@ the rebuild was refused, verification failed, or any doc failed to resolve
 - Malformed `export:` block (unknown key, bad `out`, non-string entries):
   hard-fail naming the field.
 - `export.order` slug not in `documents:`: hard-fail naming the slug.
+- `export.cover` set but not resolving to an existing file under the
+  project root (issue #757): hard-fail at plan time, no writes.
+- `export.cover_as` colliding with the `EXPORT.md` marker, `research/`, or
+  a planned `NN-<slug>/` doc directory (issue #757): hard-fail at plan
+  time, no writes.
 - Non-empty out dir without the `EXPORT.md` marker: refusal, no deletion,
   nonzero exit.
 - Unresolvable doc: finding + nonzero exit; other docs still export.

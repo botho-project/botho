@@ -23,50 +23,21 @@ pytest collection collision documented in issue #58.
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
 RUBRIC_ID = "anvil-essay-v1"
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value``
-    parser so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestFilesExist(unittest.TestCase):
@@ -142,6 +113,14 @@ class TestSkillFrontmatter(unittest.TestCase):
         self.assertIn("OWNS voice fidelity as rubric dim 2", text)
         self.assertIn("resolve_voice_docs", text)
 
+    def test_self_published_exclusion_documented(self):
+        # Issue #890: SKILL.md documents the circular-calibration fix.
+        text = _read("SKILL.md")
+        self.assertIn("exclude_self_slug", text)
+        self.assertIn("corpus_excluded", text)
+        self.assertIn("corpus_thin", text)
+        self.assertIn("voice_corpus_exclude", text)
+
     def test_markdown_only_body_and_slug_echo(self):
         text = _read("SKILL.md")
         self.assertIn("no PDF render path", text)
@@ -151,6 +130,16 @@ class TestSkillFrontmatter(unittest.TestCase):
         text = _read("SKILL.md").lower()
         self.assertIn("toaster", text)
         self.assertIn("spread failure", text)
+
+    def test_ai_byline_documented_opt_in(self):
+        """Issue #941: SKILL.md documents the opt-in ai_byline: block,
+        its default-off posture, and that it is not the model-output
+        watermark."""
+        text = _read("SKILL.md")
+        self.assertIn("AI-authorship byline", text)
+        self.assertIn("resolve_ai_byline", text)
+        self.assertIn("off by default", text)
+        self.assertIn("watermark", text.lower())
 
 
 class TestCommandFrontmatter(unittest.TestCase):
@@ -168,9 +157,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
 
 class TestReviewCommandWiring(unittest.TestCase):
@@ -232,6 +219,57 @@ class TestReviewCommandWiring(unittest.TestCase):
     def test_link_coverage_judgment_is_major_never_critical(self):
         self.assertIn("never critical", self.text)
 
+    def test_thesis_unity_check_present(self):
+        # Issue #1148: 5e restates the argument in one sentence and tests
+        # each ##-level section against it.
+        self.assertIn("5e", self.text)
+        self.assertIn("Thesis-unity check", self.text)
+        self.assertIn("restate the essay's single argument in one sentence", self.text)
+        self.assertIn("weaken the argument", self.text)
+
+    def test_thesis_unity_check_is_major_never_critical(self):
+        self.assertIn("5e", self.text)
+        text_around_5e = self.text[self.text.index("5e. Thesis-unity check") :]
+        self.assertIn("`major`, never critical", text_around_5e[:400])
+
+    def test_thesis_unity_check_degrades_gracefully_with_few_sections(self):
+        # Zero or one ##-level sections: nothing to test a section against,
+        # matching the zero-numbers / zero-links vacuous-pass convention.
+        self.assertIn("Zero or one", self.text)
+        self.assertIn("passes vacuously", self.text)
+        self.assertIn("do NOT force a vacuous finding", self.text)
+
+    def test_thesis_unity_check_feeds_dim_7(self):
+        self.assertIn("dim 7 consumes 5d plus 5e", self.text)
+
+    def test_thesis_unity_runs_on_whats_working_sections(self):
+        # Issue #1148: craft protection ("What's working") must not exempt
+        # a section from the thesis-unity relevance check.
+        self.assertIn("craft-preservation rule, not a relevance exemption", self.text)
+        self.assertIn(
+            "MUST run — and MAY raise a `major` finding — on a section already "
+            'listed as "What\'s working."',
+            self.text,
+        )
+
+    def test_self_published_exclusion_wired(self):
+        # Issue #890: essay-review step 4 excludes the thread's own
+        # published form from the voice.corpus calibration base.
+        self.assertIn("exclude_self_slug=<thread>", self.text)
+        self.assertIn("Self-published exclusion", self.text)
+        self.assertIn("excluded", self.text)
+        self.assertIn("exclusion_reasons", self.text)
+
+    def test_corpus_excluded_summary_block_documented(self):
+        self.assertIn("corpus_excluded", self.text)
+        self.assertIn("voice_corpus_exclude", self.text)
+
+    def test_thin_corpus_guard_documented(self):
+        # Issue #890 AC 3: fewer than 2 remaining exemplars must be
+        # surfaced, not silently calibrated against.
+        self.assertIn("corpus_thin", self.text)
+        self.assertIn("Thin-corpus guard", self.text)
+
 
 class TestDraftAndReviseCommands(unittest.TestCase):
     def test_draft_records_voice_exemplars(self):
@@ -257,6 +295,28 @@ class TestDraftAndReviseCommands(unittest.TestCase):
         self.assertNotIn("essay-figures", text)
         self.assertNotIn("essay-audit", text)
 
+    def test_draft_resolves_and_inserts_ai_byline(self):
+        """Issue #941: essay-draft resolves the opt-in ai_byline: block
+        and inserts the rendered line per placement."""
+        text = _read("commands/essay-draft.md")
+        self.assertIn("resolve_ai_byline", text)
+        self.assertIn("ai_byline_text", text)
+        self.assertIn("ai_byline_placement", text)
+        self.assertIn("render_byline_markdown", text)
+        for placement in ("byline", "footer", "frontmatter-only"):
+            self.assertIn(placement, text)
+        self.assertIn("Byte-identical to pre-#941 behavior", text)
+
+    def test_revise_re_resolves_ai_byline(self):
+        """Issue #941: essay-revise re-resolves the byline each pass
+        (config-driven, not carried content) and strips a disabled one."""
+        text = _read("commands/essay-revise.md")
+        self.assertIn("resolve_ai_byline", text)
+        self.assertIn("ai_byline_text", text)
+        self.assertIn("ai_byline_placement", text)
+        self.assertIn("re-resolved fresh each pass", text)
+        self.assertIn("never leave a stale disclosure line", text)
+
 
 class TestRubric(unittest.TestCase):
     """rubric.md declares 9 dims summing to 44, >=35, voice-dominant."""
@@ -270,9 +330,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)

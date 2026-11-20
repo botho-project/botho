@@ -147,6 +147,6 @@ Use it to verify the wiring end-to-end (units enumerate, outputs land under `exh
 
 - `commands/report-figures.md` § "Procedure" step 5 — the dispatch step that consumes this contract.
 - `anvil/skills/report/lib/figure_adapters.py` — the skill-local dispatcher implementation (lib promotion waits for a second consumer, per CLAUDE.md § "Working on this repo").
-- `commands/deck-imagegen-adapter.md` — the sibling adapter philosophy for deck imagery (Python-object shaped; this contract is its subprocess-shaped analog).
+- `anvil/skills/deck/commands/deck-imagegen-adapter.md` — the sibling adapter philosophy for deck imagery (Python-object shaped; this contract is its subprocess-shaped analog).
 - `anvil/lib/snippets/git_sync.md` § "The knob" — the `.anvil/config.json` precedent this registration extends.
 - `commands/report-review.md` step 4c — the existence/freshness gate that covers body-referenced adapter outputs unchanged.

@@ -45,8 +45,8 @@ class TestMultiFamilyPlans:
             artifact_type=ARTIFACT_TYPE,
         )
         assert [d.slug for d in plan.documents] == [
-            "brasidas-a",
-            "brasidas-c",
+            "meridian-a",
+            "meridian-c",
         ]
         for doc in plan.documents:
             assert doc.brief_merge is not None
@@ -66,12 +66,12 @@ class TestMultiFamilyPlans:
             for r in d.renames
         }
         assert (
-            rename_map["Brasidas.C.7"]
-            == project / "brasidas-c" / "brasidas-c.7"
+            rename_map["Meridian.C.7"]
+            == project / "meridian-c" / "meridian-c.7"
         )
         assert (
-            rename_map["Brasidas.C.7.enablement"]
-            == project / "brasidas-c" / "brasidas-c.7.enablement"
+            rename_map["Meridian.C.7.enablement"]
+            == project / "meridian-c" / "meridian-c.7.enablement"
         )
 
     def test_project_root_is_the_family_dir_itself(self, tmp_path):
@@ -193,14 +193,14 @@ class TestBriefMode:
 class TestCollisions:
     def test_slug_already_in_brief_refused(self, tmp_path):
         # An existing BRIEF already lists the derived slug
-        # `brasidas-c` (listed-but-missing is only a warning at strict
+        # `meridian-c` (listed-but-missing is only a warning at strict
         # parse time, so the BRIEF itself validates).
         project = build_letter_family_threads(tmp_path)
         (project / "BRIEF.md").write_text(
             "---\n"
             "project: agent-workspace\n"
             "documents:\n"
-            "  - slug: brasidas-c\n"
+            "  - slug: meridian-c\n"
             "    artifact_type: investment-memo\n"
             "---\n\nBody.\n",
             encoding="utf-8",
@@ -213,12 +213,12 @@ class TestCollisions:
             )
         msg = str(excinfo.value)
         assert "Slug collision" in msg
-        assert "brasidas-c" in msg
-        assert "Brasidas.C" in msg
+        assert "meridian-c" in msg
+        assert "Meridian.C" in msg
 
     def test_target_dir_occupied_refused(self, tmp_path):
         project = build_letter_family_threads(tmp_path)
-        (project / "brasidas-c").mkdir()
+        (project / "meridian-c").mkdir()
         with pytest.raises(AdoptFamilyError) as excinfo:
             build_adopt_family_plan(
                 project,
@@ -226,7 +226,7 @@ class TestCollisions:
                 artifact_type=ARTIFACT_TYPE,
             )
         msg = str(excinfo.value)
-        assert "brasidas-c" in msg
+        assert "meridian-c" in msg
         assert "Nothing was modified" in msg
 
     def test_cross_family_sanitized_slug_collision_refused(
@@ -234,8 +234,8 @@ class TestCollisions:
     ):
         # Two stems differing only in case sanitize to the same slug.
         project = build_letter_family_threads(tmp_path)
-        (project / "brasidas.c.1").mkdir()
-        (project / "brasidas.c.1" / "spec.md").write_text(
+        (project / "meridian.c.1").mkdir()
+        (project / "meridian.c.1" / "spec.md").write_text(
             "# b\n", encoding="utf-8"
         )
         with pytest.raises(AdoptFamilyError) as excinfo:
@@ -246,8 +246,8 @@ class TestCollisions:
             )
         msg = str(excinfo.value)
         assert "Cross-family slug collision" in msg
-        assert "`Brasidas.C`" in msg and "`brasidas.c`" in msg
-        assert "`brasidas-c`" in msg
+        assert "`Meridian.C`" in msg and "`meridian.c`" in msg
+        assert "`meridian-c`" in msg
 
     def test_unparseable_existing_brief_refused(self, tmp_path):
         project = build_letter_family_threads(tmp_path)
@@ -281,7 +281,7 @@ class TestCollisions:
         # pre-existing target tree always trips the slug-dir collision,
         # before any version-dir target could clobber.
         project = build_letter_family_threads(tmp_path)
-        (project / "brasidas-a" / "brasidas-a.1").mkdir(parents=True)
+        (project / "meridian-a" / "meridian-a.1").mkdir(parents=True)
         with pytest.raises(AdoptFamilyError) as excinfo:
             build_adopt_family_plan(
                 project,
@@ -289,7 +289,7 @@ class TestCollisions:
                 artifact_type=ARTIFACT_TYPE,
             )
         msg = str(excinfo.value)
-        assert "brasidas-a" in msg
+        assert "meridian-a" in msg
         assert "Nothing was modified" in msg
 
 
@@ -307,15 +307,15 @@ class TestReport:
         assert result.shape is Shape.ADOPT_FAMILY
         report = result.report
         assert (
-            "Rename: `Brasidas.C.7` → `brasidas-c/brasidas-c.7`" in report
+            "Rename: `Meridian.C.7` → `meridian-c/meridian-c.7`" in report
         )
         assert "## Sidecar tag resolution" in report
         assert (
-            "`Brasidas.C.5.review-v2/` → `brasidas-c.5.review/`" in report
+            "`Meridian.C.5.review-v2/` → `meridian-c.5.review/`" in report
         )
         assert "## Proposed `BRIEF.md`" in report
-        assert "slug: brasidas-a" in report
-        assert "slug: brasidas-c" in report
+        assert "slug: meridian-a" in report
+        assert "slug: meridian-c" in report
         assert "# TODO(operator)" in report
         assert "## Strays (left untouched)" in report
         assert "notes-archive" in report
@@ -332,7 +332,7 @@ class TestReport:
         original_fm_end = ENROLL_OPERATOR_BRIEF.index("\n---\n", 4)
         assert ENROLL_OPERATOR_BRIEF[:original_fm_end] in result.report
         assert (
-            "slug: brasidas-a  # adopted-from: Brasidas.A.{N}"
+            "slug: meridian-a  # adopted-from: Meridian.A.{N}"
             in result.report
         )
 
@@ -340,7 +340,7 @@ class TestReport:
 class TestLeadingZeroAmbiguity:
     """Leading-zero slot collapse refusals (issue #458).
 
-    `Brasidas.C.07/` + `Brasidas.C.7/` both parse to `Brasidas.C`
+    `Meridian.C.07/` + `Meridian.C.7/` both parse to `Meridian.C`
     version slot 7: the dict-keyed scan silently dropped one. Duplicate
     sidecar slots previously fell through to the misleading
     `seen_targets` "already exists" message. Both are now scan-time
@@ -357,9 +357,9 @@ class TestLeadingZeroAmbiguity:
         with pytest.raises(AdoptFamilyError) as excinfo:
             build_adopt_family_plan(project, artifact_type=ARTIFACT_TYPE)
         msg = str(excinfo.value)
-        assert "`Brasidas.C.07/`" in msg
-        assert "`Brasidas.C.7/`" in msg
-        assert "`Brasidas.C` version 7" in msg
+        assert "`Meridian.C.07/`" in msg
+        assert "`Meridian.C.7/`" in msg
+        assert "`Meridian.C` version 7" in msg
         assert "Nothing was modified" in msg
 
     def test_refusal_fires_at_scan_time_before_required_flags(
@@ -376,7 +376,7 @@ class TestLeadingZeroAmbiguity:
         assert "Ambiguous version numbering" in str(excinfo.value)
 
     def test_whole_batch_aborts_with_clean_sibling_family(self, tmp_path):
-        # Brasidas.A is collision-free, but the batch contract aborts
+        # Meridian.A is collision-free, but the batch contract aborts
         # EVERYTHING pre-mutation: the raise means no plan exists for
         # the clean family either.
         project = build_letter_family_threads(
@@ -384,16 +384,16 @@ class TestLeadingZeroAmbiguity:
         )
         with pytest.raises(AdoptFamilyError):
             build_adopt_family_plan(project, artifact_type=ARTIFACT_TYPE)
-        assert not (project / "brasidas-a").exists()
+        assert not (project / "meridian-a").exists()
         assert not (project / "BRIEF.md").exists()
 
     def test_duplicate_sidecar_slot_refused_at_plan_time(self, tmp_path):
-        # Single version dir (Brasidas.C.7/) with a leading-zero twin
+        # Single version dir (Meridian.C.7/) with a leading-zero twin
         # of one of its sidecars: previously this fell through to the
         # misleading seen_targets "already exists" refusal — now it is
         # a scan-time ambiguity refusal naming both sidecar dirs.
         project = build_letter_family_threads(tmp_path)
-        dup = project / "Brasidas.C.07.enablement"
+        dup = project / "Meridian.C.07.enablement"
         dup.mkdir()
         (dup / "review.md").write_text("# dup\n", encoding="utf-8")
         with pytest.raises(AdoptFamilyError) as excinfo:
@@ -403,17 +403,17 @@ class TestLeadingZeroAmbiguity:
                 artifact_type=ARTIFACT_TYPE,
             )
         msg = str(excinfo.value)
-        assert "`Brasidas.C.07.enablement/`" in msg
-        assert "`Brasidas.C.7.enablement/`" in msg
+        assert "`Meridian.C.07.enablement/`" in msg
+        assert "`Meridian.C.7.enablement/`" in msg
         assert "`enablement` sidecar" in msg
         assert "Nothing was modified" in msg
         assert "already exists" not in msg
 
     def test_lone_leading_zero_dir_adopts_normalized(self, tmp_path):
-        # No Brasidas.C.7 sibling for slot 17: a lone Brasidas.C.017
-        # is NOT a refusal — it adopts, normalized to brasidas-c.17.
+        # No Meridian.C.7 sibling for slot 17: a lone Meridian.C.017
+        # is NOT a refusal — it adopts, normalized to meridian-c.17.
         project = build_letter_family_threads(tmp_path, with_sidecars=False)
-        lone = project / "Brasidas.C.017"
+        lone = project / "Meridian.C.017"
         lone.mkdir()
         (lone / "spec.md").write_text("# v017\n", encoding="utf-8")
         plan = build_adopt_family_plan(project, artifact_type=ARTIFACT_TYPE)
@@ -423,6 +423,6 @@ class TestLeadingZeroAmbiguity:
             for r in doc.renames
         }
         assert (
-            renames["Brasidas.C.017"]
-            == project / "brasidas-c" / "brasidas-c.17"
+            renames["Meridian.C.017"]
+            == project / "meridian-c" / "meridian-c.17"
         )

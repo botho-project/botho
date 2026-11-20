@@ -164,7 +164,7 @@ The perspective sibling is intentionally allowed at `.0.perspective/` (before th
 | `READY` | Latest `<thread>.{N}.review/verdict.md` records `advance: true` AND no unresolved critical flag from any critic sibling |
 | `AUDITED` | `<thread>.{N}.audit/` exists alongside a `READY` version |
 
-**Thresholds** (deck is a customer-facing artifact per `lib/README.md`'s legal/customer-facing rule — a pitch deck is the founder's pitch to external capital):
+**Thresholds** (deck is a customer-facing artifact per `anvil/lib/README.md`'s legal/customer-facing rule — a pitch deck is the founder's pitch to external capital):
 
 - **≥43/49** advances to `READY`.
 - **<43/49** requires revision.
@@ -175,14 +175,14 @@ The perspective sibling is intentionally allowed at `.0.perspective/` (before th
   4. **Absent ask** — no specific round size, no use-of-funds breakdown, no runway-to-milestone framing.
   5. **Incoherent or absent business model** (wire-key `incoherent_or_absent_business_model`) — no revenue mechanic stated, OR internally contradictory unit economics, OR counterparty-rejecting terms. Raised by `deck-economics` (primary, post-#551) with `deck-review` as fallback when `deck-economics` is skipped from the critic fan-out.
 
-Iteration cap: default `max_iterations: 4` (terminal version is `<thread>.5/`). Configurable per-thread via `<thread>/.anvil.json`. Exceeding the cap marks the thread `BLOCKED` (in the portfolio orchestrator's report) and requires human review.
+Iteration cap: default `max_iterations: 4`. The reviser refuses to write `<thread>.{N+1}/` when `N + 1 > effective_max_iterations` (`deck-revise` step 3), so `<thread>.{max_iterations}/` (`<thread>.4/` at the default) is the worst-case terminal version dir — there is no `<thread>.5/` under a default cap. Configurable per-thread via `<thread>/.anvil.json`. Exceeding the cap marks the thread `BLOCKED` (in the portfolio orchestrator's report) and requires human review.
 
 **Per-thread override contract.** The cap exists for principled reasons — prevent infinite revision loops, force the operator to confront foundational thesis problems instead of polishing forever — so the override is deliberately friction-ful: it requires a paired rationale that documents *why* this thread deserves more passes. The carrier in v1 is `<thread>/.anvil.json` (predates the #296 consolidation); the **v2 convergence target is the project-level `BRIEF.md`** — memo already carries the structurally identical paired override on `BriefDocument.max_iterations` + `BriefDocument.iteration_cap_rationale` (see `anvil/skills/memo/SKILL.md` §"Per-document override contract"), and `anvil:project-migrate` merges a deck thread's `.anvil.json` into the project BRIEF when migrating older layouts. The canonical `.anvil.json` shape:
 
 ```json
 {
   "max_iterations": 6,
-  "iteration_cap_rationale": "Well-conditioned thread: trajectory v1→v4 monotonically improving (27→29→31→34), first 0-critical at v4, named 1-pt gap is founder-follow-up bottleneck not deck-side polish. One extra pass to land Sphere Semiconductor outcome detail."
+  "iteration_cap_rationale": "Well-conditioned thread: trajectory v1→v4 monotonically improving (27→29→31→34), first 0-critical at v4, named 1-pt gap is founder-follow-up bottleneck not deck-side polish. One extra pass to land Acme Semiconductor outcome detail."
 }
 ```
 
@@ -268,6 +268,10 @@ uv pip install -e .[auto_shrink]
 ```
 
 When the extra is not installed, `deck-review` graceful-skips the auto-shrink check (mirrors the `mmdc` preflight #65 and `pdfjam` preflight #85 pattern); the rest of the review proceeds normally and the skip is recorded as an info-level lint note in `_summary.md`. The `marp_lint` source-side check above is unaffected — it has no third-party dependencies.
+
+### Post-render text-layer-completeness gate (issue #983)
+
+A third deterministic gate (the `anvil.skills.deck.lib.text_layer_completeness` module — invoked via `uv run --project .anvil python -c "from anvil.skills.deck.lib.text_layer_completeness import check_text_layer_completeness"`) runs in `deck-review` alongside the auto-shrink detector and catches a failure mode neither `marp_lint` nor `auto_shrink_detector` sees: a caption (or other trailing content) pushed off a slide's bottom edge and absent from the rendered PDF entirely. For every slide it confirms the slide's last checkable source line is present in that slide's rendered `pdftotext` page text; unlike the peer-relative auto-shrink detector, it needs no peer class, so it works uniformly on singleton `_class:` slides too. Missing `pdftotext` (poppler-utils) or a not-yet-rendered `deck.pdf` graceful-skips at `info` severity; the escape hatch is `<!-- anvil-lint-disable: text-layer-completeness -->`.
 
 ## Asset generation — hybrid policy
 
@@ -369,7 +373,7 @@ This skill ships with opinionated defaults. Consumers are expected to override l
 
 - `voice.md` (optional) — Founder/firm voice/tone guidance the drafter reads in addition to its base prompt.
 - `rubric.overrides.md` (optional) — Add stage-specific weight notes (e.g., "weight team higher for pre-seed") or domain-specific critical-flag examples.
-- `templates/<their-theme>.css` (optional) — Marp theme override. Consumers porting an existing brand identity (e.g., a LaTeX beamer `.sty`) start from the starter template at `anvil/lib/marp/brand-theme-starter.css` and the porting recipe at `anvil/lib/snippets/brand-theme-porting.md` (beamer-concept mapping table, registration, render-gate + vision validation).
+- `templates/<their-theme>.css` (optional) — Marp theme override. Consumers porting an existing brand identity (e.g., a LaTeX beamer `.sty`) start from the starter template at `anvil/lib/marp/brand-theme-starter.css` and the porting recipe at `anvil/lib/snippets/brand-theme-porting.md` (beamer-concept mapping table, registration, render-gate + vision validation). **Capacity-lint calibration (issue #1150)**: the `slide-content-overflow` pre-flight lint (`deck-review.md` step 5b) is calibrated against the shipped theme's padding/font/line-height — a ported theme with different geometry declares its own via a `/* @anvil-capacity ... */` comment block in the theme CSS (`brand-theme-porting.md` §"Declaring capacity geometry"), which `deck-review` resolves automatically from `deck.md`'s `theme:` frontmatter. No block means the shipped default geometry applies, same as an unported theme.
 - `commands/deck-imagegen.md` — Generative-imagery command (opt-in via `imagery_policy: generative-eligible` in `BRIEF.md` frontmatter). See `commands/deck-imagegen.md` and `commands/deck-imagegen-adapter.md`. Anvil ships zero production backends; consumers register their own adapter via `.anvil/config.json`. New consumers start with `commands/deck-imagegen-onboarding.md` — a five-minute smoke test against the shipped placeholder reference backend, the adapter-owned auth-bootstrap pattern for cloud backends, and a porting checklist for existing in-house image workers.
 
 ## Per CLAUDE.md

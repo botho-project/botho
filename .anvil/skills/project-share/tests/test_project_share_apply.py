@@ -131,7 +131,7 @@ class TestZip(unittest.TestCase):
             zip_path = result.apply_result.zip_path
             assert zip_path is not None
             self.assertEqual(
-                zip_path.name, "brains-for-robots-share-20260609.zip"
+                zip_path.name, "smart-actuators-share-20260609.zip"
             )
             # plan.project_dir is resolved; compare resolved paths
             # (macOS tmpdirs live behind the /var → /private/var link).
@@ -193,6 +193,74 @@ class TestDivergenceRegression(unittest.TestCase):
             orchestrate.run(project, zip_output=True, now=NOW)
             brief = load_project_brief_strict(project, validate_dirs=True)
             self.assertEqual(len(brief.documents), 3)
+
+
+class TestCoverNote(unittest.TestCase):
+    """Issue #757: `export.cover` survives the marker-guarded rebuild."""
+
+    def _project_with_cover(self, td: str, *, cover_as: str = "") -> Path:
+        block = "export:\n  cover: SHARE-README.md\n"
+        if cover_as:
+            block += f"  cover_as: {cover_as}\n"
+        project = build_full_project(Path(td), export_block=block)
+        (project / "SHARE-README.md").write_text(
+            "# Welcome\n\nRead the memo first, then the deck.\n",
+            encoding="utf-8",
+        )
+        return project
+
+    def test_cover_copied_with_default_name(self) -> None:
+        with TemporaryDirectory() as td:
+            project = self._project_with_cover(td)
+            result = orchestrate.run(project, now=NOW)
+            self.assertTrue(result.success, result.report)
+            readme = project / "SHARE" / "README.md"
+            self.assertTrue(readme.is_file())
+            self.assertEqual(
+                readme.read_text(encoding="utf-8"),
+                (project / "SHARE-README.md").read_text(encoding="utf-8"),
+            )
+
+    def test_cover_copied_with_cover_as_override(self) -> None:
+        with TemporaryDirectory() as td:
+            project = self._project_with_cover(td, cover_as="OVERVIEW.md")
+            result = orchestrate.run(project, now=NOW)
+            self.assertTrue(result.success, result.report)
+            self.assertTrue((project / "SHARE" / "OVERVIEW.md").is_file())
+            self.assertFalse((project / "SHARE" / "README.md").exists())
+
+    def test_cover_survives_rebuild(self) -> None:
+        """The exact regression this issue reports: a hand-written
+        `SHARE/README.md` used to be destroyed on every re-export."""
+        with TemporaryDirectory() as td:
+            project = self._project_with_cover(td)
+            orchestrate.run(project, now=NOW)
+            readme = project / "SHARE" / "README.md"
+            before = readme.read_bytes()
+            # Rebuild (second apply run over the marker-guarded out dir).
+            result = orchestrate.run(project, now=NOW)
+            self.assertTrue(result.success, result.report)
+            self.assertTrue(readme.is_file())
+            self.assertEqual(readme.read_bytes(), before)
+
+    def test_cover_lands_in_zip(self) -> None:
+        with TemporaryDirectory() as td:
+            project = self._project_with_cover(td)
+            result = orchestrate.run(project, zip_output=True, now=NOW)
+            self.assertTrue(result.success, result.report)
+            assert result.apply_result is not None
+            zip_path = result.apply_result.zip_path
+            assert zip_path is not None
+            with zipfile.ZipFile(zip_path) as zf:
+                names = zf.namelist()
+            self.assertIn("SHARE/README.md", names)
+
+    def test_no_cover_configured_no_readme_written(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            result = orchestrate.run(project, now=NOW)
+            self.assertTrue(result.success, result.report)
+            self.assertFalse((project / "SHARE" / "README.md").exists())
 
 
 class TestGitignoreSuggestion(unittest.TestCase):

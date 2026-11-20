@@ -31,7 +31,7 @@ A single command that an operator (or orchestrating agent) runs to see the state
    - The audit result (pass/fail, critical flags) from `<slug>.{N}.audit/verdict.md` if present.
    - Whether `<slug>.{N}.promote/receipt.md` exists (CUSTOMER-READY).
    - The iteration count and `max_iterations` from `<slug>.{N}/_progress.json` (or from `<slug>/.anvil.json` override).
-5. Compute the state-machine position per thread using the table in `SKILL.md`.
+5. Compute the state-machine position per thread using the table in `SKILL.md`. **Pending-marker terminal gate (issue #841)**: a thread with `advance: true`, `pass: true`, and zero critical flags still reads as `REVIEWED+AUDITED`, not `AUDITED`, while either critic's `verdict.md` "Outstanding dependencies" section is non-empty (equivalently, `<slug>.{N}.pending/_review.json` carries an unresolved `pending_dependency` flag) — see `commands/report-audit.md`'s terminal-gate step. This is a distinct check from the critical-flag check: a `pending_dependency` flag never appears in either verdict's `Critical flags` list.
 6. Recommend the next command per thread:
 
    | State | Recommended next command |

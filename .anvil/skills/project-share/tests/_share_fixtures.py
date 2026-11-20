@@ -104,7 +104,7 @@ def brief_text(
 
 def build_full_project(
     root: Path,
-    project_name: str = "brains-for-robots",
+    project_name: str = "smart-actuators",
     *,
     export_block: Optional[str] = None,
 ) -> Path:
@@ -181,7 +181,7 @@ def build_full_project(
 
 
 def build_zero_config_project(
-    root: Path, project_name: str = "brains-for-robots"
+    root: Path, project_name: str = "smart-actuators"
 ) -> Path:
     """Full project with NO ``export:`` block (defaults exercised)."""
     return build_full_project(root, project_name, export_block=None)
@@ -256,10 +256,64 @@ def build_dangling_symlink_project(
     return project
 
 
+def build_project_with_dangling_citation(
+    root: Path, project_name: str = "dangling-citation"
+) -> Path:
+    """Single-doc project whose thread body cites a project-root working
+    document (``STRATEGIC-OPTIONS.md``) that is never part of the export
+    set (issue #758) — a bare backticked mention AND a relative markdown
+    link, both pointing at the same non-exported file. Also cites a
+    sibling doc's own exported body (should NOT be flagged) and a
+    filename that doesn't exist anywhere (should NOT be flagged either).
+    """
+    project = root / project_name
+    project.mkdir(parents=True, exist_ok=True)
+    documents = (
+        "documents:\n"
+        "  - slug: investment-memo\n"
+        "    artifact_type: investment-memo\n"
+        "  - slug: kill-thresholds\n"
+        "    artifact_type: investment-memo\n"
+    )
+    _write(
+        project / "BRIEF.md",
+        brief_text("Dangling Citation", documents_yaml=documents),
+    )
+    _write(
+        project / "STRATEGIC-OPTIONS.md",
+        "# Strategic options\n\nInternal working notes — NOT for export.\n",
+    )
+
+    memo_vdir = project / "investment-memo" / "investment-memo.1"
+    _write(
+        memo_vdir / "investment-memo.md",
+        "# Investment memo v1\n\n"
+        "See the kill thresholds discussion in `STRATEGIC-OPTIONS.md` for "
+        "context. This mentions `not-a-real-file.md`, which doesn't exist "
+        "anywhere and should not be flagged.\n",
+    )
+    _bookkeeping(memo_vdir, "investment-memo", 1)
+
+    kill_vdir = project / "kill-thresholds" / "kill-thresholds.1"
+    _write(
+        kill_vdir / "kill-thresholds.md",
+        "# Kill thresholds v1\n\n"
+        "Cross-reference: [strategic options]"
+        "(../../STRATEGIC-OPTIONS.md).\n"
+        "Also see [the investment memo]"
+        "(../../investment-memo/investment-memo.1/investment-memo.md), "
+        "which IS part of this export.\n",
+    )
+    _bookkeeping(kill_vdir, "kill-thresholds", 1)
+
+    return project
+
+
 __all__ = [
     "brief_text",
     "build_dangling_symlink_project",
     "build_full_project",
+    "build_project_with_dangling_citation",
     "build_project_with_unstarted_slug",
     "build_real_latest_dir_project",
     "build_zero_config_project",

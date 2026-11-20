@@ -2,6 +2,7 @@
 audience: Software engineers at a mid-sized firm, mixed exposure to AI tooling, no formal ML background
 time_slot_minutes: 30
 venue: Internal engineering all-hands
+talk_genre: technical-lecture   # or maker-story; optional, defaults to technical-lecture
 learning_goals:
   - Understand what "agentic" AI workflows are and why they differ from chatbots
   - Recognize the failure modes that distinguish toy demos from production systems

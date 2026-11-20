@@ -10,14 +10,93 @@ The rubric is tuned so that **rigor + evidence + citation hygiene (6 + 6 + 5 = 1
 |---|---|---|---|
 | 1 | **Rigor of method / argument** | 6 | The methodology (experimental setup, proof structure, derivation) is sound and adequate to support the claims. The highest-weighted dimension. Distinct from evidence sufficiency: a method can be rigorous in structure but undersupported in results. |
 | 2 | **Evidence sufficiency** | 6 | The experiments / proofs / data presented are adequate for the claims made. Sample sizes are justified, baselines are appropriate, ablations exist where claims rest on a specific design choice. Distinct from rigor: a rigorous method that produces only weak signal scores low here. |
-| 3 | **Clarity of contribution** | 5 | What is new is unambiguous and stated in the abstract and introduction. A reviewer can extract the contribution(s) in one sentence per item. Failure mode: papers whose contribution is unclear are rejected even when results are strong. |
+| 3 | **Clarity of contribution** | 5 | What is new is unambiguous and stated in the abstract and introduction. A reviewer can extract the contribution(s) in one sentence per item. Failure mode: papers whose contribution is unclear are rejected even when results are strong — including the **underclaiming / buried-contribution** case, symmetric to overclaiming: a technically correct, fully-sourced paper whose central idea is present but demoted to background, qualification, or discussion rather than stated in the abstract and introduction does not pass this dimension at full weight (see "Dim 3 / Dim 9 — overclaiming and underclaiming are symmetric failure modes" below). |
 | 4 | **Related-work positioning** | 5 | Honest and accurate placement against prior art. Closest prior work is engaged on its actual merits. Failure mode: ignoring close prior work — often grounds for desk rejection. |
 | 5 | **Reproducibility** | 5 | Code, data, seeds, hyperparameters, environment are referenced or supplied. Methods section is sufficient for an independent group to replicate. Increasingly a hard requirement at top venues. |
 | 6 | **Figure & table quality** | 4 | Figures and tables are self-contained (caption tells the story), readable at print size, have axis labels with units, and avoid chartjunk. Tables have correct alignment and meaningful column headers. |
-| 7 | **Prose & structural quality** | 4 | Abstract → introduction → methods → results → discussion flow is intact; prose is concise; no hand-waving; tense and voice are consistent. Includes LaTeX-specific concerns: no overfull hboxes in body sections, no broken cross-references (`Section ??`), no unused macros. |
+| 7 | **Prose & structural quality** | 4 | Abstract → introduction → methods → results → discussion flow is intact; prose is concise; no hand-waving; tense and voice are consistent. Includes LaTeX-specific concerns: no overfull hboxes in body sections, no broken cross-references (`Section ??`), no unused macros. **Default AI-tell check** — deduct for self-flattering / virtue-signaling adjectives that *announce* integrity, courage, or intellectual virtue rather than demonstrate it (*honest reversal/accounting/reading/positioning, candid take, frank assessment, uncomfortable answer, painful truth, humbling admission*); if the move is honest, the reader feels it from the move itself — labeling it is a tell that signals AI authorship. Also deduct for the **structural-importance announcement** class — *load-bearing* / *load bearing* used to assert (rather than demonstrate) that a passage matters; if a passage is essential, cutting it will show that, so name what the passage does instead of asserting its importance. **Exception**: the adjective stays when it does real semantic work (contrastive: *the hard question* against an easier one, *the actual problem* against a claimed one, *the deeper issue* against a surface one); a genuine engineering/architecture referent (an actual wall, an actual truss) is likewise exempt from the structural-importance check. This check fires by default for every consumer — it does not depend on a hand-authored `.anvil/skills/paper/voice.md`. **Audience fit (issue #1322)**: every sentence, appendices included, is addressed to the BRIEF's declared audience rather than the project's operator or team — see §"Audience fit (dims 7 and 9)". **Reader flow (issue #1397)**: scored from the fresh-context reader-flow lens (`paper-review` step 4j) — define-before-use, naming drift, roadmap order, float proximity, results before objects, repeated caveats, number variants (and reworded-caveat drift when supplied) — see §"Reader flow (dim 7)". |
 | 8 | **Citation hygiene** | 5 | Every non-trivial claim has a citation; cited papers actually support the surrounding claim (audit phase verifies — this dimension catches the unsourced-claim half); bibliography entries are complete and consistent (author, title, venue, year all present). |
-| 9 | **Rhetorical economy** | 4 | Is every paragraph load-bearing? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a busy reviewer extract the contribution in 90 seconds? |
+| 9 | **Rhetorical economy** | 4 | Does every paragraph carry weight the argument needs? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a busy reviewer extract the contribution in 90 seconds? The **self-flattering virtue-signaling adjective** class and the **structural-importance announcement** class (see dim 7's default AI-tell check — *honest/candid/frank/uncomfortable X* that labels a move instead of making it, and *load-bearing* / *load bearing* that asserts a passage matters instead of demonstrating it) are also rhetorical-economy failures: the label is words the argument does not need. Preserve the same semantic-work exception (a contrastive adjective that does real work is load-bearing, not a tell). **Burying the lede is also a rhetorical-economy failure** — a central claim surfaced only after extended qualification or related-work apparatus costs the reader words spent reaching the point, symmetric to the padding this dimension already penalizes (see "Dim 3 / Dim 9 — overclaiming and underclaiming are symmetric failure modes" below). **Audience fit (issue #1322)**: every sentence, appendices included, is addressed to the BRIEF's declared audience rather than the project's operator or team — see §"Audience fit (dims 7 and 9)". |
 | | **Total** | **44** | Advance threshold: ≥35 |
+
+## Dim 9 — plain-language framing (issue #1042/#1044)
+
+Dim 9's "could the same argument land in fewer words?" test does not
+penalize a passage for teaching. Per `anvil/lib/snippets/plain_language.md`
+(the plain-language-first framework — issue #1042/#1043) and
+`anvil/lib/snippets/rubric.md` §"Dim 9 — teaching-oriented length is
+not padding", a passage that states an idea in ordinary language before
+introducing its formal name, or that keeps a plain restatement alongside
+a newly-introduced technical term, is doing the paper's job — a reviewer
+scoring dim 9 should not cite it as bloat. The test remains: **would
+deleting this passage remove information the reader needs, or only
+remove words?** See `commands/paper-review.md` step 5's D9 bullet for
+the reviewer-side application.
+
+## Dim 3 / Dim 9 — overclaiming and underclaiming are symmetric failure modes (issue #1046/#1047)
+
+A good paper states the strongest honest claim its evidence supports, teaches it clearly, and creates productive curiosity — hype-free, but not confused with timidity. Two failure modes sit on either side of that target. The rubric treats them as **symmetric**: neither dim 3 nor dim 9 rewards moving toward one by moving away from the other.
+
+**Overclaiming** — asserting novelty without a specific search; presenting a conjecture, metaphor, design, or partial implementation as a result; using promotional adjectives in place of evidence; implying empirical support before the experiment has run. This is the failure mode dim 3's "unambiguous... in one sentence" contribution test and dim 9's hedging-proportionality question already push against, and it is what the scoring guidance's "0 — absent or actively misleading" floor exists to catch.
+
+**Underclaiming** — a technically correct, fully-sourced, heavily-qualified paper that buries its central idea has no less of a failure mode just because it never overreaches:
+
+- choosing a familiar, easily-defended subsidiary result over the paper's actual organizing idea;
+- burying the organizing idea after background, qualifications, or related work rather than opening with it;
+- presenting a research program as a narrow implementation note;
+- describing what was built without explaining why it changes how a reader might think;
+- stripping all tension, surprise, speculation, and honestly-labeled open possibility from the exposition;
+- a paper a careful reader finds unobjectionable but has no reason to remember.
+
+**Dim 3 (Clarity of contribution)** fails an underclaiming paper for the same reason it fails an overclaiming one: the dimension's own test is "a reviewer can extract the contribution(s) in one sentence per item" from the abstract and introduction. A paper whose introduction leads with the easiest-to-defend subsidiary result, reaching its actual organizing idea only in the discussion, does not pass at full weight regardless of how well-supported that buried idea turns out to be.
+
+**Dim 9 (Rhetorical economy)** already asks "are the most important claims surfaced early?" and "is hedging proportional to genuine uncertainty, not used as a cushion?" — underclaiming fails both: burying the lede spends the reader's attention on background and qualification before the point, and hedging that exceeds the paper's actual uncertainty is disproportionate cushioning, not honesty.
+
+See `commands/paper-review.md` §"Underclaiming / buried-lede finding" for the reviewer-side cold-reader check, `commands/paper-draft.md` §"Strongest-claim inventory" for the questions the brief must answer before drafting, and `commands/paper-litsearch.md` §"Component-novelty calibration" for how related-work positioning should not collapse a broader synthesis claim to its least-novel ingredient.
+
+### Ambition is not novelty inflation
+
+A paper MAY make a large synthesis, framing, construction, or research-program claim while separately labeling which component results are inherited. An author is not required to pretend every ingredient is new in order to state that the combination reveals a consequential object or question — that labeled-ingredients move is exactly what dim 3's "one sentence per item" contribution test rewards. The verbs **"we propose," "we organize," "we build," "we argue," "we conjecture,"** and **"we test"** let an author be bold about the work actually being done while staying precise about its evidentiary status; none of them is, by itself, overclaiming.
+
+The reviewer should NOT score a bold synthesis claim down as overclaiming when the paper labels which ingredients are demonstrated, which are derived, which are new synthesis, and which are conjecture — that labeling is the paper doing its job. Novelty inflation is a *labeling* failure (asserting novelty without a specific search, presenting an unlabeled conjecture as a result — the overclaiming failure mode above), not the act of staking a large claim per se.
+
+## Audience fit (dims 7 and 9) — issue #1322
+
+Every sentence in the body **and the appendices** must be addressed to the reader the BRIEF declares (the `audience:` frontmatter key, or the BRIEF's "Audience" section). A sentence addressed to the project's operator or team is a non sequitur for that reader, however true, traceable, and short it is. Dim 9's "does every paragraph carry weight the argument needs?" is a question about *whom* the paragraph serves, not only about its length. Dim 7 scores the same defect as a prose-quality failure.
+
+Deduct under dim 7 and/or dim 9 for:
+
+- **authorization, commissioning, and approval statements** ("No replay wave is authorized by this estimate", "goal #40 commissioned this manuscript");
+- **budget and spend** approvals or caps;
+- **publication, release, or operator gates** ("subject to the operator's publication gate");
+- **internal goal, ticket, issue, board, or chat-message numbers** ("reopened by goal #38", "messages 31965, 31970");
+- **pointers the reader cannot follow**: private buckets (`s3://`), local paths, room-message numbers, and repo-relative artifact paths with no public link (the auditor's link-hygiene rule is `commands/paper-audit.md` step 6c).
+
+**Severity: `major` in the body, `minor` in an appendix.** An appendix is not out of scope. A BRIEF that permits moving process material to an appendix permits shortening it there, not addressing it to someone else. **Suggested fix: delete the sentence or move it to a non-published process log** (the thread's `BRIEF.md`, a session note). If the fact matters to the reader, restate it without the governance framing: say what was run, not who approved it.
+
+**Evidence comes from a deterministic, advisory pre-flight.** `paper-review` step 4i runs `anvil/lib/audience_check.py`, which writes `<thread>.{N}.audience/_review.json` (`kind: tool_evidence`). The scan carries no critical flag, owns no dimension, and never changes the total or `advance` by itself. Its hits are evidence for this sub-rule, and the reviewer confirms each one before deducting: a paper about access control may legitimately say "authorized", and a human "operator" may be a study subject. The sub-rule adds no dimension and no new critical-flag type, so the rubric total stays /44. When an audience defect meets the critical-flag standard (for example, the paper cannot go to the declared venue while it stands), the reviewer raises an ordinary critical flag under the open-ended clause in §"Critical flags".
+
+## Reader flow (dim 7) — issue #1397
+
+Dim 7 names "flow"; this section is where it is checked. `paper-review` step 4j dispatches a **fresh-context** subagent that reads the compiled paper front to back, once, as the BRIEF's declared audience, with no access to the scoring pass, and writes `<thread>.{N}.readerflow/` (`kind: judgment`, advisory, no critical flag, no owned dimension) plus a glossary table (term, first use, definition site, variants). The reviewer confirms each finding before deducting and cites the confirmed ones in dim 7's justification.
+
+Reader-flow checks, by defect class:
+
+1. **Define-before-use**: terms, symbols, acronyms, coined identifiers and cost units are defined at or before first use, and near it. Every glossary row whose first use precedes its definition site, or that has no definition site, is one class-1 finding (the glossary and the findings must not disagree). **Referent/baseline sub-rule (#1432)**: a quantity stated without its referent or baseline ("X % above" with no "above what", a number with no design/object label) is also class 1; every percentage or ratio in the abstract must name what it compares. The lens reads the PDF (placement) and the source (first use) together.
+2. **One concept, one name**: no concept under several names, no name for several things.
+3. **Roadmap order**: body section order matches the introduction's contribution list or roadmap.
+4. **Float proximity**: figures and tables print near the text that discusses them.
+5. **Objects before results**: results appear after the designs, baselines or datasets they concern are introduced.
+6. **Caveats said once**: no full caveat restated several times, no unprompted denial, no conclusion that repeats the abstract.
+7. **Number variants**: one quantity, one rounding, or an explicit bridge between variants.
+8. **Caveat widening** (when `paper-revise` supplies a reworded-caveats list; optional input): each reworded caveat's quantifier, causal word and referent still match the evidence.
+9. **Narrative placement**: no section, paragraph or motivation interrupts, delays or is missing from the reading path (a meta or related-work section mid-story, an overloaded paragraph, a missing "why this exists" sentence). Numbered 9 so class 8 keeps its meaning.
+
+**Severity:** class 1 and 5 findings are `major` in the body; other classes (including class 9) are `minor` and add no cap contribution, and a single repeated sentence under class 6 is a `nit`. Class 8 drift is `major`.
+
+**Flow improvement is measured by recurrence, not finding count (issue #1419).** The lens is a fresh read that surfaces a long tail of new, mostly minor items, so raw counts do not fall on flow-revised versions (conformal-antenna v11 -> v12: 42 -> 31; transmon-benchmark v22 -> v23: 36 -> 39; motor-gradient v21 -> v22: 41 -> 42). `paper-review` step 4j therefore records `R = recurring / prior_total`: the share of the previous version's `major` + `minor` readerflow findings that recur in the current one (matched one-to-one by `evidence_span`; see `anvil/skills/paper/lib/readerflow_recurrence.py`). A flow revision is expected to bring `R` to **0.5 or below**; this threshold is a proposed starting point, not computed on data. A pair above it is reported as such, not tuned away. `R` is advisory: it never changes the total, the dim 7 score or the cap below. Do not read a raw finding count as a flow-improvement signal.
+
+**Dim 7 cap (decided in #1397): cap dim 7 at 2/4 when three or more confirmed class 1 (define-before-use) findings remain unresolved in the body.** Rationale: an undefined term on first use stops a newcomer, and three of them is the point at which the geode-fem canary papers (≈50 flow defects each at 40-42/44) were unreadable on first pass despite a clean prose score. Fewer than three deduct within the 4-point weight without a cap. The cap is on dim 7 only; the weight, /44 total and threshold are unchanged, and nothing here is a critical flag. Findings the reviewer cannot confirm (a term the subagent missed in a footnote) do not count toward the cap.
 
 ## Perspective substrate (dim 4)
 
@@ -107,11 +186,13 @@ Suggested calibration:
 
 **Quoted evidence (issue #464 / #475).** Every justification follows the quoted-evidence sub-rule in `anvil/lib/snippets/rubric.md` §"Dimension scoring guidance" rule 1: at least one verbatim inline quote from `main.tex` with a location anchor — `("the quoted span" — §2.1)` — per dimension, with the `no instance of <X> found` by-absence marker allowed at full weight only. The reviewer self-checks its `scoring.md` against the body via `anvil/lib/evidence_check.py` before the review sidecar lands (see `commands/paper-review.md` step 5b); a quote that does not appear verbatim in the body is fabricated evidence and the justification must be re-derived. No weight or threshold changes — this is an evidence-discipline contract on the justification prose, not a scoring change.
 
+**Pending-measurement markers do not incur a dimension penalty (issue #842).** A well-formed `[PENDING <source>]` placeholder (see `anvil/lib/snippets/pending_marker.md`) is an honest disclosure that a specific number is not yet available (a training run still in progress, a benchmark queued, a vendor quote not returned) — it is NOT a defect and MUST NOT be scored down on any dimension (Evidence sufficiency D2 and Reproducibility D5 are the dimensions most tempting to mark down for "missing data"; do not). The reviewer scores the surrounding argument's soundness *assuming* the pending value resolves as described. The gap is tracked separately — and independently of both dimension scoring AND the blocking-verdict path — as an **outstanding dependency** (the specially-resolved `pending_dependency` flag; see the "Outstanding dependencies (not critical flags)" section below), which holds only the READY/AUDITED terminal transition. Double-penalizing (a low dimension score AND a blocked verdict) would punish exactly the honest disclosure this convention exists to encourage.
+
 ## Advance threshold
 
 - **≥35/44** — advance to `READY` (proceed to `paper-audit`).
 - **<35/44** — block; revise.
-- **Any critical flag set (from `.review/` OR `.audit/`)** — block regardless of total. The next revision must address the flagged issue specifically and the next reviewer pass must re-evaluate the flag before the threshold check applies.
+- **Any critical flag set (from `.review/` OR `.audit/` OR an operator `.operator/` sibling — issue #1322)** — block regardless of total. The next revision must address the flagged issue specifically and the next reviewer pass must re-evaluate the flag before the threshold check applies.
 
 ## Critical flags
 
@@ -123,8 +204,13 @@ A critical flag is an issue severe enough that **a sophisticated reader would im
 - **Numerical inconsistency** — A number reported in the text disagrees with the corresponding figure or table. Examples: text says 87.3 accuracy, Table 2 says 87.1; abstract claims 5x speedup, results show 3x.
 - **Close prior work ignored** — A paper exists in the literature that is so close to the claimed contribution that ignoring it constitutes a misrepresentation of novelty. This is harder to call than the first three — use only when the omitted paper is clearly known to a serious reviewer in the area.
 - **Build / compile failure** — `pdflatex` + `bibtex` cycle does not complete cleanly, OR the rendered PDF contains unresolved citations or references. Caught by `paper-audit`; if surfaced by the reviewer (e.g., from a build log shared in the version dir), set a flag. **This flag class also covers an external companion artifact** the paper's claims rest on (issue #663): when a thread declares an `artifact_verify` block in `<thread>/.anvil.json`, `paper-review` step 4f runs the declared commands (e.g., `lake build` on a companion Lean 4 proof repository, a benchmark harness, a dataset checksum) and a non-zero exit or timeout raises an `artifact_verify_<n>`-typed critical flag — "run the artifact, not just the PDF." A broken *declaration* (missing `cwd`, unlaunchable command) fails open as a `major` finding rather than a flag. See `SKILL.md` § "External-artifact verification" and `commands/paper-review.md` step 4f.
-
 The reviewer should also raise a flag for any other issue that, in their judgment, meets the standard above — these examples are starting points, not a closed set. **Critical flags from `paper-audit` carry equal weight** to those from `paper-review` and block advancement to `AUDITED` (i.e., the paper is not done) until addressed.
+
+## Outstanding dependencies (not critical flags — issue #842)
+
+An **unresolved pending marker** is deliberately NOT in the critical-flags list above — it is a distinct, specially-resolved category with the opposite verdict posture:
+
+- **Unresolved pending marker** — A well-formed `[PENDING <source>]` placeholder (see `anvil/lib/snippets/pending_marker.md`) remains in the body. `paper-review` step 4g runs `anvil/lib/pending_marker.py` unconditionally, which emits a specially-resolved `pending_dependency`-typed flag (the additive type from `anvil/lib/convergence.py`, modeled on the `no_go` precedent) whenever any active marker is still present — **deterministic, not a reviewer judgment call**. A well-formed marker is an **honest disclosure of a genuinely outstanding value, not a defect**: it does NOT lower any dimension score (see the "Pending-measurement markers do not incur a dimension penalty" note above) and it does NOT force `Verdict.BLOCK` the way a real critical flag does (`convergence.blocking_critical_flags` filters it out). Instead it is surfaced as an *outstanding dependency* in `verdict.md` and gates **only** the READY/AUDITED terminal transition (`paper-review` step 7 / `paper-audit` step 6b), separately from the score/verdict path. It clears once the marker is replaced with its **real value** — which is the ONLY correct resolution; the reviser must never fabricate a value to clear it (see `commands/paper-revise.md`).
 
 ## Verdict format
 

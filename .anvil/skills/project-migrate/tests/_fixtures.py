@@ -14,7 +14,7 @@ Builders match the three on-disk shapes the detector recognizes:
 - ``build_post_283_anvil_json`` — `<project>/BRIEF.md` + `<slug>/<slug>.N/`
   with `.anvil.json` (per-thread or root) and possibly `memo.md` bodies.
 - ``build_fully_migrated`` — target shape (everything correct).
-- ``build_bessemer_shaped`` — sanitized multi-thread snapshot exercising
+- ``build_foundry_shaped`` — sanitized multi-thread snapshot exercising
   the canary case (multiple memo.N versions + critic siblings).
 """
 
@@ -97,7 +97,7 @@ def build_pre_283_classic(
 
 def build_post_283_anvil_json(
     root: Path,
-    project_name: str = "brains-for-robots",
+    project_name: str = "smart-actuators",
     *,
     slugs: Optional[list] = None,
 ) -> Path:
@@ -179,7 +179,7 @@ def build_post_283_anvil_json(
 
 def build_fully_migrated(
     root: Path,
-    project_name: str = "brains-for-robots-migrated",
+    project_name: str = "smart-actuators-migrated",
     *,
     slugs: Optional[list] = None,
 ) -> Path:
@@ -245,17 +245,17 @@ def build_fully_migrated(
     return project_dir
 
 
-def build_bessemer_shaped(
-    root: Path, project_name: str = "bessemer"
+def build_foundry_shaped(
+    root: Path, project_name: str = "foundry"
 ) -> Path:
-    """Build a sanitized bessemer-shaped pre-#283 snapshot.
+    """Build a sanitized foundry-shaped pre-#283 snapshot.
 
     Multiple memo.N versions with critic siblings (review and audit dirs)
     to exercise the canary case where critic siblings need renaming
     alongside their version dirs.
 
     Shape:
-      bessemer/
+      foundry/
         memo.1/memo.md
         memo.1.review/verdict.md
         memo.2/memo.md
@@ -269,7 +269,7 @@ def build_bessemer_shaped(
     project_dir.mkdir(parents=True, exist_ok=True)
     for n in (1, 2, 3):
         version_dir = project_dir / f"memo.{n}"
-        body_text = f"# bessemer memo v{n}\n\n"
+        body_text = f"# foundry memo v{n}\n\n"
         if n == 3:
             # Add a cross-thread reference to memo.2 to exercise rewriting.
             body_text += (
@@ -318,9 +318,9 @@ def build_bessemer_shaped(
     return project_dir
 
 
-def build_aldus_shaped_deck(
+def build_beacon_shaped_deck(
     root: Path,
-    project_name: str = "brains-for-robots",
+    project_name: str = "smart-actuators",
     *,
     thread: str = "series-a-deck",
     with_project_brief: bool = False,
@@ -364,7 +364,7 @@ def build_aldus_shaped_deck(
     _write(
         thread_root / "BRIEF.md",
         "---\n"
-        "company: Aldus Robotics\n"
+        "company: Beacon Robotics\n"
         "stage: series-a\n"
         "---\n"
         "\n"
@@ -448,7 +448,7 @@ def build_mixed_memo_deck_proposal(
 
     One project root with three pre-#295 flat threads:
 
-    - ``aldus`` — memo thread (``aldus.N/memo.md`` + review sibling;
+    - ``beacon`` — memo thread (``beacon.N/memo.md`` + review sibling;
       skill-fixed body needs the slug-echo rename).
     - ``series-a-deck`` — deck thread in the nested-but-flat shape
       (thread root with BRIEF/refs/assets/.anvil.json as a sibling of
@@ -466,34 +466,34 @@ def build_mixed_memo_deck_proposal(
 
     # --- memo thread (flat, named stem, skill-fixed body) ---
     for n in (1, 2):
-        version_dir = project_dir / f"aldus.{n}"
+        version_dir = project_dir / f"beacon.{n}"
         _write(
             version_dir / "memo.md",
-            f"# aldus memo v{n}\n\nBody.\n",
+            f"# beacon memo v{n}\n\nBody.\n",
         )
         _write(
             version_dir / "_progress.json",
             json.dumps(
                 {
                     "version": 1,
-                    "thread": "aldus",
+                    "thread": "beacon",
                     "phases": {"draft": {"state": "done"}},
                 },
                 indent=2,
             ) + "\n",
         )
     _write(
-        project_dir / "aldus.2.review" / "verdict.md",
-        "# Review of aldus.2\n\nVerdict: advance.\n",
+        project_dir / "beacon.2.review" / "verdict.md",
+        "# Review of beacon.2\n\nVerdict: advance.\n",
     )
 
-    # --- deck thread (nested-but-flat; reuse the aldus-shaped builder
+    # --- deck thread (nested-but-flat; reuse the beacon-shaped builder
     # pieces inline so this fixture stays self-describing) ---
     deck = "series-a-deck"
     deck_root = project_dir / deck
     _write(
         deck_root / "BRIEF.md",
-        "---\ncompany: Aldus Robotics\nstage: series-a\n---\n\n"
+        "---\ncompany: Beacon Robotics\nstage: series-a\n---\n\n"
         f"# Brief: {deck}\n",
     )
     _write(
@@ -645,6 +645,74 @@ def build_bare_version_dir_threads(
     )
     _write(project_dir / "paper.pdf", "PDF-PLACEHOLDER\n")
     _write(project_dir / "figures" / "fig1.png", "PNG-PLACEHOLDER\n")
+    return project_dir
+
+
+def build_bare_foreign_md_body_threads(
+    root: Path,
+    project_name: str = "wave-two-five-blocks",
+    *,
+    slug: str = "wave-two-five-blocks",
+    body_filename: str = "post.md",
+) -> Path:
+    """Build a BARE project with a FOREIGN ``.md`` body filename (#878).
+
+    Anonymized reproduction of the `anvil:essay` adoption-target shape: a
+    hand-rolled blog pipeline that independently converged on the anvil
+    ``{thread}.{N}/`` + ``.review``/``.audit`` sibling grammar, but names
+    its body file ``post.md`` — a foreign pipeline's fixed name, not any
+    anvil skill's historical fixed name (``_SKILL_FIXED_BODY_FILENAMES``
+    doesn't recognize it, so the historical rename loop has nothing to
+    match). Zero anvil config anywhere (no `BRIEF.md`, no `.anvil.json`).
+
+    Shape:
+
+      <project>/
+        <slug>.1/post.md
+        <slug>.2/post.md
+        <slug>.2.review/review.md      ← hand-rolled, unstamped
+        <slug>.3/post.md
+    """
+    project_dir = root / project_name
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    for n in (1, 2, 3):
+        _write(
+            project_dir / f"{slug}.{n}" / body_filename,
+            f"# Wave two, five blocks (v{n})\n\nPost body draft v{n}.\n",
+        )
+    _write(
+        project_dir / f"{slug}.2.review" / "review.md",
+        "# Review of draft v2\n\nHand-rolled reviewer notes.\n",
+    )
+    return project_dir
+
+
+def build_bare_ambiguous_md_body_threads(
+    root: Path,
+    project_name: str = "ambiguous-post",
+    *,
+    slug: str = "ambiguous-post",
+) -> Path:
+    """Build a BARE project with TWO distinct foreign ``.md`` bodies (#878).
+
+    A single thread whose version dirs disagree on the foreign body
+    filename (``post.md`` on one version, ``draft.md`` on another) — the
+    ambiguous case the single-candidate constraint in
+    ``_foreign_md_body_candidates`` refuses to guess at. No rename should
+    be planned; the plan should surface an operator-facing note instead.
+    """
+    project_dir = root / project_name
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    _write(
+        project_dir / f"{slug}.1" / "post.md",
+        "# Ambiguous post v1\n",
+    )
+    _write(
+        project_dir / f"{slug}.2" / "draft.md",
+        "# Ambiguous post v2 (renamed pipeline mid-flight)\n",
+    )
     return project_dir
 
 
@@ -966,27 +1034,27 @@ def build_letter_family_threads(
     flat ``{Project}.{Letter}.{N}/`` version dirs with foreign-tagged
     critic siblings, hand-rolled single-file ``review.md`` payloads, a
     stray non-versioned dir, and an orphan sidecar.
-    ``with_leading_zero_dup=True`` adds a ``Brasidas.C.07/`` twin of
-    the existing ``Brasidas.C.7/`` (issue #458 — both parse to
-    ``Brasidas.C`` version slot 7).
+    ``with_leading_zero_dup=True`` adds a ``Meridian.C.07/`` twin of
+    the existing ``Meridian.C.7/`` (issue #458 — both parse to
+    ``Meridian.C`` version slot 7).
 
-    Shape (two letter families, gap at ``Brasidas.C.6`` deliberate)::
+    Shape (two letter families, gap at ``Meridian.C.6`` deliberate)::
 
       <root>/<project_name>/
-        Brasidas.A.1/spec.md
-        Brasidas.A.2/spec.md
-        Brasidas.A.2.review/review.md          ← single-file payload
-        Brasidas.C.5/spec.md
-        Brasidas.C.5.review-v2/review.md       ← versioned foreign tag
-        Brasidas.C.5.pre_flight/review.md
-        Brasidas.C.7/spec.md
-        Brasidas.C.7.enablement/review.md
-        Brasidas.C.7.s101/review.md
-        Brasidas.C.7.audit/review.md           ← same-dir .audit/.audit2
-        Brasidas.C.7.audit2/review.md             pair (distinct tags)
-        Brasidas.C.9.fto/review.md             ← orphan sidecar (no C.9)
+        Meridian.A.1/spec.md
+        Meridian.A.2/spec.md
+        Meridian.A.2.review/review.md          ← single-file payload
+        Meridian.C.5/spec.md
+        Meridian.C.5.review-v2/review.md       ← versioned foreign tag
+        Meridian.C.5.pre_flight/review.md
+        Meridian.C.7/spec.md
+        Meridian.C.7.enablement/review.md
+        Meridian.C.7.s101/review.md
+        Meridian.C.7.audit/review.md           ← same-dir .audit/.audit2
+        Meridian.C.7.audit2/review.md             pair (distinct tags)
+        Meridian.C.9.fto/review.md             ← orphan sidecar (no C.9)
         notes-archive/scratch.md               ← stray non-versioned dir
-        Brasidas.C.7.1/oddball.md              ← stray (matches neither
+        Meridian.C.7.1/oddball.md              ← stray (matches neither
                                                   grammar: numeric tag)
 
     ``with_sidecars=False`` builds only the version dirs + strays (the
@@ -1003,8 +1071,8 @@ def build_letter_family_threads(
     project_dir.mkdir(parents=True, exist_ok=True)
 
     version_dirs = {
-        "Brasidas.A": (1, 2),
-        "Brasidas.C": (5, 7),
+        "Meridian.A": (1, 2),
+        "Meridian.C": (5, 7),
     }
     for stem, versions in version_dirs.items():
         for n in versions:
@@ -1014,20 +1082,20 @@ def build_letter_family_threads(
             )
     if with_leading_zero_dup:
         _write(
-            project_dir / "Brasidas.C.07" / "spec.md",
-            "# Brasidas.C v07\n\nLeading-zero twin (zero-padded).\n",
+            project_dir / "Meridian.C.07" / "spec.md",
+            "# Meridian.C v07\n\nLeading-zero twin (zero-padded).\n",
         )
 
     if with_sidecars:
         sidecar_names = (
-            "Brasidas.A.2.review",
-            "Brasidas.C.5.review-v2",
-            "Brasidas.C.5.pre_flight",
-            "Brasidas.C.7.enablement",
-            "Brasidas.C.7.s101",
-            "Brasidas.C.7.audit",
-            "Brasidas.C.7.audit2",
-            "Brasidas.C.9.fto",  # orphan: Brasidas.C.9 absent
+            "Meridian.A.2.review",
+            "Meridian.C.5.review-v2",
+            "Meridian.C.5.pre_flight",
+            "Meridian.C.7.enablement",
+            "Meridian.C.7.s101",
+            "Meridian.C.7.audit",
+            "Meridian.C.7.audit2",
+            "Meridian.C.9.fto",  # orphan: Meridian.C.9 absent
         )
         for name in sidecar_names:
             _write(
@@ -1040,7 +1108,7 @@ def build_letter_family_threads(
         "# Scratch\n\nStray non-versioned dir content.\n",
     )
     _write(
-        project_dir / "Brasidas.C.7.1" / "oddball.md",
+        project_dir / "Meridian.C.7.1" / "oddball.md",
         "# Oddball\n\nMinor-versioned-looking stray.\n",
     )
 
@@ -1085,17 +1153,17 @@ def build_adopted_review_threads(
     Shape (two adopted threads)::
 
       <root>/<project_name>/
-        brasidas-c/
-          brasidas-c.5/spec.md
-          brasidas-c.5.review/review.md          ← review.md-only sidecar
-          brasidas-c.7/spec.md
-          brasidas-c.7.enablement/review.md      ← review.md-only sidecar
-          brasidas-c.7.s101/review.md            ← review.md-only sidecar
-        brasidas-a/
-          brasidas-a.2/spec.md
-          brasidas-a.2.review/review.md          ← review.md-only sidecar
+        meridian-c/
+          meridian-c.5/spec.md
+          meridian-c.5.review/review.md          ← review.md-only sidecar
+          meridian-c.7/spec.md
+          meridian-c.7.enablement/review.md      ← review.md-only sidecar
+          meridian-c.7.s101/review.md            ← review.md-only sidecar
+        meridian-a/
+          meridian-a.2/spec.md
+          meridian-a.2.review/review.md          ← review.md-only sidecar
 
-    ``with_real_sibling=True`` adds a co-sibling `brasidas-c.7.audit/`
+    ``with_real_sibling=True`` adds a co-sibling `meridian-c.7.audit/`
     that already carries a canonical `_review.json` WITH real scores (so
     the load-bearing zero-dimension-tolerance test can aggregate a stub
     alongside a genuinely-scored critic on the SAME version dir).
@@ -1111,11 +1179,11 @@ def build_adopted_review_threads(
     project_dir.mkdir(parents=True, exist_ok=True)
 
     threads = {
-        "brasidas-c": {
+        "meridian-c": {
             5: ("review",),
             7: ("enablement", "s101"),
         },
-        "brasidas-a": {
+        "meridian-a": {
             2: ("review",),
         },
     }
@@ -1132,18 +1200,18 @@ def build_adopted_review_threads(
                     _write_stub_payload(sidecar, f"{slug}.{n}", tag)
 
     if with_real_sibling:
-        # A genuinely-scored co-sibling on brasidas-c.7 (alongside the
+        # A genuinely-scored co-sibling on meridian-c.7 (alongside the
         # foreign .enablement / .s101 stubs). Real per-dimension scores +
         # a real total/threshold/verdict — the aggregate of [stub, this]
         # must reflect THIS critic's numbers untouched.
-        real = project_dir / "brasidas-c" / "brasidas-c.7.audit"
+        real = project_dir / "meridian-c" / "meridian-c.7.audit"
         _write(
             real / "_review.json",
             json.dumps(
                 {
                     "schema_version": "1",
                     "kind": "judgment",
-                    "version_dir": "brasidas-c.7",
+                    "version_dir": "meridian-c.7",
                     "critic_id": "audit",
                     "scores": [
                         {
@@ -1337,9 +1405,9 @@ def build_provisional_letter_family(
     Shape::
 
       <root>/<project_name>/
-        Brasidas.P.1/provisional.tex
-        Brasidas.P.2/provisional.tex
-        [Brasidas.P.2/counsel_memo.tex]   ← with_counsel_memo
+        Meridian.P.1/provisional.tex
+        Meridian.P.2/provisional.tex
+        [Meridian.P.2/counsel_memo.tex]   ← with_counsel_memo
 
     ``counsel_only`` builds version dirs carrying ONLY
     ``counsel_memo.tex`` (the refusal fixture). Returns the family dir
@@ -1350,17 +1418,17 @@ def build_provisional_letter_family(
     for n in (1, 2):
         if counsel_only:
             _write(
-                project_dir / f"Brasidas.P.{n}" / "counsel_memo.tex",
+                project_dir / f"Meridian.P.{n}" / "counsel_memo.tex",
                 _COUNSEL_MEMO_TEX,
             )
         else:
             _write(
-                project_dir / f"Brasidas.P.{n}" / "provisional.tex",
+                project_dir / f"Meridian.P.{n}" / "provisional.tex",
                 _PROVISIONAL_TEX,
             )
     if with_counsel_memo and not counsel_only:
         _write(
-            project_dir / "Brasidas.P.2" / "counsel_memo.tex",
+            project_dir / "Meridian.P.2" / "counsel_memo.tex",
             _COUNSEL_MEMO_TEX,
         )
     return project_dir
@@ -1371,10 +1439,10 @@ __all__ = [
     "ENROLL_OPERATOR_BRIEF",
     "FOREIGN_REVIEW_PROSE",
     "build_adopted_review_threads",
-    "build_aldus_shaped_deck",
+    "build_beacon_shaped_deck",
     "build_bare_native_provisional",
     "build_bare_version_dir_threads",
-    "build_bessemer_shaped",
+    "build_foundry_shaped",
     "build_fully_migrated",
     "build_letter_family_threads",
     "build_loose_file_batch",

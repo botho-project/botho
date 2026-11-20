@@ -27,7 +27,7 @@ Test coverage map (from issue #285 AC list):
   strict raises FileNotFoundError.
 - **On-disk fixtures** — a well-formed BRIEF fixture under
   ``fixtures/project_brief_parser/`` exercises the canonical
-  brains-for-robots shape end-to-end (regression anchor for sub-
+  smart-actuators shape end-to-end (regression anchor for sub-
   deliverable 3 / #286 when it wires the overlay selector).
 
 Fixtures live under ``fixtures/project_brief_parser/`` — distinct from
@@ -108,14 +108,14 @@ def _write_brief(
 def _well_formed_frontmatter() -> str:
     """Return a canonical, valid project BRIEF frontmatter body.
 
-    Mirrors the brains-for-robots fixture shape so tests that need a
+    Mirrors the smart-actuators fixture shape so tests that need a
     baseline "everything works" parse can use this directly.
     """
     return textwrap.dedent(
         """\
-        project: brains-for-robots
+        project: smart-actuators
         audience:
-          - Sphere internal leadership (primary)
+          - Acme internal leadership (primary)
           - VC investors (secondary)
         hard_rules:
           - Avoid speculative claims without an evidence anchor.
@@ -164,9 +164,9 @@ class TestWellFormedBrief(_TmpProjectBase):
 
         self.assertIsNotNone(brief)
         assert brief is not None  # for type narrowing
-        self.assertEqual(brief.project, "brains-for-robots")
+        self.assertEqual(brief.project, "smart-actuators")
         self.assertEqual(len(brief.audience), 2)
-        self.assertIn("Sphere internal leadership (primary)", brief.audience)
+        self.assertIn("Acme internal leadership (primary)", brief.audience)
         self.assertEqual(len(brief.hard_rules), 2)
         self.assertEqual(len(brief.documents), 5)
 
@@ -174,7 +174,7 @@ class TestWellFormedBrief(_TmpProjectBase):
         _write_brief(self.project_dir, _well_formed_frontmatter())
         brief = load_project_brief_strict(self.project_dir)
 
-        self.assertEqual(brief.project, "brains-for-robots")
+        self.assertEqual(brief.project, "smart-actuators")
         self.assertEqual(len(brief.documents), 5)
 
     def test_documents_are_typed_brief_document_instances(self) -> None:
@@ -365,6 +365,48 @@ class TestUnknownArtifactType(_TmpProjectBase):
 
 
 # ---------------------------------------------------------------------------
+# Legacy input aliases for renamed artifact types (issue #694)
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyArtifactTypeInputAlias(_TmpProjectBase):
+    """Issue #694: the `pub` skill was renamed to `paper`.
+
+    A consumer BRIEF authored before the rename may still carry
+    ``artifact_type: pub``. The parser accepts it as an input alias and
+    normalizes to the canonical ``ArtifactType.PAPER`` — nothing emits
+    the legacy string. New BRIEFs use ``artifact_type: paper`` directly.
+    """
+
+    def _brief_with_type(self, artifact_type: str) -> str:
+        return textwrap.dedent(
+            f"""\
+            project: tiny
+            documents:
+              - slug: my-paper
+                artifact_type: {artifact_type}
+            """
+        ).rstrip()
+
+    def test_legacy_pub_normalizes_to_paper(self) -> None:
+        _write_brief(self.project_dir, self._brief_with_type("pub"))
+        brief = load_project_brief_strict(self.project_dir)
+        doc = brief.document_for_slug("my-paper")
+        self.assertIsNotNone(doc)
+        assert doc is not None
+        self.assertEqual(doc.artifact_type, ArtifactType.PAPER)
+        # Input-only: the normalized value is the canonical string.
+        self.assertEqual(doc.artifact_type.value, "paper")
+
+    def test_canonical_paper_parses_directly(self) -> None:
+        _write_brief(self.project_dir, self._brief_with_type("paper"))
+        brief = load_project_brief_strict(self.project_dir)
+        doc = brief.document_for_slug("my-paper")
+        assert doc is not None
+        self.assertEqual(doc.artifact_type, ArtifactType.PAPER)
+
+
+# ---------------------------------------------------------------------------
 # Skill-identity artifact types (issue #386)
 # ---------------------------------------------------------------------------
 
@@ -416,7 +458,7 @@ class TestSkillIdentityArtifactTypes(_TmpProjectBase):
 
     def test_pitch_deck_rejected_listing_all_registered_values(self) -> None:
         """The studio's informal 'pitch-deck' stays unregistered — the
-        closed-ended error lists all sixteen registered values so the
+        closed-ended error lists all nineteen registered values so the
         operator can self-correct."""
         fm = textwrap.dedent(
             """\
@@ -431,7 +473,7 @@ class TestSkillIdentityArtifactTypes(_TmpProjectBase):
             load_project_brief_strict(self.project_dir)
         msg = str(cm.exception)
         self.assertIn("pitch-deck", msg)
-        self.assertEqual(len(REGISTERED_ARTIFACT_TYPES), 16)
+        self.assertEqual(len(REGISTERED_ARTIFACT_TYPES), 19)
         for registered in REGISTERED_ARTIFACT_TYPES:
             self.assertIn(registered, msg)
 
@@ -456,12 +498,15 @@ class TestSkillIdentityArtifactTypes(_TmpProjectBase):
             ArtifactType.DECK,
             ArtifactType.SLIDES,
             ArtifactType.PROPOSAL,
-            ArtifactType.PUB,
+            ArtifactType.PAPER,
             ArtifactType.REPORT,
             ArtifactType.IP_USPTO,
             ArtifactType.IP_USPTO_PROVISIONAL,
             ArtifactType.ESSAY,
             ArtifactType.DATASHEET,
+            ArtifactType.PRIMER,
+            ArtifactType.SPEC,
+            ArtifactType.MEMOIR,
         ):
             self.assertNotIn(skill_identity, MEMO_ARTIFACT_TYPES)
 
@@ -469,7 +514,10 @@ class TestSkillIdentityArtifactTypes(_TmpProjectBase):
         """Issue #394: the #386 guard is re-keyed onto an explicit set.
 
         Issue #408 grew the set with ``pub`` (research-paper threads —
-        the project-migrate BRIEF-synthesis registry gap); issue #432
+        the project-migrate BRIEF-synthesis registry gap; the skill was
+        renamed ``pub`` → ``paper`` under #694, so the enum member is now
+        ``ArtifactType.PAPER`` and the legacy ``pub`` string is an input
+        alias); issue #432
         grew it with ``report`` (the vN report-dir adoption mode's
         inferred type — the same registry-gap shape); issue #440 grew
         it with ``ip-uspto`` / ``ip-uspto-provisional`` (the
@@ -481,7 +529,17 @@ class TestSkillIdentityArtifactTypes(_TmpProjectBase):
         ``anvil:datasheet`` artifact class — shipped #418/#421 before
         this registry pattern was consistently applied, backfilled so
         rubric-rebackport's BRIEF-route inference has a validated
-        carrier)."""
+        carrier); issues #686/#687 grew it with ``primer`` (the
+        ``anvil:primer`` artifact class — long-form pedagogical
+        explainers own their threads in a shared project BRIEF, same
+        skill-identity shape); issues #697/#706 grew it with ``spec``
+        (the ``anvil:spec`` artifact class — normative technical
+        specifications maintained against an implementation own their
+        threads in a shared project BRIEF, same skill-identity shape);
+        issue #740 grew it with ``memoir`` (the ``anvil:memoir``
+        artifact class — chaptered narrative nonfiction reconstructed
+        from a private evidentiary corpus own their chapter threads in
+        a shared project BRIEF, same skill-identity shape)."""
         from project_brief import (  # noqa: PLC0415
             SKILL_IDENTITY_ARTIFACT_TYPES,
         )
@@ -493,12 +551,15 @@ class TestSkillIdentityArtifactTypes(_TmpProjectBase):
                     ArtifactType.DECK,
                     ArtifactType.SLIDES,
                     ArtifactType.PROPOSAL,
-                    ArtifactType.PUB,
+                    ArtifactType.PAPER,
                     ArtifactType.REPORT,
                     ArtifactType.IP_USPTO,
                     ArtifactType.IP_USPTO_PROVISIONAL,
                     ArtifactType.ESSAY,
                     ArtifactType.DATASHEET,
+                    ArtifactType.PRIMER,
+                    ArtifactType.SPEC,
+                    ArtifactType.MEMOIR,
                 }
             ),
         )
@@ -960,6 +1021,123 @@ class TestMalformedTargetLength(_TmpProjectBase):
 
 
 # ---------------------------------------------------------------------------
+# target_length: { slides: [...] } — issue #742
+# ---------------------------------------------------------------------------
+
+
+class TestTargetLengthSlidesUnit(_TmpProjectBase):
+    """``slides`` is a truthful third ``target_length`` unit for deck/slides.
+
+    A deck (or slides) thread is authored and reviewed in slide count,
+    not words or pages — declaring ``pages`` on a deck previously routed
+    silently through the 600-words-per-page conversion, fabricating a
+    word budget for an artifact that has none. ``slides`` is accepted
+    ONLY for ``artifact_type: deck`` / ``artifact_type: slides``, and is
+    passed through WITHOUT any words-per-page-style conversion — slide
+    count is the terminal unit.
+    """
+
+    def test_deck_slides_unit_parses_without_conversion(self) -> None:
+        fm = textwrap.dedent(
+            """\
+            project: tiny
+            documents:
+              - slug: pitch-deck
+                artifact_type: deck
+                target_length: { slides: [11, 14] }
+            """
+        ).rstrip()
+        _write_brief(self.project_dir, fm)
+        brief = load_project_brief_strict(self.project_dir)
+
+        tl = brief.documents[0].target_length
+        self.assertIsNotNone(tl)
+        assert tl is not None
+        self.assertEqual(tl.source_key, "slides")
+        # No words-per-page-style conversion: the raw slide bounds pass
+        # through verbatim (11, 14) — NOT multiplied by any wpp factor.
+        self.assertEqual(tl.min_words, 11)
+        self.assertEqual(tl.max_words, 14)
+
+    def test_slides_artifact_type_slides_unit_parses(self) -> None:
+        """``artifact_type: slides`` (the talk-deck skill) also accepts ``slides``."""
+        fm = textwrap.dedent(
+            """\
+            project: tiny
+            documents:
+              - slug: talk
+                artifact_type: slides
+                target_length: { slides: [20, 25] }
+            """
+        ).rstrip()
+        _write_brief(self.project_dir, fm)
+        brief = load_project_brief_strict(self.project_dir)
+
+        tl = brief.documents[0].target_length
+        self.assertIsNotNone(tl)
+        assert tl is not None
+        self.assertEqual(tl.source_key, "slides")
+        self.assertEqual(tl.min_words, 20)
+        self.assertEqual(tl.max_words, 25)
+
+    def test_non_deck_artifact_type_slides_unit_rejected(self) -> None:
+        """A ``slides`` unit on a non-deck/non-slides document is rejected."""
+        fm = textwrap.dedent(
+            """\
+            project: tiny
+            documents:
+              - slug: doc
+                artifact_type: investment-memo
+                target_length: { slides: [11, 14] }
+            """
+        ).rstrip()
+        _write_brief(self.project_dir, fm)
+        with self.assertRaises(ValueError) as cm:
+            load_project_brief_strict(self.project_dir)
+        msg = str(cm.exception)
+        self.assertIn("slides", msg)
+        self.assertIn("deck", msg)
+        self.assertIn("investment-memo", msg)
+
+    def test_deck_words_and_slides_both_declared_raises(self) -> None:
+        """Even on a deck, declaring both ``words`` and ``slides`` is ambiguous."""
+        fm = textwrap.dedent(
+            """\
+            project: tiny
+            documents:
+              - slug: pitch-deck
+                artifact_type: deck
+                target_length: { words: [100, 200], slides: [11, 14] }
+            """
+        ).rstrip()
+        _write_brief(self.project_dir, fm)
+        with self.assertRaises(ValueError) as cm:
+            load_project_brief_strict(self.project_dir)
+        self.assertIn("ambiguous", str(cm.exception).lower())
+
+    def test_deck_words_unit_still_accepted(self) -> None:
+        """A deck may still declare ``words`` / ``pages`` — ``slides`` is additive, not exclusive."""
+        fm = textwrap.dedent(
+            """\
+            project: tiny
+            documents:
+              - slug: pitch-deck
+                artifact_type: deck
+                target_length: { words: [500, 800] }
+            """
+        ).rstrip()
+        _write_brief(self.project_dir, fm)
+        brief = load_project_brief_strict(self.project_dir)
+
+        tl = brief.documents[0].target_length
+        self.assertIsNotNone(tl)
+        assert tl is not None
+        self.assertEqual(tl.source_key, "words")
+        self.assertEqual(tl.min_words, 500)
+        self.assertEqual(tl.max_words, 800)
+
+
+# ---------------------------------------------------------------------------
 # Absence-tolerant behavior
 # ---------------------------------------------------------------------------
 
@@ -1100,7 +1278,7 @@ class TestAudienceDictShape(_TmpProjectBase):
             """\
             project: tiny
             audience:
-              primary: Sphere internal leadership
+              primary: Acme internal leadership
               secondary: VC investors
             documents:
               - slug: doc
@@ -1111,7 +1289,7 @@ class TestAudienceDictShape(_TmpProjectBase):
         brief = load_project_brief_strict(self.project_dir)
         self.assertEqual(
             brief.audience,
-            ["Sphere internal leadership", "VC investors"],
+            ["Acme internal leadership", "VC investors"],
         )
 
     def test_dict_with_list_values_flattens_per_role(self) -> None:
@@ -1232,7 +1410,7 @@ class TestAudienceDictShape(_TmpProjectBase):
             """\
             project: tiny
             audience:
-              - Sphere internal leadership
+              - Acme internal leadership
               - VC investors
             documents:
               - slug: doc
@@ -1243,7 +1421,7 @@ class TestAudienceDictShape(_TmpProjectBase):
         brief = load_project_brief_strict(self.project_dir)
         self.assertEqual(
             brief.audience,
-            ["Sphere internal leadership", "VC investors"],
+            ["Acme internal leadership", "VC investors"],
         )
 
     def test_dict_audience_does_not_bypass_max_iterations_check(self) -> None:
@@ -1258,7 +1436,7 @@ class TestAudienceDictShape(_TmpProjectBase):
             """\
             project: tiny
             audience:
-              primary: Sphere internal leadership
+              primary: Acme internal leadership
               secondary: VC investors
             documents:
               - slug: doc
@@ -1617,7 +1795,7 @@ class TestDocumentIterationCapOverride(_TmpProjectBase):
             """\
             project: tiny
             documents:
-              - slug: aldus
+              - slug: beacon
                 artifact_type: investment-memo
                 max_iterations: 5
                 iteration_cap_rationale: |
@@ -1837,9 +2015,9 @@ class TestDocumentIterationCapOverride(_TmpProjectBase):
         """
         fm = textwrap.dedent(
             """\
-            project: aldus-portfolio
+            project: beacon-portfolio
             documents:
-              - slug: aldus
+              - slug: beacon
                 artifact_type: investment-memo
                 max_iterations: 6
                 iteration_cap_rationale: |
@@ -1852,7 +2030,7 @@ class TestDocumentIterationCapOverride(_TmpProjectBase):
         ).rstrip()
         _write_brief(self.project_dir, fm)
         brief = load_project_brief_strict(self.project_dir)
-        doc = brief.document_for_slug("aldus")
+        doc = brief.document_for_slug("beacon")
         self.assertIsNotNone(doc)
         assert doc is not None  # type narrowing
         self.assertEqual(doc.max_iterations, 6)
@@ -1871,7 +2049,7 @@ class TestDocumentIterationCapOverride(_TmpProjectBase):
 
 
 # ---------------------------------------------------------------------------
-# On-disk fixture (the brains-for-robots canary shape)
+# On-disk fixture (the smart-actuators canary shape)
 # ---------------------------------------------------------------------------
 
 
@@ -1885,14 +2063,14 @@ class TestOnDiskFixture(unittest.TestCase):
     """
 
     def test_brains_for_robots_fixture_parses(self) -> None:
-        fixture = _FIXTURES / "brains-for-robots"
+        fixture = _FIXTURES / "smart-actuators"
         self.assertTrue(
             fixture.exists(),
             f"fixture missing: {fixture}",
         )
 
         brief = load_project_brief_strict(fixture)
-        self.assertEqual(brief.project, "brains-for-robots")
+        self.assertEqual(brief.project, "smart-actuators")
         self.assertEqual(len(brief.documents), 5)
 
         slugs = {doc.slug for doc in brief.documents}

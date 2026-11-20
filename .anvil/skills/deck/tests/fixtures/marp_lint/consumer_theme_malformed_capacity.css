@@ -1,0 +1,16 @@
+/* @theme fixture-consumer-theme-malformed */
+
+/* A consumer theme whose @anvil-capacity block is present but entirely
+ * malformed (unknown keys, unparseable values, no ':' on one line) — the
+ * parser must fall back to the shipped default Geometry() rather than
+ * crash. Used by test_marp_lint.py (issue #1150). */
+
+/* @anvil-capacity
+   not_a_real_geometry_field: 99
+   capacity_units: not-a-number
+   this line has no colon at all
+*/
+
+section {
+  padding: 56px;
+}

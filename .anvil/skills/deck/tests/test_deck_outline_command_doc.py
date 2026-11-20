@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent  # anvil/skills/deck/
 
@@ -39,10 +41,6 @@ SKIP_CHECK_HEADINGS = (
     "## Beats",
     "## Slide-by-slide",
 )
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 def test_deck_outline_file_exists():

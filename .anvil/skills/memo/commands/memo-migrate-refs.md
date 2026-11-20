@@ -50,9 +50,9 @@ The `(BRIEF Source <N>)` ordinal carries provenance back to the BRIEF.md §Sourc
 
 1. **Resolve thread directory**. Confirm `<thread>/BRIEF.md` exists. When missing, raise `MigrateError` with the resolved path (mirrors the source-missing failure mode in `memo-migrate`).
 2. **Parse `## Sources` section**. Find the `## Sources` heading via case-insensitive regex (matches `# Sources`, `## Sources`, `### Sources`, or `#### Sources`). The section runs to the next heading of equal or higher level. Handle the three observed shapes:
-   - **Bulleted with markdown-link** (aldus): `- [Title](URL) — claim`
+   - **Bulleted with markdown-link** (beacon): `- [Title](URL) — claim`
    - **Numbered prose** (geode): `1. <name>, <date> — <claim with figures>`
-   - **Numbered bold-prefix** (the-bottega): `1. **Title** — <description with inline URLs>`
+   - **Numbered bold-prefix** (the-atelier): `1. **Title** — <description with inline URLs>`
 
    When the §Sources section is absent or empty, return success with `entries_parsed=0` and a note. This is graceful degradation — many BRIEFs (especially the canonical `BRIEF.fresh.md.example`) legitimately have no §Sources section.
 3. **Derive `<key>.md` filename** per §Sources entry:

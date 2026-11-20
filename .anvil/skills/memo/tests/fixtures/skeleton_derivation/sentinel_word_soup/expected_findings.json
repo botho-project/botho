@@ -1,0 +1,46 @@
+{
+  "skeleton_derivation": {
+    "ran": true,
+    "claims_enumerated": 4,
+    "findings_count": 3,
+    "findings_by_severity": {
+      "critical": 1,
+      "important": 2,
+      "suggestion": 0
+    },
+    "findings": [
+      {
+        "claim_id": 1,
+        "claim_excerpt": "owning the harness beats owning the models",
+        "skeleton_location": "root claim",
+        "body_location": "Executive summary",
+        "verdict": "CONTRADICTED",
+        "severity": "critical",
+        "message": "The skeleton's root claim is a value-migration thesis: owning the harness beats owning the models (compute and models commoditize; value accrues to the orchestration layer). The body argues the opposite frame — a competitive-positioning claim that 'owning the agent beats owning the gateway' with 'the gateway underneath is a substitutable pipe' — and the recommendation is scoped to 'win the agent seat', not to capture migrating value. The body never delivers the root claim it was authored to expand.",
+        "suggested_fix": "Edit skeleton.md first (confirm the value-migration root claim is intended), then re-derive the body so the Executive summary and Recommendation deliver 'owning the harness beats owning the models' rather than the gateway-vs-agent positioning frame.",
+        "load_bearing_justification": "The root claim is the single sentence a reader must take away; the body delivering a contradictory thesis is the exact word-soup failure mode this leg exists to catch. Critical."
+      },
+      {
+        "claim_id": 3,
+        "claim_excerpt": "model owners cannot easily recapture the orchestration-layer value",
+        "skeleton_location": "§Recapture risk section claim",
+        "body_location": "(absent)",
+        "verdict": "ABSENT",
+        "severity": "important",
+        "message": "The §Recapture risk section claim (model owners cannot easily recapture the orchestration-layer value because the harness accumulates switching costs and workflow lock-in) has no corresponding body section. The body has no recapture-risk section at all; the reader cannot evaluate the load-bearing leg of the thesis.",
+        "suggested_fix": "Add a §Recapture risk body section that delivers the skeleton claim, or drop the claim from the skeleton if it is no longer load-bearing."
+      },
+      {
+        "claim_id": 4,
+        "claim_excerpt": "harness-native efficiency",
+        "skeleton_location": "§Enclosure section claim",
+        "body_location": "§Enclosure",
+        "verdict": "DIVERGENT",
+        "severity": "important",
+        "message": "The §Enclosure body section load-bears on the undefined coinage 'harness-native efficiency' (plus 'the in-boundary plane widens' and 'the escalation floor is invariant' used without the skeleton's definition). 'harness-native efficiency' never appears — defined — in the skeleton, so the body introduced load-bearing jargon the intent artifact never sanctioned. The skeleton defined the escalation floor; the body reuses the term but attaches it to a gateway-defensibility argument the skeleton does not carry.",
+        "suggested_fix": "Either define 'harness-native efficiency' in skeleton.md (so the coinage is sanctioned intent) or rewrite §Enclosure to use the skeleton's defined terms; align the section's argument with the §Enclosure skeleton claim (the harness owns the invariant escalation floor)."
+      }
+    ],
+    "critical_flag_candidate": true
+  }
+}

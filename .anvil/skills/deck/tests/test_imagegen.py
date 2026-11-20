@@ -64,10 +64,13 @@ from imagegen import (  # noqa: E402
     load_config,
     load_style_presets,
     resolve_default_policy,
+    resolve_effective_imagery_policy,
     resolve_slot_prompt,
     run_imagegen,
     DEFAULT_PRESET_KEY,
     SHARED_SUFFIX,
+    _extract_field_block,
+    _latest_version_dir,
 )
 from prompt_journal import JournalEntry, read_journal  # noqa: E402
 
@@ -81,8 +84,8 @@ def _make_tiny_png(seed: int = 0) -> bytes:
     """Construct a valid 1x1 PNG with a single pixel.
 
     Used by the mock adapter to return PNG bytes that pass the
-    ``_is_png`` signature check without depending on Pillow. The pixel
-    color encodes ``seed`` so the bytes differ across calls (useful for
+    ``_sniff_image_format`` signature check without depending on Pillow. The
+    pixel color encodes ``seed`` so the bytes differ across calls (useful for
     asserting that a re-dispatched slot writes new bytes vs. idempotent
     skip leaving the prior bytes in place).
     """
@@ -172,6 +175,7 @@ def _build_thread_fixture(
     deck_md: str | None = None,
     speaker_notes: str | None = None,
     slot_prompt_sidecars: dict[str, str] | None = None,
+    layout: str = "flat",
 ) -> Path:
     """Create a minimal portfolio + thread + version-dir tree for tests.
 
@@ -192,13 +196,26 @@ def _build_thread_fixture(
         slot_prompt_sidecars: Mapping ``{slot_name: prompt_body}`` for
             sidecar prompt files written to
             ``assets/generated/<slot>.prompt.md``.
+        layout: ``"flat"`` (default; pre-#382 —
+            ``<portfolio>/<thread>.<version>/`` directly under
+            ``portfolio``, preserved for un-migrated-consumer coverage)
+            or ``"nested"`` (post-#382 artifact contract —
+            ``<portfolio>/<thread>/<thread>.<version>/``, matching
+            ``commands/deck-imagegen.md`` § "Inputs"). ``BRIEF.md``
+            always lives at ``<portfolio>/<thread>/BRIEF.md`` regardless
+            of layout — only the version dir's placement varies (#948).
 
     Returns:
-        The version directory path (``<portfolio>/<thread>.<version>/``).
+        The version directory path.
     """
     thread_dir = portfolio / thread
     thread_dir.mkdir(parents=True, exist_ok=True)
-    version_dir = portfolio / f"{thread}.{version}"
+    if layout == "nested":
+        version_dir = thread_dir / f"{thread}.{version}"
+    elif layout == "flat":
+        version_dir = portfolio / f"{thread}.{version}"
+    else:
+        raise ValueError(f"unknown layout {layout!r}: expected 'flat' or 'nested'")
     version_dir.mkdir(parents=True, exist_ok=True)
 
     # BRIEF.md frontmatter.
@@ -492,8 +509,78 @@ class TestLoadStylePresets(unittest.TestCase):
             self.assertIn(key, presets, f"missing preset {key!r}")
         # editorial-photography must have a non-empty prefix.
         self.assertTrue(presets["editorial-photography"]["prefix"])
-        # raw must have an empty prefix (per the spec).
+        # raw must have an empty prefix and suffix (per the spec) — a
+        # non-regression check (#960): the widened terminator regex must
+        # not disturb raw's short-circuit-to-empty behavior.
         self.assertEqual(presets["raw"]["prefix"], "")
+        self.assertEqual(presets["raw"]["suffix"], "")
+
+    def test_no_shipped_preset_leaks_worked_example_content(self) -> None:
+        """Regression for #960: a multi-word bold marker like
+        ``**Worked example**:`` must terminate the preceding
+        ``**Prefix**:``/``**Suffix**:`` block, not get swallowed into it.
+        """
+        shipped = _LIB.parent / "assets" / "imagery-style-presets.md"
+        if not shipped.exists():
+            self.skipTest(
+                f"shipped presets file not found at {shipped}; this is a "
+                f"co-located lib check and not a hard test prerequisite"
+            )
+        presets = load_style_presets(shipped)
+        for key, fields in presets.items():
+            for field_name, value in fields.items():
+                self.assertNotIn(
+                    "Worked example",
+                    value,
+                    f"preset {key!r} {field_name!r} leaked a Worked "
+                    f"example block: {value!r}",
+                )
+                self.assertNotIn(
+                    "---",
+                    value,
+                    f"preset {key!r} {field_name!r} leaked a literal "
+                    f"'---' separator: {value!r}",
+                )
+
+
+class TestExtractFieldBlock(unittest.TestCase):
+    """Regression coverage for #960: multi-word bold markers must
+    terminate a ``**<field>**:`` block just like single-word markers.
+    """
+
+    def test_multiword_marker_terminates_prefix_block(self) -> None:
+        body = (
+            "**Prefix**: studio product photography, clean background.\n"
+            "\n"
+            "**Worked example**: a compact industrial gateway device on "
+            "a white background.\n"
+            "\n"
+            "---\n"
+        )
+        prefix = _extract_field_block(body, "Prefix")
+        self.assertEqual(prefix, "studio product photography, clean background.")
+        self.assertNotIn("Worked example", prefix)
+        self.assertNotIn("gateway", prefix)
+        self.assertNotIn("---", prefix)
+
+    def test_multiword_marker_terminates_suffix_block(self) -> None:
+        body = (
+            "**Suffix**: no on-image text, no watermark.\n"
+            "\n"
+            "**Worked example**: fabricated alternate subject text.\n"
+        )
+        suffix = _extract_field_block(body, "Suffix")
+        self.assertEqual(suffix, "no on-image text, no watermark.")
+        self.assertNotIn("Worked example", suffix)
+
+    def test_singleword_marker_still_terminates(self) -> None:
+        """Non-regression: the original single-word-marker terminator
+        behavior (e.g. ``**Suffix**:`` following ``**Prefix**:``) still
+        works after widening the terminator pattern.
+        """
+        body = "**Prefix**: prefix text.\n\n**Suffix**: suffix text.\n"
+        self.assertEqual(_extract_field_block(body, "Prefix"), "prefix text.")
+        self.assertEqual(_extract_field_block(body, "Suffix"), "suffix text.")
 
 
 class TestComposePrompt(unittest.TestCase):
@@ -619,6 +706,44 @@ class TestResolveSlotPrompt(unittest.TestCase):
             )
             self.assertEqual(out, "the hero prompt")
 
+    def test_speaker_notes_excludes_trailing_human_aside(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            v = Path(tmp) / "acme.1"
+            v.mkdir(parents=True)
+            notes = (
+                "# Speaker notes\n\n"
+                "## Imagery prompt: hero\n\n"
+                "the hero prompt\n\n"
+                "on-slide caption note: attribute to Jane Doe, not "
+                "part of the prompt\n\n"
+                "## Imagery prompt: other\n\nthe other prompt\n"
+            )
+            out = resolve_slot_prompt(
+                "hero", version_dir=v, speaker_notes_text=notes
+            )
+            self.assertEqual(out, "the hero prompt")
+            self.assertNotIn("caption note", out)
+            self.assertNotIn("Jane Doe", out)
+
+    def test_speaker_notes_no_blank_line_resolves_in_full(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            v = Path(tmp) / "acme.1"
+            v.mkdir(parents=True)
+            notes = (
+                "# Speaker notes\n\n"
+                "## Imagery prompt: hero\n\n"
+                "a prompt that wraps across\n"
+                "a single unbroken paragraph with no blank line\n"
+            )
+            out = resolve_slot_prompt(
+                "hero", version_dir=v, speaker_notes_text=notes
+            )
+            self.assertEqual(
+                out,
+                "a prompt that wraps across\n"
+                "a single unbroken paragraph with no blank line",
+            )
+
     def test_missing_both_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             v = Path(tmp) / "acme.1"
@@ -708,6 +833,123 @@ class TestRunImagegenHappyPath(unittest.TestCase):
             self.assertTrue(
                 progress["phases"]["imagegen"]["completed"].endswith("Z")
             )
+
+
+class TestLatestVersionDirLayouts(unittest.TestCase):
+    """``_latest_version_dir`` resolves both post-#382 nested and
+    pre-#382 flat thread layouts (issue #948).
+    """
+
+    def test_nested_layout_resolves(self) -> None:
+        """Post-#382 nested layout: <portfolio>/<thread>/<thread>.{N}/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            version_dir = _build_thread_fixture(portfolio, layout="nested")
+            resolved = _latest_version_dir(portfolio, "acme")
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.resolve(), version_dir.resolve())
+            self.assertTrue((resolved / "deck.md").exists())
+
+    def test_nested_layout_picks_highest_n(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            _build_thread_fixture(portfolio, layout="nested", version=1)
+            v2 = _build_thread_fixture(portfolio, layout="nested", version=2)
+            resolved = _latest_version_dir(portfolio, "acme")
+            self.assertEqual(resolved.resolve(), v2.resolve())
+
+    def test_flat_layout_fallback_still_resolves(self) -> None:
+        """Pre-#382 flat layout (no nested <thread>/ wrapper) still works."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            version_dir = _build_thread_fixture(portfolio, layout="flat")
+            resolved = _latest_version_dir(portfolio, "acme")
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.resolve(), version_dir.resolve())
+            self.assertTrue((resolved / "deck.md").exists())
+
+    def test_latest_symlink_pin_takes_precedence_over_highest(self) -> None:
+        """A pinned <thread>.latest symlink resolves over the highest N."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            v1 = _build_thread_fixture(portfolio, layout="nested", version=1)
+            _build_thread_fixture(portfolio, layout="nested", version=2)
+            thread_dir = portfolio / "acme"
+            # Pin .latest to v1 even though v2 (the highest N) exists.
+            (thread_dir / "acme.latest").symlink_to("acme.1", target_is_directory=True)
+            resolved = _latest_version_dir(portfolio, "acme")
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.resolve(), v1.resolve())
+            # deck.md is reachable through the symlink transparently.
+            self.assertTrue((resolved / "deck.md").exists())
+
+    def test_no_nested_or_flat_version_dirs_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            (portfolio / "acme").mkdir()
+            self.assertIsNone(_latest_version_dir(portfolio, "acme"))
+
+    def test_dangling_latest_symlink_still_returned(self) -> None:
+        """A dangling ``.latest`` symlink wins per ``resolve_latest``'s
+        documented symlink-precedence contract — the caller (here,
+        ``run_imagegen`` via the ``deck.md`` existence check) is
+        responsible for surfacing the broken-target case cleanly.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            thread_dir = portfolio / "acme"
+            thread_dir.mkdir()
+            # Symlink target ("acme.9") does not exist on disk.
+            (thread_dir / "acme.latest").symlink_to(
+                "acme.9", target_is_directory=True
+            )
+            resolved = _latest_version_dir(portfolio, "acme")
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved, thread_dir / "acme.latest")
+            self.assertFalse((resolved / "deck.md").exists())
+
+    def test_mid_migration_nested_takes_precedence_over_flat(self) -> None:
+        """Both a flat AND a nested version dir present: nested wins.
+
+        The documented artifact contract is nested-first; a thread
+        mid-migration (an old flat dir left behind alongside a new
+        nested one) should resolve to the nested, contract-conformant
+        version, not silently fall back to the stale flat sibling.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            nested = _build_thread_fixture(portfolio, layout="nested", version=1)
+            # A stray flat dir for the same thread/version, simulating a
+            # leftover from before migration.
+            flat_dir = portfolio / "acme.1"
+            flat_dir.mkdir()
+            (flat_dir / "deck.md").write_text("# stale flat copy\n", encoding="utf-8")
+            resolved = _latest_version_dir(portfolio, "acme")
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.resolve(), nested.resolve())
+
+
+class TestRunImagegenNestedLayout(unittest.TestCase):
+    """``run_imagegen`` dispatches correctly against the nested layout."""
+
+    def test_dispatches_against_nested_thread_layout(self) -> None:
+        adapter = _MockAdapter()
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            version_dir = _build_thread_fixture(portfolio, layout="nested")
+            result = run_imagegen(
+                "acme",
+                portfolio=portfolio,
+                adapter=adapter,
+                backend_name_for_journal="mock.adapter",
+            )
+            self.assertEqual(result.phase_state, "done")
+            self.assertEqual(len(result.slots), 2)
+            self.assertTrue(
+                (version_dir / "assets" / "generated" / "hero.png").exists()
+            )
+            journal = read_journal(version_dir / "assets" / "_prompts.json")
+            self.assertEqual(set(journal.keys()), {"hero.png", "lifestyle.png"})
 
 
 class TestRunImagegenOptInGate(unittest.TestCase):
@@ -908,6 +1150,120 @@ class TestResolveDefaultPolicy(unittest.TestCase):
             p.write_text("not json {{{", encoding="utf-8")
             with self.assertRaises(ImagegenError):
                 resolve_default_policy(p)
+
+
+class TestResolveEffectiveImageryPolicy(unittest.TestCase):
+    """``resolve_effective_imagery_policy`` (#984) — the extracted, reusable
+    resolver for the full BRIEF ∪ config ∪ built-in resolution order (#547).
+
+    ``run_imagegen`` now delegates to this function rather than
+    re-deriving the order inline; ``deck-design.md`` step 7b and
+    ``deck-audit.md`` are documented to call it too, so this is the
+    single source of truth under direct unit coverage.
+    """
+
+    def _write_config(
+        self, portfolio: Path, *, default_policy: str | None = None
+    ) -> Path:
+        cfg = portfolio / ".anvil" / "config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        imagegen: dict[str, object] = {}
+        if default_policy is not None:
+            imagegen["default_policy"] = default_policy
+        payload: dict[str, object] = {"version": 1, "deck": {"imagegen": imagegen}}
+        cfg.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return cfg
+
+    def test_thread_brief_wins(self) -> None:
+        """Thread BRIEF declares the policy; config also has an override —
+        the thread BRIEF MUST win, per the documented priority order."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            _build_thread_fixture(
+                portfolio, imagery_policy="generative-eligible"
+            )
+            self._write_config(portfolio, default_policy="deterministic-only")
+            policy, source = resolve_effective_imagery_policy(
+                portfolio / "acme", portfolio
+            )
+            self.assertEqual(policy, "generative-eligible")
+            self.assertEqual(source, "BRIEF.md")
+
+    def test_falls_back_to_config_default_policy(self) -> None:
+        """Thread BRIEF omits the field → the consumer-level
+        ``deck.imagegen.default_policy`` override wins."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            _build_thread_fixture(portfolio, imagery_policy="")
+            self._write_config(portfolio, default_policy="generative-eligible")
+            policy, source = resolve_effective_imagery_policy(
+                portfolio / "acme", portfolio
+            )
+            self.assertEqual(policy, "generative-eligible")
+            self.assertIn("deck.imagegen.default_policy", source)
+
+    def test_falls_back_to_built_in_default(self) -> None:
+        """Neither the thread BRIEF nor config supplies a value → the
+        built-in ``deterministic-only`` default, with a named source."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            _build_thread_fixture(portfolio, imagery_policy="")
+            policy, source = resolve_effective_imagery_policy(
+                portfolio / "acme", portfolio
+            )
+            self.assertEqual(policy, "deterministic-only")
+            self.assertEqual(source, "built-in default")
+
+    def test_ignores_sibling_project_level_brief(self) -> None:
+        """Regression test for issue #984: a *project-level* ``BRIEF.md``
+        at the portfolio root (frontmatter ``documents:`` list per the
+        post-#296 project-org model) is a DISTINCT file from the
+        thread-level ``BRIEF.md`` and must never be consulted for
+        ``imagery_policy``. Passing the correct thread root resolves the
+        thread's own declaration even though a same-named sibling file
+        one directory up carries no such field."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            _build_thread_fixture(
+                portfolio, imagery_policy="generative-eligible"
+            )
+            # Project-level BRIEF.md — same filename, different schema,
+            # one directory up from the thread root.
+            (portfolio / "BRIEF.md").write_text(
+                "---\ndocuments:\n  - acme\n---\n\n# Project brief\n",
+                encoding="utf-8",
+            )
+            policy, source = resolve_effective_imagery_policy(
+                portfolio / "acme", portfolio
+            )
+            self.assertEqual(policy, "generative-eligible")
+            self.assertEqual(source, "BRIEF.md")
+
+    def test_explicit_config_path_override(self) -> None:
+        """An explicit ``config_path`` is honored over the conventional
+        ``<portfolio>/.anvil/config.json`` location."""
+        with tempfile.TemporaryDirectory() as tmp:
+            portfolio = Path(tmp)
+            _build_thread_fixture(portfolio, imagery_policy="")
+            custom_cfg = portfolio / "custom-config.json"
+            custom_cfg.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "deck": {
+                            "imagegen": {
+                                "default_policy": "consumer-provided"
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            policy, source = resolve_effective_imagery_policy(
+                portfolio / "acme", portfolio, config_path=custom_cfg
+            )
+            self.assertEqual(policy, "consumer-provided")
+            self.assertIn(str(custom_cfg), source)
 
 
 class TestRunImagegenDefaultPolicy(unittest.TestCase):

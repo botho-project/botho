@@ -106,13 +106,18 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
 8. **Update `_progress.json`** inside the staging dir: `phases.audit.state = done`, `phases.audit.completed = <ISO>`. This is the LAST file write before the context manager exits — the manifest verification + atomic rename at exit (issue #350) requires `_progress.json` to be present. Then **exit the `staged_sidecar` context block**: the primitive verifies every name in the required-files manifest exists in the staging dir, then atomically renames `.<thread>.{N}.audit.tmp/` → `<thread>.{N}.audit/`. The final-named dir only ever exists in **complete** form.
 9. **Report**: print the path to the (now-renamed) audit dir and a one-line status (e.g., `Audited kdd-2026-keynote.1 → kdd-2026-keynote.1.audit/ (37 claims: 28 supported, 4 unsupported, 2 wrong, 3 ambiguous; AUDIT FLAG SET)`).
 
+## Editorial overrides do not apply (issue #1373)
+
+`slides-audit` ignores `editorial_overrides:` in `BRIEF.md`. A `wrong` factual claim must not be waivable by a style decision; only `slides-review` and `slides-vision` read overrides.
+
 ## Notes for the auditor agent
 
 - **Sharper posture than the general reviewer.** The auditor's job is citation-correspondence. Where the reviewer asks "is this claim well-argued?", the auditor asks "is this claim *true* and *attributable*?". Be precise.
 - **The notes/ matter.** Speakers often make claims in spoken commentary that don't appear on the slide. The auditor reads notes/*.md exhaustively because that's where the highest-density-of-spoken-claims lives.
 - **`wrong` is a high bar.** It requires either (a) a primary source that contradicts the claim, or (b) consensus in the field that contradicts it. A claim being controversial is not `wrong`; a claim being unsupported is not `wrong`; only verifiable error or contradiction-of-consensus is `wrong`.
 - **`unsupported` is a real signal.** A plausible claim without a source is a hostile-question vector. Flag generously here (it doesn't block the deck; it reduces Dimension 1 score in the reviewer's pass).
-- **`ambiguous` is the auditor's hedge.** Use it when you genuinely can't tell. Paywalled papers, unverifiable industry statistics, vague quantifiers ("most", "many", "often") without bounds — all reasons to verdict `ambiguous` rather than guessing.
+- **Obvious framing is a non-finding.** A disclosure or framing that is obvious to the declared audience (an AI-painted cartoon not labelled "AI illustration", an illustrative sketch not labelled "not measured data") is not a claim to verify and not `ambiguous`; do not record it. Provenance of such images belongs in notes/sources (see `rubric.md` §"On-slide disclosure vs. provenance").
+- **`ambiguous` is the auditor's hedge.** It is for unverifiable claims, not for obvious framing. Use it when you genuinely can't tell. Paywalled papers, unverifiable industry statistics, vague quantifiers ("most", "many", "often") without bounds — all reasons to verdict `ambiguous` rather than guessing.
 - **Figures are claims too.** A chart that purports to show data from a source must be verified the same way as a textual statistic. The figurer's job is to produce charts from sourced data; the auditor verifies that the produced chart matches the source.
 
 ## Idempotence and resumability

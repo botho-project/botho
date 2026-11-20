@@ -14,6 +14,7 @@ post-#295 / post-#296 model.
 /anvil:project-migrate <project-dir>             # dry-run (no mutations)
 /anvil:project-migrate <project-dir> --apply     # execute the plan
 /anvil:project-migrate <project-dir> --report    # markdown report only
+    [--artifact-type <type>]                     # optional on all three above (issue #878)
 
 /anvil:project-migrate --enroll <file> [<file> ...]    # dry-run enrollment
     [--project <dir>] [--slug <slug>] [--artifact-type <type>] [--apply]
@@ -41,6 +42,10 @@ If neither `--apply` nor `--report` is passed, the command runs in **dry-run
 mode**: it detects, plans, and prints, but writes nothing to disk.
 
 `--apply` and `--report` are mutually exclusive. Passing both is rejected.
+
+`--artifact-type <type>` is an OPTIONAL modifier on the main mode
+(dry-run / `--apply` / `--report` alike, issue #878) — see §2 below for
+the full contract. It does not change mode dispatch.
 
 `--enroll <file> [...]` selects **single-file enrollment mode** (issue
 #406): instead of migrating a whole project, it wraps one or more loose
@@ -103,8 +108,9 @@ Call `detect.detect_shape(project_dir)`. This returns a `Shape` enum:
 
 ### 2. Plan
 
-Call `plan.build_plan(project_dir, shape)`. Returns a `Plan` object listing
-per-document `DocumentPlan` entries. Each entry carries:
+Call `plan.build_plan(project_dir, shape, artifact_type=...)`. Returns a
+`Plan` object listing per-document `DocumentPlan` entries. Each entry
+carries:
 
 - `slug` — final slug name.
 - `source_dir` — current on-disk directory (may equal target).
@@ -119,6 +125,42 @@ per-document `DocumentPlan` entries. Each entry carries:
   into the BRIEF entry.
 - `notes` — operator-facing notes (e.g., "cross-thread references rewritten:
   3 occurrences").
+
+**`--artifact-type <type>` on the main mode (issue #878).** A bare project
+(no anvil config anywhere — `ProjectInventory.is_bare`) with a plain `.md`
+body used to be stuck: the BRIEF this run synthesizes always defaulted
+every thread to `artifact_type: investment-memo`, but the *correct*
+declaration (e.g. `artifact_type: essay`) can only come from that same
+synthesized BRIEF — circular, so a consumer whose body filename doesn't
+match anvil's own historical fixed names (e.g. a foreign blog pipeline's
+`post.md`) got neither the right type nor a body rename. `--artifact-type`
+resolves the circularity directly:
+
+- Validated against the same two-tier registry `--enroll` /
+  `--adopt-vn` use (`REGISTERED_ARTIFACT_TYPES` + consumer-declared types
+  via `discover_consumer_artifact_types`); an unregistered value is a
+  plan-time refusal (`plan.PlanError`) raised BEFORE any mutation.
+- Applied to every synthesized `documents:` entry on a BARE thread —
+  `artifact_type` is set directly with **no** `# TODO(operator)` marker
+  (the operator declared it explicitly; nothing was guessed). Non-bare
+  threads (already carrying a declared or legacy type) are unaffected.
+- **Independent of the body-filename rename below** — the flag only
+  affects the BRIEF's `artifact_type:` value.
+
+**Foreign body-filename detection (issue #878, independent of the flag
+above).** A bare thread's `.md` body filename may be fixed by a FOREIGN
+pipeline (e.g. `post.md`) rather than any anvil skill's *own* historical
+fixed name (`memo.md`, `proposal.md`, `report.md`, `installation.md`,
+`pub.md`) — the historical skill-fixed rename loop only recognizes
+anvil's own names, so it has nothing to match. The planner separately
+scans each bare thread for a **single consistent** non-canonical `.md`
+filename across its version dirs and, when exactly one is found, plans
+its rename to `<slug>.md` — reviewable in the dry-run plan before
+`--apply`, and paired with a `# TODO(operator)` confirmation note (never
+silent). This fires whether or not `--artifact-type` is given. When
+**multiple distinct** foreign names are observed across the thread's
+version dirs, the choice is ambiguous: no rename is planned, and the plan
+surfaces an operator-facing note instead of guessing.
 
 ### 3. Report (dry-run / `--report`)
 
@@ -299,14 +341,14 @@ Hard errors (plan-time, pre-mutation — the whole family aborts):
 ### 8. Letter-family adoption mode (`--adopt-family`, issue #440 — Phase 2 of #432)
 
 Adopts foreign `{Project}.{Letter}.{N}` version-dir families — the
-sphere-survey ip-thread grammar (`Brasidas.C.7/` +
-`Brasidas.C.7.enablement/` siblings, flat under one directory) — into
+sphere-survey ip-thread grammar (`Meridian.C.7/` +
+`Meridian.C.7.enablement/` siblings, flat under one directory) — into
 the canonical anvil shape:
 
 ```
-/anvil:project-migrate --adopt-family agents/Brasidas \
+/anvil:project-migrate --adopt-family agents/Meridian \
     --tag-map tag-map.json --artifact-type ip-uspto-provisional
-/anvil:project-migrate --adopt-family agents/Brasidas \
+/anvil:project-migrate --adopt-family agents/Meridian \
     --tag-map tag-map.json --artifact-type ip-uspto-provisional --apply
 ```
 
@@ -318,14 +360,14 @@ directory = N letter families, batch):
    `{Project}.{Letter}` stem (the letter is the single-letter final
    dot-segment); `{stem}.{N}.<tag>` sibling dirs rename alongside
    their version dir. Version gaps tolerated (per #408). Strays
-   (non-matching dirs, numeric-tag oddballs like `Brasidas.C.7.1`) and
+   (non-matching dirs, numeric-tag oddballs like `Meridian.C.7.1`) and
    orphan sidecars (version dir absent) are left untouched and
    reported.
 2. **Project root**: `<dir>` itself — the families sit flat under it
    and the adopted threads land at `<dir>/<slug>/<slug>.{N}` with the
    BRIEF at `<dir>/BRIEF.md`.
 3. **Slugs are derived, not flagged**: the `{Project}.{Letter}` stem
-   folds via the standard sanitization (`Brasidas.C` → `brasidas-c`).
+   folds via the standard sanitization (`Meridian.C` → `meridian-c`).
    There is NO `--slug` in this mode (multi-family invocations make a
    single override meaningless; derived slugs are deterministic).
 4. **Declarative tag mapping (`--tag-map <file>`)** — the binding spec
@@ -381,12 +423,12 @@ Hard errors (plan-time, pre-mutation — the whole batch aborts):
 - Tag-map value violating the canonical tag grammar (dotted word,
   `-vN` suffix, non-word characters).
 - Two foreign tags resolving to one canonical tag on the SAME version
-  dir (e.g. `.audit` + `.audit2` → `audit` on `Brasidas.C.7`); the
+  dir (e.g. `.audit` + `.audit2` → `audit` on `Meridian.C.7`); the
   same pair on different version dirs is legal.
 - Missing `--artifact-type` — refusal naming the two likely ip
   candidates.
 - Slug collision with a BRIEF entry or an on-disk path; cross-family
-  collision after sanitization (`Brasidas.C` vs `brasidas.c`).
+  collision after sanitization (`Meridian.C` vs `meridian.c`).
 - Existing BRIEF that fails strict parsing — never modify a BRIEF we
   can't parse.
 - A BRIEF-less project root containing other thread-shaped dirs — run
@@ -632,6 +674,10 @@ After apply, the project would round-trip through `discover_thread_root` +
 - Source directory does not exist or is not a directory: hard-fail.
 - `--apply` and `--report` both passed: hard-fail.
 - Detection returns `Shape.UNKNOWN`: hard-fail with a diagnostic.
+- `--artifact-type` given but not a registered or consumer-declared
+  artifact type (issue #878): `plan.PlanError`, raised BEFORE any
+  mutation — the message lists both the registered and consumer-declared
+  sets.
 - Apply step fails for a doc: per-doc rollback, then report the failure and
   exit non-zero. Already-migrated docs are not rolled back.
 - Verify fails after apply: report the failures and exit non-zero. The

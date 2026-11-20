@@ -1,0 +1,53 @@
+# Skeleton — <thread-slug> v<N>
+
+<!--
+skeleton.md is the memo's communicative INTENT, authored BEFORE any body prose
+and expanded INTO the body (issue #752). It is a recursive claim tree that a
+reader (or the operator, in one minute) can approve or correct before 3,000
+words calcify around it.
+
+Authoring contract (see commands/memo-draft.md §"Author the skeleton before the
+body" and rubric.md §"Summary-detail consistency" §"Skeleton↔section derivation
+leg"):
+
+  1. ROOT CLAIM — exactly ONE sentence stating what a reader must take away.
+     Not a topic ("the economics"), a CLAIM ("the economics force a $457–$1,314
+     enterprise price and today it sits $14 above the kill line").
+  2. SECTION CLAIMS — one sentence per planned body section. Each is a CLAIM,
+     not a topic. Sub-claims may nest under a section claim (the tree is
+     recursive) when a section carries more than one load-bearing assertion.
+  3. PLAIN-LANGUAGE CONSTRAINT — no term may appear in the skeleton that a
+     domain-literate outsider could not parse, UNLESS the skeleton itself
+     defines it inline. This forces the jargon question to be settled before
+     the body is written. A coinage ("harness-native efficiency") that is not
+     defined in the skeleton is a skeleton defect, not a prose defect.
+
+The body is an EXPANSION of the approved skeleton: every body section must
+remain answerable to its skeleton claim, and the whole body must deliver the
+root claim. The reviewer back-checks skeleton→body derivation at review time
+(same MATCH / DIVERGENT / ABSENT / CONTRADICTED verdict tags as the
+summary↔detail leg).
+
+Delete this comment block when authoring a real skeleton.
+-->
+
+## Root claim
+
+<one sentence — what a reader must take away from the whole memo>
+
+## Section claims
+
+1. **§<section-name>** — <one-sentence claim the section must land (not a topic)>
+2. **§<section-name>** — <one-sentence claim>
+   - <optional sub-claim, when the section carries more than one load-bearing assertion>
+   - <optional sub-claim>
+3. **§<section-name>** — <one-sentence claim>
+
+<!--
+Every coinage or piece of domain jargon used above must be defined here or in
+the claim where it first appears. Example inline definition:
+
+  2. **§Economics** — the escalation floor (the minimum per-seat price below
+     which the unit economics never recover) is invariant at $471, so today's
+     $457 list price sits $14 under the kill line.
+-->

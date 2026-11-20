@@ -99,7 +99,32 @@ check and is unit-tested). If `mmdc` is NOT on PATH:
   fences) does NOT trigger this preflight — `mmdc` is only required when a
   diagram is present.
 
-When `mmdc` is present, render each diagram with:
+**Launchability, not just presence (#692).** `check_mmdc_available()` only
+tests that the binary is on PATH — it reports available while `mmdc`'s pinned
+Puppeteer Chromium is absent from `~/.cache/puppeteer`, in which case every
+diagram render dies at browser launch with an opaque `Could not find Chrome
+ver. <pinned>`. When `mmdc` IS on PATH, call
+`anvil/lib/render.py::check_mmdc_launchable()` (a trivial one-node probe
+render, unit-tested) **once before committing to the batch of diagram
+renders**. On `False`:
+
+- Emit a `[blocker]` quoting `anvil/lib/render.py::MMDC_LAUNCH_REMEDIATION`
+  verbatim — it names the two working fixes: install the pinned browser with
+  `npx puppeteer browsers install chrome`, or point `mmdc` at an existing
+  system Chrome via `mmdc --puppeteerConfigFile <file>` where `<file>`
+  contains `{"executablePath":"/path/to/google-chrome","args":["--no-sandbox"]}`.
+- **Write the same proactive `figures/<name>.png-FAILED.md` stub** for each
+  diagram that would have been rendered, naming the launch failure and that
+  remediation — identical graceful-degrade path to the absent-binary case
+  above.
+- Skip the `mmdc` render path for this run; never abort the phase (the
+  matplotlib + external-asset steps still run).
+- A slide deck with zero diagrams does NOT trigger this probe either — like
+  the PATH check, launchability is only required when a diagram is present
+  (and the probe costs a real Chromium cold start, so it is never run
+  speculatively).
+
+When `mmdc` is present and launchable, render each diagram with:
 ```bash
 mmdc \
   --input figures/src/<name>.mmd \
@@ -173,7 +198,7 @@ Use external assets for: product screenshots, photos, third-party logos, pre-exi
 2. **Resume check**: enumerate figure references in `deck.md`. For each referenced figure, check if the file exists in `figures/`. If all referenced figures exist AND `phases.figures.state == done`, exit early — no work needed.
 3. **Initialize `_progress.json`**: write `phases.figures.state = in_progress`, `phases.figures.started = <ISO>`.
 4. **For each missing or stale figure**:
-   - **Mermaid diagrams (`mmdc → PNG`)** — diagrams are rendered to PNG via `mmdc`; inline ```mermaid fences do NOT render in the PDF (see "Mermaid (default for diagrams)" above for the full preflight + render block). Run the preflight first: call `anvil.lib.render.check_mmdc_available()`; if it returns False, emit a `[blocker]` with the full remediation (`npm install -g @mermaid-js/mermaid-cli`, ~300MB+ Chromium, `--puppeteerConfigFile {"args":["--no-sandbox"]}` in CI), write a proactive `figures/<name>.png-FAILED.md` stub per diagram BEFORE producing a `deck.md` that references nonexistent PNGs, and skip the `mmdc` render path for this run. If `mmdc` is present, render each `figures/src/<name>.mmd` source — or each inline ```mermaid fence in `deck.md` (extract to `figures/src/<name>.mmd` first) — to PNG with `-c anvil/lib/figures/mermaid-theme.json`. On a per-diagram render failure (e.g., syntax error), produce a `figures/<name>.png-FAILED.md` stub noting the attempted source and the error.
+   - **Mermaid diagrams (`mmdc → PNG`)** — diagrams are rendered to PNG via `mmdc`; inline ```mermaid fences do NOT render in the PDF (see "Mermaid (default for diagrams)" above for the full preflight + render block). Run the preflight first: call `anvil.lib.render.check_mmdc_available()`; if it returns False, emit a `[blocker]` with the full remediation (`npm install -g @mermaid-js/mermaid-cli`, ~300MB+ Chromium, `--puppeteerConfigFile {"args":["--no-sandbox"]}` in CI), write a proactive `figures/<name>.png-FAILED.md` stub per diagram BEFORE producing a `deck.md` that references nonexistent PNGs, and skip the `mmdc` render path for this run. If it returns True, call `anvil.lib.render.check_mmdc_launchable()` once before the batch; if *that* returns False (binary on PATH, pinned Chromium unlaunchable), emit a `[blocker]` quoting `anvil.lib.render.MMDC_LAUNCH_REMEDIATION`, write the same per-diagram `-FAILED.md` stubs, and skip the `mmdc` render path for this run. If `mmdc` is present and launchable, render each `figures/src/<name>.mmd` source — or each inline ```mermaid fence in `deck.md` (extract to `figures/src/<name>.mmd` first) — to PNG with `-c anvil/lib/figures/mermaid-theme.json`. On a per-diagram render failure (e.g., syntax error), produce a `figures/<name>.png-FAILED.md` stub noting the attempted source and the error.
    - **Data plots** — require a source `.csv` (or equivalent). If no source data exists AND the brief / refs don't provide it, refuse and surface the gap in `figures/_unresolved.md`. The figurer does not invent data. The matplotlib step runs independently of the `mmdc` preflight outcome — a missing `mmdc` does not block matplotlib renders.
    - **External assets** — copy from `refs/` or `assets/` into `figures/` with a clear name. Runs independently of the `mmdc` preflight outcome.
 5. **Tooling preference**: self-contained tools (Mermaid CLI, matplotlib, ImageMagick for conversion) over network-dependent services. Failing renders produce a stub `.md` placeholder noting what was attempted and why it failed, rather than silently leaving a broken image reference.

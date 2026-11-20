@@ -415,13 +415,13 @@ class TestSlugShape(_ResolverBase):
     """The slug regex correctly escapes special chars and matches variants."""
 
     def test_slug_with_hyphen_matches(self) -> None:
-        """Hyphenated slug (``brasidas-synthesis``) resolves correctly.
+        """Hyphenated slug (``meridian-synthesis``) resolves correctly.
 
         The canary's slugs are hyphenated (``investment-memo``,
-        ``brasidas-synthesis``, ``latency-wall``). The resolver MUST
+        ``meridian-synthesis``, ``latency-wall``). The resolver MUST
         escape the slug in the regex so the hyphen is literal.
         """
-        slug = "brasidas-synthesis"
+        slug = "meridian-synthesis"
         thread = Path(self._td.name) / slug
         thread.mkdir(parents=True, exist_ok=True)
         (thread / f"{slug}.1").mkdir()

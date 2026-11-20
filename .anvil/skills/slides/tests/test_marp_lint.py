@@ -278,5 +278,36 @@ class TestPortedRulesIncludesInlineDisplay(unittest.TestCase):
         self.assertIn("figure-italic-supporting-line-too-long", PORTED_RULES)
 
 
+class TestImageOnlySlideInfo(unittest.TestCase):
+    """Issue #1368: image-only slides get an ``info``, never a warning."""
+
+    _FM = "---\nmarp: true\n---\n\n"
+
+    def test_image_only_slide_emits_exactly_one_info(self) -> None:
+        src = self._FM + "![bg fit](figures/slide-01.png)\n\n<!--\nPage text\n-->\n"
+        result = lint_source(src)
+        self.assertEqual(len(result.infos), 1)
+        self.assertEqual(result.infos[0].message, "image-only slide — lint not applicable")
+        self.assertEqual((len(result.errors), len(result.warnings)), (0, 0))
+
+    def test_mixed_deck_only_flags_image_only_slide(self) -> None:
+        src = (
+            self._FM
+            + "# Real slide\n\n- one\n- two\n\n---\n\n"
+            + "![bg](figures/slide-02.png)\n"
+        )
+        result = lint_source(src)
+        self.assertEqual([f.slide for f in result.infos], [2])
+        self.assertEqual((len(result.errors), len(result.warnings)), (0, 0))
+
+    def test_slide_with_text_beside_bg_image_is_not_image_only(self) -> None:
+        src = self._FM + "![bg right:40%](x.png)\n\n# Heading\n"
+        self.assertEqual(lint_source(src).infos, [])
+
+    def test_non_bg_image_is_not_image_only(self) -> None:
+        src = self._FM + "![diagram](figures/d.png)\n"
+        self.assertEqual(lint_source(src).infos, [])
+
+
 if __name__ == "__main__":
     unittest.main()

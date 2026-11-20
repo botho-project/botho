@@ -23,11 +23,17 @@ avoid the cross-skill pytest collection collision.
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
 RUBRIC_ID = "anvil-primer-v1"
 
@@ -35,42 +41,7 @@ RUBRIC_ID = "anvil-primer-v1"
 # sidecar primitive.
 CRITIC_COMMANDS = ("commands/primer-review.md", "commands/primer-audit.md")
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value``
-    parser so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestFilesExist(unittest.TestCase):
@@ -100,14 +71,24 @@ class TestFilesExist(unittest.TestCase):
                     (_SKILL_ROOT / rel).exists(), f"missing skill file: {rel}"
                 )
 
-    def test_deferred_scope_absent(self):
-        # v1 defers the worked example, voice wiring, figure-adapter
-        # registry, and LaTeX/TikZ path (issue #686 curation).
-        self.assertFalse(
-            (_SKILL_ROOT / "examples").exists(),
-            "examples/ is deferred scope (the Botho #881 worked example)",
+    def test_worked_example_shipped(self):
+        # The Botho worked example landed in #693 (dogfood complete, botho#881
+        # → PR #900): a trimmed vendored snapshot + a structural-contract
+        # README pinned by test_primer_example_brief_parses.py.
+        self.assertTrue(
+            (_SKILL_ROOT / "examples" / "botho" / "BRIEF.md").is_file(),
+            "the vendored Botho worked example must ship at examples/botho/",
         )
-        # No voice-wiring or figure-adapter commands leaked in.
+        self.assertTrue(
+            (_SKILL_ROOT / "examples" / "expected-thread.N" / "README.md").is_file(),
+            "the structural-contract README must ship at "
+            "examples/expected-thread.N/README.md",
+        )
+
+    def test_deferred_scope_absent(self):
+        # #693 shipped the worked example, but voice wiring, the figure-adapter
+        # registry, and the LaTeX/TikZ path remain deferred (issue #686
+        # curation). No voice-wiring or figure-adapter commands leaked in.
         for stem in ("primer-voice", "primer-figure-adapter"):
             with self.subTest(command=stem):
                 self.assertFalse(
@@ -174,9 +155,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
 
 class TestCriticCommandStamping(unittest.TestCase):
@@ -220,6 +199,128 @@ class TestSpecRefContractInCommands(unittest.TestCase):
         self.assertIn("spec_ref_resolved", text)
 
 
+class TestFigurePlanContract(unittest.TestCase):
+    """The #690 draft-time figure-placeholder contract is documented across
+    draft / figures / revise / review / audit / SKILL.md."""
+
+    def test_draft_places_figure_references_and_records_plan(self):
+        text = _read("commands/primer-draft.md")
+        # The drafter emits body references to exhibits paths...
+        self.assertIn("exhibits/figN-slug.png", text)
+        self.assertIn("![Figure N — ", text)
+        # ...and records the figure plan in _progress.json.
+        self.assertIn("figure_plan", text)
+        # Broken refs before figures render are expected/tolerated.
+        self.assertIn("does not yet exist", text.lower().replace("don't", "do not"))
+        # Zero-figure threads are the silent-off default.
+        self.assertIn("silent-off", text)
+
+    def test_draft_documents_caption_numbering_convention(self):
+        text = _read("commands/primer-draft.md")
+        # Captions carry their own "Figure N —" prefix + labelformat=empty.
+        self.assertIn("labelformat=empty", text)
+        self.assertIn("Figure N —", text)
+
+    def test_figures_ungated_from_audited_and_renders_referenced_paths(self):
+        text = _read("commands/primer-figures.md")
+        # No longer gated on AUDITED — runs any time after draft.
+        self.assertIn("No terminal-state gate", text)
+        self.assertIn("figure_plan", text)
+        # Renders to exactly the drafter-referenced paths, never invents one.
+        self.assertIn("exactly the", text)
+        self.assertIn("never invent", text.lower())
+        # Caption convention agreement (no double-numbering).
+        self.assertIn("labelformat=empty", text)
+        # Existence validation mirrors report-figures.
+        self.assertIn("Validate by file existence", text)
+
+    def test_revise_preserves_and_updates_the_figure_plan(self):
+        text = _read("commands/primer-revise.md")
+        self.assertIn("figure_plan", text)
+        self.assertIn("exhibits/figN-slug.png", text)
+
+    def test_review_has_exhibit_existence_freshness_check(self):
+        text = _read("commands/primer-review.md")
+        # A step-4c analog capping dim 3 / dim 7 on missing/stale exhibits.
+        self.assertIn("4c", text)
+        self.assertIn("figure_plan", text)
+        self.assertIn("stale", text.lower())
+        # Zero-figure thread is a silent no-op (regression safety).
+        self.assertIn("silent no-op", text)
+        # Caps dims 3 and 7, no critical flag.
+        self.assertIn("no critical flag", text.lower())
+
+    def test_audit_covers_diagram_content(self):
+        text = _read("commands/primer-audit.md")
+        # The factual sweep now covers teaching-diagram source content.
+        self.assertIn("figure_plan", text)
+        self.assertIn("diagram", text.lower())
+
+    def test_skill_documents_draft_time_figure_placement(self):
+        text = _read("SKILL.md")
+        self.assertIn("figure_plan", text)
+        self.assertIn("draft-time figure-placement", text)
+        # The figures gate moved earlier (no AUDITED-only gate).
+        self.assertIn("no `AUDITED` gate", text)
+        self.assertIn("labelformat=empty", text)
+
+
+class TestPolishFlagContract(unittest.TestCase):
+    """The #691 operator-directed revision flag is wired into
+    primer-revise.md + SKILL.md, references the shared snippet, and
+    bypasses ONLY the step-2 combined verdict pre-check."""
+
+    def test_revise_has_cli_flags_section_with_polish(self):
+        text = _read("commands/primer-revise.md")
+        self.assertIn("## CLI flags", text)
+        self.assertIn('### `--polish "<reason>"`', text)
+        # References the shared snippet as the source of truth.
+        self.assertIn("directed_revision.md", text)
+
+    def test_revise_polish_bypasses_step_two_only(self):
+        text = _read("commands/primer-revise.md")
+        # Bypasses the combined verdict pre-check (step 2) only...
+        self.assertIn("Bypasses step 2 ONLY", text)
+        # ...while the dual-critic check (step 1) and iteration cap (step 3)
+        # still apply.
+        self.assertIn("step 1", text)
+        self.assertIn("step 3", text)
+        # Inline bypass note at the step-2 procedure itself.
+        self.assertIn("`--polish` bypass", text)
+
+    def test_revise_polish_required_reason(self):
+        text = _read("commands/primer-revise.md")
+        # Empty / whitespace-only / missing reason rejected; thread untouched.
+        self.assertIn('--polish ""', text)
+        self.assertIn("whitespace-only", text)
+        self.assertIn("left untouched", text)
+
+    def test_revise_polish_no_inherited_credit(self):
+        text = _read("commands/primer-revise.md")
+        self.assertIn("No inherited credit", text)
+        self.assertIn("own rubric merits", text)
+
+    def test_revise_polish_audit_trail_fields(self):
+        text = _read("commands/primer-revise.md")
+        self.assertIn('metadata.revision_mode = "polish"', text)
+        self.assertIn("metadata.revise_force_reason", text)
+        # Audit-trail-only: no state-machine impact.
+        self.assertIn("NO state-machine impact", text)
+
+    def test_revise_default_path_byte_identical(self):
+        text = _read("commands/primer-revise.md")
+        # The default (no-flag) path must be advertised as unchanged.
+        self.assertIn("byte-identical to the pre-#691 shape", text)
+
+    def test_skill_documents_polish_pass(self):
+        text = _read("SKILL.md")
+        self.assertIn("Operator-initiated polish passes", text)
+        self.assertIn("directed_revision.md", text)
+        self.assertIn('--polish "<reason>"', text)
+        # Names the load-bearing invariants at a glance.
+        self.assertIn("No inherited credit", text)
+
+
 class TestRubric(unittest.TestCase):
     """rubric.md declares 9 dims summing to 44, >=35, pedagogy-dominant."""
 
@@ -232,9 +333,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)
@@ -389,9 +488,7 @@ class TestSpecRefResolver(unittest.TestCase):
             project_dir = Path(d)
             spec = project_dir / "spec.md"
             spec.write_text("# formal spec\n", encoding="utf-8")
-            self._write_brief(
-                project_dir, spec_ref_line="    spec_ref: spec.md\n"
-            )
+            self._write_brief(project_dir, spec_ref_line="    spec_ref: spec.md\n")
             resolved = pb.resolve_spec_ref(
                 project_dir, "toy-primer", consumer_root=project_dir
             )
@@ -427,13 +524,149 @@ class TestSpecRefResolver(unittest.TestCase):
         pb = self._import_registry()
         with tempfile.TemporaryDirectory() as d:
             project_dir = Path(d)
-            self._write_brief(
-                project_dir, spec_ref_line="    spec_ref: spec.md\n"
-            )
+            self._write_brief(project_dir, spec_ref_line="    spec_ref: spec.md\n")
             resolved = pb.resolve_spec_ref(
                 project_dir, "not-a-slug", consumer_root=project_dir
             )
             self.assertIsNone(resolved)
+
+
+class TestRenderGateHardeningContract(unittest.TestCase):
+    """The #692 render-pipeline hardening: the primer-local pandoc defaults
+    asset carries both the caption + \\pandocbounded directives, and
+    primer-figures.md documents the new deterministic render-gate checks."""
+
+    def test_pandoc_defaults_asset_exists(self):
+        asset = _SKILL_ROOT / "assets" / "pandoc-defaults.yaml"
+        self.assertTrue(
+            asset.exists(),
+            f"missing primer pandoc defaults asset: {asset}",
+        )
+
+    def test_pandoc_defaults_carries_both_directives_in_one_header_block(self):
+        """The caption directive (#690/#695) and the \\pandocbounded cap
+        (#692) must co-exist in ONE header-includes block, not two competing
+        ones."""
+        text = (_SKILL_ROOT / "assets" / "pandoc-defaults.yaml").read_text(
+            encoding="utf-8"
+        )
+        # Exactly one header-includes key (the parse-valid inline-LaTeX path in
+        # a pandoc defaults file — see the asset's schema note).
+        self.assertEqual(text.count("header-includes:"), 1)
+        # (a) the caption convention from #690/#695...
+        self.assertIn("labelformat=empty", text)
+        # (b) ...and the #692 pandocbounded 0.85\textheight cap.
+        self.assertIn(r"\pandocbounded", text)
+        self.assertIn(r"0.85\textheight", text)
+        # Both directives appear AFTER the single header-includes key (i.e.
+        # in the same block), not before it. Use rindex so a comment mention
+        # earlier in the file doesn't mask the in-block occurrence.
+        header_pos = text.index("header-includes:")
+        self.assertGreater(text.rindex("labelformat=empty"), header_pos)
+        self.assertGreater(text.rindex(r"\pandocbounded"), header_pos)
+        # The LaTeX path is pinned (pandocbounded is a LaTeX-only macro).
+        self.assertIn("pdf-engine: xelatex", text)
+
+    def test_figures_documents_pandoc_defaults_and_pandocbounded(self):
+        text = _read("commands/primer-figures.md")
+        self.assertIn("pandoc-defaults.yaml", text)
+        self.assertIn(r"\pandocbounded", text)
+        self.assertIn(r"0.85\textheight", text)
+
+    def test_figures_documents_glyph_and_embedded_image_gates(self):
+        text = _read("commands/primer-figures.md")
+        # Source-driven glyph verification (item 2).
+        self.assertIn("glyph_verification", text)
+        self.assertIn("pdftotext", text)
+        self.assertIn("U+2260", text)
+        # Embedded-image assertion (item 3).
+        self.assertIn("embedded_images", text)
+        self.assertIn("pdfimages", text)
+
+    def test_figures_documents_mmdc_launchability_probe(self):
+        text = _read("commands/primer-figures.md")
+        # Item 4: the launchability probe, distinct from binary presence.
+        self.assertIn("check_mmdc_launchable", text)
+        self.assertIn("MMDC_LAUNCH_REMEDIATION", text)
+
+    def test_pandoc_defaults_compiles_a_tall_figure_when_tools_available(self):
+        """Real-render smoke: the \\pandocbounded 0.85\\textheight cap must
+        compile standalone (no consumer .tex template — primer ships none) and
+        keep a tall figure + long caption on-page.
+
+        Skipped when pandoc/xelatex/pdfinfo are absent (CI without a
+        toolchain), matching the opportunistic-smoke discipline in
+        ``tests/lib/test_render_gate.py``.
+        """
+        import shutil
+        import struct
+        import subprocess
+        import tempfile
+        import zlib
+
+        for tool in ("pandoc", "xelatex", "pdfinfo"):
+            if shutil.which(tool) is None:
+                self.skipTest(f"{tool} not on PATH; skipping real-render smoke")
+
+        asset = _SKILL_ROOT / "assets" / "pandoc-defaults.yaml"
+
+        def _make_tall_png(path: Path, w: int, h: int) -> None:
+            def chunk(typ: bytes, data: bytes) -> bytes:
+                c = typ + data
+                return (
+                    struct.pack(">I", len(data))
+                    + c
+                    + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+                )
+
+            ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+            raw = bytearray()
+            row = bytes((30, 60, 120)) * w
+            for _ in range(h):
+                raw.append(0)
+                raw += row
+            idat = zlib.compress(bytes(raw), 6)
+            path.write_bytes(
+                b"\x89PNG\r\n\x1a\n"
+                + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", idat)
+                + chunk(b"IEND", b"")
+            )
+
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            (work / "exhibits").mkdir()
+            _make_tall_png(work / "exhibits" / "tall.png", 400, 1400)
+            body = work / "primer.md"
+            body.write_text(
+                "# A tall exhibit\n\n"
+                "![Figure 1 — a deliberately tall diagram whose caption spans "
+                "several lines so that, without the 0.85 textheight cap, the "
+                "caption would overflow the page footer and clip at the edge — "
+                "the exact botho canary failure this override fixes.]"
+                "(exhibits/tall.png)\n\n"
+                "That concludes the walkthrough.\n",
+                encoding="utf-8",
+            )
+            pdf = work / "primer.pdf"
+            proc = subprocess.run(
+                [
+                    "pandoc",
+                    str(body),
+                    "-o",
+                    str(pdf),
+                    "--defaults",
+                    str(asset),
+                    "--resource-path",
+                    str(work),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            # The override must COMPILE (exit 0) and produce a PDF. Glyph
+            # warnings on stderr are fine; a non-zero exit is not.
+            self.assertEqual(proc.returncode, 0, f"pandoc failed: {proc.stderr[-800:]}")
+            self.assertTrue(pdf.exists() and pdf.stat().st_size > 0)
 
 
 if __name__ == "__main__":

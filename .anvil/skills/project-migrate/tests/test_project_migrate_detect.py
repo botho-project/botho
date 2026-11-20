@@ -7,7 +7,7 @@ Coverage map:
   ``Shape.POST_283_ANVIL_JSON``.
 - Fully-migrated projects classify as ``Shape.FULLY_MIGRATED``.
 - Empty / non-anvil directories classify as ``Shape.UNKNOWN``.
-- The bessemer-shaped canary fixture classifies as PRE_283_CLASSIC.
+- The foundry-shaped canary fixture classifies as PRE_283_CLASSIC.
 - Inventory walks correctly enumerate per-thread `.anvil.json` files,
   skill-fixed body filenames, and version dirs.
 
@@ -28,7 +28,7 @@ sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import detect  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_bessemer_shaped,
+    build_foundry_shaped,
     build_fully_migrated,
     build_post_283_anvil_json,
     build_pre_283_classic,
@@ -55,9 +55,9 @@ class TestDetectShape(unittest.TestCase):
             project = build_fully_migrated(Path(td))
             self.assertEqual(detect_shape(project), Shape.FULLY_MIGRATED)
 
-    def test_bessemer_shaped_classifies(self) -> None:
+    def test_foundry_shaped_classifies(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             self.assertEqual(detect_shape(project), Shape.PRE_283_CLASSIC)
 
     def test_empty_dir_unknown(self) -> None:
@@ -113,13 +113,13 @@ class TestInventory(unittest.TestCase):
                 self.assertIsNone(thread.anvil_json_path)
             self.assertEqual(inv.extra_anvil_jsons, [])
 
-    def test_bessemer_shaped_inventory(self) -> None:
+    def test_foundry_shaped_inventory(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             inv = inventory_project(project)
             self.assertEqual(len(inv.threads), 1)
             thread = inv.threads[0]
-            self.assertEqual(thread.slug, "bessemer")
+            self.assertEqual(thread.slug, "foundry")
             self.assertEqual(len(thread.version_dirs), 3)
             self.assertIn("memo.md", thread.body_filenames)
 

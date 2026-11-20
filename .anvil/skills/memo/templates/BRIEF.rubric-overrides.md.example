@@ -12,13 +12,13 @@
 #      models, and framing companions. The reader (CEO) is expected to
 #      extract the framework and apply judgment; the memo is deliberately
 #      non-prescriptive on the portfolio-shape choice. (Modeled on the
-#      brasidas-synthesis canary thread.)
+#      meridian-synthesis canary thread.)
 #
 #   2. `feedback-memo` — a studio-side feedback memo TO a CEO on his draft
 #      roadmap thesis (~5K words). Validates parts, recommends sharpening,
 #      proposes a concrete pitch backbone. No "the company," no ask, no
 #      founder section — the recommendation target is positional. (Modeled
-#      on the raytheon-pitch-strategy canary thread.)
+#      on the northwind-pitch-strategy canary thread.)
 #
 # To use: copy this file to `<project>/BRIEF.md`, drop the leading comments,
 # trim or extend the documents list to match your project, and tune the
@@ -35,7 +35,7 @@ hard_rules:
   - Recommendations must be falsifiable; name the evidence that would flip them.
 
 documents:
-  - slug: brasidas-synthesis
+  - slug: meridian-synthesis
     artifact_type: descriptive-thesis
     target_length: { words: [9000, 13000] }
     # Per-version overrides on top of `target_length`. Each key is the
@@ -78,7 +78,7 @@ documents:
         reflects the synthesis-brief shape, not scope creep.
       target_length: { words: [9000, 13000] }
 
-  - slug: raytheon-pitch-strategy
+  - slug: northwind-pitch-strategy
     artifact_type: position-paper
     target_length: { words: [4000, 6000] }
     # Per-document iteration-cap paired override (issue #349). BOTH keys
@@ -160,7 +160,7 @@ and the prior sibling `<thread>/.anvil.json` is retired. The two
   scoped to the subtype.
 - **Per-doc `max_iterations` + `iteration_cap_rationale`** — the
   paired iteration-cap override from issue #349 (demonstrated on the
-  `raytheon-pitch-strategy` entry above). BOTH keys are required when
+  `northwind-pitch-strategy` entry above). BOTH keys are required when
   overriding; the rationale text is the audit trail preserved in BRIEF
   git history. The override may raise the cap above the principled
   default of 4 but never lower it. See `anvil/skills/memo/SKILL.md`

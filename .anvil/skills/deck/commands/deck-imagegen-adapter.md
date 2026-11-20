@@ -211,7 +211,7 @@ It is NOT a production backend — it generates placeholder rectangles, not imag
 
 ### Illustrative: cloud HTTP backend sketch (NOT shipped)
 
-No production/cloud backend is shipped in anvil. Studio's in-progress `imagine.spheresemi.xyz` adapter (per Epic #130's Risks & Considerations) is the closest existing reference but is NOT part of this contract — anvil-side work MUST NOT assume that adapter exists. Consumers writing a first cloud adapter can model the shape from this minimal example (for the short-lived-token auth-bootstrap variant, see `commands/deck-imagegen-onboarding.md` § "Auth bootstrap for cloud backends"):
+No production/cloud backend is shipped in anvil. Studio's in-progress `imagine.acmesemi.xyz` adapter (per Epic #130's Risks & Considerations) is the closest existing reference but is NOT part of this contract — anvil-side work MUST NOT assume that adapter exists. Consumers writing a first cloud adapter can model the shape from this minimal example (for the short-lived-token auth-bootstrap variant, see `commands/deck-imagegen-onboarding.md` § "Auth bootstrap for cloud backends"):
 
 ```python
 # myrepo/imagery_adapter.py

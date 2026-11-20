@@ -6,10 +6,13 @@ their own ``lib/`` package (e.g., ``rubric-rebackport``'s tests cache
 ``lib`` in ``sys.modules``, then another skill's tests can't import
 their own ``lib.<module>``).
 
-The pattern: explicitly load each lib module by file path under a
-unique name (``project_share_lib.<module>``), so the cache key never
-collides with any other skill's ``lib.<module>``. The loaded modules
-are exposed as attributes on this module so tests can write
+Delegates the actual loading to the shared
+``anvil.lib.skill_lib_loader`` helper (issue #879) rather than
+re-deriving the ``importlib`` incantation here — that module registers
+``lib/`` under the unique package name ``project_share_lib`` and
+resolves each requested submodule's relative imports via normal import
+machinery, so no hand-maintained load order is needed. The loaded
+modules are exposed as attributes on this module so tests can write
 ``from _project_share_skill_lib import config, plan, ...``.
 
 This file is named uniquely (``_project_share_skill_lib`` rather than
@@ -25,10 +28,9 @@ be importable, which ``conftest.py`` wires up.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
+from anvil.lib.skill_lib_loader import load_skill_lib
 
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent
@@ -36,67 +38,28 @@ _LIB_DIR = _SKILL_ROOT / "lib"
 
 _PACKAGE_NAME = "project_share_lib"
 
-# Dependency-safe load order: config → collect → plan → apply → verify
-# → orchestrate (plan imports collect + config; apply + verify import
-# plan; orchestrate imports everything).
-_MODULES = [
-    "config",
-    "collect",
-    "plan",
-    "apply",
-    "verify",
-    "orchestrate",
-]
-
-
-def _load_skill_lib_package() -> None:
-    """Load every lib module under ``project_share_lib.<name>``.
-
-    Idempotent: re-running is a no-op when the package is already in
-    sys.modules.
-    """
-    if _PACKAGE_NAME in sys.modules:
-        return
-
-    pkg_spec = importlib.util.spec_from_file_location(
-        _PACKAGE_NAME,
-        _LIB_DIR / "__init__.py",
-        submodule_search_locations=[str(_LIB_DIR)],
-    )
-    assert pkg_spec is not None
-    pkg_module = importlib.util.module_from_spec(pkg_spec)
-    sys.modules[_PACKAGE_NAME] = pkg_module
-    pkg_spec.loader.exec_module(pkg_module)
-
-    for mod_name in _MODULES:
-        full_name = f"{_PACKAGE_NAME}.{mod_name}"
-        if full_name in sys.modules:
-            continue
-        spec = importlib.util.spec_from_file_location(
-            full_name, _LIB_DIR / f"{mod_name}.py"
-        )
-        assert spec is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[full_name] = module
-        spec.loader.exec_module(module)
-        setattr(pkg_module, mod_name, module)
-
-
-_load_skill_lib_package()
+_lib = load_skill_lib(
+    "project-share",
+    _LIB_DIR,
+    ["config", "collect", "plan", "citations", "apply", "verify", "orchestrate"],
+    package_name=_PACKAGE_NAME,
+)
 
 # Re-export each submodule on this helper. ``apply`` is exposed as
 # ``apply_mod`` to avoid shadowing the builtin in test namespaces
 # (mirrors the project-migrate helper).
-config = sys.modules[f"{_PACKAGE_NAME}.config"]
-collect = sys.modules[f"{_PACKAGE_NAME}.collect"]
-plan = sys.modules[f"{_PACKAGE_NAME}.plan"]
-apply_mod = sys.modules[f"{_PACKAGE_NAME}.apply"]
-verify = sys.modules[f"{_PACKAGE_NAME}.verify"]
-orchestrate = sys.modules[f"{_PACKAGE_NAME}.orchestrate"]
+config = _lib.config
+collect = _lib.collect
+plan = _lib.plan
+citations = _lib.citations
+apply_mod = _lib.apply
+verify = _lib.verify
+orchestrate = _lib.orchestrate
 
 
 __all__ = [
     "apply_mod",
+    "citations",
     "collect",
     "config",
     "orchestrate",

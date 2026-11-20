@@ -92,7 +92,7 @@ EMPTY → OUTLINED → DRAFTED → REVIEWED → REVISED → … → READY → AU
 |---|---|
 | `EMPTY` | No `<thread>.{N}/` directories AND no `<thread>.0.outline/` |
 | `OUTLINED` | `<thread>.0.outline/outline.md` exists; no `<thread>.1/` yet |
-| `DRAFTED` | Latest `<thread>.{N}/` exists with `deck.md` and `_progress.json.draft == done`; no sibling review at the same `N` |
+| `DRAFTED` | Latest `<thread>.{N}/` exists with `deck.md` and `_progress.json.draft == done` (or `import == done` for a `slides-import`ed version); no sibling review at the same `N` |
 | `REVIEWED` | `<thread>.{N}.review/verdict.md` exists for the latest `N` |
 | `REVISED` | A `<thread>.{N+1}/` exists after a prior `<thread>.{N}.review/` |
 | `READY` | Latest `<thread>.{N}.review/verdict.md` records `advance: true` AND no unresolved critical flag |
@@ -107,7 +107,7 @@ EMPTY → OUTLINED → DRAFTED → REVIEWED → REVISED → … → READY → AU
 - **Density flag** — any slide exceeds 50 words OR 7 bullets. Blocks (forces a slide split).
 - **Time flag** — projected duration >110% of the venue slot. Blocks (forces a cut).
 
-**Iteration cap**: default `max_iterations: 4` (so worst-case terminal version is `<thread>.5/`). Configurable per-thread via `<thread>/.anvil.json` with `{ "max_iterations": <N> }` in v1; the **v2 convergence target is the project-level `BRIEF.md`** (the post-#296 config locus — memo already carries the per-document override on its `documents:` entries, and `anvil:project-migrate` merges a thread's `.anvil.json` into the project BRIEF when migrating older layouts). Exceeding the cap marks the thread `BLOCKED` (in the portfolio orchestrator's report) and requires human review.
+**Iteration cap**: default `max_iterations: 4` (`<thread>.{max_iterations}/` — `<thread>.4/` at the default — is the worst-case terminal version dir; there is no `<thread>.5/` under a default cap). Configurable per-thread via `<thread>/.anvil.json` with `{ "max_iterations": <N> }` in v1; the **v2 convergence target is the project-level `BRIEF.md`** (the post-#296 config locus — memo already carries the per-document override on its `documents:` entries, and `anvil:project-migrate` merges a thread's `.anvil.json` into the project BRIEF when migrating older layouts). Exceeding the cap marks the thread `BLOCKED` (in the portfolio orchestrator's report) and requires human review.
 
 **Re-running siblings on revision**: `audit`, `rehearse`, and `vision` are critic-shaped and are re-discovered on each loop. After a revision lands a new `<thread>.{N+1}/`, the orchestrator re-runs `slides-review`, `slides-audit`, `slides-rehearse`, and `slides-vision` against the new version. `handout` is terminal-only and runs once on the final READY+AUDITED+REHEARSED version.
 
@@ -116,17 +116,24 @@ EMPTY → OUTLINED → DRAFTED → REVIEWED → REVISED → … → READY → AU
 | Command | Role | Reads | Writes |
 |---|---|---|---|
 | `slides` | portfolio orchestrator | all `<thread>.*` dirs under cwd | (none; reports state per thread + recommends next command) |
+| `slides-import <thread> --pdf <path>` | importer | an externally-authored PDF (+ optional `--notes <dir>`) | `<thread>.1/` (image-backed `deck.md`, `figures/slide-NN.png`, `notes/`) + `refs/original/` (untouched PDF + SHA-256 manifest) |
 | `slides-outline <thread>` | outliner | `<thread>/BRIEF.md` (+ `<thread>/refs/`) | `<thread>.0.outline/outline.md` |
 | `slides-draft <thread>` | drafter | `<thread>/BRIEF.md` (+ refs); for revisions, also `<thread>.{N}/` + all `<thread>.{N}.*/` siblings; AND `<thread>.0.outline/` if present | `<thread>.1/` (or `<thread>.{N+1}/` on revise-from-feedback path; see `slides-revise`) |
 | `slides-review <thread>` | reviewer | latest `<thread>.{N}/` | `<thread>.{N}.review/` (also runs pre-flight `slide-content-overflow` lint per "Pre-flight overflow lint" below) |
 | `slides-audit <thread>` | auditor | latest `<thread>.{N}/` (deck.md AND notes/) | `<thread>.{N}.audit/` |
 | `slides-vision <thread>` | vision critic | latest `<thread>.{N}/deck.md` (renders to `deck.pdf` + per-slide PNGs on demand) | `<thread>.{N}.vision/` with `_review.json` (`kind=vision`), `_meta.json`, `_progress.json`, and per-slide PNGs in `slides/` |
-| `slides-revise <thread>` | reviser | latest `<thread>.{N}/` + all `<thread>.{N}.*/` critic siblings | `<thread>.{N+1}/` with `changelog.md` |
+| `slides-revise <thread> [--polish "<reason>"] [--reject "<reason>"]` | reviser | latest `<thread>.{N}/` + all `<thread>.{N}.*/` critic siblings | `<thread>.{N+1}/` with `changelog.md`; with `--polish`, also `metadata.revision_mode = "polish"` + `metadata.revise_force_reason`; with `--reject`, also `metadata.revision_mode = "operator_reject"` + `metadata.reject_reason`. The two flags are mutually exclusive. See §"Operator-initiated polish / rejection". |
 | `slides-figures <thread>` | figurer | latest `<thread>.{N}/deck.md` | figures under `<thread>.{N}/figures/` |
 | `slides-rehearse <thread>` | rehearser | latest `<thread>.{N}/` | `<thread>.{N}.rehearse/` |
 | `slides-handout <thread>` | handout exporter | latest READY+AUDITED+REHEARSED `<thread>.{N}/` | `<thread>.{N}.handout/handout.pdf` |
 
 The portfolio orchestrator is the user-facing entry point for status; the lifecycle commands are dispatched from it (or invoked directly by the orchestrating agent).
+
+### Importing a deck authored outside anvil
+
+`slides-import` is the entry point for an existing PDF talk. It writes an image-backed `<thread>.1/` (one `![bg fit](figures/slide-NN.png)` slide per page, page text kept in an HTML comment so audit quotes resolve) and preserves the untouched original in `<thread>/refs/original/` — not `<thread>.0/`, which stays reserved for the outline. Re-running on a thread that already has `<thread>.1/` refuses. The lint reports `info: image-only slide — lint not applicable` for these slides; it is never a pass.
+
+An optional thread-`BRIEF.md` block, `slides.external_source: {dir, build, pdf}`, tells `slides-revise` to edit the real source under `dir`, run `build`, and re-render the PDF into `figures/` instead of editing `deck.md`. The block is skill-local (ignored by other skills); absent, behavior is unchanged. See `commands/slides-revise.md` § "External-source threads".
 
 ## Progress tracking
 
@@ -191,7 +198,7 @@ Rationale for sidecar markdown over Marp's inline `<!-- presenter notes -->` syn
 
 1. **Diffability**: per-slide note files diff cleanly across `<thread>.{N}/` versions. Inline notes embedded in `deck.md` make slide-level diffs noisy.
 2. **Audit consumability**: the auditor reads `notes/*.md` independently to fact-check spoken claims, which often contain numbers and citations not appearing on the slide itself.
-3. **Density check**: the rehearser counts note words for spoken-time estimation; sidecar files make this trivial.
+3. **Density check**: the rehearser counts note words for spoken-time estimation; sidecar files make this trivial. If a notes file separates `## Cues` (short spoken prompts) from a `## Script`/prose sibling section, only the `## Cues` words count toward timing — see `slides-rehearse.md` "Cues vs. Script sections".
 4. **Handoff**: someone else delivering the talk reads `notes/` as a standalone document.
 
 The Marp renderer supports both inline notes (HTML comments) and sidecar notes (via build pipeline). The skill prompt instructs the drafter to write to sidecar files; if the consumer prefers inline notes for their build pipeline, a trivial merger script can concatenate them at export time.
@@ -202,7 +209,7 @@ The Marp renderer supports both inline notes (HTML comments) and sidecar notes (
 
 **`slides-audit`** — *technical fact-check, MANDATORY.* The load-bearing distinction from `anvil:deck`. The auditor reads `<thread>.{N}/deck.md` AND `<thread>.{N}/notes/*.md` and writes `<thread>.{N}.audit/` with: every technical claim enumerated; for each claim, a verdict (`supported` / `unsupported` / `wrong` / `ambiguous`) plus a citation or source link. Posture is sharper than the general reviewer's — citation-correspondence is the apex concern. Critical flag on any `wrong` verdict blocks advancement regardless of rubric score.
 
-**`slides-rehearse`** — *time-budget + density check.* Mechanical pass: counts words per slide, estimates spoken-time-per-slide (default heuristic: 90s base + 30s per non-trivial figure + 1.5s per word of presenter notes, capped at 3 min/slide for technical depth slides). Emits `<thread>.{N}.rehearse/timing.md` with per-slide and aggregate estimates, density violations, and recommended cuts. Deterministic-first (regex/wordcount) with LLM judgment only for "is this figure trivial or non-trivial?" classification. Feeds Dimensions 4 and 8 directly.
+**`slides-rehearse`** — *time-budget + density check.* Mechanical pass: counts words per slide, estimates spoken-time-per-slide (default heuristic: 90s base + 30s per non-trivial figure + 1.5s per word of presenter notes, capped at 3 min/slide for technical depth slides). If a notes file has a `## Cues` heading, only that section's words count toward timing (a `## Script`/full-prose sibling section is excluded) — see `slides-rehearse.md` "Cues vs. Script sections"; files without `## Cues` fall back to the whole-file word count unchanged. A notes file with a `## Script (timed core)` heading is timed in **script mode** instead (`words ÷ script_wpm × 60`, default 130 wpm, no base/figure terms or 180s cap; precedence `## Script (timed core)` > `## Cues` > whole file), and `timing.md` marks each slide `mode: script|cues|full` and flags script pace above 150 wpm. For slots under ~20 minutes, lower `time_per_slide_seconds_base` in `.anvil.json` — the 90s default alone can exceed a short slot before any notes are counted. Emits `<thread>.{N}.rehearse/timing.md` with per-slide and aggregate estimates, density violations, recommended cuts, and a low-information caveat when a majority of slides hit the 180s cap. Deterministic-first (regex/wordcount) with LLM judgment only for "is this figure trivial or non-trivial?" classification. Feeds Dimensions 4 and 8 directly.
 
 **`slides-figures`** — *figure generation, talk-specific defaults.* Writes into `<thread>.{N}/figures/` (part of the artifact, not a sibling). Three asset paths:
 - **Mermaid** for flowcharts and block diagrams — rendered to PNG via `mmdc` (`figures/<name>.mmd` → `figures/<name>.png`). Inline fences do NOT render in the PDF (issue #65), so `mmdc` is required for any deck with a diagram.
@@ -237,6 +244,40 @@ The skill prompt instructs the figurer to **never invent data** — only render 
 - The lint runs ONLY in `slides-review`. `slides-draft`, `slides-audit`, `slides-figures`, and `slides-rehearse` do not invoke it. This keeps the per-phase responsibility boundaries clean — the drafter is allowed to produce an overflowing slide so the reviser sees the failure mode.
 
 **Escape hatch — `<!-- anvil-lint-disable: slide-content-overflow -->`**: any slide that contains this HTML comment has its `slide-content-overflow` finding downgraded to `severity: info`. The finding is still recorded so the reviser sees that the slide is dense, but `advance` is not blocked. Use this for legitimately-dense slides that have been visually validated (e.g., a deliberately busy reference figure, or a comparison table that needs all rows). Document the rationale in the slide's `notes/<NN>-*.md` so the auditor can spot-check.
+
+## Editorial overrides
+
+An operator who deliberately overrides a critic finding by hand can record it so the next `slides-review` / `slides-vision` pass does not re-flag it and `slides-revise` does not revert it. Declare it per document in the project `BRIEF.md`, beside `rubric_overrides`:
+
+```yaml
+documents:
+  - slug: sauna-talk
+    artifact_type: slides
+    editorial_overrides:
+      - slide: 7
+        dimension: 4            # slides-review: rubric dim number; slides-vision: dim key, e.g. slide_density
+        reason: "Build photos replace the qualitative sketch on purpose."
+        date: 2026-10-15
+```
+
+Matching is exact (slide AND dimension; no free text). A matched finding is reported as `severity: nit` with an `overridden:` rationale and is not deducted. Critical flags and `blocker` findings are never overridden, `slides-audit` ignores overrides, and unmatched (possibly stale) overrides are listed in each review summary. `reason` and `date` (ISO) are required.
+
+## Operator-initiated polish / rejection
+
+A `READY` thread (`advance: true`, no critical flags) is the normal terminus, and `slides-revise` step 4 refuses to revise it. Two sanctioned overrides exist (issue #1369), both bypassing step 4 only:
+
+- `slides-revise <thread> --polish "<reason>"` — one line-level pass over sub-threshold dimension notes and `nit`/untagged comments; never restructures.
+- `slides-revise <thread> --reject "<reason>"` — the operator overrules the scoring system and reopens the thread for a substantive revision; the reason is ranked above every critic finding.
+
+Shared invariants (full contract: `anvil/lib/snippets/directed_revision.md`):
+
+- **The reason is required** — empty / whitespace-only / missing is rejected and the thread is left untouched.
+- **`--polish` and `--reject` are mutually exclusive.**
+- **Step 1 (a review must exist) and step 3 (iteration cap) still apply.** Deleting a verdict or hand-editing `_progress.json` to force a revision is not supported; it destroys the audit trail.
+- **No inherited credit** — the output is a normal `<thread>.{N+1}/` scored on its own merits.
+- **Audit trail** (not scored, not gating): `metadata.revision_mode` (`"polish"` / `"operator_reject"`) plus the verbatim `metadata.revise_force_reason` / `metadata.reject_reason`. `slides-review` surfaces an `operator_reject` as an observational `## Operator rejection` note in `findings.md`.
+
+See `commands/slides-revise.md` §"CLI flags" for the reviser-side procedure.
 
 ## Rubric
 

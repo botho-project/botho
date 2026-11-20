@@ -67,11 +67,12 @@ collision, an `order` slug missing from `documents:`, or xelatex absent.
   `anvil/lib/critics.py`, denominator + threshold from the sibling's
   `_meta.json` version stamp), and notes the audit state.
 - **Stages** one `<slug>.tex` per chapter into `chapters_dir` (in declared
-  `order`), copying the resolved `chapter_filename` or generating a
-  placeholder. The chapters dir is a **marker-guarded blow-away rebuild** —
+  `order`), copying the slug-resolved `chapter_filename` (the `{slug}` token
+  is substituted per thread) or generating a placeholder. The chapters dir
+  is a **marker-guarded blow-away rebuild** —
   stale chapters from threads removed from `order` disappear by construction.
 - **Compiles** the consumer `master_doc` with **two-pass XeLaTeX** via
-  `anvil/lib/render_gate.py::compile_and_gate` (the skill does not roll its
+  `anvil/lib/render_gate/compile_and_gate.py::compile_and_gate` (the skill does not roll its
   own LaTeX invocation) and writes `out_pdf`.
 - **Reports** `BOOK_REPORT.md`: a per-thread table (slug, resolved version,
   state, score/44, audit state, recommended next command) plus a "Build
@@ -87,7 +88,7 @@ build:
     - appendix
   master_doc: book/book.tex     # consumer-owned master document (required for compile)
   chapters_dir: book/chapters   # where to stage per-thread chapter files
-  chapter_filename: chapter.tex # per-thread filename to stage
+  chapter_filename: chapter.tex # per-thread filename template to look for
   out_pdf: book/book.pdf        # output PDF path (default: <chapters_dir>/../book.pdf)
 ```
 
@@ -97,6 +98,35 @@ chapter in BRIEF order with the framework defaults (`book/chapters`,
 shared `ProjectBrief` model is not extended; the BRIEF parser already ignores
 unknown top-level frontmatter keys, so the `build:` block is safe in any BRIEF
 today (the same precedent `project-share`'s `export:` block relies on).
+
+### `chapter_filename` is a per-thread template (#864)
+
+`chapter_filename` names the file to look for **inside each thread's resolved
+version dir**. It is a bare filename (no path separators) in which the literal
+token `{slug}` is substituted with that thread's own slug:
+
+```yaml
+build:
+  chapter_filename: '{slug}.tex'   # 00-introduction/00-introduction.3/00-introduction.tex
+```
+
+A value with no `{slug}` token — the `chapter.tex` default — resolves to
+itself for every thread, so every pre-existing config behaves exactly as
+before.
+
+**Zero-config default by artifact type.** When the `build:` block does *not*
+set `chapter_filename` at all, the effective template is chosen per document:
+
+| `documents:` entry `artifact_type` | Default template |
+|---|---|
+| `memoir` | `{slug}.tex` (memoir's slug-echo body contract — "never `chapter.tex`", #295) |
+| anything else / absent | `chapter.tex` |
+
+An explicit `build.chapter_filename` always wins — for memoir threads too —
+so a project that already pinned a filename is never silently overridden. (The
+"was it set?" test is pydantic's `model_fields_set`, so spelling out
+`chapter_filename: chapter.tex` is honored verbatim rather than being
+re-read as "unset.")
 
 `order` semantics: when present it is the authoritative include-list and
 ordering — slugs omitted from `order` are excluded (noted in the report);
@@ -143,12 +173,12 @@ compiled `book.pdf`, and the `BOOK_REPORT.md` provenance report.
 
 ## Lib primitives composed
 
-- `anvil/lib/project_brief.py` — `load_project_brief_strict` for the
+- `anvil/lib/project_brief/` — `load_project_brief_strict` for the
   `documents:` list and default ordering.
 - `anvil/lib/latest_resolution.py` — `resolve_latest(thread_dir, slug)` per
   thread.
 - `anvil/lib/render.py` — `check_xelatex_available()` + `XELATEX_REMEDIATION`.
-- `anvil/lib/render_gate.py` — `compile_and_gate` (two-pass LaTeX + gate).
+- `anvil/lib/render_gate/` — `compile_and_gate` (two-pass LaTeX + gate).
 - `anvil/lib/critics.py` — `load_review` + `aggregate` for review scores.
 - Skill-local `lib/`: `config.py` (BookConfig + `build:` parser), `collect.py`
   (per-thread resolution + state + score + audit), `stage.py` (marker-guarded

@@ -27,10 +27,25 @@ schema, `multi_item` derivation rule, and rotation-hint normalization.
 
 ### 1. Run the build
 
-Load the skill lib (`anvil/skills/project-photos/lib/`) and call the
-single entry point:
+Load the skill lib and call the single entry point. The skill's `lib/`
+directory (`anvil/skills/project-photos/lib/` in the anvil source tree,
+`.anvil/skills/project-photos/lib/` in a consumer install) is a package
+whose `orchestrate` module imports its sibling `manifest` module by
+relative import, and the directory name is hyphenated, so it cannot be
+loaded with a bare `sys.path.insert` + `import orchestrate`. Use the
+shared loader (`anvil.lib.skill_lib_loader`, importable via `uv run
+--project .anvil` per the "Running anvil Python from a consumer"
+pattern):
 
 ```python
+from pathlib import Path
+from anvil.lib.skill_lib_loader import import_skill_lib_module
+
+orchestrate = import_skill_lib_module(
+    "project-photos", Path("anvil/skills/project-photos/lib"), "orchestrate"
+)
+# .anvil/skills/project-photos/lib in a consumer install.
+
 result = orchestrate.run(
     photos_dir,
     numbering_doc,

@@ -51,6 +51,7 @@ import re
 import unittest
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
 
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent
@@ -58,10 +59,6 @@ _REVISE_MD = _SKILL_ROOT / "commands" / "memo-revise.md"
 _SKILL_MD = _SKILL_ROOT / "SKILL.md"
 _PLAN_TEMPLATE = _SKILL_ROOT / "templates" / "plan.md.template"
 _FIXTURES = _HERE / "fixtures" / "memo_revise_plan"
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +407,7 @@ class TestDeclinedItemsBecomeChangelogRows(unittest.TestCase):
             "clean and forceful presentation",
             plan_md,
             "declined_items_decay fixture MUST preserve the canary "
-            "operator-intent phrase from issue #243 (Studio Raytheon "
+            "operator-intent phrase from issue #243 (Studio Northwind "
             "memo.3 → memo.4 evidence)",
         )
 
@@ -732,7 +729,8 @@ class TestPlanTemplatePresent(unittest.TestCase):
 
     def test_template_documents_planned_edits_table(self) -> None:
         template = _read(_PLAN_TEMPLATE)
-        # The table columns MUST be documented per AC4.
+        # The table columns MUST be documented per AC4. `Mode` was added
+        # by issue #748 (resolution-mode vocabulary).
         for col in (
             "ID",
             "Source",
@@ -741,6 +739,7 @@ class TestPlanTemplatePresent(unittest.TestCase):
             "Summary",
             "Words Δ",
             "Dim Δ",
+            "Mode",
         ):
             self.assertIn(
                 col,
@@ -892,6 +891,187 @@ class TestFixtureInventoryComplete(unittest.TestCase):
             set(self.EXPECTED_FIXTURES),
             "tests/fixtures/memo_revise_plan/ MUST contain exactly the "
             "six AC10-named fixture directories",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #748 — resolution modes (added/restructured/removed/moved-to-exhibit)
+# + net-delta reporting: the additive-only reviser contract.
+# ---------------------------------------------------------------------------
+
+
+class TestResolutionModeVocabulary(unittest.TestCase):
+    """Issue #748 — every addressed `Resolution:` row in `changelog.md`
+    declares HOW the finding was resolved via a mode tag, extending the
+    existing `declined` / `addressed (judgment-held)` vocabulary rather
+    than replacing it. Mirrors the precedent set by
+    ``test_declined_items_resolution_format_in_changelog`` above: assert
+    on the documented row-format substring in ``commands/memo-revise.md``.
+    """
+
+    def setUp(self) -> None:
+        self.revise = _read(_REVISE_MD)
+
+    def test_four_resolution_modes_documented(self) -> None:
+        for mode in ("added", "restructured", "removed", "moved-to-exhibit"):
+            self.assertIn(
+                f"`{mode}`",
+                self.revise,
+                f"memo-revise.md MUST document the `{mode}` resolution "
+                f"mode (issue #748)",
+            )
+
+    def test_mode_tagged_resolution_row_format_documented(self) -> None:
+        # The mode-tagged row shape MUST be documented: `Resolution:
+        # <mode> — <change>`.
+        self.assertIn(
+            "Resolution: <mode> — <change>",
+            self.revise,
+            "memo-revise.md MUST document the `Resolution: <mode> — "
+            "<change>` changelog row format (issue #748)",
+        )
+
+    def test_declined_and_judgment_held_dispositions_survive(self) -> None:
+        # The pre-#748 vocabulary (`declined`, `addressed
+        # (judgment-held)`) MUST NOT be removed — issue #748 extends it.
+        self.assertIn("Resolution: declined", self.revise)
+        self.assertIn("addressed (judgment-held)", self.revise)
+
+    def test_removed_before_added_prompt_instruction_documented(self) -> None:
+        # Proposal item 3 — the revision-plan prompt (step 7) MUST
+        # instruct the reviser to consider `removed` before `added`, and
+        # to re-examine an all-`added` plan.
+        self.assertIn(
+            "consider `removed` before `added`",
+            self.revise,
+            "memo-revise.md step 7 MUST inject the 'consider `removed` "
+            "before `added`' instruction into the revision-plan prompt "
+            "(issue #748 proposal item 3)",
+        )
+        lowered = self.revise.lower()
+        self.assertIn(
+            "should be re-examined before applying",
+            lowered,
+            "memo-revise.md MUST document that an all-`added` plan "
+            "should be re-examined before applying (issue #748)",
+        )
+
+    def test_worked_removed_example_in_changelog(self) -> None:
+        # Proposal item 6 / acceptance sketch: one worked example of a
+        # `removed` resolution in the command doc's changelog example.
+        self.assertIn(
+            "removed — cut",
+            self.revise,
+            "memo-revise.md MUST include a worked `removed` resolution "
+            "example in the changelog.md example table (issue #748)",
+        )
+
+    def test_no_new_gating_stated(self) -> None:
+        # Proposal item 4 — audit-trail only, no score/gate/state-machine
+        # impact. Same framing discipline as `metadata.scope` /
+        # `metadata.revision_mode`.
+        lowered = self.revise.lower()
+        self.assertIn(
+            "no new gating",
+            lowered,
+            "memo-revise.md MUST explicitly state resolution modes "
+            "introduce no new gating (issue #748 proposal item 4)",
+        )
+
+
+class TestNetDeltaHeader(unittest.TestCase):
+    """Issue #748 proposal item 2 — the changelog header reports the
+    revision's net word count and bold-span count delta.
+    """
+
+    def setUp(self) -> None:
+        self.revise = _read(_REVISE_MD)
+
+    def test_net_delta_header_documented(self) -> None:
+        self.assertIn(
+            "Net-delta header",
+            self.revise,
+            "memo-revise.md MUST document the changelog net-delta "
+            "header (issue #748)",
+        )
+
+    def test_words_and_bold_spans_lines_documented(self) -> None:
+        self.assertIn(
+            "words: 3417 → 3597 (+180)",
+            self.revise,
+            "memo-revise.md MUST document the `words: <before> → "
+            "<after> (<Δ>)` net-delta header line (issue #748)",
+        )
+        self.assertIn(
+            "bold spans: 122 → 136 (+14)",
+            self.revise,
+            "memo-revise.md MUST document the `bold spans: <before> → "
+            "<after> (<Δ>)` net-delta header line (issue #748)",
+        )
+
+    def test_net_delta_header_is_audit_trail_only(self) -> None:
+        # Same audit-trail-only framing as `metadata.scope` /
+        # `metadata.revision_mode` — no score or gating impact.
+        lowered = self.revise.lower()
+        self.assertIn(
+            "audit-trail only",
+            lowered,
+            "memo-revise.md MUST frame the net-delta header as "
+            "audit-trail only (issue #748)",
+        )
+
+
+class TestPlanModeColumnEditableBeforeApply(unittest.TestCase):
+    """Issue #748 proposal item 5 — under `--plan`, planned rows carry a
+    proposed resolution mode that is editable before `--apply`.
+    """
+
+    def setUp(self) -> None:
+        self.revise = _read(_REVISE_MD)
+        self.template = _read(_PLAN_TEMPLATE)
+        self.skill = _read(_SKILL_MD)
+
+    def test_plan_row_mode_cell_documented_in_revise_md(self) -> None:
+        self.assertIn(
+            "`Mode` (one of `added` / `restructured` / `removed` / "
+            "`moved-to-exhibit`",
+            self.revise,
+            "memo-revise.md MUST document the plan row `Mode` cell "
+            "(issue #748)",
+        )
+
+    def test_mode_cell_editable_independent_of_decline(self) -> None:
+        lowered = self.revise.lower()
+        self.assertIn(
+            "may be edited by the operator",
+            lowered,
+            "memo-revise.md MUST state the `Mode` cell is editable by "
+            "the operator before `--apply` (issue #748)",
+        )
+
+    def test_apply_reads_mode_cell_into_changelog(self) -> None:
+        self.assertIn(
+            "read the `Mode` cell",
+            self.revise,
+            "memo-revise.md `--apply` dispatch (step 0b) MUST document "
+            "reading each row's `Mode` cell into the changelog "
+            "resolution-mode tag (issue #748)",
+        )
+
+    def test_template_documents_mode_column_operator_use(self) -> None:
+        self.assertIn(
+            "RESOLUTION MODE (issue #748)",
+            self.template,
+            "plan.md.template's operator-use comment block MUST "
+            "document the `Mode` cell contract (issue #748)",
+        )
+
+    def test_skill_md_documents_proposed_mode(self) -> None:
+        self.assertIn(
+            "proposed resolution mode",
+            self.skill,
+            "SKILL.md MUST document that planned edits carry a "
+            "proposed resolution mode (issue #748)",
         )
 
 

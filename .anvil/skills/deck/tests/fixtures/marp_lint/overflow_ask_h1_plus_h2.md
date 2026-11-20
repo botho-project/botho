@@ -8,11 +8,11 @@ theme: anvil-deck
 
 ## The ask
 
-# Raising **$2M seed** to ship Otium pilot
+# Raising **$4M seed** to ship Widget pilot
 
-- **50%** founding team · **20%** Otium v0 prototype
-- **15%** Aldus Mobile alpha · **10%** 50-unit pilot
-- **5%** display partnership LOI execution
-- ~18 months runway at $111K/mo blended
+- **50%** founding team · **20%** Lantern v0 prototype
+- **15%** Beacon Mobile alpha · **10%** 50-unit pilot
+- **5%** channel partnership LOI execution
+- ~24 months runway at $150K/mo blended
 
-_Robb Walters · robb@2amlogic.com · 2AM Logic Studio_
+_A. Founder · founder@example.com · Example Studio_

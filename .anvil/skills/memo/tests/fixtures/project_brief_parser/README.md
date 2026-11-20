@@ -17,7 +17,7 @@ fixture is fine; until then the two trees live independently.
 
 ## Fixtures
 
-### `brains-for-robots/`
+### `smart-actuators/`
 
 Mirrors the canary's intended five-document project shape:
 `investment-memo`, `latency-wall` (position-paper), `technical-vision`

@@ -4,7 +4,7 @@ The reviewer scores a talk deck against 9 weighted dimensions summing to **44**.
 
 The rubric is talk-tuned: **technical accuracy + pedagogical clarity + narrative arc + density (25/44 ≈ 56.8%)** dominate. A talk's primary job is to communicate true ideas clearly within a time budget. Visual polish matters but never outranks correctness or readability — an unreadable beautiful slide is worse than a plain readable one.
 
-This weighting differs from `anvil:memo` (where thesis + evidence + risk dominate) and will differ from `anvil:deck` (where investability + persuasion + defensibility dominate). Same 9-dimension shape; different priorities. The dim 9 *Rhetorical economy* addition (weight 4) provides explicit countervailing pressure against bloat at the **talk level** — distinct from per-slide density (dim 4). Dim 4 asks "is this slide too dense?"; dim 9 asks "could the whole talk land in 30 minutes? Are slides 23–28 load-bearing?". Dim 9 is owned by the source-side reviewer (`slides-review`) and is NOT scored by `slides-vision`.
+This weighting differs from `anvil:memo` (where thesis + evidence + risk dominate) and will differ from `anvil:deck` (where investability + persuasion + defensibility dominate). Same 9-dimension shape; different priorities. The dim 9 *Rhetorical economy* addition (weight 4) provides explicit countervailing pressure against bloat at the **talk level** — distinct from per-slide density (dim 4). Dim 4 asks "is this slide too dense?"; dim 9 asks "could the whole talk land in 30 minutes? Do slides 23–28 carry weight the talk needs?". Dim 9 is owned by the source-side reviewer (`slides-review`) and is NOT scored by `slides-vision`.
 
 ## Dimensions
 
@@ -17,11 +17,29 @@ This weighting differs from `anvil:memo` (where thesis + evidence + risk dominat
 | 5 | **Visual quality** | 4 | Diagram clarity, consistent style, no chartjunk, sensible color choices. Lower weight than for `deck` (where polish is investability signal); a great talk on plain slides beats a polished talk on bad slides. |
 | 6 | **Accessibility / readability at distance** | 4 | Minimum font size (24pt body / 18pt code), color-blind-safe palette, sufficient contrast, no critical info conveyed by color alone. Hard requirement for projected venues — a slide unreadable from row 20 is a slide nobody read. |
 | 7 | **Presenter-notes completeness** | 4 | Every slide has speaker notes covering: what to say, transitions, anticipated questions, time-allocation. Critical for rehearsal AND for handoff (someone else may deliver the talk). |
-| 8 | **Time-budget realism** | 3 | Slide count × estimated-time-per-slide fits the venue slot ±10%. Penalize "60 slides for a 45-minute slot" overruns. Rehearsal phase produces the empirical estimate; the reviewer scores the realism of the fit. |
-| 9 | **Rhetorical economy** | 4 | Talk-level anti-bloat (distinct from per-slide density dim 4): could the whole talk land in 30 minutes? Are slides 23–28 load-bearing? Could the same arc reach the takeaway in fewer beats? Owned by `slides-review` (source-side judgment); NOT scored by `slides-vision`. |
+| 8 | **Time-budget realism** | 3 | Slide count × estimated-time-per-slide fits the venue slot ±10%. Penalize "60 slides for a 45-minute slot" overruns. Rehearsal phase produces the empirical estimate; the reviewer scores the realism of the fit. **Evidence cap**: D8 is capped at 2/3 unless the version has a `<thread>.{N}.rehearse/timing.md` sibling **or** the BRIEF records an aloud timing (`aloud_timing_minutes:` frontmatter key); budgets alone are not timing evidence. The reviewer states which evidence it used. |
+| 9 | **Rhetorical economy** | 4 | Talk-level anti-bloat (distinct from per-slide density dim 4): could the whole talk land in 30 minutes? Do slides 23–28 carry weight the talk needs? Could the same arc reach the takeaway in fewer beats? Owned by `slides-review` (source-side judgment); NOT scored by `slides-vision`. Teaching-oriented length is not padding — see `anvil/lib/snippets/plain_language.md` and `anvil/lib/snippets/rubric.md` §"Dim 9 — teaching-oriented length is not padding" (issue #1042) for the plain-language-first distinction between padding and patient explanation. |
 | | **Total** | **44** | Advance threshold: ≥35 |
 
 The four anchor dimensions (1–4) sum to **25/44 ≈ 56.8%**, reflecting that the four pillars of a good talk are *true, clear, well-shaped, and digestible*. The presentation-craft dimensions (5–8) sum to 15/44 — necessary but never sufficient. The dim 9 *Rhetorical economy* check (4/44) sits adjacent to dim 4 *Slide density* as the talk-level counterpart to the per-slide check.
+
+## On-slide disclosure vs. provenance
+
+Two things critics conflate: **provenance** (where an image, figure, or number came from, and what was done to it) and **on-slide disclosure** (a visible label, tag, or footer telling the audience about it). Provenance belongs in `notes/`, `refs/`, and slide-sources. A visible label is justified only under the **audience common-sense test**: *would a reasonable member of the declared audience otherwise be misled about what they are looking at?*
+
+- Passes (label justified): a photorealistic image that could pass for a real photograph, a chart whose data is synthetic but reads as measured, a quote or statistic whose source the audience would assume to be something else.
+- Fails (no label): an obviously AI-painted cartoon, an illustrative sketch of a concept, a cropped screenshot, a footer reciting editing steps ("cropped to remove a signature"). Record these in notes or sources instead.
+
+Critics (`slides-review`, `slides-audit`, `slides-vision`) must not recommend a disclosure label that fails the test, and must not deduct for the absence of one. The reviser may decline such a finding (see `commands/slides-revise.md`). This section changes no dimension weight, total (/44), threshold, or critical flag.
+
+## Talk genre calibration (`talk_genre`)
+
+The optional `BRIEF.md` frontmatter key `talk_genre` takes one of two values:
+
+- `technical-lecture` (the default when the key is absent or holds an unrecognized value): the dimensions are judged exactly as written above.
+- `maker-story`: a first-person build or project story. In **judgment prose only**, dim 2 is judged by "can the audience follow the story?" with no penalty for absent formal concept → example → implication scaffolding, and dims 3 (*Narrative arc*) and 5 (*Visual quality*, including documentary evidence) are weighed ahead of lecture-style scaffolding. Critics must not recommend replacing documentary photos of the build with schematics, sketches, or plots under this genre.
+
+The numeric weights are identical under both genres; `talk_genre` never changes a score ceiling, the /44 total, or the threshold.
 
 ## Dimension 4 ownership (density / cognitive load)
 
@@ -128,4 +146,4 @@ The reviewer dir is **read-only once written**. Revisions consume it without mod
 - **Trust the auditor and rehearser.** The audit flag, density flag, and time flag are upstream of the reviewer's judgment — pull them in from sibling dirs and propagate. Do not re-litigate them.
 - **Pedagogy beats polish.** A clear plain slide beats a beautiful confusing one. Score Dimension 2 (Pedagogical clarity) before scoring Dimension 5 (Visual quality).
 - **Notes matter for talks.** A slide without notes is a slide the speaker has not thought through. Penalize Dimension 7 hard for missing or perfunctory notes.
-- **Time-budget realism is a real dimension, not a tiebreaker.** Score Dimension 8 from the rehearser's `timing.md` — do not eyeball.
+- **Time-budget realism is a real dimension, not a tiebreaker.** Score Dimension 8 from the rehearser's `timing.md` — do not eyeball. Without a `timing.md` sibling or a BRIEF `aloud_timing_minutes:` value, cap Dimension 8 at 2/3 and say so.

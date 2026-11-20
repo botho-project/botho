@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from anvil.lib.testing import tree_hash as _tree_digest
 from _fixtures import FOREIGN_REVIEW_PROSE, build_adopted_review_threads
 from _project_migrate_skill_lib import adopt_review, orchestrate
 
@@ -20,15 +21,6 @@ run_adopt_review = orchestrate.run_adopt_review
 
 def _digest(path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for p in sorted(root.rglob("*")):
-        h.update(str(p.relative_to(root)).encode("utf-8"))
-        if p.is_file():
-            h.update(p.read_bytes())
-    return h.hexdigest()
 
 
 class TestApply:
@@ -43,15 +35,15 @@ class TestApply:
         result = run_adopt_review(project, apply=True)
         assert result.success, result.report
         assert sorted(result.apply_result.converted) == [
-            "brasidas-a.2.review",
-            "brasidas-c.5.review",
-            "brasidas-c.7.enablement",
-            "brasidas-c.7.s101",
+            "meridian-a.2.review",
+            "meridian-c.5.review",
+            "meridian-c.7.enablement",
+            "meridian-c.7.s101",
         ]
 
         for sidecar_rel in (
-            "brasidas-c/brasidas-c.7.enablement",
-            "brasidas-a/brasidas-a.2.review",
+            "meridian-c/meridian-c.7.enablement",
+            "meridian-a/meridian-a.2.review",
         ):
             sidecar = project / sidecar_rel
             # The two additive files exist.
@@ -127,7 +119,7 @@ class TestRollback:
 
         def failing_staged(final_dir, required_files, **kw):
             cm = real(final_dir, required_files, **kw)
-            if final_dir.name == "brasidas-c.7.s101":
+            if final_dir.name == "meridian-c.7.s101":
                 # Enter (creating the staging dir + moving aside already
                 # happened in _convert_one), then raise in-body.
                 class _Boom:
@@ -147,21 +139,21 @@ class TestRollback:
         assert not result.success, result.report
         assert result.apply_result is not None
         failed = {n for n, _ in result.apply_result.failed}
-        assert "brasidas-c.7.s101" in failed
+        assert "meridian-c.7.s101" in failed
 
         # The failed sidecar is restored byte-identical: still review.md
         # only, no partial _review.json / _meta.json.
-        s101 = project / "brasidas-c" / "brasidas-c.7.s101"
+        s101 = project / "meridian-c" / "meridian-c.7.s101"
         assert s101.is_dir()
         assert (s101 / "review.md").read_text() == FOREIGN_REVIEW_PROSE
         assert not (s101 / "_review.json").exists()
         assert not (s101 / "_meta.json").exists()
         # No staging / backup dirs left behind.
         assert not (
-            project / "brasidas-c" / ".brasidas-c.7.s101.tmp"
+            project / "meridian-c" / ".meridian-c.7.s101.tmp"
         ).exists()
         assert not (
-            project / "brasidas-c" / ".brasidas-c.7.s101.bak"
+            project / "meridian-c" / ".meridian-c.7.s101.bak"
         ).exists()
 
     def test_total_failure_leaves_tree_untouched(

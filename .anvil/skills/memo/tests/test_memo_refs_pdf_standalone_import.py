@@ -33,12 +33,16 @@ test cannot accidentally pass just because the repo-root ``anvil/``
 package happens to be importable at test time (it always is, when the
 suite is run from the repo root).
 
-The subprocess REPLACES ``sys.path`` rather than just prepending the
-isolated dir, to guarantee no fallback to the repo-root ``anvil/``
-package. Stdlib is still importable because we keep the standard
-``PYTHONPATH``-derived entries via ``sys.executable``'s built-in path
-config — only user-site / cwd-style entries that might surface
-``anvil/`` are stripped.
+The subprocess runs with ``-S`` (no ``site`` import) and REPLACES
+``sys.path`` rather than just prepending the isolated dir, to guarantee
+no fallback to the repo-root ``anvil/`` package. ``-S`` is load-bearing:
+an editable install of anvil (``pip install -e .`` / ``uv pip install -e
+.`` in the dev venv) registers an import finder via a site-packages
+``.pth`` hook, which makes ``anvil`` importable regardless of
+``sys.path`` filtering — skipping ``site`` processing is the only way to
+keep it out. ``refs_pdf`` is stdlib-only, so losing site-packages costs
+nothing. Stdlib remains importable via the interpreter's built-in path
+config.
 
 Per the #58 packaging convention, this file's filename
 (``test_memo_refs_pdf_standalone_import.py``) is unique across the
@@ -111,20 +115,23 @@ class TestRefsPdfStandaloneImport(unittest.TestCase):
             program = textwrap.dedent(
                 """
                 import sys
-                # Replace sys.path with ONLY the isolated dir. We
-                # additionally restore the stdlib + site-packages entries
-                # that the Python launcher pre-loaded under the original
-                # sys.path[0] equivalents, EXCEPT any "" / "." / repo-root
-                # entries that could leak the framework's own ``anvil/``
-                # package. site-packages stays so pydantic etc. remain
-                # importable (refs_pdf itself does not need them, but
-                # this keeps the smoke test future-proof).
+                # Replace sys.path with ONLY the isolated dir plus the
+                # stdlib entries the interpreter pre-loaded, EXCEPT any
+                # "" / "." / repo-root entries that could leak the
+                # framework's own ``anvil/`` package. There is no
+                # site-packages entry at all (the parent passed -S), so
+                # an editable install's .pth finder can't leak ``anvil``
+                # either; refs_pdf is stdlib-only and needs nothing from
+                # site-packages.
                 isolated = sys.argv[1]
                 sys.path = [
                     p for p in sys.path
                     if p and p not in ("", ".")
                 ]
                 sys.path.insert(0, isolated)
+                # The parent launched us with -S, so no site-packages
+                # entry (and no editable-install .pth finder) is present
+                # — refs_pdf is stdlib-only and needs neither.
                 # Hard guarantee: ``anvil`` must NOT be importable in
                 # this configuration. If it is, the test environment
                 # has leaked the repo-root package and the assertion
@@ -161,7 +168,7 @@ class TestRefsPdfStandaloneImport(unittest.TestCase):
                 if k != "PYTHONPATH"
             }
             result = subprocess.run(
-                [sys.executable, "-c", program, str(tmp_path)],
+                [sys.executable, "-S", "-c", program, str(tmp_path)],
                 capture_output=True,
                 text=True,
                 cwd=str(tmp_path),

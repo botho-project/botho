@@ -29,10 +29,24 @@ scan itself never writes.
 
 ### 1. Run the scan
 
-Load the skill lib (`anvil/skills/project-scout/lib/`) and call the single
-entry point:
+Load the skill lib and call the single entry point. The skill's `lib/`
+directory (`anvil/skills/project-scout/lib/` in the anvil source tree,
+`.anvil/skills/project-scout/lib/` in a consumer install) is a package
+whose modules import each other by relative import (`from .cluster import
+...`), and the directory name is hyphenated, so it cannot be loaded with a
+bare `sys.path.insert` + `import orchestrate`. Use the shared loader
+(`anvil.lib.skill_lib_loader`, importable via `uv run --project .anvil`
+per the "Running anvil Python from a consumer" pattern):
 
 ```python
+from pathlib import Path
+from anvil.lib.skill_lib_loader import import_skill_lib_module
+
+orchestrate = import_skill_lib_module(
+    "project-scout", Path("anvil/skills/project-scout/lib"), "orchestrate"
+)
+# .anvil/skills/project-scout/lib in a consumer install.
+
 result = orchestrate.run(
     root,
     include=include_globs,      # () when not given

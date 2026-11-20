@@ -12,6 +12,13 @@ reviewer can dispatch on. Per the issue body, the function:
 3. Never raises — lenient by design, mirroring
    ``load_rubric_overrides_for_slug``'s contract.
 
+Also covers ``load_recommendation_target_resolved`` (issue #837), the
+dual-surface resolver that falls back to the project-root ``BRIEF.md``
+``documents:`` entry when no thread-level ``BRIEF.md`` exists — the
+#348 mechanism was dead code for any project migrated to the post-
+#295/#296 project-first layout, since that layout has no thread-level
+BRIEF at all.
+
 The unique filename (``test_brief_recommendation_target.py``) avoids
 collision with other skills' tests per the #58 packaging convention.
 
@@ -34,7 +41,10 @@ _HERE = Path(__file__).resolve().parent
 _LIB = _HERE.parent / "lib"
 sys.path.insert(0, str(_LIB))
 
-from project_brief import load_recommendation_target  # noqa: E402
+from project_brief import (  # noqa: E402
+    load_recommendation_target,
+    load_recommendation_target_resolved,
+)
 from project_discovery import BRIEF_FILENAME  # noqa: E402
 
 
@@ -280,6 +290,208 @@ class TestTemplateIntegration(unittest.TestCase):
                 "`recommendation_target: undecided` as the documented default "
                 "(issue #136 + #348)",
             )
+
+
+# ---------------------------------------------------------------------------
+# load_recommendation_target_resolved — dual-surface resolution (issue #837)
+# ---------------------------------------------------------------------------
+
+
+class _TmpProjectFirstBase(unittest.TestCase):
+    """Per-test temp dir mimicking the post-#295/#296 project-first shape.
+
+    ``self.project_dir`` is the project root (holds the project-level
+    ``BRIEF.md``); ``self.thread_dir`` is ``<project_dir>/<slug>`` (the
+    directory that WOULD hold a legacy thread-level ``BRIEF.md``, and
+    always holds the ``<slug>.{N}/`` version dirs).
+    """
+
+    SLUG = "memo"
+
+    def setUp(self) -> None:
+        self._td = TemporaryDirectory()
+        self.project_dir = Path(self._td.name) / "project"
+        self.thread_dir = self.project_dir / self.SLUG
+        self.thread_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(self._td.cleanup)
+
+    def _write_project_brief(self, *, recommendation_target: str | None) -> Path:
+        """Write a project-root ``BRIEF.md`` with one ``documents:`` entry.
+
+        ``recommendation_target`` is interpolated verbatim into the
+        matching document entry when not ``None``; omitted entirely
+        when ``None`` (the "no per-doc declaration" case).
+        """
+        rt_line = (
+            f"    recommendation_target: {recommendation_target}\n"
+            if recommendation_target is not None
+            else ""
+        )
+        body = textwrap.dedent(
+            f"""\
+            ---
+            project: demo-project
+            audience:
+              - demo audience
+            hard_rules: []
+            documents:
+              - slug: {self.SLUG}
+                artifact_type: investment-memo
+            {rt_line}---
+
+            # Project BRIEF
+            """
+        )
+        brief = self.project_dir / BRIEF_FILENAME
+        brief.write_text(body, encoding="utf-8")
+        return brief
+
+    def _write_thread_brief(self, body: str) -> Path:
+        brief = self.thread_dir / BRIEF_FILENAME
+        brief.write_text(body, encoding="utf-8")
+        return brief
+
+
+class TestResolvedProjectFirstShape(_TmpProjectFirstBase):
+    """The #837 acceptance criterion: project-first-shape fixture.
+
+    A project-root ``BRIEF.md`` with a ``documents:`` entry carrying
+    ``recommendation_target: undecided`` and NO thread-level
+    ``BRIEF.md`` — the exact shape the canary reported as dead code.
+    """
+
+    def test_project_level_undecided_fires_with_project_source(self) -> None:
+        # No thread-level BRIEF.md written — matches the canary's
+        # "all-dogs-go-to-heaven memo thread" reproduction shape.
+        self._write_project_brief(recommendation_target="undecided")
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertEqual(value, "undecided")
+        self.assertEqual(source, "project")
+
+    def test_project_level_invest_resolves_with_project_source(self) -> None:
+        self._write_project_brief(recommendation_target="invest")
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertEqual(value, "invest")
+        self.assertEqual(source, "project")
+
+    def test_project_level_typo_resolves_to_default(self) -> None:
+        # Invalid value on the per-doc field normalizes to None at
+        # parse time (the field's deliberate lenient-validation
+        # exception) — the resolver sees no usable value and falls
+        # through to "default", not a parse error.
+        self._write_project_brief(recommendation_target="Undecided")
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertIsNone(value)
+        self.assertEqual(source, "default")
+
+
+class TestResolvedThreadPrecedence(_TmpProjectFirstBase):
+    """Thread-level value wins over a project-level value when BOTH present."""
+
+    def test_thread_wins_over_project(self) -> None:
+        self._write_project_brief(recommendation_target="invest")
+        self._write_thread_brief(
+            "---\nrecommendation_target: conditional\n---\n\n# Brief\n"
+        )
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertEqual(value, "conditional")
+        self.assertEqual(source, "thread")
+
+    def test_legacy_thread_only_shape_unaffected(self) -> None:
+        # No project-level BRIEF.md at all — the pre-#295/#296 legacy
+        # shape. Byte-identical to load_recommendation_target's result.
+        self._write_thread_brief(
+            "---\nrecommendation_target: undecided\n---\n\n# Brief\n"
+        )
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertEqual(value, "undecided")
+        self.assertEqual(source, "thread")
+
+
+class TestResolvedDefaultPaths(_TmpProjectFirstBase):
+    """Neither surface supplies a value — resolves to (None, "default")."""
+
+    def test_no_briefs_at_all(self) -> None:
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertIsNone(value)
+        self.assertEqual(source, "default")
+
+    def test_project_brief_without_matching_slug(self) -> None:
+        # Project BRIEF exists but declares a different slug.
+        body = textwrap.dedent(
+            """\
+            ---
+            project: demo-project
+            audience:
+              - demo audience
+            hard_rules: []
+            documents:
+              - slug: some-other-thread
+                artifact_type: investment-memo
+                recommendation_target: undecided
+            ---
+
+            # Project BRIEF
+            """
+        )
+        (self.project_dir / BRIEF_FILENAME).write_text(body, encoding="utf-8")
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertIsNone(value)
+        self.assertEqual(source, "default")
+
+    def test_project_brief_with_slug_but_no_recommendation_target(self) -> None:
+        self._write_project_brief(recommendation_target=None)
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertIsNone(value)
+        self.assertEqual(source, "default")
+
+    def test_structurally_invalid_project_brief_degrades_to_default(self) -> None:
+        # A project-level BRIEF that fails schema validation (missing
+        # required `artifact_type`) must degrade to default rather
+        # than raise — mirrors load_rubric_overrides_for_slug's
+        # "malformed BRIEF never breaks the reviewer" posture.
+        body = textwrap.dedent(
+            """\
+            ---
+            project: demo-project
+            audience:
+              - demo audience
+            hard_rules: []
+            documents:
+              - slug: memo
+            ---
+
+            # Project BRIEF
+            """
+        )
+        (self.project_dir / BRIEF_FILENAME).write_text(body, encoding="utf-8")
+        value, source = load_recommendation_target_resolved(self.thread_dir)
+        self.assertIsNone(value)
+        self.assertEqual(source, "default")
+
+
+class TestResolvedNeverRaises(_TmpProjectFirstBase):
+    """Adversarial inputs never raise — mirrors load_recommendation_target."""
+
+    def test_string_thread_dir_is_coerced_to_path(self) -> None:
+        value, source = load_recommendation_target_resolved(
+            str(self.thread_dir)  # type: ignore[arg-type]
+        )
+        self.assertIsNone(value)
+        self.assertEqual(source, "default")
+
+    def test_explicit_project_dir_and_slug_override_defaults(self) -> None:
+        # Caller passes project_dir / slug explicitly instead of relying
+        # on the thread_dir.parent / thread_dir.name defaults — covers
+        # the documented override path for divergent on-disk layouts.
+        self._write_project_brief(recommendation_target="pass")
+        value, source = load_recommendation_target_resolved(
+            self.thread_dir,
+            project_dir=self.project_dir,
+            slug=self.SLUG,
+        )
+        self.assertEqual(value, "pass")
+        self.assertEqual(source, "project")
 
 
 if __name__ == "__main__":

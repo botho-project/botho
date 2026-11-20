@@ -11,7 +11,6 @@ succeeded subset — the enroll contract).
 
 from __future__ import annotations
 
-import hashlib
 import subprocess
 
 import pytest
@@ -23,6 +22,7 @@ from _fixtures import (
     write_tag_map,
 )
 from _project_migrate_skill_lib import apply_mod, orchestrate
+from anvil.lib.testing import tree_hash as _tree_digest
 
 run_adopt_family = orchestrate.run_adopt_family
 
@@ -31,15 +31,6 @@ ARTIFACT_TYPE = "ip-uspto-provisional"
 
 def _tag_map(tmp_path):
     return write_tag_map(tmp_path / "tag-map.json", DEFAULT_TAG_MAP)
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 class TestAdoptNoBrief:
@@ -56,48 +47,48 @@ class TestAdoptNoBrief:
 
         # Version dirs relocated under their derived slug dirs.
         for slug, versions in (
-            ("brasidas-a", (1, 2)),
-            ("brasidas-c", (5, 7)),
+            ("meridian-a", (1, 2)),
+            ("meridian-c", (5, 7)),
         ):
             for n in versions:
                 assert (
                     project / slug / f"{slug}.{n}" / "spec.md"
                 ).is_file()
-        assert not (project / "Brasidas.A.1").exists()
-        assert not (project / "Brasidas.C.7").exists()
+        assert not (project / "Meridian.A.1").exists()
+        assert not (project / "Meridian.C.7").exists()
 
         # Sidecars renamed per the tag map (incl. the review-v2 remap).
         assert (
-            project / "brasidas-a" / "brasidas-a.2.review" / "review.md"
+            project / "meridian-a" / "meridian-a.2.review" / "review.md"
         ).is_file()
         assert (
-            project / "brasidas-c" / "brasidas-c.5.review" / "review.md"
+            project / "meridian-c" / "meridian-c.5.review" / "review.md"
         ).is_file()
         assert (
-            project / "brasidas-c" / "brasidas-c.7.audit2" / "review.md"
+            project / "meridian-c" / "meridian-c.7.audit2" / "review.md"
         ).is_file()
-        assert not (project / "Brasidas.C.5.review-v2").exists()
+        assert not (project / "Meridian.C.5.review-v2").exists()
 
         # Strays + orphan sidecars untouched.
         assert (project / "notes-archive" / "scratch.md").is_file()
-        assert (project / "Brasidas.C.9.fto" / "review.md").is_file()
-        assert (project / "Brasidas.C.7.1" / "oddball.md").is_file()
+        assert (project / "Meridian.C.9.fto" / "review.md").is_file()
+        assert (project / "Meridian.C.7.1" / "oddball.md").is_file()
 
         # Bodies never renamed (the #408 carve-out).
         assert not (
-            project / "brasidas-c" / "brasidas-c.7" / "brasidas-c.md"
+            project / "meridian-c" / "meridian-c.7" / "meridian-c.md"
         ).exists()
 
         # Starter BRIEF synthesized with the TODO discipline.
         text = (project / "BRIEF.md").read_text(encoding="utf-8")
         assert "documents:" in text
-        assert "slug: brasidas-a  # adopted-from: Brasidas.A.{N}" in text
+        assert "slug: meridian-a  # adopted-from: Meridian.A.{N}" in text
         assert (
             "artifact_type: ip-uspto-provisional  # TODO(operator): "
             "confirm — applied invocation-wide by --adopt-family" in text
         )
         assert "## Enrollment log" in text
-        assert "adopted letter family `Brasidas.C`" in text
+        assert "adopted letter family `Meridian.C`" in text
 
     def test_strict_round_trip_and_discovery(self, tmp_path):
         pytest.importorskip("anvil.lib.project_brief")
@@ -115,8 +106,8 @@ class TestAdoptNoBrief:
 
         brief = load_project_brief_strict(project, validate_dirs=True)
         assert [d.slug for d in brief.documents] == [
-            "brasidas-a",
-            "brasidas-c",
+            "meridian-a",
+            "meridian-c",
         ]
         for doc in brief.documents:
             assert doc.artifact_type == ARTIFACT_TYPE
@@ -124,8 +115,8 @@ class TestAdoptNoBrief:
         # AC: discover_thread_root resolves each adopted version dir
         # (the #408 non-renamed-body path).
         for slug, versions in (
-            ("brasidas-a", (1, 2)),
-            ("brasidas-c", (5, 7)),
+            ("meridian-a", (1, 2)),
+            ("meridian-c", (5, 7)),
         ):
             for n in versions:
                 discovery = discover_thread_root(
@@ -156,7 +147,7 @@ class TestAdoptIntoExistingBrief:
         # Byte-identical operator frontmatter prefix preserved.
         original_fm_end = ENROLL_OPERATOR_BRIEF.index("\n---\n", 4)
         assert new_text.startswith(ENROLL_OPERATOR_BRIEF[:original_fm_end])
-        assert "slug: brasidas-a  # adopted-from: Brasidas.A.{N}" in new_text
+        assert "slug: meridian-a  # adopted-from: Meridian.A.{N}" in new_text
         assert "artifact_type: ip-uspto  # TODO(operator)" in new_text
         assert (
             "Operator-authored prose that must survive byte-identically."
@@ -183,8 +174,8 @@ class TestAdoptIntoExistingBrief:
         assert [d.slug for d in brief.documents] == [
             "zeta-memo",
             "alpha-memo",
-            "brasidas-a",
-            "brasidas-c",
+            "meridian-a",
+            "meridian-c",
         ]
         # Operator fields survive the append.
         assert brief.theme == "sphere-brand"
@@ -220,7 +211,7 @@ class TestGit:
 
         status = self._git(project, "status", "--porcelain").stdout
         assert any(
-            line.startswith("R") and "brasidas-c.7/spec.md" in line
+            line.startswith("R") and "meridian-c.7/spec.md" in line
             for line in status.splitlines()
         ), status
 
@@ -232,7 +223,7 @@ class TestGit:
             "--follow",
             "--format=%s",
             "--",
-            "brasidas-c/brasidas-c.7/spec.md",
+            "meridian-c/meridian-c.7/spec.md",
         ).stdout.splitlines()
         assert log == ["adopt", "pre-adoption"]
 
@@ -241,21 +232,21 @@ class TestRollback:
     def test_injected_failure_isolates_per_family(
         self, tmp_path, monkeypatch
     ):
-        # Fail mid-way through the SECOND family (`brasidas-c`):
-        # `brasidas-a` stays applied, `brasidas-c` is rolled back
+        # Fail mid-way through the SECOND family (`meridian-c`):
+        # `meridian-a` stays applied, `meridian-c` is rolled back
         # byte-identical, and the BRIEF is written for the succeeded
         # subset (the enroll contract routed through Shape.ADOPT_FAMILY).
         project = build_letter_family_threads(tmp_path)
         family_c_dirs = sorted(
             d.name for d in project.iterdir() if d.name.startswith(
-                "Brasidas.C."
+                "Meridian.C."
             )
         )
 
         real_rename = apply_mod._rename
 
         def failing_rename(source, target, git_info):
-            if target.name == "brasidas-c.7":
+            if target.name == "meridian-c.7":
                 raise OSError("simulated rename failure")
             return real_rename(source, target, git_info)
 
@@ -269,25 +260,25 @@ class TestRollback:
         )
         assert not result.success
         assert result.apply_result is not None
-        assert result.apply_result.applied_docs == ["brasidas-a"]
+        assert result.apply_result.applied_docs == ["meridian-a"]
         assert [s for s, _ in result.apply_result.failed_docs] == [
-            "brasidas-c"
+            "meridian-c"
         ]
 
-        # brasidas-a applied for real.
+        # meridian-a applied for real.
         assert (
-            project / "brasidas-a" / "brasidas-a.2.review" / "review.md"
+            project / "meridian-a" / "meridian-a.2.review" / "review.md"
         ).is_file()
-        # brasidas-c restored: every original dir back, target gone.
+        # meridian-c restored: every original dir back, target gone.
         for name in family_c_dirs:
             assert (project / name).is_dir(), name
-        assert not (project / "brasidas-c").exists()
+        assert not (project / "meridian-c").exists()
 
         # BRIEF written for the succeeded subset only.
         assert result.apply_result.brief_written
         text = (project / "BRIEF.md").read_text(encoding="utf-8")
-        assert "slug: brasidas-a" in text
-        assert "slug: brasidas-c" not in text
+        assert "slug: meridian-a" in text
+        assert "slug: meridian-c" not in text
 
     def test_first_family_failure_restores_it_byte_identical(
         self, tmp_path, monkeypatch
@@ -299,7 +290,7 @@ class TestRollback:
         def failing_rename(source, target, git_info):
             # Fail mid-family so earlier renames already mutated the
             # tree and the rollback path is genuinely exercised.
-            if target.name == "brasidas-a.2":
+            if target.name == "meridian-a.2":
                 raise OSError("simulated rename failure")
             return real_rename(source, target, git_info)
 
@@ -313,12 +304,12 @@ class TestRollback:
         )
         assert not result.success
         failed = {s for s, _ in result.apply_result.failed_docs}
-        assert "brasidas-a" in failed
-        # brasidas-c (the other family) still applied + listed; the
+        assert "meridian-a" in failed
+        # meridian-c (the other family) still applied + listed; the
         # failed family's subtree is restored.
-        for name in ("Brasidas.A.1", "Brasidas.A.2", "Brasidas.A.2.review"):
+        for name in ("Meridian.A.1", "Meridian.A.2", "Meridian.A.2.review"):
             assert (project / name).is_dir(), name
-        assert not (project / "brasidas-a").exists()
+        assert not (project / "meridian-a").exists()
 
     def test_whole_batch_failure_leaves_tree_untouched(
         self, tmp_path, monkeypatch
