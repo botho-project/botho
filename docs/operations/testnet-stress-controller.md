@@ -143,6 +143,10 @@ name, and nothing outside its window.
   state, including on rows already `reconciled`, or the run stops with
   `fleet transaction receipt disagreement` or `spent-input state disagreement`.
   Verified rows record `deferred_verified` and drop `deferred_hosts`.
+  Each validator's receipt for a controller-signed payment must include the
+  signed transaction hash. Its fee, output count and total must match the
+  signed payment, and each input's finalized spend height must match the
+  receipt's block height. The same checks apply when resuming a saved receipt.
 - **Halt timers.** The 300 s unconfirmed and 900 s unresolved ages exclude
   time inside `safe_halt` windows, and nothing else.
 - **Phase boundary.** A payment still carrying `deferred_hosts` from a step

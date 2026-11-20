@@ -186,7 +186,10 @@ def check_transaction_receipts(row, info, receipts):
               for r in receipts}
     if len(shapes) != 1:
         raise Gate('fleet transaction receipt disagreement')
-    if any(r.get('txHash', row['hash']) != row['hash'] for r in receipts):
+    # Legacy public-faucet receipts may omit the hash. A signed payment
+    # receipt must independently identify the transaction being reconciled.
+    missing_hash = row['hash'] if row['kind'] == 'funding' else None
+    if any(r.get('txHash', missing_hash) != row['hash'] for r in receipts):
         raise Gate('fleet transaction receipt hash mismatch')
     if row['kind'] == 'funding':
         # The public faucet signs these grants outside the controller.

@@ -168,6 +168,17 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('signed outputs', self.c.j.get('reason'))
         self.c.sync.assert_not_awaited()
 
+    async def test_saved_receipt_must_identify_the_signed_payment(self):
+        info = self.save_confirmation()
+        del info['confirmed_receipts'][HOSTS[-1]]['txHash']
+        self.c.j.transition('confirmed', 'confirmed', info=info)
+        await self.run_reconciler([(5, 100, True)])
+        self.assertEqual(self.c.j.get('status'), 'held')
+        self.assertIn('receipt hash', self.c.j.get('reason'))
+        self.assertEqual(self.c.j.intent('confirmed')['state'], 'confirmed')
+        self.assertEqual(self.c.j.db.execute('SELECT input FROM reservations').fetchone()[0], 'input')
+        self.c.sync.assert_not_awaited()
+
     async def test_saved_receipts_must_match_the_signed_total_on_resume(self):
         info = self.save_confirmation()
         for receipt in info['confirmed_receipts'].values():
