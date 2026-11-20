@@ -573,6 +573,44 @@ class Controller:
             return all(record['hosts'][h]['peer_zero'] for h in window['expected_down'])
         return 'unknown'  # netem: operator reconciles faults.jsonl post-run
 
+    async def recovery_tip(self, status, down, step):
+        """Read the same block from each reachable validator at window end."""
+        reachable = {host: status[host] for host in HOSTS if status.get(host) is not None}
+        missing = [host for host in HOSTS if host not in reachable and host not in down]
+        if missing:
+            return None, ['one tip: no status from '+', '.join(missing)]
+        if not reachable:
+            return None, ['one tip: no reachable validators']
+        invalid = [host for host, s in reachable.items()
+                   if type(s.get('chainHeight')) is not int or s['chainHeight'] < 0]
+        if invalid:
+            return None, ['one tip: invalid chain height from '+', '.join(invalid)]
+
+        height = min(s['chainHeight'] for s in reachable.values())
+        blocks = await asyncio.gather(*(self.tolerate(host, down, self.rpc.call(
+            host, 'getBlockByHeight', {'height': height}), step) for host in reachable))
+        hashes = {}
+        failures = []
+        for host, block in zip(reachable, blocks):
+            if block is None and host in down:
+                continue
+            if (not isinstance(block, dict) or type(block.get('height')) is not int
+                    or block['height'] != height or not isinstance(block.get('hash'), str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', block['hash'])):
+                failures.append(f'one tip: invalid block at height {height} from {host}')
+                continue
+            hashes[host] = block['hash']
+
+        if len(set(hashes.values())) > 1:
+            failures.append('one tip: conflicting hashes at height '+str(height))
+        elif not hashes and not failures:
+            failures.append('one tip: no block at height '+str(height))
+        else:
+            for host, digest in hashes.items():
+                if reachable[host]['chainHeight'] == height and reachable[host].get('tipHash') != digest:
+                    failures.append(f'one tip: block differs from reported tip at height {height} on {host}')
+        return {'height': height, 'hosts': list(hashes), 'hashes': hashes}, failures
+
     async def degrade_close(self, record, window, now, status, down, metrics):
         """The window_end verdict: every criterion observable at this tick."""
         step, named = window['step'], window['expected_down']
@@ -583,18 +621,8 @@ class Controller:
             failures.append('fault not exercised')
         # One tip: every reachable host agrees at the common minimum height.
         # Only a host a later, active step names may be absent here.
-        reachable = [h for h in HOSTS if status.get(h) is not None]
-        missing = [h for h in HOSTS if h not in reachable and h not in down]
-        if missing:
-            failures.append('one tip: no status from '+', '.join(missing))
-        elif reachable:
-            height = min(status[h]['chainHeight'] for h in reachable)
-            blocks = await asyncio.gather(*(self.tolerate(h, down, self.rpc.call(
-                h, 'getBlockByHeight', {'height': height}), step) for h in reachable))
-            hashes = {b.get('hash') for b in blocks if b is not None}
-            record['tip_check'] = {'height': height, 'hosts': [h for h,b in zip(reachable,blocks) if b is not None]}
-            if len(hashes) != 1:
-                failures.append('one tip: conflicting hashes at height '+str(height))
+        record['tip_check'], tip_failures = await self.recovery_tip(status, down, step)
+        failures.extend(tip_failures)
         # Loop stalls: over-1 s recorded only; any >= 5 s delta fails.
         loops = {}
         for host in HOSTS:

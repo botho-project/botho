@@ -102,13 +102,13 @@ class Fleet:
             return {"network": "botho-testnet", "gitCommit": "commit",
                     "version": "0.6.0", "synced": self.synced[host],
                     "chainHeight": self.height[host],
-                    "tipHash": "block-%d" % self.height[host],
+                    "tipHash": f"{self.height[host]:064x}",
                     "peerCount": 0 if host in self.frozen else 4,
                     "scpPeerCount": 0 if host in self.frozen else 4,
                     **self.quorum[host]}
         if method == "getBlockByHeight":
             h = params["height"]
-            return {"hash": "genesis" if h == 0 else "block-%d" % h,
+            return {"height": h, "hash": f"{h:064x}",
                     "timestamp": h, "txCount": 0}
         if method == "fee_getRate":
             return {"baseRate": 2, "baseMin": 1, "baseMax": 4,
@@ -164,7 +164,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         c.config = {"node_sha256": "hash", "infrastructure_end": START + 82 * 3600,
                     "resource_baselines": {h: dict(REFERENCE) for h in HOSTS}}
         c.plan = {"network": "botho-testnet", "node_commit": "commit",
-                  "genesis": "genesis", "schema_version": 2, "seed": 7,
+                  "genesis": f"{0:064x}", "schema_version": 2, "seed": 7,
                   "faults": {"validator_degrade_phase": steps}}
         c.degrade_steps = SUMMARY["degrade_steps"] if steps else []
         c.j.set("status", "running")
@@ -910,7 +910,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c[:2] for c in self.fleet.calls], expected)
         self.assertEqual(self.c.statuses[A], {"network": "botho-testnet",
             "gitCommit": "commit", "version": "0.6.0", "synced": True, "chainHeight": 101,
-            "tipHash": "block-101", "peerCount": 4, "scpPeerCount": 4})
+            "tipHash": f"{101:064x}", "peerCount": 4, "scpPeerCount": 4})
 
         self.fleet.calls.clear()
         self.c.closed = False

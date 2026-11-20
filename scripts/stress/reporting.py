@@ -437,6 +437,8 @@ def degrade_report(journal, steps):
             row["failures"] = list(verdict.get("failures") or []) if verdict else []
             row["awaiting"] = list(record.get("awaiting") or [])
             row["fault_observed"] = record.get("fault_observed")
+            if record.get("tip_check") is not None:
+                row["tip_check"] = record["tip_check"]
             for host, track in (record.get("hosts") or {}).items():
                 row["milestones"][host] = {
                     name: None if track.get(name) is None else track[name] - restore
