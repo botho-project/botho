@@ -1329,6 +1329,7 @@ async fn run_async_with_shutdown(
     // from a non-minting node. Gossipsub message ids are source+seqno, so a
     // re-publish is a fresh message to peers whose mempools then dedupe it.
     let mut mempool_rebroadcast_interval = tokio::time::interval(Duration::from_secs(30));
+    mempool_rebroadcast_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Per-tx backoff shared by BOTH re-broadcast paths (the 30 s tick above
     // and the minting-arm re-feed). Without it the 100 ms minting arm
     // re-published the same pending transfers on every minted solution while
@@ -2656,6 +2657,29 @@ async fn run_async_with_shutdown(
             // connections. Peers dedupe via their own mempool acceptance, so
             // a re-publish of an already-known tx is a no-op for them.
             _ = mempool_rebroadcast_interval.tick() => {
+                // A rejoining validator starts with an empty transaction cache.
+                // SCP retries the proposal by hash, so also offer its mint payload.
+                if discovery.peer_count() > 0 {
+                    if let Some(mint) = consensus.stalled_proposed_mint() {
+                        match NetworkDiscovery::broadcast_minting_tx(
+                            &mut swarm,
+                            discovery.stats_ref(),
+                            &mint,
+                        ) {
+                            Ok(()) => debug!(
+                                target: "botho::consensus::mint_relay",
+                                height = mint.block_height,
+                                hash = %hex::encode(mint.hash()),
+                                "Re-announced proposed mint for stalled slot"
+                            ),
+                            Err(e) => debug!(
+                                target: "botho::consensus::mint_relay",
+                                error = %e,
+                                "Failed to re-announce proposed mint"
+                            ),
+                        }
+                    }
+                }
                 // Forget txs that left the mempool (confirmed or evicted).
                 if let Ok(mempool) = node.shared_mempool().read() {
                     rebroadcast_schedule.prune(|hash| mempool.contains(hash));
