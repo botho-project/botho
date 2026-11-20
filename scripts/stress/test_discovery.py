@@ -369,6 +369,23 @@ class DiscoveryExecutorTests(unittest.TestCase):
         with patch("controller.time.monotonic", return_value=11.05):
             self.assertAlmostEqual(self.c.admission_delay(11), .95)
 
+    def test_rehearsal_wait_records_requested_sleep_and_actual_wakeup(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        sleep = AsyncMock()
+        with patch.object(self.c, 'admission_delay', return_value=.25) as delay, \
+                patch('controller.asyncio.sleep', sleep), \
+                patch('controller.time.perf_counter', side_effect=[5.0, 5.7]), \
+                patch('controller.time.time', side_effect=[1000.0, 1000.7]):
+            asyncio.run(self.c.wait_for_admission(4.9, 'setup'))
+        delay.assert_called_once_with(4.9)
+        sleep.assert_awaited_once_with(.25)
+        wait = self.c.last_admission_wait
+        self.assertEqual((wait['requested_at'], wait['requested_seconds'], wait['resumed_at']),
+                         (1000.0, .25, 1000.7))
+        self.assertAlmostEqual(wait['elapsed_seconds'], .7)
+
     def test_downtime_materializes_missed_offers_once_without_replay(self):
         events = [
             {

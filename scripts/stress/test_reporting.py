@@ -375,6 +375,11 @@ class TerminalReportingTests(unittest.TestCase):
         return result, payload
 
     def test_rehearsal_records_elapsed_scan_and_selection_on_signed_attempt(self):
+        self.c.last_admission_wait = {
+            "requested_at": 998.8, "requested_seconds": 1, "elapsed_seconds": 1.5,
+            "resumed_at": 1000.3,
+        }
+        self.c.admission_started = 1000.5
         ok, _ = self.sign_across_deadline(1004, 2, scan_seconds=2.5, selection_seconds=0.25)
         self.assertTrue(ok)
         row = self.c.j.intent("rehearsal-00411")
@@ -382,6 +387,7 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(info["preparation_timing"], {
             "scan_requested_at": 1001.25, "scan_wait_seconds": 2.5,
             "input_selection_seconds": 0.25,
+            "admission_wait": {**self.c.last_admission_wait, "tick_started_at": 1000.5},
         })
         from reporting import rehearsal_summary
         self.c.j.set("rehearsal_result", {"timing_tolerance": {"max_offer_lag_seconds": 5}})

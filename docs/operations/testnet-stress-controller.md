@@ -707,6 +707,15 @@ Use `--details` for each payment's bounds and the original marker verdict
 for each window. The controller's recorded grade continues to use its durable
 submission markers.
 
+For each prepared rehearsal payment, the journal records when the controller
+requested its wallet scan. When a preceding admission wait was observed,
+`info.preparation_timing.admission_wait` also records the wall times
+`requested_at`, `resumed_at` and `tick_started_at`. The requested sleep and
+its measured monotonic duration are `requested_seconds` and `elapsed_seconds`.
+A late wake includes time the event loop spent servicing other work. Multiple
+payments admitted in one pass share its wake and tick times. Historical
+journals and a process's first admission pass can lack the wait record.
+
 ### Inventory and short rehearsal prerequisites
 
 Use the existing explicit `deploy.py stage --profile ... --output ...` path,

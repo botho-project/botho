@@ -1512,6 +1512,11 @@ class Controller:
                 'scan_wait_seconds': scan_returned - scan_started,
                 'input_selection_seconds': selection_finished - scan_returned,
             }
+            wait = getattr(self, 'last_admission_wait', None)
+            if wait is not None:
+                info['preparation_timing']['admission_wait'] = {
+                    **wait, 'tick_started_at': self.admission_started,
+                }
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
                     scan_height=height,eligible_at=eligible_at,prepared_at=time.time())
         self.gate()
@@ -2050,6 +2055,18 @@ class Controller:
             delay = min(delay, self.next_offer_at - time.time())
         return max(.2, delay)
 
+    async def wait_for_admission(self, started, status):
+        delay = self.admission_delay(started)
+        if status == 'setup':
+            requested_at = time.time()
+            before = time.perf_counter()
+        await asyncio.sleep(delay)
+        if status == 'setup':
+            self.last_admission_wait = {
+                'requested_at': requested_at, 'requested_seconds': delay,
+                'elapsed_seconds': time.perf_counter() - before, 'resumed_at': time.time(),
+            }
+
     async def admission_tick(self):
         async with self.admission_lock:
             # One tick may admit several offers (#1618); the v2 deliver pass
@@ -2116,6 +2133,7 @@ class Controller:
             if self.fresh:
                 await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
+            self.last_admission_wait = None
             while True:
                 started=time.monotonic()
                 self.next_offer_at = None
@@ -2143,7 +2161,7 @@ class Controller:
                     self.j.set('last_summary_at',time.time())
                 # Include admission/report work in the cadence, but always
                 # yield so monitoring and reconciliation can make progress.
-                await asyncio.sleep(self.admission_delay(started))
+                await self.wait_for_admission(started, status)
             if self.j.get('status') == 'rehearsal_complete':
                 return
             if self.fresh and not self.j.pending():
