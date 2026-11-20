@@ -166,11 +166,7 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
     async def test_private_ca_is_pinned_and_tls_verification_stays_enabled(self):
         import ssl
         from runtime import campaign_tls_context
-        # Use a real local trust bundle; this test never connects to a server.
-        cafile = ssl.get_default_verify_paths().cafile
-        if cafile is None:
-            self.skipTest('platform has no PEM default trust bundle')
-        data = Path(cafile).read_bytes()
+        data = (Path(__file__).resolve().parent / 'fixtures' / 'campaign-test-ca.pem').read_bytes()
         ca = self.state/'ca.pem'
         ca.write_bytes(data)
         config = {'tls_ca_file':str(ca),'tls_ca_sha256':hashlib.sha256(data).hexdigest()}

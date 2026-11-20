@@ -1,7 +1,6 @@
 import copy
 import json
 from pathlib import Path
-import ssl
 import tarfile
 import unittest
 from unittest.mock import patch
@@ -35,9 +34,7 @@ class HandoffTests(unittest.TestCase):
         self.funding.mkdir()
         self.state = self.root / "state"
         self.state.mkdir()
-        ca_file = self.root / "ca.pem"
-        der = ssl.create_default_context().get_ca_certs(binary_form=True)[0]
-        ca_file.write_text(ssl.DER_cert_to_PEM_cert(der))
+        ca_file = Path(__file__).resolve().parent / "fixtures" / "campaign-test-ca.pem"
         profile.update(
             tls_ca_file=str(ca_file), tls_ca_sha256=gate.sha256(ca_file.read_bytes())
         )
