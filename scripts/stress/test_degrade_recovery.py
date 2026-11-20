@@ -613,12 +613,13 @@ class VerdictTests(Base):
             result = await rpc(host, method, params, **kw)
             if (method == "node_getStatus" and host == N5
                     and at("D5", "fault_start") <= self.now < at("D5", "restore_at")):
-                result = {**result, "tipHash": "other"}
+                result = {**result, "tipHash": "f" * 64}
             return result
         self.c.rpc.call.side_effect = conflicting
         await self.run_d5()
         self.assertTrue(self.held())
         self.assertIn("D5: recovery check failed: conflicting hash at height", self.reason())
+        self.assertEqual(self.verdict("D5"), "fail")
 
     async def test_metrics_unavailable_on_a_live_host_is_not_a_pass(self):
         self.quiescent_accounting()

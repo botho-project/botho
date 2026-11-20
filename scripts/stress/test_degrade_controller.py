@@ -252,6 +252,103 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
     def calls_to(self, host, method=None):
         return [c for c in self.fleet.calls if c[0] == host and method in (None, c[1])]
 
+    async def test_monitor_requires_the_requested_block_from_every_live_validator(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        for bad in (None, {"height": 99, "hash": "a" * 64}, {"height": True, "hash": "b" * 64},
+                    {"height": 100, "hash": None}, {"height": 100, "hash": "short"}):
+            async def reply(host, method, params):
+                if host == N5 and params["height"] == 100:
+                    return bad
+                return await self.fleet.rpc(host, method, params)
+            self.c.rpc.call.side_effect = reply
+            with self.subTest(bad=bad), self.assertRaisesRegex(Gate, "invalid block at height 100"):
+                await self.c.monitor_checkpoint(statuses, (), None)
+            self.assertIsNone(self.c.j.get("checkpoint_height"))
+
+    async def test_stable_checkpoint_validates_tips_without_another_block_read(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.c.rpc.call.reset_mock()
+        await self.c.monitor_checkpoint(statuses, (), None)
+        # All nodes changing their answer together still contradicts the saved final block.
+        changed = [dict(s, tipHash="a" * 64) for s in statuses]
+        with self.assertRaisesRegex(Gate, "conflicting hash at height 100"):
+            await self.c.monitor_checkpoint(changed, (), None)
+        self.c.rpc.call.assert_not_awaited()
+        self.assertEqual(self.c.j.get("checkpoint_hash"), f"{100:064x}")
+
+    async def test_named_host_must_supply_its_block_upon_return_at_the_same_height(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        async def unavailable(host, method, params):
+            return None if host == N5 else await self.fleet.rpc(host, method, params)
+        self.c.rpc.call.side_effect = unavailable
+        await self.c.monitor_checkpoint(statuses, (N5,), "D1")
+        self.assertEqual(self.c.j.get("checkpoint_hosts"), list(HOSTS[:-1]))
+        self.assertIs(self.c.j.get("genesis_verified"), False)
+        with self.assertRaisesRegex(Gate, "invalid block at height 100"):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.c.rpc.call.side_effect = self.fleet.rpc
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_hosts"), list(HOSTS))
+        self.assertEqual(self.c.j.get("verified_genesis_hash"), self.c.plan["genesis"])
+
+    async def test_advancing_peer_still_has_to_serve_the_lagging_peers_block(self):
+        self.fleet.height[N5] += 1
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.fleet.height[N5] += 1
+        statuses[-1] = await self.fleet.rpc(N5, "node_getStatus")
+        async def changed_block(host, method, params):
+            answer = await self.fleet.rpc(host, method, params)
+            return {**answer, "hash": "e" * 64} if host == N5 else answer
+        self.c.rpc.call.side_effect = changed_block
+        with self.assertRaisesRegex(Gate, "conflicting hashes at height 100"):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_tips")[N5], [101, f"{101:064x}"])
+
+    async def test_legacy_journal_rechecks_checkpoint_and_genesis_before_publishing(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        self.c.j.set("checkpoint_height", 100)
+        self.c.j.set("checkpoint_hash", "old unverified value")
+        self.c.j.set("genesis_verified", True)
+        async def wrong_height(host, method, params):
+            answer = await self.fleet.rpc(host, method, params)
+            return {**answer, "height": 1} if params["height"] == 0 else answer
+        self.c.rpc.call.side_effect = wrong_height
+        with self.assertRaisesRegex(Gate, "genesis: .*invalid block at height 0"):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertIsNone(self.c.j.get("checkpoint_hosts"))
+        self.c.rpc.call.side_effect = self.fleet.rpc
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_hash"), f"{100:064x}")
+        self.assertEqual(self.c.j.get("checkpoint_hosts"), list(HOSTS))
+
+    async def test_restarted_process_is_rechecked_at_an_unchanged_height(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.c.rebaseline(N5, {"step": "D1"}, {}, {"pid": 3, "start": "new"})
+        self.assertNotIn(N5, self.c.j.get("checkpoint_hosts"))
+        self.assertIsNone(self.c.j.get("verified_genesis_hash"))
+        self.c.rpc.call.reset_mock()
+        await self.c.monitor_checkpoint(statuses, (), None)
+        queries = [c.args[2]["height"] for c in self.c.rpc.call.await_args_list if c.args[0] == N5]
+        self.assertEqual(queries, [100, 0])
+
+    async def test_failed_checkpoint_write_preserves_the_previous_complete_record(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.fleet.advance()
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        save = self.c.j.set
+        def interrupted(key, value):
+            if key == "checkpoint_hosts":
+                raise OSError("interrupted write")
+            save(key, value)
+        with patch.object(self.c.j, "set", side_effect=interrupted), self.assertRaises(OSError):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_height"), 100)
+        self.assertEqual(self.c.j.get("checkpoint_hash"), f"{100:064x}")
+
     # -- helpers ------------------------------------------------------------
 
     def test_live_hosts_is_hosts_without_an_active_step(self):

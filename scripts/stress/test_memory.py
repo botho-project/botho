@@ -252,18 +252,21 @@ class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
             c.j = Journal(Path(name)/'journal.sqlite')
             try:
                 c.config = {'node_sha256':'hash','resource_baselines':{h:reference for h in HOSTS}}
-                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':'block','faults':{'validator_degrade_phase':False}}
+                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':f'{0:064x}','faults':{'validator_degrade_phase':False}}
                 c.closed = False
                 c.reconcile_wakeup = asyncio.Event()
                 c.fresh = 0
                 c.statuses = {}
                 c.state = Path(name)
                 status = {'network':'botho-testnet','gitCommit':'commit','version':'0.6.0',
-                          'synced':True,'chainHeight':100}
+                          'synced':True,'chainHeight':100,'tipHash':f'{100:064x}'}
                 # A persisted fleet height is not fresh in-memory state after restart.
                 c.j.set('fleet_latest', {'at': 900, 'nodes': {h: status for h in HOSTS}})
                 async def rpc(host, method, params=None):
-                    return status if method=='node_getStatus' else {'hash':'block'}
+                    if method == 'node_getStatus':
+                        return status
+                    self.assertEqual(method, 'getBlockByHeight')
+                    return {'height': params['height'], 'hash': f"{params['height']:064x}"}
                 c.rpc = Mock(call=AsyncMock(side_effect=rpc))
                 c.observer = AsyncMock(return_value=[observed])
                 def finish(*args):c.closed=True

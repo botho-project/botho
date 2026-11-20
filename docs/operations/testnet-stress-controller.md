@@ -1322,6 +1322,22 @@ Per step, `outage_blocks` is the change in the live-fleet height from the
 first tick at or after `fault_start` to the first tick at or after
 `restore_at`.
 
+**Continuous block agreement.** On each monitor tick, reachable validators
+that report the same finalized height must report the same 32-byte tip hash.
+At their common minimum height, each block response must identify the
+requested height and agree with the reported tip there. A scheduled target
+may be temporarily unreachable. The journal records which validators supplied
+the block. When a validator returns or advances, the monitor checks the
+common block even if the slowest validator stays at the same height.
+Unchanged, fully checked tips need no new block reads. A recognized process
+restart invalidates that validator's cached check and triggers a fresh
+genesis comparison. Genesis verification completes
+when all five validators identify the configured block at height zero.
+
+The monitor writes the checkpoint height, hash and responding hosts in one
+journal transaction. When resuming a journal from an earlier harness, it
+rechecks the checkpoint and genesis once before reusing them.
+
 **Loop stalls.** The controller reads `botho_node_loop_iteration_seconds` and
 `botho_node_loop_delayed_total` with `Rpc.metrics(host)`, which is a read-only
 GET of `<rpc_url minus /rpc>/metrics`. Only the node's standalone metrics

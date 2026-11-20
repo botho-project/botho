@@ -394,6 +394,11 @@ class Controller:
             raise Gate(view['step']+': second node restart in one degrade step: '+host)
         with self.j.transaction():
             self.j.set('baseline:'+host, {**rebased, 'rebased_step': view['step']})
+            checked = self.j.get('checkpoint_hosts', [])
+            if host in checked:
+                self.j.set('checkpoint_hosts', [h for h in checked if h != host])
+            self.j.set('verified_genesis_hash', None)
+            self.j.set('genesis_verified', False)
             self.j.event(None, 'rebaseline', {'step': view['step'], 'host': host,
                                               'pid': rebased['pid'], 'start': rebased['start']})
 
@@ -608,6 +613,10 @@ class Controller:
             return None, ['one tip: invalid chain height from '+', '.join(invalid)]
 
         height = min(s['chainHeight'] for s in reachable.values())
+        return await self.common_block(reachable, height, down, step)
+
+    async def common_block(self, reachable, height, down, step):
+        """Read the requested finalized height and compare every required response."""
         blocks = await asyncio.gather(*(self.tolerate(host, down, self.rpc.call(
             host, 'getBlockByHeight', {'height': height}), step) for host in reachable))
         hashes = {}
@@ -631,6 +640,63 @@ class Controller:
                 if reachable[host]['chainHeight'] == height and reachable[host].get('tipHash') != digest:
                     failures.append(f'one tip: block differs from reported tip at height {height} on {host}')
         return {'height': height, 'hosts': list(hashes), 'hashes': hashes}, failures
+
+    async def monitor_checkpoint(self, statuses, down, step):
+        reachable = {h: s for h, s in zip(HOSTS, statuses) if s is not None}
+        if not reachable or any(h not in reachable and h not in down for h in HOSTS):
+            raise Gate('checkpoint missing required validator status')
+        previous_height = self.j.get('checkpoint_height')
+        previous_hash = self.j.get('checkpoint_hash')
+        checked_hosts = self.j.get('checkpoint_hosts')
+        # Rows from earlier controllers lack per-host evidence. Read them again.
+        tips = {previous_height: previous_hash} if checked_hosts is not None else {}
+        observed_tips = {}
+        for host, status in reachable.items():
+            height, tip = status.get('chainHeight'), status.get('tipHash')
+            if (type(height) is not int or height < 0 or not isinstance(tip, str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', tip)):
+                raise Gate('invalid chain height or tip hash from '+host)
+            if tips.setdefault(height, tip) != tip:
+                raise Gate(f'conflicting hash at height {height} on {host}')
+            observed_tips[host] = [height, tip]
+        minimum = min(s['chainHeight'] for s in reachable.values())
+
+        # A reachable validator can miss a block read during its named fault.
+        # Retry it even when the surviving validators stay at the same height.
+        checkpoint = None
+        if (previous_height != minimum or checked_hosts != list(reachable)
+                or self.j.get('checkpoint_tips') != observed_tips):
+            checkpoint, failures = await self.common_block(reachable, minimum, down, step)
+            if failures:
+                raise Gate('checkpoint: '+'; '.join(failures))
+            if any(value != tips[minimum] for value in checkpoint['hashes'].values()):
+                raise Gate(f'checkpoint disagrees with reported tip at height {minimum}')
+
+        genesis = self.plan['genesis']
+        verify_genesis = self.j.get('verified_genesis_hash') != genesis
+        if verify_genesis:
+            if minimum == 0 and checkpoint is not None:
+                genesis_block = checkpoint
+            else:
+                genesis_block, failures = await self.common_block(reachable, 0, down, step)
+                if failures:
+                    raise Gate('genesis: '+'; '.join(failures))
+            if any(value != genesis for value in genesis_block['hashes'].values()):
+                raise Gate('genesis differs from manifest')
+
+        if checkpoint is not None or verify_genesis:
+            with self.j.transaction():
+                if checkpoint is not None:
+                    self.j.set('checkpoint_height', minimum)
+                    self.j.set('checkpoint_hash', tips[minimum])
+                    self.j.set('checkpoint_hosts', checkpoint['hosts'])
+                    self.j.set('checkpoint_tips', observed_tips)
+                if verify_genesis:
+                    complete = len(genesis_block['hosts']) == len(HOSTS)
+                    self.j.set('genesis_verified', complete)
+                    if complete:
+                        self.j.set('verified_genesis_hash', genesis)
+        return minimum
 
     async def degrade_close(self, record, window, now, status, down, metrics):
         """The window_end verdict: every criterion observable at this tick."""
@@ -874,6 +940,8 @@ class Controller:
                 records = await asyncio.gather(*(self.tolerate(h,down,self.observer(h),step) for h in HOSTS))
                 self.check_rejoin(now,dict(zip(HOSTS,statuses)),down,quorum_gated)
                 for host,status,observed in zip(HOSTS,statuses,records):
+                    if not isinstance(status, dict) and not (status is None and host in down):
+                        raise Gate('invalid validator status from '+host)
                     if status is not None:
                         check_identity(status,self.plan)
                         # Degrade-phase (x-series) plans need the installed
@@ -917,22 +985,15 @@ class Controller:
                         self.j.set('latest:'+host,observed[-1])
                 # Hash agreement covers every reachable host, including a named
                 # host that is isolated or delayed and therefore behind.
-                reachable = [(h,s) for h,s in zip(HOSTS,statuses) if s is not None]
-                minimum = min(s['chainHeight'] for _,s in reachable)
-                if self.j.get('checkpoint_height') != minimum:
-                    checkpoints = await asyncio.gather(*(self.tolerate(h,down,self.rpc.call(h,'getBlockByHeight',{'height':minimum}),step) for h,_ in reachable))
-                    checkpoints = [b for b in checkpoints if b is not None]
-                    if len({b['hash'] for b in checkpoints}) != 1:
-                        raise Gate('conflicting block hashes at the same finalized height')
-                    self.j.set('checkpoint_height',minimum)
-                    self.j.set('checkpoint_hash',checkpoints[0]['hash'])
-                if not self.j.get('genesis_verified'):
-                    genesis = await asyncio.gather(*(self.tolerate(h,down,self.rpc.call(h,'getBlockByHeight',{'height':0}),step) for h,_ in reachable))
-                    if any(b.get('hash') != self.plan['genesis'] for b in genesis if b is not None):
-                        raise Gate('genesis differs from manifest')
-                    # Verified only once every host has answered.
-                    if None not in genesis and len(genesis) == len(HOSTS):
-                        self.j.set('genesis_verified',True)
+                try:
+                    minimum = await self.monitor_checkpoint(statuses,down,step)
+                except Gate as error:
+                    if view:
+                        record = self.j.get('degrade:'+step, {'step': step, 'restore_at': view['restore_at']})
+                        if not record.get('verdict'):
+                            record['closed_at'] = now
+                            self.degrade_verdict(record, [str(error)], now)
+                    raise
                 # Per-step recovery evidence and window_end verdicts (#1591).
                 await self.degrade_evidence(now,statuses,self.statuses)
                 previous_height = self.fleet_height(default=-1)
