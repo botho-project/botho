@@ -525,7 +525,12 @@ def heap_evidence(hosts, window_s=86400):
 
 
 def controller_report(self):
-    rows = self.j.rows()
+    report = build_controller_report(self, self.j.rows())
+    atomic(self.state / "report.json", report)
+    return report
+
+
+def build_controller_report(self, rows):
     artifacts = artifact_evidence(
         self.state, rows, self.j.limits["max_signed_transaction_bytes"]
     )
@@ -613,7 +618,6 @@ def controller_report(self):
             "lottery_v2_spend": award_spend_expectation(self.j)["status"] == "pass",
         },
     }
-    atomic(self.state / "report.json", report)
     return report
 
 

@@ -153,7 +153,7 @@ name, and nothing outside its window.
 
 ## Results
 
-- `report.json`: current sanitized status, phase counts, fees, accounting, latency, fleet and resource snapshots.
+- `report.json`: current sanitized status, phase counts, fees, accounting, latency, fleet and resource snapshots. The discovery controller publishes the file after checking signed fees and computing the workload verdict. If those checks fail, the prior report keeps its original timestamp.
 - `report.json` `discovery.offer_deferrals` (v2, #1615): for `rehearsal` and
   `campaign`, the distinct due offers held back because their sender still had
   a pending spend (`sender_busy`), `max_inflight` was full (`inflight_cap`), or

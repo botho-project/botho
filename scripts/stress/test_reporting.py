@@ -105,6 +105,23 @@ class TerminalReportingTests(unittest.TestCase):
         }
         self.c.j.set("accounting", self.opening)
 
+    def test_discovery_validation_finishes_before_report_publication(self):
+        report_file = self.c.state / "report.json"
+        previous = self.c.report()
+        self.c.j.set("status", "held")
+
+        def inspect_then_fail(rows, quotes):
+            self.assertEqual(json.loads(report_file.read_bytes()), previous)
+            raise Gate("invalid signed fee")
+
+        with patch("discovery.summarize_fees", side_effect=inspect_then_fail):
+            with self.assertRaisesRegex(Gate, "invalid signed fee"):
+                self.c.report()
+        self.assertEqual(json.loads(report_file.read_bytes()), previous)
+        complete = self.c.report()
+        self.assertEqual(complete["qualification_status"], "failed")
+        self.assertEqual(json.loads(report_file.read_bytes()), complete)
+
     def row(self, index, state):
         name = f"rehearsal-{index:05d}"
         offered = 1000 + index * 2

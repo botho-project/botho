@@ -262,6 +262,12 @@ class FeeCoverageTests(unittest.TestCase):
         )
         cold["host"] = "a"
         self.assertEqual(summarize_fees([], [hot, cold])["quote_recovery"], "observed")
+        # Journal import order can differ from observation time.
+        self.assertEqual(summarize_fees([], iter([cold, hot]))["quote_recovery"], "observed")
+        for samples in ([hot, {**cold, "at": hot["at"]}],
+                        [{**hot, "height": None}, cold],
+                        [{**hot, "host": None}, {**cold, "host": None}]):
+            self.assertEqual(summarize_fees([], samples)["quote_recovery"], "not_exercised")
         cold["height"] = 10
         self.assertEqual(
             summarize_fees([], [hot, cold])["quote_recovery"], "not_exercised"

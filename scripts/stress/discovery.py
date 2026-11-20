@@ -888,23 +888,25 @@ class DiscoveryController(Controller):
             and time.time() - cached["at"] < 60
         ):
             return cached
-        report = super().report()
-        quotes = [
+        from reporting import build_controller_report, offer_deferrals, rehearsal_summary
+
+        rows = self.j.rows()
+        report = build_controller_report(self, rows)
+        quotes = (
             json.loads(row[0])
             for row in self.j.db.execute(
                 "SELECT detail FROM events WHERE state='fee_quote'"
             )
-        ]
-        report["fee_coverage"] = summarize_fees(self.j.rows(), quotes)
-        from reporting import offer_deferrals, rehearsal_summary
+        )
+        report["fee_coverage"] = summarize_fees(rows, quotes)
 
         report["rehearsal"] = rehearsal_summary(
             self.j, self.plan, report["artifact_evidence"]
         )
         report["seed"] = self.plan["seed"]
-        rows = self.j.rows("kind='campaign'")
-        delivered = len(rows) == len(self.events) and all(
-            r["state"] == "reconciled" for r in rows
+        campaign_rows = [r for r in rows if r["kind"] == "campaign"]
+        delivered = len(campaign_rows) == len(self.events) and all(
+            r["state"] == "reconciled" for r in campaign_rows
         )
         delivery = (
             "completed"
