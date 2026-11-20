@@ -190,7 +190,7 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
     payment): the prefunder spends fresh coinbases before its own batch
     change, so funding clusters stay shallow (#2023 review).
     """
-    canonical = controller.canonical_history()
+    canonical, created_heights = controller.selection_history()
     raw = controller.canonical_inventory(wallet, canonical)
     unspent = controller.unspent_setup_inputs(wallet, canonical)
     mature = [o for o in unspent if height - o["utxo"]["created_at"] >= 10]
@@ -202,12 +202,6 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0,
     # former ``len(pool)`` and ``len(pool - excluded)`` exactly.
     # Lottery payouts, V2 included, are canonical inputs but never decoys,
     # matching the native signer (#1643).
-    created_heights = sorted(
-        created
-        for key, (created, row) in canonical.items()
-        if key != ZERO_KEY and decoy_row(row)
-    )
-
     def in_pool(key, window):
         entry = canonical.get(key) if key != ZERO_KEY else None
         return (

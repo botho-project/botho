@@ -168,7 +168,7 @@ class RpcMetricsTests(unittest.IsolatedAsyncioTestCase):
 
 def status(height, synced=True, **extra):
     return {"network": "botho-testnet", "gitCommit": "commit", "version": "0.6.0",
-            "synced": synced, "chainHeight": height, "tipHash": "block-%d" % height,
+            "synced": synced, "chainHeight": height, "tipHash": f"{height:064x}",
             "peerCount": 4, "scpPeerCount": 4, **extra}
 
 
@@ -272,6 +272,9 @@ class VerdictTests(Base):
         self.assertEqual(record["loops"][A]["reset"], True)  # restart reset the counters
         self.assertEqual({h: record["loops"][h]["delayed"] for h in HOSTS}, dict.fromkeys(HOSTS, 0))
         self.assertEqual(set(record["tip_check"]["hosts"]), set(HOSTS))
+        tip = record["tip_check"]
+        self.assertEqual(tip["hashes"], {h: f"{tip['height']:064x}" for h in HOSTS})
+        self.assertEqual(degrade_report(self.c.j, self.c.degrade_steps)[0]["tip_check"], tip)
 
     async def test_over_one_second_iterations_alone_do_not_fail(self):
         self.quiescent_accounting()
@@ -354,7 +357,7 @@ class VerdictTests(Base):
         async def forked(host, method, params=None, **kw):
             result = await rpc(host, method, params, **kw)
             if method == "getBlockByHeight" and host == N4 and verdict_tick:
-                result = {**result, "hash": "fork"}
+                result = {**result, "hash": "f" * 64}
             return result
         self.c.rpc.call.side_effect = forked
         self.c.closed = False
@@ -365,6 +368,38 @@ class VerdictTests(Base):
                 Gate, "D1: recovery check failed: one tip: conflicting hashes"):
             await self.c.degrade_evidence(self.now, statuses, self.c.statuses)
         self.assertEqual(self.verdict("D1"), "fail")
+
+    async def test_common_tip_requires_an_identified_block_from_every_required_peer(self):
+        height = 250
+        digest = f"{height:064x}"
+        statuses = {host: status(height) for host in HOSTS}
+        # Ahead peers must still serve the common height and have a different live tip.
+        statuses[N4] = status(height + 1)
+        good = {"height": height, "hash": digest}
+        reply = good
+
+        async def block(host, method, params):
+            self.assertEqual((method, params), ("getBlockByHeight", {"height": height}))
+            return reply if host == N5 else good
+
+        self.c.rpc.call.side_effect = block
+        for reply in (None, [], {}, {"height": height}, {"height": height, "hash": ""},
+                      {"height": height, "hash": "x" * 64}, {"height": height, "hash": []},
+                      {"height": height - 1, "hash": digest}, {"height": float(height), "hash": digest}):
+            with self.subTest(reply=reply):
+                tip, failures = await self.c.recovery_tip(statuses, (), "D5")
+                self.assertEqual(failures, [f"one tip: invalid block at height {height} from {N5}"])
+                self.assertEqual(set(tip["hashes"]), set(HOSTS) - {N5})
+
+        reply = None
+        tip, failures = await self.c.recovery_tip(statuses, (N5,), "D5")
+        self.assertEqual(failures, [])
+        self.assertEqual(tip["hosts"], list(HOSTS[:-1]))
+
+        reply = good
+        statuses[N5] = status(height, tipHash="f"*64)
+        _, failures = await self.c.recovery_tip(statuses, (), "D5")
+        self.assertEqual(failures, [f"one tip: block differs from reported tip at height {height} on {N5}"])
 
     async def test_accounting_mismatch_fails(self):
         self.quiescent_accounting(difference=1)

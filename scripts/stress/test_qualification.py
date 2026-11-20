@@ -99,6 +99,60 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse((c.state / "activated.json").exists())
         self.assertFalse(c.j.rows("kind='campaign'"))
 
+    def detached_campaign(self):
+        fixture = test_discovery.DiscoveryExecutorTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        c = fixture.c
+        c.config.update(prefund_evidence={"manifest_sha256": "a" * 64}, infrastructure_end=1000 + 80.5 * 3600)
+        c.j.set("status", "setup")
+        c.j.set("setup_start", 1000)
+        c.j.set("start", None)
+        c.j.set("end", None)
+        c.j.set("opening_verified", True)
+        c.fleet_height = Mock(return_value=265)
+        c.sync = AsyncMock(side_effect=c.fleet_height)
+        c.deliver = AsyncMock()
+        return c
+
+    def test_detached_campaign_waits_for_maturing_grants_then_starts_rehearsal(self):
+        c = self.detached_campaign()
+        required = c.plan["wallets"]["min_mature_utxos_per_wallet"]
+        wallet = {"unreserved_unspent": required + 3, "mature": required, "eligible": required - 1}
+        def readiness(height):
+            c.j.set("inventory_readiness", {"status": "generator_limited", "wallets": [wallet]})
+            return height > 265
+        c.inventory_ready = Mock(side_effect=readiness)
+        with patch("discovery.time.time", return_value=20000):
+            asyncio.run(c.setup_tick())
+            self.assertEqual(c.j.get("inventory_readiness")["status"], "waiting_for_inventory")
+            asyncio.run(c.setup_tick())
+            c.sync.assert_awaited_once()
+            c.deliver.assert_not_awaited()
+            self.assertIsNone(c.j.get("rehearsal_start"))
+            c.fleet_height.return_value = 266
+            asyncio.run(c.setup_tick())
+            self.assertEqual(c.j.get("rehearsal_start"), 20015)
+            self.assertIsNone(c.j.get("start"))
+            c.deliver.assert_awaited_once()
+
+    def test_detached_campaign_holds_exhausted_inventory_and_expiring_window(self):
+        c = self.detached_campaign()
+        c.j.set("inventory_readiness", {"status": "generator_limited",
+                                        "wallets": [{"mature": 4, "unreserved_unspent": 4}]})
+        c.inventory_ready = Mock(return_value=False)
+        with patch("discovery.time.time", return_value=20000), self.assertRaisesRegex(Gate, "inventory/decoy"):
+            asyncio.run(c.setup_tick())
+        c.inventory_ready.return_value = True
+        # The rehearsal alone fits, but its T0 lead leaves too little time for the full drain.
+        late = 1000 + 8 * 3600 - c.plan["rehearsal"]["duration_seconds"] - 30
+        with patch("discovery.time.time", return_value=late), self.assertRaisesRegex(Gate, "fixed lifetime"):
+            asyncio.run(c.setup_tick())
+        with patch("discovery.time.time", return_value=1000 + 8 * 3600), self.assertRaisesRegex(Gate, "setup deadline"):
+            asyncio.run(c.setup_tick())
+        c.deliver.assert_not_awaited()
+        self.assertIsNone(c.j.get("rehearsal_start"))
+
     def test_run_loop_keeps_qualification_terminal_status(self):
         from controller import Controller
 

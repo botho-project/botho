@@ -1,5 +1,6 @@
 """Preflight refuses any node that does not report V2 lottery rules on PROTOCOL_VERSION (#1643)."""
 import asyncio
+import json
 import re
 from pathlib import Path
 import tempfile
@@ -35,6 +36,8 @@ class CheckLotteryRulesTests(unittest.TestCase):
         node = re.search(r'^pub const PROTOCOL_VERSION: &str = "([^"]+)";$', source, re.M)
         self.assertIsNotNone(node, 'PROTOCOL_VERSION not found in ' + str(DISCOVERY_RS))
         self.assertEqual(PROTOCOL_VERSION, node.group(1))
+        template = Path(__file__).with_name("x-series-plan.json")
+        self.assertEqual(json.loads(template.read_bytes())["protocol"], PROTOCOL_VERSION)
 
     def test_rejects_v1_and_malformed_rules(self):
         for rules in (1, None, '2', 2.0, True, 3):

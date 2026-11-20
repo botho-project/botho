@@ -30,7 +30,7 @@ that shape against the plan before anything is staged:
     The bound on every member therefore bounds this mean too. Rows that
     declare background against a wealthy ring (``exit``) are reported, not
     gated: the operator freezes the plan from the Part A rehearsal's p99
-    quoted fee per BTH moved instead.
+    fixed-base consensus floor per unit of output value instead.
 
 ``coverage``
     Replays the rehearsal and the plan's whole 72 h schedule (``expand``'s
@@ -48,8 +48,12 @@ that shape against the plan before anything is staged:
 """
 
 import argparse
+import hashlib
 import json
+import re
 from pathlib import Path
+
+from fee_evidence import RELAY_MIN_TX_FEE, resign_fee
 
 GOLDEN = Path(__file__).with_name("fixtures") / "fee-shape-golden.json"
 # stress.rs `deserialize_fee_multiplier`: the signer's fee tiers.
@@ -288,6 +292,22 @@ def gated_fee(golden, inputs, moved, tier):
     return FEE_MARGIN * tier * max(r["resign_fee"] for r in rows if r["depth"] == GATED_DEPTH)
 
 
+def projected_payment_fee(quote, selected_value, shape_value, tier):
+    numerator = quote * shape_value * tier * FEE_MARGIN
+    return (numerator + selected_value - 1) // selected_value
+
+
+def projected_relay_floor(consensus_floor, output_value, shape_value, base_ceiling):
+    """Conservative floor for a move of shape_value at the sampled economic rate.
+
+    Retain the size charge at the fixed consensus base in the ratio. Add the target's
+    maximum size charge separately to cover changes in input count and relay
+    congestion. Round up for the integer demurrage and exit calculations.
+    """
+    numerator = (consensus_floor + 1) * shape_value
+    return base_ceiling + (numerator + output_value - 1) // output_value
+
+
 def coverage(plan, events=None, golden=None):
     """Replay the rehearsal and campaign through selection.cover; returns evidence.
 
@@ -318,6 +338,7 @@ def coverage(plan, events=None, golden=None):
     wallets = [[output(grant, float("-inf")) for _ in range(grants)] for _ in range(count)]
     failures, multi, moved, spends, fees = [], 0, 0, 0, 0
     moved_by_inputs, worst_fee = {}, 0
+    rehearsal_moved = []
     for event in sorted(rehearsal_events(plan) + list(events), key=lambda e: e["offset_seconds"]):
         at = event["offset_seconds"]
         sender = int(event["sender"].split("-")[1]) - 1
@@ -334,6 +355,8 @@ def coverage(plan, events=None, golden=None):
         spends += 1
         multi += len(selected) > 1
         total = sum(o["utxo"]["amount"] for o in selected)
+        if at < 0:  # Rehearsal offers precede campaign T0.
+            rehearsal_moved.append(total)
         moved = max(moved, total)
         moved_by_inputs[len(selected)] = max(moved_by_inputs.get(len(selected), 0), total)
         spend = {"at": at, "sender": event["sender"], "inputs": len(selected), "moved": total,
@@ -355,7 +378,20 @@ def coverage(plan, events=None, golden=None):
             wallets[sender].append(output(change, at + MATURITY_SECONDS))
         wallets[recipient].append(output(amount, at + MATURITY_SECONDS))
     balances = [sum(o["utxo"]["amount"] for o in w) for w in wallets]
-    return {"payments": spends + len(failures), "covered": spends, "uncovered": len(failures),
+    projection = None
+    if rehearsal_moved:
+        # For a fixed quote the smallest input totals have the highest ratios.
+        # The nearest-rank p99 ratio uses the (N // 100 + 1)-th smallest total.
+        selected = sorted(rehearsal_moved)[len(rehearsal_moved) // 100]
+        largest = max(priced.values())
+        required = projected_payment_fee(RELAY_MIN_TX_FEE, selected, largest, max(TIERS))
+        projection = {"basis": "legacy_total_quote_per_input_value",
+                      "fixed_minimum_with_margin_picocredits": RELAY_MIN_TX_FEE * max(TIERS) * FEE_MARGIN,
+                      "covered_rehearsal_offers": len(rehearsal_moved), "quote_picocredits": RELAY_MIN_TX_FEE,
+                      "p99_selected_input_picocredits": selected, "largest_shape_picocredits": largest,
+                      "minimum_projected_fee_picocredits": required, "cap_picocredits": max_single,
+                      "exceeds_cap_at_relay_minimum": required > max_single}
+    return {"rehearsal_relay_minimum_projection": projection, "payments": spends + len(failures), "covered": spends, "uncovered": len(failures),
             "first_uncovered": failures[0] if failures else None,
             "several_inputs": multi, "largest_value_moved": moved,
             "largest_value_moved_by_inputs": {str(k): v for k, v in sorted(moved_by_inputs.items())},
@@ -413,18 +449,188 @@ def preflight(plan):
             "fee_margin": FEE_MARGIN, "gated_depth": GATED_DEPTH,
             "ring_gated_to_bth": round(ring_bound_bth(golden), 3),
             "note": "exit rows are reported, not gated: freeze the plan from the Part A "
-                    "rehearsal's p99 quoted fee per BTH moved on the pinned build"}
+                    "rehearsal's p99 fixed-base consensus floor per unit of output value on the pinned build"}
+
+
+def measured_fee_check(plan_bytes, rehearsal=None, funding=None):
+    """Compare Part A settling quotes with the plan's payment and batch caps."""
+    from runtime import digest
+
+    plan = json.loads(plan_bytes)
+    require(plan.get("execution_mode") == "rehearsal_only", "expected the staged Part A plan")
+    result = {"plan_file_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+              "node_commit": plan["node_commit"]}
+    payment_quotes = batch_quotes = legacy_quotes = None
+    if rehearsal is not None:
+        require(rehearsal["plan_sha256"] == digest(plan), "rehearsal report plan digest mismatch")
+        result["rehearsal_run"] = rehearsal.get("run_id")
+        result["node_sha256"] = rehearsal.get("node_sha256")
+        result["qualification_status"] = rehearsal.get("qualification_status")
+        summary = rehearsal["rehearsal"]
+        result["payment_fee_floor_quotes"] = summary.get("fee_floor_quotes")
+        result["payment_consensus_floors"] = summary.get("payment_consensus_floors")
+        if (rehearsal.get("status") == "rehearsal_complete"
+                and rehearsal.get("qualification_status") in ("passed", "accepted_generator_limited")):
+            expected = (plan["rehearsal"]["duration_seconds"] - 120) // plan["rehearsal"]["interval_seconds"]
+            require(summary.get("reconciled") == expected, "completed rehearsal counts differ from plan")
+            payment_quotes = complete_p99(summary.get("payment_consensus_floors"), expected,
+                                          "consensus_floor_picocredits", "output_value_picocredits")
+            legacy_quotes = complete_p99(summary.get("fee_floor_quotes"), expected,
+                                         "resign_fee_picocredits", "selected_input_picocredits")
+    if funding is not None:
+        require(funding["plan_sha256"] == result["plan_file_sha256"], "funding health plan digest mismatch")
+        result["batch_fee_floor_quotes"] = funding.get("fee_floor_quotes")
+        if funding.get("completed_before_deadline") is True and funding.get("batches") == batches(plan):
+            batch_quotes = complete_p99(funding.get("fee_floor_quotes"), funding["batches"],
+                                        "resign_fee_picocredits")
+    golden = load_golden()
+    shapes = planned_shapes(plan, golden)
+    # The Part A freeze applies the largest planned payment value to the
+    # common payment cap, including a one-input spend of a probe's change.
+    payment_value = max(shape[3] for shape in shapes if shape[6] is None)
+    planned_value = payment_value
+    if payment_quotes:
+        observed_value = result["payment_consensus_floors"].get("max_selected_input_picocredits")
+        require(type(observed_value) is int and payment_quotes[1] < observed_value < 2**64,
+                "invalid maximum observed selected input value")
+        payment_value = max(planned_value, observed_value)
+    payment_cap = int(plan["limits"]["max_single_signed_fee_picocredits"])
+    input_count = max(shape[1] for shape in shapes if shape[6] is None)
+    base_ceilings = golden["payment_base_ceiling_by_input_count"]
+    require(1 <= input_count <= len(base_ceilings), "no fee base ceiling for planned input count")
+    base_ceiling = max(base_ceilings[:input_count])
+    raw_bound = (projected_relay_floor(*payment_quotes, payment_value, base_ceiling)
+                 if payment_quotes else None)
+    payment_bound = resign_fee(raw_bound) * max(TIERS) * FEE_MARGIN if raw_bound is not None else None
+    previous_bound = (projected_payment_fee(*legacy_quotes, planned_value, max(TIERS)) if legacy_quotes else None)
+    amounts = [
+        {"shape": "payments", "moved_picocredits": payment_value, "planned_moved_picocredits": planned_value,
+         "tier": max(TIERS),
+         "base_ceiling_picocredits": base_ceiling, "projected_raw_relay_floor_picocredits": raw_bound,
+         "legacy_total_quote_projection_picocredits": previous_bound,
+         "margin": FEE_MARGIN, "required_picocredits": payment_bound, "cap_picocredits": payment_cap},
+        {"shape": "prefund batch", "required_picocredits": batch_quotes[0] if batch_quotes else None,
+         "cap_picocredits": prefund_shape(plan)[2]},
+    ]
+    for row in amounts:
+        required = row["required_picocredits"]
+        row["status"] = ("incomplete" if required is None else
+                         "within_cap" if required <= row["cap_picocredits"] else "over_cap")
+    result["shapes"] = amounts
+    statuses = {row["status"] for row in result["shapes"]}
+    result["status"] = ("over_cap" if "over_cap" in statuses else
+                        "incomplete" if "incomplete" in statuses else "within_cap")
+    return result
+
+
+def complete_p99(summary, expected, numerator, denominator=None):
+    if not summary or summary.get("p99") is None:
+        return None
+    require(type(expected) is int and expected > 0 and
+            all(type(summary.get(key)) is int and summary[key] == expected for key in ("signed", "samples")),
+            "p99 sample counts differ from the completed transaction count")
+    p99 = summary["p99"]
+    fee = p99[numerator]
+    moved = p99[denominator] if denominator else 1
+    require(all(type(value) is int and value > 0 for value in (fee, moved)), "invalid p99 observation")
+    return fee, moved
+
+
+def verified_funding(plan_bytes, rehearsal, funding_bytes, snapshot_bytes=None):
+    """Link the supplied health file to the controller that consumed it."""
+    require(isinstance(rehearsal.get("run_id"), str) and rehearsal["run_id"],
+            "missing rehearsal run ID")
+    actual = hashlib.sha256(funding_bytes).hexdigest()
+    source = {"health_sha256": actual}
+    if "prefund_health_sha256" in rehearsal:
+        require(rehearsal["prefund_health_sha256"] == actual, "controller funding health digest mismatch")
+        source["source"] = "controller_report"
+    if snapshot_bytes is not None:
+        snapshot = json.loads(snapshot_bytes)
+        plan_sha = hashlib.sha256(plan_bytes).hexdigest()
+        journal = snapshot["meta"]
+        require(snapshot["stage"] == "journal" and journal["opening_verified"] is True
+                and re.fullmatch("[0-9a-f]{64}", snapshot["launch_digest"])
+                and journal["launch_digest"] == snapshot["launch_digest"]
+                and journal["plan_digest"] == snapshot["plan_digest"]
+                and journal["setup_start"] == snapshot["setup_start"],
+                "snapshot journal does not confirm the prefunded launch")
+        require(snapshot["mode"] == "rehearsal_only" and snapshot["run_id"] == rehearsal["run_id"]
+                and type(snapshot["setup_start"]) in (float, int) and snapshot["setup_start"] > 0
+                and snapshot["setup_start"] == rehearsal["setup_start"]
+                and snapshot["plan_digest"] == rehearsal["plan_sha256"]
+                and snapshot["plan_sha256"] == snapshot["funding"]["plan_sha256"] == plan_sha,
+                "controller snapshot differs from rehearsal attempt or plan")
+        require(snapshot["funding"]["health_sha256"] == actual, "snapshot funding health digest mismatch")
+        source.setdefault("source", "controller_snapshot")
+        source["snapshot_sha256"] = hashlib.sha256(snapshot_bytes).hexdigest()
+    require("source" in source, "legacy report requires --rehearsal-snapshot to verify funding")
+    return source
+
+
+def campaign_fee_check(plan_bytes, rehearsal, funding_bytes, campaign_bytes, pin, snapshot_bytes=None):
+    """Bind the Part A measurement to the payload pins and payment plan for Part B."""
+    plan = json.loads(plan_bytes)
+    campaign = json.loads(campaign_bytes)
+    require(campaign.get("execution_mode", "campaign") == "campaign" and campaign["duration_hours"] == 72,
+            "expected the 72-hour campaign plan")
+    for key in ("network", "protocol", "profile", "seed", "node_commit", "prefund", "wallets"):
+        require(campaign[key] == plan[key], "campaign differs from rehearsal: " + key)
+    require(campaign["funding"]["mode"] == plan["funding"]["mode"], "campaign funding mode differs from rehearsal")
+    for key in ("duration_seconds", "interval_seconds", "drain_seconds"):
+        require(campaign["rehearsal"][key] == plan["rehearsal"][key], "campaign rehearsal differs: " + key)
+    require(campaign["limits"]["max_single_signed_fee_picocredits"] == plan["limits"]["max_single_signed_fee_picocredits"],
+            "campaign payment cap differs from rehearsal")
+    require(pin["commit"] == plan["node_commit"], "campaign node commit differs from rehearsal")
+    for key in ("node_sha256", "signer_sha256"):
+        candidate = pin.get(key)
+        require(isinstance(candidate, str) and re.fullmatch("[0-9a-f]{64}", candidate)
+                and candidate == rehearsal.get(key), "campaign pin differs from rehearsal: " + key)
+    result = measured_fee_check(plan_bytes, rehearsal, json.loads(funding_bytes))
+    result["funding_provenance"] = verified_funding(plan_bytes, rehearsal, funding_bytes, snapshot_bytes)
+    replay = preflight(campaign)["coverage"]
+    result["campaign"] = {"plan_file_sha256": hashlib.sha256(campaign_bytes).hexdigest(),
+                          "node_sha256": pin["node_sha256"], "signer_sha256": pin["signer_sha256"],
+                          "replayed_payments_including_rehearsal": replay["covered"]}
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--plan", type=Path, default=Path(__file__).with_name("x-series-plan.json"))
+    parser.add_argument("--rehearsal-report", type=Path, help="Part A controller report for a measured fee check")
+    parser.add_argument("--funding-health", type=Path, help="same fleet's prefund health report")
+    parser.add_argument("--campaign-plan", type=Path, help="Part B candidate workload plan")
+    parser.add_argument("--campaign-pin", type=Path, help="Part B node and signer installation pin")
+    parser.add_argument("--rehearsal-snapshot", type=Path, help="retained controller snapshot for a legacy Part A report")
     args = parser.parse_args()
     try:
-        result = preflight(json.loads(args.plan.read_text()))
-    except (ValueError, KeyError, TypeError) as error:
+        measured = args.rehearsal_report is not None or args.funding_health is not None
+        if args.rehearsal_snapshot:
+            require(args.funding_health and args.rehearsal_report, "--rehearsal-snapshot requires both Part A reports")
+        plan_raw = args.plan.read_bytes()
+        report = json.loads(args.rehearsal_report.read_bytes()) if args.rehearsal_report else None
+        funding_raw = args.funding_health.read_bytes() if args.funding_health else None
+        snapshot_raw = args.rehearsal_snapshot.read_bytes() if args.rehearsal_snapshot else None
+        if args.campaign_plan or args.campaign_pin:
+            require(all((args.campaign_plan, args.campaign_pin, args.funding_health, args.rehearsal_report)),
+                    "campaign comparison requires --campaign-plan, --campaign-pin, --rehearsal-report and --funding-health")
+            result = campaign_fee_check(plan_raw, report, funding_raw, args.campaign_plan.read_bytes(),
+                                        json.loads(args.campaign_pin.read_bytes()), snapshot_raw)
+        elif measured:
+            result = measured_fee_check(plan_raw, report, json.loads(funding_raw) if funding_raw is not None else None)
+            if report is not None and funding_raw is not None:
+                if snapshot_raw is not None or "prefund_health_sha256" in report:
+                    result["funding_provenance"] = verified_funding(plan_raw, report, funding_raw, snapshot_raw)
+                else:
+                    result["funding_provenance"] = {"source": "plan_only"}
+        else:
+            result = preflight(json.loads(plan_raw))
+    except (ValueError, KeyError, TypeError, OSError) as error:
         parser.error(str(error))
     print(json.dumps(result, indent=2))
+    if measured and result["status"] != "within_cap":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

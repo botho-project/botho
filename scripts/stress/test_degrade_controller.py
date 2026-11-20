@@ -67,6 +67,7 @@ class Fleet:
         self.unsubmitted = set()
         self.unconfirmed = set()
         self.unspent = set()  # chain_areKeyImagesSpent reports spent: False
+        self.spend_height = {h: 100 for h in HOSTS}
         self.metrics_down = set()  # metrics server unreachable (#1591)
         # Metrics-server loop counters (#1591); a restart resets them.
         self.loop = {h: {"iterations": 1000, "within_1s": 1000, "delayed": 0} for h in HOSTS}
@@ -102,13 +103,13 @@ class Fleet:
             return {"network": "botho-testnet", "gitCommit": "commit",
                     "version": "0.6.0", "synced": self.synced[host],
                     "chainHeight": self.height[host],
-                    "tipHash": "block-%d" % self.height[host],
+                    "tipHash": f"{self.height[host]:064x}",
                     "peerCount": 0 if host in self.frozen else 4,
                     "scpPeerCount": 0 if host in self.frozen else 4,
                     **self.quorum[host]}
         if method == "getBlockByHeight":
             h = params["height"]
-            return {"hash": "genesis" if h == 0 else "block-%d" % h,
+            return {"height": h, "hash": f"{h:064x}",
                     "timestamp": h, "txCount": 0}
         if method == "fee_getRate":
             return {"baseRate": 2, "baseMin": 1, "baseMax": 4,
@@ -122,7 +123,8 @@ class Fleet:
             return {"txHash": params["hash"], "blockHeight": 100,
                     "fee": self.receipt_fee[host], "outputCount": 1, "totalOutput": 1000}
         if method == "chain_areKeyImagesSpent":
-            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False}
+            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False,
+                     "spentHeight": self.spend_height[host] if host not in self.unspent else None}
                     for k in params["keyImages"]]
         if method == "chain_getOutputs":
             return [{"height": i, "outputs": []}
@@ -164,7 +166,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         c.config = {"node_sha256": "hash", "infrastructure_end": START + 82 * 3600,
                     "resource_baselines": {h: dict(REFERENCE) for h in HOSTS}}
         c.plan = {"network": "botho-testnet", "node_commit": "commit",
-                  "genesis": "genesis", "schema_version": 2, "seed": 7,
+                  "genesis": f"{0:064x}", "schema_version": 2, "seed": 7,
                   "faults": {"validator_degrade_phase": steps}}
         c.degrade_steps = SUMMARY["degrade_steps"] if steps else []
         c.j.set("status", "running")
@@ -711,6 +713,24 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("spent-input state disagreement", self.reason())
         self.assertIn("deferred_hosts", json.loads(self.c.j.intent("pay")["info"]))
 
+    async def test_wrong_spend_height_on_rejoined_host_keeps_deferred_evidence(self):
+        self.now = at("D1", "fault_start") + 60
+        self.fleet.stop(A)
+        self.accepted_row()
+        await self.reconcile(2)
+        self.assertEqual(self.c.j.intent("pay")["state"], "reconciled")
+        self.now = at("D1", "window_end") + 1
+        self.fleet.start(A)
+        self.settle()
+        self.fleet.spend_height[A] = 101
+        self.c.closed = False
+        await self.reconcile(1)
+        self.assertTrue(self.held())
+        self.assertIn("spent-input height", self.reason())
+        info = json.loads(self.c.j.intent("pay")["info"])
+        self.assertEqual(info["deferred_hosts"], [A])
+        self.assertNotIn("deferred_verified", info)
+
     async def test_spent_check_during_step_defers_the_named_host(self):
         # Confirmed on all five before D1, scanned during it: the spent
         # state on A is still owed and joins the post-window verification.
@@ -910,7 +930,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c[:2] for c in self.fleet.calls], expected)
         self.assertEqual(self.c.statuses[A], {"network": "botho-testnet",
             "gitCommit": "commit", "version": "0.6.0", "synced": True, "chainHeight": 101,
-            "tipHash": "block-101", "peerCount": 4, "scpPeerCount": 4})
+            "tipHash": f"{101:064x}", "peerCount": 4, "scpPeerCount": 4})
 
         self.fleet.calls.clear()
         self.c.closed = False

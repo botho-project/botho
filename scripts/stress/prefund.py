@@ -51,10 +51,11 @@ import time
 from urllib.parse import urlsplit
 
 from controller import Controller
+from fee_evidence import floor_quote_summary
 from lottery import lottery_rows
 from plan import expand
 from runtime import (Gate, HOSTS, Journal, Quota, Rpc, atomic, campaign_targets,
-                     campaign_tls_context, check_identity, parse_hosts, pinned_file)
+                     campaign_tls_context, check_identity, fsync_directory, parse_hosts, pinned_file)
 from selection import choose
 from fee_quote import sign_priced
 
@@ -309,7 +310,8 @@ class Prefunder(Controller):
         # Drafts the producer quoted below its fee floor (#2001): never
         # submitted, kept for audit outside ``artifacts`` (no orphan there).
         self.underpaid = self.state / 'underpaid'
-        for directory in (self.grants_dir, self.artifacts, self.underpaid):
+        self.unquoted = self.state / 'unquoted'
+        for directory in (self.grants_dir, self.artifacts, self.underpaid, self.unquoted):
             directory.mkdir(mode=0o700, exist_ok=True)
             # An existing directory is re-checked: exist_ok keeps its old mode.
             owner_only_dir(directory, 'state_dir/' + directory.name)
@@ -588,9 +590,13 @@ class Prefunder(Controller):
             return False
         self.gate(write=True)
         limits = self.j.limits
-        if len(self.unconfirmed()) >= limits['max_inflight']:
+        # A finalized setup transfer can change the cluster wealth used to quote
+        # the next transfer. Pinned funding plans budget one batch per block.
+        pending = self.unconfirmed()
+        max_batches = 1 if 'prefund' in self.plan else limits['max_inflight']
+        if len(pending) >= max_batches:
             return False
-        if any(r['state'] != 'accepted' for r in self.unconfirmed()):
+        if any(r['state'] != 'accepted' for r in pending):
             return False  # Resolve every uncertain grant before signing another.
         recent = [r for r in self.records if r.get('submitted_at', -1e18) > self.clock() - 60]
         if len(recent) >= limits['max_normal_submissions_per_minute']:
@@ -627,24 +633,29 @@ class Prefunder(Controller):
         # Price against the producer's own fee floor (#2001): sign, quote the
         # draft with estimateFee, re-sign at the quote. An underpaying draft
         # moves to ``underpaid/`` (kept, never submitted) before the re-sign.
-        quotes = [0]
-
         async def sign(min_fee):
+            if min_fee:
+                self.producer_budget(2, 'producer request budget before re-signing')
             return await self.native({**request, **({'min_fee': min_fee} if min_fee else {})})
 
         async def quote_draft(tx_hex):
-            if quotes[0]:
-                self.producer_budget(2, 'producer request budget before re-signing')
-            quotes[0] += 1
-            return await self.rpc.call(self.m['producer_role'], 'estimateFee', {'tx_hex': tx_hex})
+            try:
+                return await self.rpc.call(self.m['producer_role'], 'estimateFee', {'tx_hex': tx_hex})
+            except Quota:
+                # Only the read-only quote was attempted. Preserve these signed bytes
+                # before the run loop retries this still-unrecorded batch.
+                retain_draft(self.unquoted)
+                raise
 
-        def discard():
-            target, n = self.underpaid / artifact.name, 1
+        def retain_draft(directory):
+            target, n = directory / artifact.name, 1
             while target.exists():
-                target, n = self.underpaid / f'{artifact.stem}.{n}{artifact.suffix}', n + 1
+                target, n = directory / f'{artifact.stem}.{n}{artifact.suffix}', n + 1
             os.replace(artifact, target)
+            fsync_directory(directory)
+            fsync_directory(self.artifacts)
 
-        info = await sign_priced(sign, quote_draft, discard, artifact)
+        info = await sign_priced(sign, quote_draft, lambda: retain_draft(self.underpaid), artifact)
         # From here a signed artifact exists. Any refusal leaves it as an orphan,
         # which holds every later start until an operator reviews it.
         need(0 < info['fee'] <= self.max_fee, 'signed grant fee exceeds max_single_signed_fee '
@@ -838,6 +849,7 @@ class Prefunder(Controller):
                   'grant_picocredits': self.m['grant_picocredits'],
                   'principal': report['principal'], 'fees': report['fees'],
                   'max_fee': max(r['fee'] for r in self.records), 'accounting': report,
+                  'fee_floor_quotes': floor_quote_summary(self.records, per_input_value=False),
                   'opening_balances': balances, 'opening_lottery_balances': lottery_balances,
                   'completed_before_deadline': self.clock() < self.m['deadline'],
                   'inventory_readiness': {'status': 'ready' if all(r['ready'] for r in readiness) else

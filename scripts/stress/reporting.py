@@ -7,7 +7,9 @@ import math
 import os
 import resource
 import stat
+import statistics
 import time
+from fee_evidence import floor_quote_summary, payment_consensus_summary
 from lottery import award_spend_expectation
 from plan import expand
 from runtime import HOSTS, atomic, digest
@@ -279,6 +281,59 @@ def offer_deferrals(journal, kind):
     }
 
 
+def rehearsal_preparation_timing(submitted, lag_limit):
+    """Summarize elapsed times for the attempt that actually produced each signature.
+
+    The interval before scan request includes any earlier attempts or deferrals.
+    Scan wait includes lock contention or reuse of the current admission pass's
+    shared scan. The node and signer may both be idle during either interval.
+    """
+    def finite(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    def summarize(records):
+        samples = []
+        missing = invalid = 0
+        for row, info in records:
+            timing = info.get("preparation_timing")
+            if "preparation_timing" not in info:
+                missing += 1
+                continue
+            if not isinstance(timing, dict):
+                invalid += 1
+                continue
+            clocks = (row["offered"], timing.get("scan_requested_at"), info.get("eligible_at"),
+                      row["prepared"], row["submitted"])
+            scan = timing.get("scan_wait_seconds")
+            selection = timing.get("input_selection_seconds")
+            if (not all(finite(t) for t in clocks) or list(clocks) != sorted(clocks)
+                    or not finite(scan) or scan < 0 or not finite(selection) or selection < 0):
+                invalid += 1
+                continue
+            samples.append({
+                "offer_to_scan_request": clocks[1] - clocks[0],
+                "scan_wait": scan,
+                "input_selection": selection,
+                "eligibility_to_prepared": clocks[3] - clocks[2],
+                "prepared_to_submit": clocks[4] - clocks[3],
+            })
+        return {
+            "submitted": len(records), "measured": len(samples),
+            "missing": missing, "invalid": invalid,
+            "median_seconds": {key: statistics.median(sample[key] for sample in samples)
+                               for key in samples[0]} if samples else None,
+        }
+
+    # Use the original run's evaluated cadence threshold when it is available.
+    # An in-progress or older report can still give measurements for all submissions.
+    late = None
+    if finite(lag_limit) and lag_limit >= 0:
+        late = summarize([(row, info) for row, info in submitted
+                          if finite(row["offered"]) and finite(row["submitted"])
+                          and row["submitted"] - row["offered"] > lag_limit])
+    return {"all": summarize(submitted), "late": late, "lag_limit_seconds": lag_limit}
+
+
 def rehearsal_summary(journal, plan, artifacts=None):
     settings = plan["rehearsal"]
     expected = (settings["duration_seconds"] - 120) // settings["interval_seconds"]
@@ -299,9 +354,18 @@ def rehearsal_summary(journal, plan, artifacts=None):
     # Present only under the plan opt-in (#1613): never readable as a pass.
     acceptance = journal.get("rehearsal_acceptance")
     accepted = {"accepted_as": acceptance["accepted_as"]} if acceptance else {}
+    written = [(r, json.loads(r["info"])) for r in rows
+               if r["prepared"] is not None or r["submitted"] is not None]
+    signed = [info for r, info in written if r["prepared"] is not None]
     return {
         **result,
         **accepted,
+        "preparation_timing": rehearsal_preparation_timing(
+            [(r, info) for r, info in written if r["submitted"] is not None],
+            result.get("timing_tolerance", {}).get("max_offer_lag_seconds"),
+        ),
+        "fee_floor_quotes": floor_quote_summary(signed, per_input_value=True),
+        "payment_consensus_floors": payment_consensus_summary(signed),
         "expected": expected,
         "offered": len(rows),
         "not_yet_offered": max(0, expected - len(rows)),
@@ -373,6 +437,8 @@ def degrade_report(journal, steps):
             row["failures"] = list(verdict.get("failures") or []) if verdict else []
             row["awaiting"] = list(record.get("awaiting") or [])
             row["fault_observed"] = record.get("fault_observed")
+            if record.get("tip_check") is not None:
+                row["tip_check"] = record["tip_check"]
             for host, track in (record.get("hosts") or {}).items():
                 row["milestones"][host] = {
                     name: None if track.get(name) is None else track[name] - restore
@@ -461,7 +527,12 @@ def heap_evidence(hosts, window_s=86400):
 
 
 def controller_report(self):
-    rows = self.j.rows()
+    report = build_controller_report(self, self.j.rows())
+    atomic(self.state / "report.json", report)
+    return report
+
+
+def build_controller_report(self, rows):
     artifacts = artifact_evidence(
         self.state, rows, self.j.limits["max_signed_transaction_bytes"]
     )
@@ -500,6 +571,8 @@ def controller_report(self):
         "start": self.j.get("start"),
         "end": self.j.get("end"),
         "plan_sha256": digest(self.plan),
+        "node_sha256": self.config.get("node_sha256"),
+        "signer_sha256": self.config.get("signer_sha256"),
         "counts": counts,
         "submitted_to_reconciled_seconds": latency("submitted"),
         "nominal_campaign_offers": nominal,
@@ -547,7 +620,8 @@ def controller_report(self):
             "lottery_v2_spend": award_spend_expectation(self.j)["status"] == "pass",
         },
     }
-    atomic(self.state / "report.json", report)
+    if "prefund_evidence" in self.config:
+        report["prefund_health_sha256"] = self.config["prefund_evidence"].get("health_sha256")
     return report
 
 

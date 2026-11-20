@@ -176,6 +176,56 @@ class Scenario(unittest.TestCase):
         return json.loads(json.dumps([c.blocks, c.inventory, c.spent]))
 
 
+class SelectionHistoryTests(Scenario):
+    def test_only_a_committed_append_extends_the_index(self):
+        h = self.harness(tx_per_block=1)
+        c = h.controller()
+        h.sync(12)
+        rows, heights = c.selection_history()
+        original = c.canonical_history()
+        with patch.object(controller_module, 'decoy_row', wraps=controller_module.decoy_row) as classify:
+            h.sync(12)
+            self.assertIs(c.selection_history()[0], rows)
+            classify.assert_not_called()
+            h.fail_native = True
+            with self.assertRaisesRegex(Gate, "injected"):
+                h.sync(13)
+            self.assertEqual(c.canonical_history(), original)
+            h.fail_native = False
+            h.sync(13)
+            updated_rows, updated_heights = c.selection_history()
+            self.assertEqual(classify.call_count, len(h.chain.block(13)['outputs']))
+        self.assertIs(updated_rows, rows)
+        self.assertIs(updated_heights, heights)
+        self.assertEqual(max(h for h, _ in original.values()), 12)
+        rebuilt = controller_module.SelectionHistory(c.blocks).read()
+        self.assertEqual((updated_rows, updated_heights), rebuilt)
+        restarted = h.controller()
+        h.sync(13)
+        self.assertEqual(restarted.selection_history(), rebuilt)
+        self.assertIsNot(restarted.selection_history()[0], rows)
+
+    def test_failed_suffix_keeps_previous_rows_and_rechecks_on_retry(self):
+        first = {'targetKey': 'AA'}
+        index = controller_module.SelectionHistory([{'height': 1, 'outputs': [first]}])
+        rows, heights = index.read()
+        malformed = {'targetKey': 'cc', 'lottery': True, 'lotteryContext': {}}
+        index.blocks = index.blocks + [{'height': 2, 'outputs': [
+            {'targetKey': 'aa'}, {'targetKey': 'bb'}, malformed]}]
+        for _ in range(2):
+            with self.assertRaisesRegex(Gate, 'malformed V2'):
+                index.read()
+            self.assertEqual(rows, {'aa': (1, first)})
+            self.assertEqual(heights, [1])
+        index.blocks = index.blocks[:1] + [{'height': 2, 'outputs': [
+            {'targetKey': 'aa'}, {'targetKey': 'cc', 'lottery': True},
+            {'targetKey': 'bb'}, {'targetKey': '0' * 64}]}]
+        current, current_heights = index.read()
+        self.assertEqual(set(current), {'aa', 'bb', '0' * 64})
+        self.assertEqual(current['aa'], (1, first))
+        self.assertEqual(current_heights, [1, 2])
+
+
 class CompactInventoryTests(Scenario):
     def test_owned_outputs_drop_only_the_ciphertext_and_history_keeps_it(self):
         h = self.harness(tx_per_block=2)
@@ -284,6 +334,11 @@ def reference_choose(controller, wallet, height, amount=0, count=None, headroom=
     return []
 
 
+def fixture_selection_history(canonical):
+    heights = sorted(h for key, (h, _) in canonical.items() if key != "0" * 64)
+    return canonical, heights
+
+
 class SelectionEquivalenceTests(unittest.TestCase):
     """choose() counts decoy pools instead of building them (#1633): same result.
 
@@ -309,6 +364,7 @@ class SelectionEquivalenceTests(unittest.TestCase):
                     'target_key': list(bytes.fromhex(key))}})
             fake = SimpleNamespace(
                 canonical_history=lambda c=canonical: c,
+                selection_history=lambda c=canonical: fixture_selection_history(c),
                 canonical_inventory=lambda w, c=None, o=owned: o,
                 unspent_setup_inputs=lambda w, c=None, o=owned: o,
                 j=SimpleNamespace(limits={'max_single_signed_fee_picocredits': 10**8}))
@@ -336,6 +392,7 @@ class SelectionEquivalenceTests(unittest.TestCase):
                     'target_key': list(bytes.fromhex(real))}}]
                 fake = SimpleNamespace(
                     canonical_history=lambda c=canonical: c,
+                    selection_history=lambda c=canonical: fixture_selection_history(c),
                     canonical_inventory=lambda w, c=None, o=owned: o,
                     unspent_setup_inputs=lambda w, c=None, o=owned: o,
                     j=SimpleNamespace(limits={'max_single_signed_fee_picocredits': 10**8}))

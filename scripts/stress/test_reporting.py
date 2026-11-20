@@ -105,6 +105,31 @@ class TerminalReportingTests(unittest.TestCase):
         }
         self.c.j.set("accounting", self.opening)
 
+    def test_controller_report_records_funding_health_digest_from_launch(self):
+        self.c.j.set("status", "held")
+        self.assertNotIn("prefund_health_sha256", self.c.report())
+        self.c.config["prefund_evidence"] = {"health_sha256": "a" * 64}
+        self.assertEqual(self.c.report()["prefund_health_sha256"], "a" * 64)
+        saved = json.loads((self.c.state / "report.json").read_bytes())
+        self.assertEqual(saved["prefund_health_sha256"], "a" * 64)
+
+    def test_discovery_validation_finishes_before_report_publication(self):
+        report_file = self.c.state / "report.json"
+        previous = self.c.report()
+        self.c.j.set("status", "held")
+
+        def inspect_then_fail(rows, quotes):
+            self.assertEqual(json.loads(report_file.read_bytes()), previous)
+            raise Gate("invalid signed fee")
+
+        with patch("discovery.summarize_fees", side_effect=inspect_then_fail):
+            with self.assertRaisesRegex(Gate, "invalid signed fee"):
+                self.c.report()
+        self.assertEqual(json.loads(report_file.read_bytes()), previous)
+        complete = self.c.report()
+        self.assertEqual(complete["qualification_status"], "failed")
+        self.assertEqual(json.loads(report_file.read_bytes()), complete)
+
     def row(self, index, state):
         name = f"rehearsal-{index:05d}"
         offered = 1000 + index * 2
@@ -288,7 +313,7 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(report["not_yet_offered"], 6)
         self.assertEqual(report["rehearsal"]["not_yet_offered"], 540)
 
-    def sign_across_deadline(self, eligible_at, sign_seconds):
+    def sign_across_deadline(self, eligible_at, sign_seconds, scan_seconds=0, selection_seconds=0):
         """Real Controller.prepare/submit_prepared and Journal gates; only the
         native signer boundary (with its durable file) and RPC are faked."""
         self.row(0, "reconciled")
@@ -296,12 +321,21 @@ class TerminalReportingTests(unittest.TestCase):
         self.c.j.offer("rehearsal-00412", "rehearsal", 1002, 1, 0, 1)
         (self.c.state / "artifacts").mkdir()
         self.c.gate = Mock()
-        self.c.sync = AsyncMock(return_value=100)
-        self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
+        now = [eligible_at - scan_seconds - selection_seconds]
+
+        async def scan():
+            now[0] += scan_seconds
+            return 100
+
+        def select(*args):
+            now[0] += selection_seconds
+            return [{"id": "owned-input"}]
+
+        self.c.sync = scan
+        self.c.spendable = select
         self.c.blocks, self.c.spent = [], []
         self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
         self.c.report = Mock()
-        now = [eligible_at]
         self.c.j.clock = lambda: now[0]
         payload = b"native publication before journal preparation"
         signed = {
@@ -334,9 +368,53 @@ class TerminalReportingTests(unittest.TestCase):
 
         self.c.native = AsyncMock(side_effect=native)
         self.c.rpc = Mock(call=AsyncMock(side_effect=rpc))
-        with patch("controller.time.time", side_effect=lambda: now[0]):
+        with patch("controller.time.time", side_effect=lambda: now[0]), patch(
+            "controller.time.perf_counter", side_effect=lambda: now[0] - 1000
+        ):
             result = asyncio.run(self.c.prepare("rehearsal-00411", 1, 8))
         return result, payload
+
+    def test_rehearsal_records_elapsed_scan_and_selection_on_signed_attempt(self):
+        self.c.last_admission_wait = {
+            "requested_at": 998.8, "requested_seconds": 1, "elapsed_seconds": 1.5,
+            "resumed_at": 1000.3,
+        }
+        self.c.admission_started = 1000.5
+        ok, _ = self.sign_across_deadline(1004, 2, scan_seconds=2.5, selection_seconds=0.25)
+        self.assertTrue(ok)
+        row = self.c.j.intent("rehearsal-00411")
+        info = json.loads(row["info"])
+        self.assertEqual(info["preparation_timing"], {
+            "scan_requested_at": 1001.25, "scan_wait_seconds": 2.5,
+            "input_selection_seconds": 0.25,
+            "admission_wait": {**self.c.last_admission_wait, "tick_started_at": 1000.5},
+        })
+        from reporting import rehearsal_summary
+        self.c.j.set("rehearsal_result", {"timing_tolerance": {"max_offer_lag_seconds": 5}})
+        summary = rehearsal_summary(self.c.j, self.c.plan)["preparation_timing"]
+        self.assertEqual(summary["all"]["submitted"], 2)
+        self.assertEqual(summary["all"]["missing"], 1)
+        self.assertEqual(summary["late"]["measured"], 1)
+        self.assertEqual(summary["late"]["median_seconds"], {
+            "offer_to_scan_request": 1.25, "scan_wait": 2.5, "input_selection": 0.25,
+            "eligibility_to_prepared": 2, "prepared_to_submit": 0,
+        })
+
+    def test_rehearsal_timing_keeps_older_and_invalid_submissions_visible(self):
+        from reporting import rehearsal_preparation_timing
+        row = {"offered": 100, "prepared": 104, "submitted": 105}
+        sample = {"scan_requested_at": 101.0, "scan_wait_seconds": 0.25,
+                  "input_selection_seconds": 0.5}
+        info = {"eligible_at": 103, "preparation_timing": sample}
+        cases = [(row, {}), (row, info), (row, {**info, "eligible_at": 100}),
+                 (row, {**info, "preparation_timing": {**sample, "scan_wait_seconds": float("nan")}})]
+        summary = rehearsal_preparation_timing(cases, 5)
+        self.assertEqual(summary["all"]["measured"], 1)
+        self.assertEqual(summary["all"]["missing"], 1)
+        self.assertEqual(summary["all"]["invalid"], 2)
+        self.assertEqual(summary["late"]["submitted"], 0)
+        self.assertIsNone(summary["late"]["median_seconds"])
+        self.assertIsNone(rehearsal_preparation_timing(cases, None)["late"])
 
     def test_sign_started_inside_slot_commits_and_submits_after_deadline(self):
         # #1635, the x1 endurance2 case: eligible at +118.3 s of a 120 s grace,

@@ -509,6 +509,33 @@ idle gate is incomplete, not passed. During x2 itself the controller's
 They do not replace this qualification. A sustained-payments profile still
 needs #1437's reviewed transfer counter.
 
+#### Verify the payment fleet binary
+
+From the rehearsal harness checkout, replay the archived collector files
+against the Linux executable selected for the next fleet.
+
+```sh
+python3 scripts/stress/verify_x2_memory.py "$MEMORY_ARCHIVE" "$NODE_BINARY"
+```
+
+For a run exported by the detached controller, use its `outcome/` directory.
+Older archives keep `manifest.json`, the five sample files and their collector
+summaries at the top level. The verifier hashes the executable, reruns the
+memory analyzer, and checks the raw-file digests against the summaries. It
+also checks the archived verdicts and checksum index when present. A successful
+receipt identifies the qualification run, source revision, binary, manifest
+and five sets of samples.
+
+The x2 operator's `provision.py execute` accepts `--memory-evidence` and
+`--node`. It checks the recorded instance types against the planned five
+validator roles and saves `payment-memory-qualification.json` before its
+first provider call. It reads `inventory.json` from the archive or the
+operator's qualification fleet directory. On a fresh operator, a recovered
+`outcome/` can use the copy beside its verified `final-receipt.json`.
+A retry replays the retained inputs. The node installer checks the selected
+binary and the sealed package against the same digest before transfer. Use
+the separate payment rehearsal and campaign reports to assess those workloads.
+
 ### Inference limits
 
 - A passing result covers only the stated `scope` and topology, for one

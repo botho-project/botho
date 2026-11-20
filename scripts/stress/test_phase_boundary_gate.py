@@ -438,6 +438,24 @@ class RestartTests(Scenario):
 class StrictnessTests(Scenario):
     """The previous phase stays strict: bounded drain, and skipped -> Gate."""
 
+    def test_prior_states_and_global_pending_have_distinct_scopes(self):
+        fleet = self.fleet(24)
+        j, boundary = fleet.c.j, fleet.boundary
+        j.offer("previous", "campaign", boundary - 1, 0, 1, 1)
+        j.offer("at-boundary", "campaign", boundary, 0, 1, 1)
+        j.offer("grant", "funding", boundary - 1, 0, 1, 1)
+        j.transition("previous", "skipped")
+        j.transition("at-boundary", "unknown")
+        j.transition("grant", "recipient_verified")
+        self.assertEqual(j.prior_campaign_states(boundary), {"skipped"})
+        self.assertTrue(j.has_pending())
+        j.transition("at-boundary", "reconciled")
+        self.assertTrue(j.has_pending())
+        j.transition("grant", "reconciled")
+        self.assertFalse(j.has_pending())
+        j.transition("previous", "reconciled")
+        self.assertEqual(j.prior_campaign_states(boundary), set())
+
     def test_skipped_previous_row_still_gates(self):
         fleet = self.fleet(1, begin=30)
         fleet.c.j.transition("correctness-00200", "skipped", "generator_slot_expired")

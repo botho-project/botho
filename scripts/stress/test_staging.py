@@ -188,6 +188,15 @@ class StagingTests(unittest.TestCase):
                     self.observer_install(text,True,'r%d'%i)
                 self.assertEqual((self.root/'keys'/'botho').read_text(),text)
 
+    def test_peak_falls_back_to_the_unit_cgroup_on_older_systemd(self):
+        fields = {'ControlGroup': '/system.slice/test-node.service'}
+        with patch.object(Path, 'read_text', autospec=True, return_value='8192\n') as read:
+            self.assertEqual(observer.service_peak(fields), '8192')
+            read.assert_called_once_with(Path('/sys/fs/cgroup/system.slice/test-node.service/memory.peak'))
+        with patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            self.assertIsNone(observer.service_peak(fields))
+        self.assertEqual(observer.service_peak({'MemoryPeak':'4096'}), '4096')
+
     def observer_sample(self,status):
         def read_text(path):
             if str(path)=='/proc/321/status':return status

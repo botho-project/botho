@@ -21,6 +21,8 @@ CADENCE_FAILURES = frozenset(
     }
 )
 ACCEPTED_AS = "generator_limited (plan opt-in, #1576 decision 1)"
+REHEARSAL_LEAD_SECONDS = 15
+CAMPAIGN_LEAD_SECONDS = 60
 
 # #1618: one admission pass (one run-loop tick) may prepare and submit several
 # due offers. After the first, an attempt starts only while the tick is younger
@@ -336,6 +338,39 @@ class DiscoveryController(Controller):
         self.j.set("inventory_readiness", {"status": "ready", "wallets": evidence})
         return True
 
+    async def start_rehearsal(self):
+        """Wait for confirmed grants to mature on a detached campaign, inside its setup window."""
+        detached = ("prefund_evidence" in self.config
+                    and self.plan.get("execution_mode", "campaign") == "campaign")
+        previous = self.j.get("inventory_readiness") or {}
+        same_height = (detached and previous.get("status") == "waiting_for_inventory"
+                       and self.fleet_height() == previous["height"])
+        if not same_height:
+            height = await self.sync()
+            ready = self.inventory_ready(height)
+        start = time.time() + REHEARSAL_LEAD_SECONDS
+        if detached:
+            earliest_finish = start + self.plan["rehearsal"]["duration_seconds"]
+            setup_end = self.j.get("setup_start") + self.plan["setup_deadline_hours"] * 3600
+            earliest_end = (earliest_finish + CAMPAIGN_LEAD_SECONDS + self.plan["duration_hours"] * 3600
+                            + self.plan["drain_minutes"] * 60)
+            if earliest_finish >= setup_end or earliest_end > self.config["infrastructure_end"]:
+                raise Gate("insufficient fixed lifetime for rehearsal, campaign and drain")
+        if same_height:
+            return None
+        if not ready:
+            readiness = self.j.get("inventory_readiness")
+            if detached and readiness and readiness.get("wallets"):
+                # Further blocks can mature grants or add eligible decoys, even
+                # after every grant has reached its minimum age.
+                wallet = readiness["wallets"][-1]
+                if wallet["unreserved_unspent"] >= self.plan["wallets"]["min_mature_utxos_per_wallet"]:
+                    self.j.set("inventory_readiness", {**readiness, "status": "waiting_for_inventory", "height": height})
+                    return None
+            raise Gate("generator_limited: pre-funded inventory/decoy headroom insufficient")
+        self.j.set("rehearsal_start", start)
+        return start
+
     async def setup_tick(self):
         if self.j.get("status") != "setup":
             raise Gate("setup is not active")
@@ -386,13 +421,9 @@ class DiscoveryController(Controller):
         start = self.j.get("rehearsal_start")
         settings = self.plan["rehearsal"]
         if start is None:
-            height = await self.sync()
-            if not self.inventory_ready(height):
-                raise Gate(
-                    "generator_limited: pre-funded inventory/decoy headroom insufficient"
-                )
-            start = time.time() + 15
-            self.j.set("rehearsal_start", start)
+            start = await self.start_rehearsal()
+            if start is None:
+                return
         offer_seconds = settings["duration_seconds"] - 120
         total = offer_seconds // settings["interval_seconds"]
         events = []
@@ -463,7 +494,7 @@ class DiscoveryController(Controller):
                 )
             self.report()
             return
-        start = time.time() + 60
+        start = time.time() + CAMPAIGN_LEAD_SECONDS
         if start + 72 * 3600 + 1800 > self.config["infrastructure_end"]:
             raise Gate("rehearsal left insufficient fixed infrastructure lifetime")
         with self.j.transaction():
@@ -563,10 +594,12 @@ class DiscoveryController(Controller):
     def materialize(self, events, start, kind, now):
         grace = self.j.limits["start_slot_grace_seconds"]
         cursor = self.j.get("offer_cursor:" + kind, 0)
+        self.next_offer_at = None
         while cursor < len(events):
             event = events[cursor]
             at = start + event["offset_seconds"]
             if at > now:
+                self.next_offer_at = at
                 break
             sender = int(event["sender"].split("-")[-1]) - 1
             recipient = int(event["recipient"].split("-")[-1]) - 1
@@ -746,29 +779,26 @@ class DiscoveryController(Controller):
             ]
             if due:
                 raise Gate("deferred step receipts unverified at phase boundary: " + due[0]["id"])
-            earlier = self.j.rows("kind='campaign' AND offered<?", (boundary,))
-            failed = [
-                r
-                for r in earlier
-                if r["state"]
-                not in (
-                    "reconciled",
-                    "prepared",
-                    "submitting",
-                    "accepted",
-                    "unknown",
-                    "confirmed",
-                )
-            ]
-            if failed:
+            earlier_states = self.j.prior_campaign_states(boundary)
+            if earlier_states.difference(("prepared", "submitting", "accepted", "unknown", "confirmed")):
                 raise Gate("generator_limited: previous phase delivery incomplete")
-            if self.j.pending() or any(r["state"] != "reconciled" for r in earlier):
+            if earlier_states or self.j.has_pending():
                 self.j.set(
                     "boundary_drain", {"phase": phase["id"], "seconds": now - boundary}
                 )
                 if now - boundary > self.j.limits["start_slot_grace_seconds"]:
                     raise Gate("previous phase drain exceeded bounded grace")
                 return
+            # Only the correctness phase needs the signed input counts. Capture
+            # those counts before yielding to sync, as with the delivery states.
+            shapes = None
+            if self.j.get("active_phase") == "correctness":
+                shapes = {
+                    json.loads(row[0]).get("input_count")
+                    for row in self.j.db.execute(
+                        "SELECT info FROM intents WHERE kind='campaign' AND offered<?", (boundary,)
+                    )
+                }
             # Boundary scan (#1629): refetch and compare the whole output
             # history and recheck every key image, but extend wallet
             # ownership incrementally; a 64-wallet full restore_check grows
@@ -779,10 +809,8 @@ class DiscoveryController(Controller):
             scanned = time.time()
             self.accounting()
             accounted = time.time()
-            if self.j.get("active_phase") == "correctness":
-                shapes = {json.loads(r["info"]).get("input_count") for r in earlier}
-                if not {1, 2, 4} <= shapes:
-                    raise Gate("correctness shapes missing")
+            if shapes is not None and not {1, 2, 4} <= shapes:
+                raise Gate("correctness shapes missing")
             if phase["id"] == "recovery":
                 await self.restore_wallet(0)
                 self.j.set("restore_recovery", True)
@@ -855,23 +883,25 @@ class DiscoveryController(Controller):
             and time.time() - cached["at"] < 60
         ):
             return cached
-        report = super().report()
-        quotes = [
+        from reporting import build_controller_report, offer_deferrals, rehearsal_summary
+
+        rows = self.j.rows()
+        report = build_controller_report(self, rows)
+        quotes = (
             json.loads(row[0])
             for row in self.j.db.execute(
                 "SELECT detail FROM events WHERE state='fee_quote'"
             )
-        ]
-        report["fee_coverage"] = summarize_fees(self.j.rows(), quotes)
-        from reporting import offer_deferrals, rehearsal_summary
+        )
+        report["fee_coverage"] = summarize_fees(rows, quotes)
 
         report["rehearsal"] = rehearsal_summary(
             self.j, self.plan, report["artifact_evidence"]
         )
         report["seed"] = self.plan["seed"]
-        rows = self.j.rows("kind='campaign'")
-        delivered = len(rows) == len(self.events) and all(
-            r["state"] == "reconciled" for r in rows
+        campaign_rows = [r for r in rows if r["kind"] == "campaign"]
+        delivered = len(campaign_rows) == len(self.events) and all(
+            r["state"] == "reconciled" for r in campaign_rows
         )
         delivery = (
             "completed"

@@ -262,6 +262,12 @@ class FeeCoverageTests(unittest.TestCase):
         )
         cold["host"] = "a"
         self.assertEqual(summarize_fees([], [hot, cold])["quote_recovery"], "observed")
+        # Journal import order can differ from observation time.
+        self.assertEqual(summarize_fees([], iter([cold, hot]))["quote_recovery"], "observed")
+        for samples in ([hot, {**cold, "at": hot["at"]}],
+                        [{**hot, "height": None}, cold],
+                        [{**hot, "host": None}, {**cold, "host": None}]):
+            self.assertEqual(summarize_fees([], samples)["quote_recovery"], "not_exercised")
         cold["height"] = 10
         self.assertEqual(
             summarize_fees([], [hot, cold])["quote_recovery"], "not_exercised"
@@ -337,6 +343,48 @@ class DiscoveryExecutorTests(unittest.TestCase):
                 with self.assertRaises(Gate):
                     asyncio.run(self.c.campaign_tick())
             self.assertEqual(self.c.j.get("active_phase"), "correctness")
+
+    def test_admission_wakes_for_next_offer_without_publishing_it_early(self):
+        from unittest.mock import patch
+
+        events = [
+            {"intent": f"clock-{i}", "offset_seconds": i * 3, "sender": "wallet-1",
+             "recipient": "wallet-2", "amount_picocredits": "10"}
+            for i in range(2)
+        ]
+        self.c.materialize(events, 1000, "rehearsal", 1002.65)
+        self.assertIsNone(self.c.j.intent("clock-1"))
+        self.assertEqual(self.c.j.get("offer_cursor:rehearsal"), 1)
+        with patch("controller.time.monotonic", return_value=10.05):
+            with patch("controller.time.time", return_value=1002.65):
+                self.assertAlmostEqual(self.c.admission_delay(10), .35)
+            with patch("controller.time.time", return_value=1002.96):
+                self.assertEqual(self.c.admission_delay(10), .2)
+            # A pass that consumed its tick budget still yields.
+            with patch("controller.time.time", return_value=1001):
+                self.assertEqual(self.c.admission_delay(9), .2)
+        self.c.materialize(events, 1000, "rehearsal", 1003.1)
+        self.assertEqual(self.c.j.intent("clock-1")["offered"], 1003)
+        self.assertIsNone(self.c.next_offer_at)
+        with patch("controller.time.monotonic", return_value=11.05):
+            self.assertAlmostEqual(self.c.admission_delay(11), .95)
+
+    def test_rehearsal_wait_records_requested_sleep_and_actual_wakeup(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        sleep = AsyncMock()
+        with patch.object(self.c, 'admission_delay', return_value=.25) as delay, \
+                patch('controller.asyncio.sleep', sleep), \
+                patch('controller.time.perf_counter', side_effect=[5.0, 5.7]), \
+                patch('controller.time.time', side_effect=[1000.0, 1000.7]):
+            asyncio.run(self.c.wait_for_admission(4.9, 'setup'))
+        delay.assert_called_once_with(4.9)
+        sleep.assert_awaited_once_with(.25)
+        wait = self.c.last_admission_wait
+        self.assertEqual((wait['requested_at'], wait['requested_seconds'], wait['resumed_at']),
+                         (1000.0, .25, 1000.7))
+        self.assertAlmostEqual(wait['elapsed_seconds'], .7)
 
     def test_downtime_materializes_missed_offers_once_without_replay(self):
         events = [
