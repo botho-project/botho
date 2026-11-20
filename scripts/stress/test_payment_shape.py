@@ -293,6 +293,28 @@ class MeasuredFeesTests(unittest.TestCase):
                          {"source": "controller_snapshot", "health_sha256": health_sha,
                           "snapshot_sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest()})
 
+        # The assembler calls prepare with the saved profile alone. Install repeats this after a disconnect.
+        profile["part_a_fee_evidence"] = staging.part_a_fee_sources(profile["plan_file"], *inputs, snapshot_path)
+        snapshot_raw = snapshot_path.read_bytes()
+        snap_sha = hashlib.sha256(snapshot_raw).hexdigest()
+        self.assertEqual(profile["part_a_fee_evidence"]["snapshot"], {"file": str(snapshot_path), "sha256": snap_sha})
+        fixture.profile.write_text(json.dumps(profile))
+        packed = staging.prepare(profile)[0][1]["state/part-a-fees.json"][0]
+        self.assertEqual(json.loads(packed)["part_a_input_sha256"]["snapshot"], snap_sha)
+        snapshot_path.write_bytes(snapshot_raw + b"\n")
+        with patch("staging.subprocess.run") as remote, self.assertRaisesRegex(Gate, "input changed: snapshot"):
+            staging.stage(fixture.profile, output, execute=True)
+        remote.assert_not_called()
+        self.assertFalse(output.exists())
+        mirror = fixture.root / "mirror.json"
+        mirror.write_bytes(snapshot_raw)
+        snapshot_path.unlink()
+        self.assertEqual(staging.prepare(profile, mirror)[0][1]["state/part-a-fees.json"][0], packed)
+        mirror.write_bytes(snapshot_raw + b" ")
+        with self.assertRaisesRegex(Gate, "input changed: snapshot"):
+            staging.prepare(profile, mirror)
+        snapshot_path.write_bytes(snapshot_raw)
+
         # Refreeze the changed file as an operator would when assembling a new campaign.
         self.funding["fee_floor_quotes"]["p99"]["resign_fee_picocredits"] -= 1
         inputs[2].write_text(json.dumps(self.funding))

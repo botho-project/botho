@@ -1214,8 +1214,12 @@ its own deployment endpoints and genesis.
 Campaign staging checks the SHA-256 of the funding file against the digest
 the Part A controller received at launch. For an older controller report
 that predates this field, supply the original controller journal snapshot
-(`payment-replay/snapshot.json`) with `--rehearsal-snapshot PATH` on both
-`payment_shape.py` and `deploy.py stage`. The snapshot identifies the attempt,
+(`payment-replay/snapshot.json`) with `--rehearsal-snapshot PATH` when running
+`payment_shape.py` and `assemble.py deploy-profile`. Assembly freezes its
+path and digest with the fee inputs. Both forms of `deploy.py stage` then
+read it from the saved profile. An explicit `--rehearsal-snapshot PATH` on
+staging can select a byte-identical copy or supply the snapshot for an
+older profile that only records the three fee files. The snapshot identifies the attempt,
 setup time, staged plan and funding file. The campaign receipt records the
 funding digest, its source and the snapshot digest when supplied. A fee
 projection from legacy reports alone is labelled `plan_only`. Campaign
@@ -1230,7 +1234,7 @@ recompute the decision using the actual signer bytes and the configured
 node digest before writing bundles or contacting the hosts. A successful
 stage puts the exact campaign plan and the resulting `part-a-fees.json`
 in the controller state directory. The receipt includes the digests of the
-three Part A inputs and the fee decision for each cap. Both x2 deployment
+Part A inputs frozen in the profile and the fee decision for each cap. Both x2 deployment
 modes check the plan's protocol against the protocol its controller expects
 from all five validators at startup.
 

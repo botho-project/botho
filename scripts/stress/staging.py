@@ -40,10 +40,13 @@ def read_file(path, private=False):
     return path.read_bytes()
 
 
-def part_a_fee_sources(campaign_plan, rehearsal_plan, rehearsal_report, funding_health):
+def part_a_fee_sources(campaign_plan, rehearsal_plan, rehearsal_report, funding_health, rehearsal_snapshot=None):
     """Freeze local inputs when the operator assembles the campaign profile."""
     sources = {'campaign_plan_sha256': hashlib.sha256(read_file(str(campaign_plan))).hexdigest()}
-    for key, path in (('plan', rehearsal_plan), ('report', rehearsal_report), ('funding', funding_health)):
+    paths = {'plan': rehearsal_plan, 'report': rehearsal_report, 'funding': funding_health}
+    if rehearsal_snapshot is not None:
+        paths['snapshot'] = rehearsal_snapshot
+    for key, path in paths.items():
         path = str(Path(path).absolute())
         sources[key] = {'file': path, 'sha256': hashlib.sha256(read_file(path)).hexdigest()}
     return sources
@@ -67,16 +70,19 @@ def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256, rehearsal_snaps
     need(evidence.get('campaign_plan_sha256') == hashlib.sha256(plan_raw).hexdigest(),
          'campaign plan differs from the frozen fee evidence')
     inputs, hashes = {}, {}
-    for key in ('plan', 'report', 'funding'):
+    snapshot_raw = read_file(str(Path(rehearsal_snapshot).absolute())) if rehearsal_snapshot is not None else None
+    keys = ['plan', 'report', 'funding']
+    if 'snapshot' in evidence:
+        keys.append('snapshot')
+    for key in keys:
         item = evidence.get(key)
         need(isinstance(item, dict) and isinstance(item.get('file'), str), 'missing Part A fee input: ' + key)
-        inputs[key] = read_file(item['file'])
+        inputs[key] = snapshot_raw if key == 'snapshot' and snapshot_raw is not None else read_file(item['file'])
         hashes[key] = hashlib.sha256(inputs[key]).hexdigest()
         need(hashes[key] == item.get('sha256'), 'Part A fee input changed: ' + key)
     pin = {'commit': plan['node_commit'], 'node_sha256': profile['node_sha256'], 'signer_sha256': signer_sha256}
-    snapshot_raw = read_file(str(Path(rehearsal_snapshot).absolute())) if rehearsal_snapshot is not None else None
     receipt = campaign_fee_check(inputs['plan'], json.loads(inputs['report']), inputs['funding'],
-                                 plan_raw, pin, snapshot_raw)
+                                 plan_raw, pin, inputs.get('snapshot', snapshot_raw))
     need(receipt['status'] == 'within_cap', 'Part A fee decision: ' + receipt['status'])
     return {**receipt, 'part_a_input_sha256': hashes}
 
