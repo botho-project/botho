@@ -67,6 +67,7 @@ class Fleet:
         self.unsubmitted = set()
         self.unconfirmed = set()
         self.unspent = set()  # chain_areKeyImagesSpent reports spent: False
+        self.spend_height = {h: 100 for h in HOSTS}
         self.metrics_down = set()  # metrics server unreachable (#1591)
         # Metrics-server loop counters (#1591); a restart resets them.
         self.loop = {h: {"iterations": 1000, "within_1s": 1000, "delayed": 0} for h in HOSTS}
@@ -122,7 +123,8 @@ class Fleet:
             return {"txHash": params["hash"], "blockHeight": 100,
                     "fee": self.receipt_fee[host], "outputCount": 1, "totalOutput": 1000}
         if method == "chain_areKeyImagesSpent":
-            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False}
+            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False,
+                     "spentHeight": self.spend_height[host] if host not in self.unspent else None}
                     for k in params["keyImages"]]
         if method == "chain_getOutputs":
             return [{"height": i, "outputs": []}
@@ -710,6 +712,24 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.held())
         self.assertIn("spent-input state disagreement", self.reason())
         self.assertIn("deferred_hosts", json.loads(self.c.j.intent("pay")["info"]))
+
+    async def test_wrong_spend_height_on_rejoined_host_keeps_deferred_evidence(self):
+        self.now = at("D1", "fault_start") + 60
+        self.fleet.stop(A)
+        self.accepted_row()
+        await self.reconcile(2)
+        self.assertEqual(self.c.j.intent("pay")["state"], "reconciled")
+        self.now = at("D1", "window_end") + 1
+        self.fleet.start(A)
+        self.settle()
+        self.fleet.spend_height[A] = 101
+        self.c.closed = False
+        await self.reconcile(1)
+        self.assertTrue(self.held())
+        self.assertIn("spent-input height", self.reason())
+        info = json.loads(self.c.j.intent("pay")["info"])
+        self.assertEqual(info["deferred_hosts"], [A])
+        self.assertNotIn("deferred_verified", info)
 
     async def test_spent_check_during_step_defers_the_named_host(self):
         # Confirmed on all five before D1, scanned during it: the spent

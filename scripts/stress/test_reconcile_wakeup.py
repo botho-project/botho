@@ -6,8 +6,23 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from controller import Controller
-from runtime import HOSTS, Journal
+from controller import Controller, check_spent_inputs
+from runtime import Gate, HOSTS, Journal
+
+
+class SpentInputTests(unittest.TestCase):
+    def test_each_input_needs_typed_finalized_height_and_matching_identity(self):
+        first = {'keyImage': 'a', 'spent': True, 'spentHeight': 1}
+        second = {**first, 'keyImage': 'b'}
+        check_spent_inputs(['a','b'], 1, [[first,second], [first,second]])
+        for bad in ({'spentHeight': True}, {'spentHeight': 1.0}, {'spentHeight': None},
+                    {'spent': 1}, {'keyImage': 'a'}, {'error': 'unavailable'}):
+            with self.subTest(bad=bad), self.assertRaises(Gate):
+                check_spent_inputs(['a','b'], 1, [[first,second], [first,{**second, **bad}]])
+        with self.assertRaises(Gate):
+            check_spent_inputs(['a','b'], 1, [[first,{'keyImage':'b','spent':True}]])
+        with self.assertRaises(Gate):
+            check_spent_inputs(['a','b'], 1, [[first]])
 
 
 class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
@@ -42,6 +57,7 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
         self.calls = []
         self.bad_receipt = self.bad_spent = False
         self.receipt_fields = {}
+        self.spend_height = 100
         self.c.rpc = Mock(call=AsyncMock(side_effect=self.rpc))
 
     def finished(self):
@@ -57,7 +73,7 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
                 'fee': 11 if self.bad_receipt and host == HOSTS[-1] else 10,
                 'outputCount': 1, 'totalOutput': 1000, **self.receipt_fields}
         if method == 'chain_areKeyImagesSpent':
-            return [{'keyImage': 'image', 'spent': not self.bad_spent}]
+            return [{'keyImage': 'image', 'spent': not self.bad_spent, 'spentHeight': self.spend_height}]
         raise AssertionError('unexpected RPC/write: ' + method)
 
     async def run_reconciler(self, advances):
@@ -170,6 +186,21 @@ class ReconcileWakeupTests(unittest.IsolatedAsyncioTestCase):
         await self.run_reconciler([(5, 100, True)])
         self.assertEqual(self.c.j.intent('confirmed')['state'], 'confirmed')
         self.assertIn('integer', self.c.j.get('reason'))
+
+    async def test_wrong_spend_height_keeps_confirmed_inputs_reserved(self):
+        self.spend_height = 99  # All five validators agree on a different block.
+        await self.run_reconciler([(5, 100, True)])
+        self.assertEqual(self.c.j.get('status'), 'held')
+        self.assertIn('spent-input height', self.c.j.get('reason'))
+        self.assertEqual(self.c.j.intent('confirmed')['state'], 'confirmed')
+        self.assertEqual(self.c.j.db.execute('SELECT input FROM reservations').fetchone()[0], 'input')
+
+    async def test_negative_receipt_height_is_rejected_before_caching(self):
+        self.receipt_fields['blockHeight'] = -1
+        await self.run_reconciler([(5, 100, True)])
+        self.assertEqual(self.c.j.intent('confirmed')['state'], 'accepted')
+        self.assertIn('uint64', self.c.j.get('reason'))
+        self.c.sync.assert_not_awaited()
 
     async def test_height_wakes_do_not_shift_unconfirmed_poll_deadline(self):
         await self.run_reconciler([(5, 99, True), (5, 99, True),

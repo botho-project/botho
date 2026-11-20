@@ -194,12 +194,30 @@ def check_transaction_receipts(row, info, receipts):
     if any(type(r.get(k)) is not int for r in receipts
            for k in ('blockHeight', 'fee', 'outputCount', 'totalOutput')):
         raise Gate('signed payment receipt must report integer height, fee, count and total')
-    _, fee, count, total = shapes.pop()
+    height, fee, count, total = shapes.pop()
+    if not 0 <= height < 2**64:
+        raise Gate('signed payment receipt block height outside uint64 range')
     if fee != row['fee']:
         raise Gate('node receipt fee differs from signed fee')
     outputs = info['outputs']
     if count != len(outputs) or total != sum(o['amount'] for o in outputs):
         raise Gate('node receipt count or total differs from signed outputs')
+
+
+def check_spent_inputs(key_images, block_height, responses):
+    """Require every validator to locate every signed input at the receipt height."""
+    if not key_images or not responses:
+        raise Gate('spent-input state disagreement: missing input evidence')
+    for results in responses:
+        if not isinstance(results, list) or len(results) != len(key_images):
+            raise Gate('spent-input state disagreement: incomplete response')
+        for image, result in zip(key_images, results):
+            if (not isinstance(result, dict) or 'error' in result
+                    or result.get('keyImage') != image or result.get('spent') is not True):
+                raise Gate('spent-input state disagreement')
+            height = result.get('spentHeight')
+            if type(height) is not int or height != block_height:
+                raise Gate('spent-input height differs from transaction receipt')
 
 
 class SelectionHistory:
@@ -1724,8 +1742,7 @@ class Controller:
                         view = self.fault_view()
                         checked = self.live_hosts(view=view)
                         states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in checked))
-                        if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
-                            raise Gate('spent-input state disagreement')
+                        check_spent_inputs(info['key_images'], receipts[0]['blockHeight'], states)
                         if len(checked) != len(HOSTS):
                             # Spent state not yet seen on the named hosts:
                             # they join the post-window re-verification.
@@ -1778,8 +1795,7 @@ class Controller:
             check_transaction_receipts(row, info, [*saved.values(), *receipts])
             if row['kind'] != 'funding':
                 states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in hosts))
-                if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
-                    raise Gate('spent-input state disagreement')
+                check_spent_inputs(info['key_images'], receipts[0]['blockHeight'], states)
             saved.update(zip(hosts,receipts))
             del info['deferred_hosts']
             info['deferred_verified'] = {'step': window['step'], 'hosts': hosts, 'at': time.time()}
