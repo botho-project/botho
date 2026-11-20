@@ -687,6 +687,26 @@ checks. The setup deadline and infrastructure end remain fixed. The controller
 starts the 72-hour clock only after its own rehearsal passes with enough time
 for the full campaign and drain.
 
+### Check receiving-node timing after a rehearsal
+
+Use the installed plan and a stopped, checkpointed copy of the controller
+journal to bound the time each payment could have reached its ingress node.
+
+```sh
+python3 scripts/stress/rehearsal_arrivals.py payment-journal.sqlite rehearsal-plan.json
+```
+
+For each payment the request reservation precedes network transmission, and
+the controller records acknowledgment after the ingress returns the signed
+transaction hash. Both timestamps use the controller's wall clock. Their
+interval bounds arrival assuming that clock advances normally during the
+rehearsal. The audit checks the plan pin, the successful RPC, the original
+offer clock and the five validator receipts. A rolling window is
+`indeterminate` when the possible span crosses a tolerance boundary.
+Use `--details` for each payment's bounds and the original marker verdict
+for each window. The controller's recorded grade continues to use its durable
+submission markers.
+
 ### Inventory and short rehearsal prerequisites
 
 Use the existing explicit `deploy.py stage --profile ... --output ...` path,
