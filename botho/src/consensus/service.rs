@@ -1493,10 +1493,7 @@ impl ConsensusService {
             self.last_externalized_at.map(|t| t.elapsed().as_secs());
         // Stall clock: time since we last made externalization progress,
         // falling back to service start before the first externalization.
-        let since_progress = self
-            .last_externalized_at
-            .unwrap_or(self.started_at)
-            .elapsed();
+        let since_progress = self.time_since_externalization();
         let slot_stalled =
             scp_slot_active && since_progress > slot_duration * SLOT_STALL_THRESHOLD_MULTIPLIER;
 
@@ -1545,6 +1542,30 @@ impl ConsensusService {
 
         self.pending_values.insert(value);
         debug!(?value, "Transaction submitted for consensus");
+    }
+
+    fn time_since_externalization(&self) -> Duration {
+        self.last_externalized_at
+            .unwrap_or(self.started_at)
+            .elapsed()
+    }
+
+    /// Return the mint that peers need to validate our proposal for a stalled
+    /// slot.
+    pub fn stalled_proposed_mint(&self) -> Option<crate::block::MintingTx> {
+        let proposed = self
+            .proposed_values
+            .iter()
+            .find(|value| value.is_minting_tx)?;
+        // A proposal may wait for another nomination leader before this
+        // node has any votes of its own. Peers still need the proposed mint.
+        if self.externalized.is_some()
+            || self.time_since_externalization()
+                <= self.current_slot_duration() * SLOT_STALL_THRESHOLD_MULTIPLIER
+        {
+            return None;
+        }
+        bincode::deserialize(&self.get_tx_data(&proposed.tx_hash)?).ok()
     }
 
     /// Submit a minting transaction for consensus
@@ -5247,6 +5268,59 @@ mod tests {
             "chain wedged: slot only reached {}",
             a.current_slot()
         );
+    }
+
+    #[test]
+    fn stalled_mint_retry_serves_the_pinned_proposal_until_decision() {
+        let cfg = ConsensusConfig::fixed_timing(1);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut owner =
+            ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut peer = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let mint = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        owner.submit_minting_tx(
+            mint.hash(),
+            mint.pow_priority(),
+            bincode::serialize(&mint).unwrap(),
+        );
+        assert!(owner.stalled_proposed_mint().is_none());
+
+        owner.propose_pending_values();
+        assert!(owner
+            .proposed_values
+            .iter()
+            .any(|v| v.tx_hash == mint.hash()));
+        assert!(
+            owner.stalled_proposed_mint().is_none(),
+            "healthy nomination"
+        );
+        let later = intrinsic_valid_minting_tx(2, [0; 32], 1);
+        owner.submit_minting_tx(
+            later.hash(),
+            later.pow_priority(),
+            bincode::serialize(&later).unwrap(),
+        );
+        owner.last_externalized_at = Some(Instant::now() - Duration::from_secs(5));
+        let retry = owner
+            .stalled_proposed_mint()
+            .expect("stalled local proposal");
+        assert_eq!(retry.hash(), mint.hash());
+        TransactionValidator::validate_minting_tx_intrinsic(&retry).unwrap();
+        peer.register_minting_tx(retry.hash(), bincode::serialize(&retry).unwrap());
+        assert!(
+            peer.stalled_proposed_mint().is_none(),
+            "registration does not nominate"
+        );
+
+        let (a, b) =
+            run_two_services_with_pause(&mut owner, &mut peer, 300, Duration::from_millis(10));
+        let decided = a.expect("owner externalized");
+        assert_eq!(Some(&decided), b.as_ref());
+        assert_eq!(decided.len(), 1);
+        assert_eq!(decided[0].tx_hash, mint.hash());
+        assert!(owner.stalled_proposed_mint().is_none());
+        owner.advance_slot();
+        assert!(owner.stalled_proposed_mint().is_none());
     }
 
     /// REPRODUCTION probe (issue #998): the gossip/SCP delivery RACE. A peer
