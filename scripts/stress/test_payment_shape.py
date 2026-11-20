@@ -169,8 +169,10 @@ class MeasuredFeesTests(unittest.TestCase):
         candidate = {**PLAN, "endpoints": list(PLAN["endpoints"]), "genesis": "a" * 64}
         pin = {"commit": candidate["node_commit"], "node_sha256": "b" * 64, "signer_sha256": "c" * 64}
         self.rehearsal.update(node_sha256=pin["node_sha256"], signer_sha256=pin["signer_sha256"])
+        funding_raw = json.dumps(self.funding).encode()
+        self.rehearsal.update(run_id="part-a", prefund_health_sha256=hashlib.sha256(funding_raw).hexdigest())
         def check(c, p):
-            return ps.campaign_fee_check(self.raw, self.rehearsal, self.funding, json.dumps(c).encode(), p)
+            return ps.campaign_fee_check(self.raw, self.rehearsal, funding_raw, json.dumps(c).encode(), p)
         good = check(candidate, pin)
         self.assertEqual(good["status"], "within_cap")
         self.assertEqual(good["campaign"]["replayed_payments_including_rehearsal"], 22240)
@@ -217,6 +219,8 @@ class MeasuredFeesTests(unittest.TestCase):
             profile["wallets"].append({"address": str(index), "key": str(key)})
         self.rehearsal.update(run_id="separate-rehearsal-a", node_sha256=profile["node_sha256"],
                               signer_sha256=hashlib.sha256(Path(profile["signer"]).read_bytes()).hexdigest())
+        self.rehearsal.update(setup_start=1750000000,
+                              prefund_health_sha256=hashlib.sha256(json.dumps(self.funding).encode()).hexdigest())
         inputs = [fixture.root / name for name in ("part-a.json", "report.json", "funding.json")]
         for path, raw in zip(inputs, (self.raw, json.dumps(self.rehearsal).encode(), json.dumps(self.funding).encode())):
             path.write_bytes(raw)
@@ -242,7 +246,66 @@ class MeasuredFeesTests(unittest.TestCase):
         self.assertEqual(receipt["part_a_input_sha256"],
                          {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in zip(("plan", "report", "funding"), inputs)})
         self.assertEqual(receipt["status"], "within_cap")
+        self.assertEqual(receipt["funding_provenance"], {"source": "controller_report",
+                                                        "health_sha256": receipt["part_a_input_sha256"]["funding"]})
         self.assertEqual(receipt["campaign"]["replayed_payments_including_rehearsal"], 22240)
+
+    def test_legacy_snapshot_and_modern_report_bind_the_exact_health_file(self):
+        import staging
+
+        fixture, profile, inputs = self.staging_profile()
+        output = fixture.root / "stage"
+        snapshot_path = fixture.root / "snapshot.json"
+        health_sha = self.rehearsal.pop("prefund_health_sha256")
+        snapshot = {"run_id": self.rehearsal["run_id"], "setup_start": self.rehearsal["setup_start"],
+                    "mode": "rehearsal_only", "plan_digest": digest(self.plan),
+                    "plan_sha256": self.funding["plan_sha256"],
+                    "funding": {"health_sha256": health_sha, "plan_sha256": self.funding["plan_sha256"]}}
+        snapshot.update(stage="journal", launch_digest="d" * 64,
+                        meta={"opening_verified": True, "launch_digest": "d" * 64,
+                              "setup_start": snapshot["setup_start"], "plan_digest": snapshot["plan_digest"]})
+        inputs[1].write_text(json.dumps(self.rehearsal))
+
+        def freeze_profile():
+            profile["part_a_fee_evidence"] = staging.part_a_fee_sources(profile["plan_file"], *inputs)
+            fixture.profile.write_text(json.dumps(profile))
+
+        def refuses(message, path):
+            with patch("staging.subprocess.run") as remote, self.assertRaisesRegex(ValueError, message):
+                staging.stage(fixture.profile, output, execute=True, rehearsal_snapshot=path)
+            remote.assert_not_called()
+            self.assertFalse(output.exists())
+
+        freeze_profile()
+        refuses("requires --rehearsal-snapshot", None)
+        for key, value in (("run_id", "different-attempt"), ("mode", "campaign"), ("setup_start", 5),
+                           ("plan_sha256", "a" * 64), ("plan_digest", "b" * 64),
+                           ("funding", dict(snapshot["funding"], plan_sha256="c" * 64))):
+            snapshot_path.write_text(json.dumps({**snapshot, key: value}))
+            refuses("snapshot differs|snapshot journal", snapshot_path)
+        for key, value in (("launch_digest", "e" * 64), ("opening_verified", False)):
+            snapshot_path.write_text(json.dumps(dict(snapshot, meta={**snapshot["meta"], key: value})))
+            refuses("snapshot journal", snapshot_path)
+        snapshot_path.write_text(json.dumps(snapshot))
+        bundles = staging.prepare(profile, snapshot_path)
+        receipt = json.loads(bundles[0][1]["state/part-a-fees.json"][0])
+        self.assertEqual(receipt["funding_provenance"],
+                         {"source": "controller_snapshot", "health_sha256": health_sha,
+                          "snapshot_sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest()})
+
+        # Refreeze the changed file as an operator would when assembling a new campaign.
+        self.funding["fee_floor_quotes"]["p99"]["resign_fee_picocredits"] -= 1
+        inputs[2].write_text(json.dumps(self.funding))
+        freeze_profile()
+        refuses("snapshot funding health digest mismatch", snapshot_path)
+        self.rehearsal["prefund_health_sha256"] = health_sha
+        inputs[1].write_text(json.dumps(self.rehearsal))
+        freeze_profile()
+        refuses("controller funding health digest mismatch", None)
+        # A matching alternative snapshot cannot override the controller's own digest.
+        snapshot["funding"]["health_sha256"] = hashlib.sha256(inputs[2].read_bytes()).hexdigest()
+        snapshot_path.write_text(json.dumps(snapshot))
+        refuses("controller funding health digest mismatch", snapshot_path)
 
     def test_campaign_stage_stops_before_ssh_or_archiving_for_invalid_fees(self):
         import staging

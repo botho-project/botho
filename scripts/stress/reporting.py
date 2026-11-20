@@ -618,6 +618,8 @@ def build_controller_report(self, rows):
             "lottery_v2_spend": award_spend_expectation(self.j)["status"] == "pass",
         },
     }
+    if "prefund_evidence" in self.config:
+        report["prefund_health_sha256"] = self.config["prefund_evidence"].get("health_sha256")
     return report
 
 

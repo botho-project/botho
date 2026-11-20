@@ -536,7 +536,39 @@ def complete_p99(summary, expected, numerator, denominator=None):
     return fee, moved
 
 
-def campaign_fee_check(plan_bytes, rehearsal, funding, campaign_bytes, pin):
+def verified_funding(plan_bytes, rehearsal, funding_bytes, snapshot_bytes=None):
+    """Link the supplied health file to the controller that consumed it."""
+    require(isinstance(rehearsal.get("run_id"), str) and rehearsal["run_id"],
+            "missing rehearsal run ID")
+    actual = hashlib.sha256(funding_bytes).hexdigest()
+    source = {"health_sha256": actual}
+    if "prefund_health_sha256" in rehearsal:
+        require(rehearsal["prefund_health_sha256"] == actual, "controller funding health digest mismatch")
+        source["source"] = "controller_report"
+    if snapshot_bytes is not None:
+        snapshot = json.loads(snapshot_bytes)
+        plan_sha = hashlib.sha256(plan_bytes).hexdigest()
+        journal = snapshot["meta"]
+        require(snapshot["stage"] == "journal" and journal["opening_verified"] is True
+                and re.fullmatch("[0-9a-f]{64}", snapshot["launch_digest"])
+                and journal["launch_digest"] == snapshot["launch_digest"]
+                and journal["plan_digest"] == snapshot["plan_digest"]
+                and journal["setup_start"] == snapshot["setup_start"],
+                "snapshot journal does not confirm the prefunded launch")
+        require(snapshot["mode"] == "rehearsal_only" and snapshot["run_id"] == rehearsal["run_id"]
+                and type(snapshot["setup_start"]) in (float, int) and snapshot["setup_start"] > 0
+                and snapshot["setup_start"] == rehearsal["setup_start"]
+                and snapshot["plan_digest"] == rehearsal["plan_sha256"]
+                and snapshot["plan_sha256"] == snapshot["funding"]["plan_sha256"] == plan_sha,
+                "controller snapshot differs from rehearsal attempt or plan")
+        require(snapshot["funding"]["health_sha256"] == actual, "snapshot funding health digest mismatch")
+        source.setdefault("source", "controller_snapshot")
+        source["snapshot_sha256"] = hashlib.sha256(snapshot_bytes).hexdigest()
+    require("source" in source, "legacy report requires --rehearsal-snapshot to verify funding")
+    return source
+
+
+def campaign_fee_check(plan_bytes, rehearsal, funding_bytes, campaign_bytes, pin, snapshot_bytes=None):
     """Bind the Part A measurement to the payload pins and payment plan for Part B."""
     plan = json.loads(plan_bytes)
     campaign = json.loads(campaign_bytes)
@@ -554,7 +586,8 @@ def campaign_fee_check(plan_bytes, rehearsal, funding, campaign_bytes, pin):
         candidate = pin.get(key)
         require(isinstance(candidate, str) and re.fullmatch("[0-9a-f]{64}", candidate)
                 and candidate == rehearsal.get(key), "campaign pin differs from rehearsal: " + key)
-    result = measured_fee_check(plan_bytes, rehearsal, funding)
+    result = measured_fee_check(plan_bytes, rehearsal, json.loads(funding_bytes))
+    result["funding_provenance"] = verified_funding(plan_bytes, rehearsal, funding_bytes, snapshot_bytes)
     replay = preflight(campaign)["coverage"]
     result["campaign"] = {"plan_file_sha256": hashlib.sha256(campaign_bytes).hexdigest(),
                           "node_sha256": pin["node_sha256"], "signer_sha256": pin["signer_sha256"],
@@ -569,21 +602,30 @@ def main():
     parser.add_argument("--funding-health", type=Path, help="same fleet's prefund health report")
     parser.add_argument("--campaign-plan", type=Path, help="Part B candidate workload plan")
     parser.add_argument("--campaign-pin", type=Path, help="Part B node and signer installation pin")
+    parser.add_argument("--rehearsal-snapshot", type=Path, help="retained controller snapshot for a legacy Part A report")
     args = parser.parse_args()
     try:
         measured = args.rehearsal_report is not None or args.funding_health is not None
+        if args.rehearsal_snapshot:
+            require(args.funding_health and args.rehearsal_report, "--rehearsal-snapshot requires both Part A reports")
+        plan_raw = args.plan.read_bytes()
+        report = json.loads(args.rehearsal_report.read_bytes()) if args.rehearsal_report else None
+        funding_raw = args.funding_health.read_bytes() if args.funding_health else None
+        snapshot_raw = args.rehearsal_snapshot.read_bytes() if args.rehearsal_snapshot else None
         if args.campaign_plan or args.campaign_pin:
             require(all((args.campaign_plan, args.campaign_pin, args.funding_health, args.rehearsal_report)),
                     "campaign comparison requires --campaign-plan, --campaign-pin, --rehearsal-report and --funding-health")
-            result = campaign_fee_check(args.plan.read_bytes(), json.loads(args.rehearsal_report.read_bytes()),
-                                        json.loads(args.funding_health.read_bytes()), args.campaign_plan.read_bytes(),
-                                        json.loads(args.campaign_pin.read_bytes()))
+            result = campaign_fee_check(plan_raw, report, funding_raw, args.campaign_plan.read_bytes(),
+                                        json.loads(args.campaign_pin.read_bytes()), snapshot_raw)
         elif measured:
-            result = measured_fee_check(args.plan.read_bytes(),
-                                        json.loads(args.rehearsal_report.read_text()) if args.rehearsal_report else None,
-                                        json.loads(args.funding_health.read_text()) if args.funding_health else None)
+            result = measured_fee_check(plan_raw, report, json.loads(funding_raw) if funding_raw is not None else None)
+            if report is not None and funding_raw is not None:
+                if snapshot_raw is not None or "prefund_health_sha256" in report:
+                    result["funding_provenance"] = verified_funding(plan_raw, report, funding_raw, snapshot_raw)
+                else:
+                    result["funding_provenance"] = {"source": "plan_only"}
         else:
-            result = preflight(json.loads(args.plan.read_text()))
+            result = preflight(json.loads(plan_raw))
     except (ValueError, KeyError, TypeError, OSError) as error:
         parser.error(str(error))
     print(json.dumps(result, indent=2))

@@ -105,6 +105,14 @@ class TerminalReportingTests(unittest.TestCase):
         }
         self.c.j.set("accounting", self.opening)
 
+    def test_controller_report_records_funding_health_digest_from_launch(self):
+        self.c.j.set("status", "held")
+        self.assertNotIn("prefund_health_sha256", self.c.report())
+        self.c.config["prefund_evidence"] = {"health_sha256": "a" * 64}
+        self.assertEqual(self.c.report()["prefund_health_sha256"], "a" * 64)
+        saved = json.loads((self.c.state / "report.json").read_bytes())
+        self.assertEqual(saved["prefund_health_sha256"], "a" * 64)
+
     def test_discovery_validation_finishes_before_report_publication(self):
         report_file = self.c.state / "report.json"
         previous = self.c.report()

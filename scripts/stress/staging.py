@@ -49,7 +49,7 @@ def part_a_fee_sources(campaign_plan, rehearsal_plan, rehearsal_report, funding_
     return sources
 
 
-def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256):
+def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256, rehearsal_snapshot=None):
     """Recompute the Part A fee decision on the bytes going into this bundle."""
     fleet = RUN_ID.fullmatch(profile['run_id'])
     campaign = plan.get('execution_mode', 'campaign') == 'campaign'
@@ -58,6 +58,7 @@ def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256):
     if x2 or evidence is not None:
         need(plan.get('protocol') == PROTOCOL_VERSION, 'plan protocol differs from controller preflight')
     if evidence is None:
+        need(rehearsal_snapshot is None, 'rehearsal snapshot requires Part A fee evidence')
         need(not (x2 and campaign), 'x2 campaign requires Part A fee evidence')
         return None
     from payment_shape import campaign_fee_check
@@ -73,8 +74,9 @@ def campaign_fee_receipt(profile, plan, plan_raw, signer_sha256):
         hashes[key] = hashlib.sha256(inputs[key]).hexdigest()
         need(hashes[key] == item.get('sha256'), 'Part A fee input changed: ' + key)
     pin = {'commit': plan['node_commit'], 'node_sha256': profile['node_sha256'], 'signer_sha256': signer_sha256}
-    receipt = campaign_fee_check(inputs['plan'], json.loads(inputs['report']), json.loads(inputs['funding']),
-                                 plan_raw, pin)
+    snapshot_raw = read_file(str(Path(rehearsal_snapshot).absolute())) if rehearsal_snapshot is not None else None
+    receipt = campaign_fee_check(inputs['plan'], json.loads(inputs['report']), inputs['funding'],
+                                 plan_raw, pin, snapshot_raw)
     need(receipt['status'] == 'within_cap', 'Part A fee decision: ' + receipt['status'])
     return {**receipt, 'part_a_input_sha256': hashes}
 
@@ -202,7 +204,7 @@ def prefund_template(profile, plan, plan_raw, launch):
     return {'manifest': remote, 'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'launch': launch}
 
 
-def prepare(profile):
+def prepare(profile, rehearsal_snapshot=None):
     """Return sealed component bundles in memory; no files, SSH or units written."""
     need(profile.get('schema_version') == 1, 'unsupported deployment profile')
     run_id = profile['run_id']
@@ -252,7 +254,7 @@ def prepare(profile):
     need(ipaddress.ip_address(profile['controller_ip']).is_private, 'private controller address required')
     signer = read_file(profile['signer'])
     signer_sha256 = hashlib.sha256(signer).hexdigest()
-    fee_receipt = campaign_fee_receipt(profile, plan, plan_raw, signer_sha256)
+    fee_receipt = campaign_fee_receipt(profile, plan, plan_raw, signer_sha256, rehearsal_snapshot)
     wallets = profile['wallets']
     wallet_count = plan['wallets']['count']
     need(len(wallets)==wallet_count and len({w['address'] for w in wallets})==wallet_count and len({w['key'] for w in wallets})==wallet_count, 'manifest requires distinct wallet addresses and files')
@@ -385,7 +387,7 @@ print(json.dumps({'unit':item['unit'],'status':'staged-inactive','archive_sha256
 '''
 
 
-def stage(profile_path, output, execute=False, replace_observer_keys=False):
+def stage(profile_path, output, execute=False, replace_observer_keys=False, rehearsal_snapshot=None):
     """Seal one archive per component; with `execute`, install each INACTIVE.
 
     `replace_observer_keys` lets a staging retry replace an earlier attempt's
@@ -393,7 +395,7 @@ def stage(profile_path, output, execute=False, replace_observer_keys=False):
     replaced, so the retry still needs fresh state/package/unit/wrapper paths.
     """
     profile = json.loads(Path(profile_path).read_text())
-    bundles = prepare(profile)
+    bundles = prepare(profile, rehearsal_snapshot)
     output = Path(output)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     results = []

@@ -1211,6 +1211,16 @@ settings, and replays the candidate's full workload. The resulting receipt
 identifies the exact candidate plan by its file digest. Each fleet supplies
 its own deployment endpoints and genesis.
 
+Campaign staging checks the SHA-256 of the funding file against the digest
+the Part A controller received at launch. For an older controller report
+that predates this field, supply the original controller journal snapshot
+(`payment-replay/snapshot.json`) with `--rehearsal-snapshot PATH` on both
+`payment_shape.py` and `deploy.py stage`. The snapshot identifies the attempt,
+setup time, staged plan and funding file. The campaign receipt records the
+funding digest, its source and the snapshot digest when supplied. A fee
+projection from legacy reports alone is labelled `plan_only`. Campaign
+staging requires the matching controller record.
+
 When assembling the protocol-10 x2 campaign deployment profile, supply the
 three original Part A files. The operator's `assemble.py deploy-profile`
 accepts `--part-a-fees REHEARSAL_PLAN REPORT FUNDING_HEALTH` and records

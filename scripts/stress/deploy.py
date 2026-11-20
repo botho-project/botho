@@ -206,14 +206,15 @@ if __name__=='__main__':
     parser.add_argument('--execute', action='store_true', help='install fresh staged units INACTIVE')
     parser.add_argument('--replace-observer-keys', action='store_true',
                         help='staging retry: replace an earlier attempt\'s staged observer authorized-keys file')
+    parser.add_argument('--rehearsal-snapshot', type=Path, help='retained controller snapshot for legacy Part A fee evidence')
     args=parser.parse_args()
     if args.mode == 'stage':
         if not args.profile or not args.output:
             parser.error('stage requires --profile and a fresh --output directory')
         from staging import stage
-        stage(args.profile, args.output, args.execute, args.replace_observer_keys)
+        stage(args.profile, args.output, args.execute, args.replace_observer_keys, args.rehearsal_snapshot)
         raise SystemExit(0)
-    if args.profile or args.output or args.execute or args.replace_observer_keys:
+    if args.profile or args.output or args.execute or args.replace_observer_keys or args.rehearsal_snapshot:
         parser.error('explicit deployment profile requires stage mode; no legacy fallback')
     if args.mode=='observers':observers()
     elif args.binary and args.source_commit:controller(args.binary,args.source_commit)
