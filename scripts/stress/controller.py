@@ -202,6 +202,48 @@ def check_transaction_receipts(row, info, receipts):
         raise Gate('node receipt count or total differs from signed outputs')
 
 
+class SelectionHistory:
+    """First supported row per target, and one creation height per eligible decoy.
+
+    The controller only extends this index across a successful sync that
+    preserved the preceding blocks. A restart builds it from checked history.
+    """
+    def __init__(self, blocks):
+        self.blocks = blocks
+        self.indexed = 0
+        self.by_target = {}
+        self.decoy_heights = []
+
+    def read(self):
+        if self.indexed == len(self.blocks):
+            return self.by_target, self.decoy_heights
+
+        # Stage the suffix: a malformed payout must fail on every retry, with
+        # no partially indexed rows or duplicate heights. The initial sort
+        # also preserves chronological selection for standalone callers.
+        additions = {}
+        heights = []
+        for block in sorted(self.blocks[self.indexed:], key=lambda b: b['height']):
+            for output in block['outputs']:
+                key = output['targetKey'].lower()
+                if key in self.by_target or key in additions:
+                    continue
+                is_decoy = decoy_row(output)
+                if not is_decoy and lottery_context(output) is None:
+                    continue
+                additions[key] = (block['height'], output)
+                if is_decoy and key != '0' * 64:
+                    heights.append(block['height'])
+
+        if self.by_target:
+            self.by_target.update(additions)
+        else:
+            self.by_target = additions
+        self.decoy_heights.extend(heights)
+        self.indexed = len(self.blocks)
+        return self.by_target, self.decoy_heights
+
+
 class Controller:
     def __init__(self, state):
         self.state = state
@@ -1127,6 +1169,14 @@ class Controller:
             if full or new:
                 self.history_log().persist(previous, blocks)
             self.checkpoint_inventory(height, scans, spent, force=full)
+            # A verified suffix can extend the old selection index. Any other
+            # source, including the history loaded by a fresh process, starts
+            # with an empty index. Only selection needs to populate it.
+            index = getattr(self, 'selection_index', None)
+            if index is None or index.blocks is not previous:
+                self.selection_index = SelectionHistory(blocks)
+            else:
+                index.blocks = blocks
             self.blocks, self.inventory, self.spent = blocks, scans, spent
             self.spent_audit_offset = audit_next
             self.inventory_initialized = True
@@ -1163,24 +1213,18 @@ class Controller:
         atomic_stream(self.state/'inventory.json', inventory_chunks(time.time(), height, owned, spent))
         self.inventory_checkpoint_at = now
 
+    def selection_history(self):
+        index = getattr(self, 'selection_index', None)
+        if index is None or index.blocks is not self.blocks:
+            # A history supplied outside sync has no verified append lineage.
+            index = SelectionHistory(self.blocks)
+        return index.read()
+
     def canonical_history(self):
-        # Match target-only ledger resolution before any maturity/age filtering.
-        # History and inventory retain unsupported receipts for accounting.
-        # A V2 lottery payout has its own one-time key and is canonical
-        # (spendable) history; a legacy, context-less payout reuses its
-        # winner's key and never is (#1643). Decoy pools still exclude every
-        # lottery row; see ``decoy_row``.
-        canonical = {}
-        for block in sorted(self.blocks, key=lambda block: block['height']):
-            for output in block['outputs']:
-                key = output['targetKey'].lower()
-                if key in canonical:
-                    continue
-                if output.get('lottery', False) or output.get('lotteryContext') is not None:
-                    if lottery_context(output) is None:
-                        continue
-                canonical[key] = (block['height'], output)
-        return canonical
+        # Existing callers receive an independent dict, including callers
+        # that retain it while the controller advances to another block.
+        canonical, _ = self.selection_history()
+        return canonical.copy()
 
     def canonical_inventory(self, wallet, canonical=None):
         canonical = self.canonical_history() if canonical is None else canonical
