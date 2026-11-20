@@ -594,10 +594,12 @@ class DiscoveryController(Controller):
     def materialize(self, events, start, kind, now):
         grace = self.j.limits["start_slot_grace_seconds"]
         cursor = self.j.get("offer_cursor:" + kind, 0)
+        self.next_offer_at = None
         while cursor < len(events):
             event = events[cursor]
             at = start + event["offset_seconds"]
             if at > now:
+                self.next_offer_at = at
                 break
             sender = int(event["sender"].split("-")[-1]) - 1
             recipient = int(event["recipient"].split("-")[-1]) - 1

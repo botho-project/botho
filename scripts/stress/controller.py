@@ -1953,6 +1953,15 @@ class Controller:
         self.j.set('wallet_paths',[w['key'] for w in self.wallets])
         self.j.event(None,'wallet_restored',{'wallet':wallet})
 
+    def admission_delay(self, started):
+        # Keep the usual monitor/reconciliation yield when a pass ran long.
+        # For scheduled offers, wake on the offer clock even if the last pass
+        # began partway through a second.
+        delay = 1 - (time.monotonic() - started)
+        if self.next_offer_at is not None:
+            delay = min(delay, self.next_offer_at - time.time())
+        return max(.2, delay)
+
     async def admission_tick(self):
         async with self.admission_lock:
             # One tick may admit several offers (#1618); the v2 deliver pass
@@ -2021,6 +2030,7 @@ class Controller:
             reconciler=asyncio.create_task(self.reconcile())
             while True:
                 started=time.monotonic()
+                self.next_offer_at = None
                 status=self.j.get('status')
                 if status in ('complete','incomplete','rehearsal_complete'):
                     break
@@ -2045,7 +2055,7 @@ class Controller:
                     self.j.set('last_summary_at',time.time())
                 # Include admission/report work in the cadence, but always
                 # yield so monitoring and reconciliation can make progress.
-                await asyncio.sleep(max(.2,1-(time.monotonic()-started)))
+                await asyncio.sleep(self.admission_delay(started))
             if self.j.get('status') == 'rehearsal_complete':
                 return
             if self.fresh and not self.j.pending():

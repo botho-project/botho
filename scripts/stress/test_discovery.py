@@ -338,6 +338,31 @@ class DiscoveryExecutorTests(unittest.TestCase):
                     asyncio.run(self.c.campaign_tick())
             self.assertEqual(self.c.j.get("active_phase"), "correctness")
 
+    def test_admission_wakes_for_next_offer_without_publishing_it_early(self):
+        from unittest.mock import patch
+
+        events = [
+            {"intent": f"clock-{i}", "offset_seconds": i * 3, "sender": "wallet-1",
+             "recipient": "wallet-2", "amount_picocredits": "10"}
+            for i in range(2)
+        ]
+        self.c.materialize(events, 1000, "rehearsal", 1002.65)
+        self.assertIsNone(self.c.j.intent("clock-1"))
+        self.assertEqual(self.c.j.get("offer_cursor:rehearsal"), 1)
+        with patch("controller.time.monotonic", return_value=10.05):
+            with patch("controller.time.time", return_value=1002.65):
+                self.assertAlmostEqual(self.c.admission_delay(10), .35)
+            with patch("controller.time.time", return_value=1002.96):
+                self.assertEqual(self.c.admission_delay(10), .2)
+            # A pass that consumed its tick budget still yields.
+            with patch("controller.time.time", return_value=1001):
+                self.assertEqual(self.c.admission_delay(9), .2)
+        self.c.materialize(events, 1000, "rehearsal", 1003.1)
+        self.assertEqual(self.c.j.intent("clock-1")["offered"], 1003)
+        self.assertIsNone(self.c.next_offer_at)
+        with patch("controller.time.monotonic", return_value=11.05):
+            self.assertAlmostEqual(self.c.admission_delay(11), .95)
+
     def test_downtime_materializes_missed_offers_once_without_replay(self):
         events = [
             {
