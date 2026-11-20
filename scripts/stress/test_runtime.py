@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -49,7 +50,7 @@ class JournalTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a', 'b'])
         self.j.transition('b', 'reconciled', info={})
         self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a'])
-        with sqlite3.connect(self.path) as legacy:
+        with closing(sqlite3.connect(self.path)) as legacy, legacy:
             legacy.execute('PRAGMA trusted_schema=OFF')
             legacy.execute("UPDATE intents SET info=? WHERE id='b'", (json.dumps({'deferred_hosts':[HOSTS[1]]}),))
             self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a'])
