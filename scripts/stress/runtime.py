@@ -34,6 +34,8 @@ PENDING = ('prepared', 'submitting', 'accepted', 'unknown', 'confirmed', 'recipi
 INFLIGHT = ('prepared', 'submitting', 'accepted', 'unknown')
 assert set(INFLIGHT) < set(PENDING)
 
+_DEFERRED_HOSTS = "json_extract(info,'$.deferred_hosts')"
+
 
 class Gate(Exception):
     """A fail-closed admission decision, retained for explicit operator review."""
@@ -311,6 +313,29 @@ class Journal:
                 self.db.close()
                 raise Gate('journal limits changed')
             self.set('limits_digest', digest(self.limits))
+        self._install_receipt_candidates()
+
+    def _install_receipt_candidates(self):
+        # Keep JSON functions out of the database schema. Older SQLite builds
+        # refuse to open expression indexes using JSON with trusted_schema off.
+        with self.transaction():
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                               "AND name='receipt_candidates'").fetchone():
+                return
+            self.db.execute('CREATE TABLE receipt_candidates(intent TEXT PRIMARY KEY) WITHOUT ROWID')
+            # Include malformed legacy records so the normal receipt query
+            # still raises its JSON error. New or changed info is checked on read.
+            self.db.execute('INSERT INTO receipt_candidates SELECT id FROM intents '
+                            f'WHERE CASE WHEN json_valid(info) THEN {_DEFERRED_HOSTS} IS NOT NULL ELSE 1 END')
+            self.db.execute('''CREATE TRIGGER receipt_candidate_insert AFTER INSERT ON intents
+                WHEN NEW.info != '{}' BEGIN
+                INSERT OR IGNORE INTO receipt_candidates VALUES(NEW.id); END''')
+            self.db.execute('''CREATE TRIGGER receipt_candidate_update AFTER UPDATE OF info,id ON intents
+                WHEN OLD.info != NEW.info OR OLD.id != NEW.id BEGIN
+                DELETE FROM receipt_candidates WHERE intent=OLD.id AND OLD.id != NEW.id;
+                INSERT OR IGNORE INTO receipt_candidates VALUES(NEW.id); END''')
+            self.db.execute('''CREATE TRIGGER receipt_candidate_delete AFTER DELETE ON intents BEGIN
+                DELETE FROM receipt_candidates WHERE intent=OLD.id; END''')
 
     def get(self, key, default=None):
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
@@ -357,6 +382,25 @@ class Journal:
 
     def pending(self):
         return self.rows('state IN (' + ','.join('?' for _ in PENDING) + ')', PENDING)
+
+    def deferred_receipts(self):
+        rows = self.rows('id IN (SELECT intent FROM receipt_candidates) '
+                         f'AND {_DEFERRED_HOSTS} IS NOT NULL ORDER BY offered,id')
+        count = self.db.execute('SELECT COUNT(*) FROM receipt_candidates').fetchone()[0]
+        if count > len(rows):
+            # A concurrent writer can create a deferral after the read. Recheck
+            # the current intent in the deletion statement before pruning it.
+            try:
+                self.db.execute('DELETE FROM receipt_candidates WHERE NOT EXISTS '
+                                f'(SELECT 1 FROM intents WHERE id=intent AND {_DEFERRED_HOSTS} IS NOT NULL)')
+            except sqlite3.OperationalError as error:
+                # The selected rows are authoritative. A read-only observer
+                # or another journal writer may leave pruning to a later poll.
+                if (getattr(error, 'sqlite_errorcode', 0) & 255) not in (
+                    sqlite3.SQLITE_READONLY, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED
+                ):
+                    raise
+        return rows
 
     def inflight(self):
         """Rows counted against max_inflight; see INFLIGHT. Sender reuse and

@@ -348,7 +348,7 @@ class Controller:
 
     def deferred_rows(self):
         """Rows confirmed on the live hosts whose down hosts are not yet verified."""
-        return self.j.rows("json_extract(info,'$.deferred_hosts') IS NOT NULL ORDER BY offered, id")
+        return self.j.deferred_receipts()
 
     async def tolerate(self, host, hosts, awaitable, step=None):
         """Await a read; only a host in ``hosts`` (named by a step) may fail."""
