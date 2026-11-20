@@ -346,7 +346,10 @@ class Journal:
         return json.loads(row[0]) if row else default
 
     def set(self, key, value):
-        self.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', (key, json.dumps(value)))
+        # Repeated endpoint limits should not append frames to the durable WAL.
+        self.db.execute('''INSERT INTO meta(key,value) VALUES(?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            WHERE meta.value != excluded.value''', (key, json.dumps(value)))
 
     @contextlib.contextmanager
     def transaction(self):

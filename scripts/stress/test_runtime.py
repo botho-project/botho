@@ -26,6 +26,20 @@ class JournalTests(unittest.TestCase):
         self.j.db.close()
         self.tmp.cleanup()
 
+    def test_identical_metadata_does_not_commit_another_wal_change(self):
+        key = 'quota:' + HOSTS[0]
+        self.j.set(key, 600)
+        with closing(sqlite3.connect(self.path)) as reader:
+            def version():
+                return reader.execute('PRAGMA data_version').fetchone()[0]
+
+            initial = version()
+            self.j.set(key, 600)
+            self.assertEqual(version(), initial)
+            self.j.set(key, 60)
+            self.assertNotEqual(version(), initial)
+            self.assertEqual(reader.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone(), ('60',))
+
     def test_deferred_receipts_migrate_and_follow_the_journal_transaction(self):
         for trigger in ('insert', 'update', 'delete'):
             self.j.db.execute('DROP TRIGGER receipt_candidate_'+trigger)
