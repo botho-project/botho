@@ -389,6 +389,10 @@ class FakeHost:
             return 0, 'success\n', ''
         if argv[-1] == '-S':
             return 0, '-P INPUT ACCEPT\n-P OUTPUT ACCEPT\n', ''
+        if argv[:4] == ['tc', '-j', '-s', 'qdisc']:
+            queue = {'kind': 'netem', 'handle': '40:', 'parent': '1:4',
+                     'packets': 80, 'drops': 20}
+            return 0, json.dumps([queue]), ''
         if argv[:2] == ['tc', 'qdisc']:
             return 0, 'qdisc mq 0: root\nqdisc fq_codel 0: parent :1 limit 10240p\n', ''
         return 0, '', ''

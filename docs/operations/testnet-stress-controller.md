@@ -1396,10 +1396,25 @@ awaited, `fault_observed`, the milestones in seconds from `restore_at`,
 counts. `coverage.validator_degrade` is true only when there is at least one
 step and every step passed. An empty `degrade_steps` is never vacuous coverage.
 
-**Post-run review.** Metrics cannot show whether a stall coincided with a block
-apply. Correlating stalls with applies from node logs, and confirming a netem
-step (`fault_observed: unknown`) against `faults.jsonl`, remain operator
-post-run review.
+**Post-run review.** Correlate stalls with block applies using the node logs.
+For D4, run the offline reviewer against the archived fleet directory.
+
+```sh
+python3 scripts/stress/review_netem.py "$FLEET_DIR"
+```
+
+It checks the controller report and activation against the frozen plan digest
+and matches the runner journal by target, action order and scheduled times. Exit 0
+requires both a passing D4 controller verdict and the runner's successful
+setup, restoration, verification and disarm sequence. The campaign keeps its
+own verdict. Supply `--dev` if the runner used a different interface.
+
+The runner records a digest of each traffic-control setup command. Older
+journals retain the action names alone. At the midpoint of a sufficiently
+long D4 window, the runner requests the child queue's transmitted-packet and
+drop counters. The sample covers that queue through the time of the read.
+Drops can include queue overflow. A missing queue or a read timeout leaves
+the counters unavailable. Restoration follows the original deadline.
 
 ### Fee evidence and honest coverage
 
