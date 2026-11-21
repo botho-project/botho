@@ -970,6 +970,47 @@ class Controller:
             raise Gate('invalid observer sample list: '+host)
         return records
 
+    def check_validator_sample(self, host, status, observed, view, down, quorum_gated):
+        if not isinstance(status, dict) and not (status is None and host in down):
+            raise Gate('invalid validator status from '+host)
+        if status is not None:
+            check_identity(status,self.plan)
+            # Degrade-phase (x-series) plans need the installed
+            # 4-of-5, f=1 quorum on every reachable validator; a
+            # silent 4-of-4 would void D1-D5 (#1605).
+            if quorum_gated:
+                # A host the active restart step names may serve
+                # RPC before its gate's first evaluation (#1608);
+                # isolate/netem never restart, rejoining is strict.
+                unevaluated = (view is not None and host in down
+                               and view['action'] in RESTART_ACTIONS)
+                check_quorum(status,allow_unevaluated=unevaluated)
+                if unevaluated and all(status.get(k,0) is None for k in QUORUM_GATE_KEYS):
+                    self.j.event(None,'quorum_unevaluated',{'step':view['step'],'host':host})
+        baseline = self.j.get('baseline:'+host)
+        if baseline is None:
+            if not observed or observed[-1].get('error'):
+                raise Gate('observer baseline unavailable')
+            baseline = self.config.get('resource_baselines',{}).get(host,observed[-1])
+            if baseline['binary'] != self.config['node_sha256']:
+                raise Gate('deployed binary differs from launch pin')
+            self.j.set('baseline:'+host,baseline)
+        if observed is not None:
+            rebased = check_resources(observed,baseline,time.time(),self.resource_window(view,host))
+            if rebased is not None:
+                self.rebaseline(host,view,baseline,rebased)
+        # No progress is expected from a named host until window
+        # end, nor from anyone while quorum is lost (safe_halt).
+        if host in down or (view and view['expect'] == 'safe_halt'):
+            self.j.set('unsynced:'+host,None)
+        elif not status.get('synced'):
+            since = self.j.get('unsynced:'+host) or time.time()
+            self.j.set('unsynced:'+host,since)
+            if time.time()-since > 120:
+                raise Gate('node unsynced for two minutes: '+host)
+        else:
+            self.j.set('unsynced:'+host,None)
+
     async def monitor(self):
         while not self.closed:
             started = time.monotonic()
@@ -989,50 +1030,19 @@ class Controller:
                 statuses = await asyncio.gather(*(self.tolerate(h,{*down,*rejoining},self.rpc.call(h,'node_getStatus'),step) for h in HOSTS))
                 records = await asyncio.gather(*(self.tolerate(h,down,self.observer(h),step) for h in HOSTS))
                 self.check_rejoin(now,dict(zip(HOSTS,statuses)),down,quorum_gated)
-                for host,status,observed in zip(HOSTS,statuses,records):
-                    if not isinstance(status, dict) and not (status is None and host in down):
-                        raise Gate('invalid validator status from '+host)
-                    if status is not None:
-                        check_identity(status,self.plan)
-                        # Degrade-phase (x-series) plans need the installed
-                        # 4-of-5, f=1 quorum on every reachable validator; a
-                        # silent 4-of-4 would void D1-D5 (#1605).
-                        if quorum_gated:
-                            # A host the active restart step names may serve
-                            # RPC before its gate's first evaluation (#1608);
-                            # isolate/netem never restart, rejoining is strict.
-                            unevaluated = (view is not None and host in down
-                                           and view['action'] in RESTART_ACTIONS)
-                            check_quorum(status,allow_unevaluated=unevaluated)
-                            if unevaluated and all(status.get(k,0) is None for k in QUORUM_GATE_KEYS):
-                                self.j.event(None,'quorum_unevaluated',{'step':step,'host':host})
-                    baseline = self.j.get('baseline:'+host)
-                    if baseline is None:
-                        if not observed or observed[-1].get('error'):
-                            raise Gate('observer baseline unavailable')
-                        baseline = self.config.get('resource_baselines',{}).get(host,observed[-1])
-                        if baseline['binary'] != self.config['node_sha256']:
-                            raise Gate('deployed binary differs from launch pin')
-                        self.j.set('baseline:'+host,baseline)
-                    if observed is not None:
-                        rebased = check_resources(observed,baseline,time.time(),self.resource_window(view,host))
-                        if rebased is not None:
-                            self.rebaseline(host,view,baseline,rebased)
-                    # No progress is expected from a named host until window
-                    # end, nor from anyone while quorum is lost (safe_halt).
-                    if host in down or (view and view['expect'] == 'safe_halt'):
-                        self.j.set('unsynced:'+host,None)
-                    elif not status.get('synced'):
-                        since = self.j.get('unsynced:'+host) or time.time()
-                        self.j.set('unsynced:'+host,since)
-                        if time.time()-since > 120:
-                            raise Gate('node unsynced for two minutes: '+host)
-                    else:
-                        self.j.set('unsynced:'+host,None)
-                    # Post-idle memory is evaluated once per completed active cycle.
-                    # A stopped node's error row carries no memory sample.
-                    if observed and not observed[-1].get('error'):
-                        self.j.set('latest:'+host,observed[-1])
+                latest = {}
+                try:
+                    for host,status,observed in zip(HOSTS,statuses,records):
+                        self.check_validator_sample(host,status,observed,view,down,quorum_gated)
+                        if observed and not observed[-1].get('error'):
+                            latest[host] = observed[-1]
+                finally:
+                    # Keep the validated prefix for diagnosis if a later host fails.
+                    # Commit available samples together before any further network read.
+                    if latest:
+                        with self.j.transaction():
+                            for host,sample in latest.items():
+                                self.j.set('latest:'+host,sample)
                 # Hash agreement covers every reachable host, including a named
                 # host that is isolated or delayed and therefore behind.
                 try:

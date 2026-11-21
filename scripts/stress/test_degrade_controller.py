@@ -8,6 +8,7 @@ still halts. Fake RPC/observer coroutines; no network traffic.
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
@@ -424,6 +425,39 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.now = at("D1", "fault_start") - 600
         await self.monitor(self.now + 60)
         self.assertFalse(self.held(), self.reason())
+
+    async def test_resource_poll_becomes_visible_to_another_reader_in_one_commit(self):
+        self.now = START + 60
+        for host in HOSTS:
+            self.c.j.set("latest:" + host, {"at": START})
+        reader = sqlite3.connect(self.c.state / "journal.sqlite", isolation_level=None)
+        self.addCleanup(reader.close)
+
+        def timestamps():
+            return [json.loads(row[0])["at"] for row in reader.execute(
+                "SELECT value FROM meta WHERE key LIKE 'latest:%' ORDER BY key")]
+
+        snapshots = []
+        write = self.c.j.set
+
+        def observe(key, value):
+            write(key, value)
+            if key == "latest:" + N3:
+                snapshots.append(timestamps())
+
+        with patch.object(self.c.j, "set", side_effect=observe):
+            await self.monitor(self.now + 15)
+        self.assertFalse(self.held(), self.reason())
+        self.assertEqual(snapshots, [[START] * len(HOSTS)])
+        self.assertEqual(timestamps(), [START + 60] * len(HOSTS))
+
+    async def test_resource_gate_retains_earlier_valid_samples_for_diagnosis(self):
+        self.now = START
+        await self.monitor(START + 30, {START + 15: lambda: self.fleet.stopped.add(N3)})
+        self.assertTrue(self.held())
+        self.assertIn("observer cannot read required metrics", self.reason())
+        times = [self.c.j.get("latest:" + host)["at"] for host in HOSTS]
+        self.assertEqual(times, [START + 15, START + 15, START, START, START])
 
     async def test_quorum_checked_on_every_tick_not_only_launch(self):
         self.now = at("D1", "fault_start") - 600
