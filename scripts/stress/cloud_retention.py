@@ -334,6 +334,10 @@ def workload_terminal(root, names, identities, manifest):
     verified_at = max([t for t, _ in latest.values()] + ([held_at] if held_at is not None else []))
     for name in ('inventory.json', 'fleet-final-state.json'):
         files[name] = digest(checked_path(root, name))
+    # The runner keeps its execution receipts outside the six host archives.
+    for name in ('campaign-plan.json', 'faults.jsonl'):
+        if (root / name).exists():
+            files[name] = digest(checked_path(root, name))
     return dict(kind='terminal_workload', run=run, verified_at=verified_at, proof_sha256=files,
                 archived_at=max(verified_at, *(checked_path(root, name).stat().st_mtime for name in names)))
 
