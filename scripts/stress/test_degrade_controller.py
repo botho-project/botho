@@ -805,6 +805,38 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
                          ["getTransaction", "chain_areKeyImagesSpent"])
         self.assertEqual(self.c.deferred_rows(), [])
 
+    async def test_deferred_verification_preserves_incomplete_or_inconsistent_saved_evidence(self):
+        self.now = at("D1", "fault_start") + 60
+        self.fleet.stop(A)
+        self.accepted_row()
+        await self.reconcile(2)
+        original = self.c.j.intent("pay")["info"]
+        self.now = at("D1", "window_end") + 1
+        self.fleet.start(A)
+        self.settle()
+        for change, reason in (("missing host", "incomplete saved confirmation receipts"),
+                               ("unknown host", "incomplete saved confirmation receipts"),
+                               ("changed height", "saved confirmation height mismatch")):
+            with self.subTest(change=change):
+                info = json.loads(original)
+                if change == "missing host":
+                    del info["confirmed_receipts"][HOSTS[1]]
+                elif change == "unknown host":
+                    info["confirmed_receipts"]["unknown"] = info["confirmed_receipts"][HOSTS[1]]
+                else:
+                    info["block_height"] -= 1
+                encoded = json.dumps(info)
+                self.c.j.db.execute("UPDATE intents SET info=? WHERE id='pay'", (encoded,))
+                with self.clock(), self.assertRaisesRegex(Gate, reason):
+                    await self.c.verify_deferred()
+                self.assertEqual(self.c.j.intent("pay")["info"], encoded)
+        self.c.j.db.execute("UPDATE intents SET info=? WHERE id='pay'", (original,))
+        with self.clock():
+            await self.c.verify_deferred()
+        verified = json.loads(self.c.j.intent("pay")["info"])
+        self.assertEqual(set(verified["confirmed_receipts"]), set(HOSTS))
+        self.assertEqual(verified["deferred_verified"]["hosts"], [A])
+
     async def test_disagreeing_receipt_from_rejoined_host_halts(self):
         self.now = at("D1", "fault_start") + 60
         self.fleet.stop(A)

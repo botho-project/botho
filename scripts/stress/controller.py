@@ -1913,6 +1913,10 @@ class Controller:
             window = windows.get(info.get('deferred_step'))
             if window is None or not hosts or not set(hosts) <= set(HOSTS):
                 raise Gate('deferred confirmation names no scheduled step')
+            saved = info.get('confirmed_receipts')
+            # A host with a saved receipt can still owe a spend-height check.
+            if not isinstance(saved, dict) or set(saved).union(hosts) != set(HOSTS):
+                raise Gate('incomplete saved confirmation receipts')
             if now < window['window_end'] or any(h in down for h in hosts):
                 continue
             if time.time()-self.fresh > 60 or any(
@@ -1920,8 +1924,9 @@ class Controller:
                     or self.statuses[h].get('chainHeight',-1) < info['block_height'] for h in hosts):
                 continue  # not caught up yet; the rejoin gate bounds this wait
             receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in hosts))
-            saved = info['confirmed_receipts']
             check_transaction_receipts(row, info, [*saved.values(), *receipts])
+            if type(info['block_height']) is not int or info['block_height'] != receipts[0]['blockHeight']:
+                raise Gate('saved confirmation height mismatch')
             if row['kind'] != 'funding':
                 states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in hosts))
                 check_spent_inputs(info['key_images'], receipts[0]['blockHeight'], states)

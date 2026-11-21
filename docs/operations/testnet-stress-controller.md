@@ -142,7 +142,9 @@ name, and nothing outside its window.
   `chain_areKeyImagesSpent`. These must match the saved receipts and spent
   state, including on rows already `reconciled`, or the run stops with
   `fleet transaction receipt disagreement` or `spent-input state disagreement`.
-  Verified rows record `deferred_verified` and drop `deferred_hosts`.
+  The saved receipts and the hosts being checked must together cover all
+  five validators. The agreed inclusion height must match the height in
+  the journal. Verified rows record `deferred_verified` and drop `deferred_hosts`.
   Each validator's receipt for a controller-signed payment must include the
   signed transaction hash. Its fee, output count and total must match the
   signed payment, and each input's finalized spend height must match the
