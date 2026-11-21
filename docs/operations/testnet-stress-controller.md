@@ -1438,6 +1438,21 @@ apply. Correlating stalls with applies from node logs, and confirming a netem
 step (`fault_observed: unknown`) against `faults.jsonl`, remain operator
 post-run review.
 
+From the repository root, run `python3 scripts/stress/recovery_receipts.py FLEET_DIR`
+on the saved fleet directory. It reads the frozen campaign and infrastructure
+plans, inventory, operator journal and controller report. If several final
+reports exist, use `--report PATH` to select the attempt.
+
+Each step shows the controller verdict, the completeness of the operator
+receipts and the elapsed time between apply and restore receipts on the
+operator clock. D4's receipts document successful command execution. Measuring
+the packet loss or latency actually experienced requires network observations.
+The controller's rejoin milestones retain their original clock and resolution.
+Historical operator journals identify steps by role and scheduled time and
+depend on the fleet archive for run identity. Exit status 0 means all scheduled
+recoveries have supporting receipts and passing controller verdicts, 1 means
+one or more are outstanding, and 2 means the inputs could not be validated.
+
 ### Fee evidence and honest coverage
 
 The signer receives a 1x, 2x, or 4x multiplier **after** the production minimum
