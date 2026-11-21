@@ -639,6 +639,87 @@ class VerdictTests(Base):
         self.assertTrue(self.held())
         self.assertEqual(self.reason(), "D5: recovery check failed: tip did not advance after restore")
 
+    async def test_d5_catchup_to_a_known_block_does_not_prove_resumption(self):
+        original = self.fleet.rpc
+        start, restore = at("D5", "fault_start"), at("D5", "restore_at")
+
+        async def catchup(host, method, params=None, **kwargs):
+            reply = await original(host, method, params, **kwargs)
+            if method == "node_getStatus" and (self.now > restore or (self.now >= start and host == N4)):
+                # One survivor already has this block. Everyone else learns it after restore.
+                height = reply["chainHeight"] + 1
+                reply = {**reply, "chainHeight": height, "tipHash": f"{height:064x}"}
+            return reply
+
+        self.c.rpc.call.side_effect = catchup
+        await self.run_d5(resume=False)
+        self.assertEqual(self.verdict("D5"), "fail")
+        row = degrade_report(self.c.j, [STEPS["D5"]])[0]
+        self.assertEqual(row["resume_height_floor"], row["tip_check"]["height"])
+        self.assertIsNone(self.record("D5")["tip_resumed_at"])
+
+    async def test_d5_recovery_requires_a_new_block_on_the_returning_validators(self):
+        original = self.fleet.rpc
+        first_tip = None
+
+        async def lagging_target(host, method, params=None, **kwargs):
+            nonlocal first_tip
+            reply = await original(host, method, params, **kwargs)
+            if host == A and method == "node_getStatus" and self.now >= at("D5", "restore_at"):
+                if first_tip is None:
+                    first_tip = reply["chainHeight"]
+                reply = {**reply, "chainHeight": first_tip, "tipHash": f"{first_tip:064x}"}
+            return reply
+
+        # This test exercises the window verdict directly. The monitor's earlier
+        # rejoin gate also detects a lagging target in a running campaign.
+        self.c.check_rejoin = Mock()
+        self.c.rpc.call.side_effect = lagging_target
+        await self.run_d5()
+        self.assertEqual(self.verdict("D5"), "fail")
+        self.assertIsNotNone(self.record("D5")["tip_resumed_at"])
+        self.assertIn("common block at window end", self.reason())
+
+    async def test_d5_includes_the_last_tip_from_a_validator_that_stopped(self):
+        c = self.c
+        window = next(w for w in c.degrade_windows() if w["step"] == "D5")
+        restore = window["restore_at"]
+        async def metrics(*_):
+            return None
+        stopped = {h: None if h in (A, B) else status(100) for h in HOSTS}
+        prior = {A: status(108)}
+        record = await c.degrade_open(window, window["fault_start"], stopped, prior, metrics)
+        await c.degrade_track(record, window, restore, stopped, metrics)
+        await c.degrade_track(record, window, restore+15, {h: status(108) for h in HOSTS}, metrics)
+        self.assertEqual(record["resume_height_floor"], 108)
+        self.assertIsNone(record["tip_resumed_at"])
+        await c.degrade_track(record, window, restore+30, {h: status(109) for h in HOSTS}, metrics)
+        self.assertEqual(record["tip_resumed_at"], restore+30)
+
+    async def test_d5_legacy_open_window_requires_fresh_progress(self):
+        c = self.c
+        step = next(w for w in c.degrade_windows() if w["step"] == "D5")
+        restore = step["restore_at"]
+        async def metrics(*_):
+            return None
+        states = {h: status(105) for h in HOSTS}
+        record = await c.degrade_open(step, step["fault_start"], states, {}, metrics)
+        record.pop("resume_height_floor")
+        record.update(tip_restore=100, tip_resumed_at=restore+15, tips={"100": "block-100", "105": "block-105"})
+        await c.degrade_track(record, step, restore+30, states, metrics)
+        self.assertEqual(record["resume_height_floor"], 105)
+        self.assertIsNone(record["tip_resumed_at"])
+        await c.degrade_track(record, step, restore+45, {h: status(106) for h in HOSTS}, metrics)
+        self.assertEqual(record["tip_resumed_at"], restore+45)
+
+    async def test_d5_legacy_window_awaiting_settlement_lacks_a_restore_height(self):
+        step = next(w for w in self.c.degrade_windows() if w["step"] == "D5")
+        record = {"step": "D5", "closed_at": step["window_end"], "verdict": None}
+        self.c.j.set("degrade:D5", record)
+        with self.assertRaisesRegex(Gate, "restore height unavailable"):
+            self.c.settle_degrade_verdicts(step["window_end"] + 15)
+        self.assertEqual(self.verdict("D5"), "fail")
+
     async def test_d5_conflicting_hash_fails(self):
         rpc = self.fleet.rpc
 

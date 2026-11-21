@@ -439,6 +439,8 @@ def degrade_report(journal, steps):
             if "campaign_payments" in record:
                 row["campaign_payments"] = record["campaign_payments"]
             row["fault_observed"] = record.get("fault_observed")
+            if "resume_height_floor" in record:
+                row["resume_height_floor"] = record["resume_height_floor"]
             if record.get("tip_check") is not None:
                 row["tip_check"] = record["tip_check"]
             for host, track in (record.get("hosts") or {}).items():

@@ -1378,8 +1378,15 @@ gate), each of the following must hold. Otherwise the run halts with
   loop sample for every host.
 - `fault_observed` is not `false`.
 - For `expect: "safe_halt"`: no two hosts reported different `tipHash` at the
-  same height during the window, and the live-fleet height advanced again
-  after `restore_at`.
+  same height during the window. The closing common block must exceed every
+  tip observed from the last pre-step sample through the first live-fleet
+  sample at or after `restore_at`. D5 records that highest known height as
+  `resume_height_floor`. Validators catching up to an existing block can
+  agree there while production is still stalled.
+  When resuming an older open journal mid-window, the controller uses the
+  highest height already recorded and waits for the next advance. If the
+  window already closed under the old code and its verdict is still pending,
+  the journal lacks the evidence to certify recovery.
 - No campaign offer in `[fault_start, window_end)` is `skipped`, `unresolved`,
   `expired`, `rejected` or `aborted`.
 

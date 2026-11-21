@@ -532,6 +532,12 @@ class Controller:
                       for h in named},
             'closed_at': None, 'verdict': None,
         }
+        if window['expect'] == 'safe_halt':
+            # A block already at a validator before the outage cannot prove recovery.
+            record['resume_height_floor'] = max(
+                (s['chainHeight'] for s in prior.values()
+                 if s and type(s.get('chainHeight')) is int and s['chainHeight'] >= 0),
+                default=None)
         self.j.set('degrade:'+window['step'], record)
         return record
 
@@ -539,10 +545,24 @@ class Controller:
         named = window['expected_down']
         tip = self.live_tip(status, named)
         if window['expect'] == 'safe_halt':
+            if 'resume_height_floor' not in record:
+                # Older journals combined heights from both sides of restore.
+                # Require a fresh advance beyond everything already recorded.
+                known_heights = [int(height) for height in record['tips']]
+                if record['tip_restore'] is not None:
+                    known_heights.append(record['tip_restore'])
+                record['resume_height_floor'] = max(known_heights, default=None)
+                record['tip_resumed_at'] = None
             for s in status.values():
-                if s is None or type(s.get('chainHeight')) is not int or not s.get('tipHash'):
+                if s is None or type(s.get('chainHeight')) is not int or s['chainHeight'] < 0:
                     continue
-                seen = record['tips'].setdefault(str(s['chainHeight']), s['tipHash'])
+                height = s['chainHeight']
+                floor = record['resume_height_floor']
+                if record['tip_restore'] is None and (floor is None or height > floor):
+                    record['resume_height_floor'] = height
+                if not s.get('tipHash'):
+                    continue
+                seen = record['tips'].setdefault(str(height), s['tipHash'])
                 if seen != s['tipHash'] and record['conflict'] is None:
                     record['conflict'] = {'height': s['chainHeight'], 'hashes': [seen, s['tipHash']]}
         if now < window['restore_at']:
@@ -552,9 +572,10 @@ class Controller:
                     record['metrics_start'][host] = await metrics(host, True, window['step'])
         elif record['tip_restore'] is None:
             record['tip_restore'] = tip
-        elif (record['tip_resumed_at'] is None and tip is not None
-                and tip > record['tip_restore']):
-            record['tip_resumed_at'] = now
+        elif record['tip_resumed_at'] is None and tip is not None:
+            floor = record.get('resume_height_floor', record['tip_restore'])
+            if floor is not None and tip > floor:
+                record['tip_resumed_at'] = now
         for host in named:
             s, track = status.get(host), record['hosts'][host]
             if now < window['restore_at']:
@@ -734,6 +755,8 @@ class Controller:
                 failures.append('conflicting hash at height '+str(record['conflict']['height']))
             if record['tip_resumed_at'] is None:
                 failures.append('tip did not advance after restore')
+            elif not tip_failures and record['tip_check']['height'] <= record['resume_height_floor']:
+                failures.append('common block at window end did not advance past the restore height')
         record['closed_at'] = now
         # Missed payments, deferred receipts and accounting are checked by
         # degrade_settle(), which runs straight after this in the same tick.
@@ -764,6 +787,8 @@ class Controller:
         deferred receipts verify (#1587), and the first accounting snapshot
         at or after window_end show difference 0. Until then it stays open.
         """
+        if window['expect'] == 'safe_halt' and record.get('resume_height_floor') is None:
+            return self.degrade_verdict(record, ['restore height unavailable in legacy recovery evidence'], now)
         missed = self.missed_offers(window)
         if missed:
             return self.degrade_verdict(record, ['missed payment '+missed[0]['id']], now)
