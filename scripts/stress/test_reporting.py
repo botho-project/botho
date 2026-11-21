@@ -304,7 +304,9 @@ class TerminalReportingTests(unittest.TestCase):
 
     def test_campaign_missing_offer_field_keeps_its_original_denominator(self):
         self.c.plan["execution_mode"] = "campaign"
-        self.c.events = [None] * 7
+        self.c.events = [{"intent": name, "offset_seconds": i * 3, "sender": "wallet-1",
+                          "recipient": "wallet-2", "amount_picocredits": "1"}
+                         for i, name in enumerate(["campaign-one", *map(str, range(6))])]
         self.c.j.offer("campaign-one", "campaign", 1000, 0, 1, 1)
         self.c.j.set("status", "held")
         with patch("discovery.time.time", return_value=2500):
@@ -312,6 +314,20 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(report["nominal_campaign_offers"], 7)
         self.assertEqual(report["not_yet_offered"], 6)
         self.assertEqual(report["rehearsal"]["not_yet_offered"], 540)
+
+    def test_report_rechecks_a_terminal_campaign_against_its_frozen_schedule(self):
+        self.c.plan["execution_mode"] = "campaign"
+        self.c.j.set("start", 1000)
+        self.c.j.set("status", "complete")
+        self.c.events = [{"intent": "planned", "offset_seconds": 0, "sender": "wallet-1",
+                          "recipient": "wallet-2", "amount_picocredits": "1"}]
+        self.c.j.offer("other", "campaign", 1000, 0, 1, 1)
+        self.c.j.transition("other", "reconciled")
+        report = self.c.report()
+        self.assertEqual(report["workload_delivery"], "failed")
+        self.assertEqual(report["not_yet_offered"], 1)
+        self.assertEqual(report["campaign_payments"], {"missing": 1, "unexpected": 1,
+                                                      "changed": 0, "unfinished": 0})
 
     def sign_across_deadline(self, eligible_at, sign_seconds, scan_seconds=0, selection_seconds=0):
         """Real Controller.prepare/submit_prepared and Journal gates; only the

@@ -25,7 +25,7 @@ from unittest.mock import patch
 
 import discovery
 from discovery import DiscoveryController
-from plan import expand
+from plan import expand, payment_terms
 from runtime import Gate, Journal, Quota
 from test_admission_throughput import Fleet, x_series
 
@@ -83,17 +83,23 @@ class CampaignFleet(Fleet):
             "phase_release",
             {p: self.phase(p)["start_hour"] * HOUR for p in reached},
         )
-        # Only the last hour is journaled (the gate checks journaled rows); the
-        # cursor still skips every earlier event, keeping the table small.
+        # Seed the full reconciled schedule. Only the last hour needs the
+        # shape and transition history exercised by these boundary checks.
         cursor = 0
         with c.j.transaction():
+            c.j.db.executemany(
+                "INSERT INTO intents(id,kind,offered,state,sender,recipient,amount) "
+                "VALUES(?,'campaign',?,'reconciled',?,?,?)",
+                ((e["intent"], e["offset_seconds"], *payment_terms(e)) for e in EVENTS
+                 if e["offset_seconds"] < self.clock.now - HOUR),
+            )
             for event in EVENTS:
                 if event["offset_seconds"] >= self.clock.now:
                     break
                 cursor += 1
                 if event["offset_seconds"] < self.clock.now - HOUR:
                     continue
-                c.j.offer(event["intent"], "campaign", event["offset_seconds"], 0, 1, 1)
+                c.j.offer(event["intent"], "campaign", event["offset_seconds"], *payment_terms(event))
                 c.j.transition(
                     event["intent"], "reconciled",
                     info={"input_count": event["input_count"]},
@@ -220,7 +226,7 @@ class CampaignFleet(Fleet):
             for event in EVENTS[cursor:]:
                 if event["offset_seconds"] >= p["end_hour"] * HOUR:
                     break
-                c.j.offer(event["intent"], "campaign", event["offset_seconds"], 0, 1, 1)
+                c.j.offer(event["intent"], "campaign", event["offset_seconds"], *payment_terms(event))
                 cursor += 1
         c.j.set("offer_cursor:campaign", cursor)
         with c.j.transaction():

@@ -318,7 +318,10 @@ class DiscoveryExecutorTests(unittest.TestCase):
         from unittest.mock import patch
 
         for index, shape in enumerate((1, 2, 4)):
-            self.c.j.offer(str(index), "campaign", 4590, index, index + 1, 10)
+            self.c.events.append({"intent": str(index), "offset_seconds": 3590 + index,
+                                  "sender": f"wallet-{index + 1}", "recipient": f"wallet-{index + 2}",
+                                  "amount_picocredits": "10"})
+            self.c.j.offer(str(index), "campaign", 4590 + index, index, index + 1, 10)
             self.c.j.transition(
                 str(index),
                 "reconciled" if index < 2 else "accepted",
@@ -464,12 +467,44 @@ class DiscoveryExecutorTests(unittest.TestCase):
         with self.assertRaisesRegex(Gate, "accounting mismatch"):
             DiscoveryController.accounting(self.c)
 
+    def test_completion_requires_the_scheduled_id_slot_wallets_and_amount(self):
+        from reporting import workload_complete
+
+        event = {"intent": "one", "offset_seconds": 3, "sender": "wallet-1",
+                 "recipient": "wallet-2", "amount_picocredits": "1000"}
+        self.c.j.set("start", 1000)
+        self.c.j.set("status", "draining")
+        self.c.j.set("accounting", {"difference": 0})
+        self.c.j.offer("one", "campaign", 1003, 0, 1, 1000)
+        self.c.j.transition("one", "reconciled")
+        self.assertTrue(workload_complete(self.c.j, [event], []))
+        for field, value in (("intent", "other"), ("offset_seconds", 4), ("sender", "wallet-3"),
+                             ("recipient", "wallet-3"), ("amount_picocredits", "1001")):
+            with self.subTest(field=field):
+                self.assertFalse(workload_complete(self.c.j, [{**event, field: value}], []))
+
+    def test_phase_gate_rejects_reconciled_substitute_for_a_scheduled_payment(self):
+        import asyncio
+        from unittest.mock import patch
+
+        self.c.events = [{"intent": "planned", "offset_seconds": 3590, "sender": "wallet-1",
+                          "recipient": "wallet-2", "amount_picocredits": "10"}]
+        self.c.j.set("offer_cursor:campaign", 1)
+        self.c.j.offer("other", "campaign", 4590, 0, 1, 10)
+        self.c.j.transition("other", "reconciled")
+        with patch("discovery.time.time", return_value=4601):
+            with self.assertRaisesRegex(Gate, "previous payments differ from the frozen schedule"):
+                asyncio.run(self.c.campaign_tick())
+        self.assertEqual(self.c.j.get("active_phase"), "correctness")
+
     def test_completed_delivery_does_not_erase_safety_hold_or_missing_gate(self):
         from reporting import workload_complete
 
         self.c.j.offer("one", "campaign", 1000, 0, 1, 1)
         self.c.j.transition("one", "reconciled")
-        events = [{"intent": "one"}]
+        events = [{"intent": "one", "offset_seconds": 0, "sender": "wallet-1",
+                   "recipient": "wallet-2", "amount_picocredits": "1"}]
+        self.c.j.set("start", 1000)
         phases = [{"id": "correctness"}]
         self.c.j.set("status", "draining")
         self.c.j.set("accounting", {"difference": 0})

@@ -50,6 +50,11 @@ def at(step, key):
     return START + STEPS[step][{"restore_at": "restore"}.get(key, key) + "_offset"]
 
 
+def scheduled_payment(identifier, offered):
+    return {"intent": identifier, "offset_seconds": offered - START,
+            "sender": "wallet-1", "recipient": "wallet-2", "amount_picocredits": "1000"}
+
+
 class Fleet:
     """Five fake validators: RPC, observer export and a ~150 s observer ring."""
 
@@ -169,6 +174,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
                   "genesis": f"{0:064x}", "schema_version": 2, "seed": 7,
                   "faults": {"validator_degrade_phase": steps}}
         c.degrade_steps = SUMMARY["degrade_steps"] if steps else []
+        c.events = []
         c.j.set("status", "running")
         c.j.set("setup_start", START - 8 * 3600)
         c.j.set("start", START)
@@ -974,6 +980,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
     # -- phase boundary -----------------------------------------------------
 
     def deferred(self, step):
+        self.c.events.append(scheduled_payment("late", self.now - 10))
         self.c.j.offer("late", "campaign", self.now - 10, 0, 1, 1000)
         self.c.j.transition("late", "reconciled", info={
             "deferred_hosts": list(STEPS[step]["target_hosts"]), "deferred_step": step})
@@ -983,7 +990,6 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
             {"id": "recovery", "start_hour": 42, "end_hour": 48},
             {"id": "degrade", "start_hour": 48, "end_hour": 54},
             {"id": "repeat", "start_hour": 54, "end_hour": 72}])
-        self.c.events = []
         self.c.j.set("active_phase", active)
         self.c.sync = AsyncMock()
         self.c.accounting = Mock()

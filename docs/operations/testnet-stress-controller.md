@@ -1386,7 +1386,8 @@ gate), each of the following must hold. Otherwise the run halts with
 Some evidence only exists after `window_end`, so the verdict stays `open` until
 all of it is in place:
 
-- every campaign offer in the window is `reconciled`;
+- every offer scheduled in the frozen plan for this window has a reconciled campaign row
+  with the same intent ID, slot timestamp, sender, recipient and principal.
 - the step's `deferred_hosts` receipts are verified (#1587);
 - the first accounting snapshot at or after `window_end` shows difference 0.
   The verdict takes one itself whenever nothing is pending and the wallet
@@ -1460,6 +1461,12 @@ signed fee never silently passes unexercised fee tests. A new report derives
 planned/offered/submitted/reconciled/skipped counts from the actual manifest and
 journal, including separate rehearsal results; it does not use the legacy 692
 constant.
+
+The report's `campaign_payments` counts missing slots, unexpected intents, changed
+payment terms or slot times, and unfinished scheduled payments. Phase changes and
+the final delivery verdict check the same fields. When resuming an older journal,
+the controller checks stored recovery passes against the schedule and reopens
+a pass if payment evidence is missing.
 
 Run all offline checks with:
 

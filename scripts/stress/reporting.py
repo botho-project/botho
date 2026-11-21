@@ -11,7 +11,7 @@ import statistics
 import time
 from fee_evidence import floor_quote_summary, payment_consensus_summary
 from lottery import award_spend_expectation
-from plan import expand
+from plan import expand, payment_terms
 from runtime import HOSTS, atomic, digest
 
 
@@ -436,6 +436,8 @@ def degrade_report(journal, steps):
             )
             row["failures"] = list(verdict.get("failures") or []) if verdict else []
             row["awaiting"] = list(record.get("awaiting") or [])
+            if "campaign_payments" in record:
+                row["campaign_payments"] = record["campaign_payments"]
             row["fault_observed"] = record.get("fault_observed")
             if record.get("tip_check") is not None:
                 row["tip_check"] = record["tip_check"]
@@ -536,13 +538,11 @@ def build_controller_report(self, rows):
     artifacts = artifact_evidence(
         self.state, rows, self.j.limits["max_signed_transaction_bytes"]
     )
-    nominal = (
-        len(self.events)
-        if hasattr(self, "events")
-        else len(expand(self.plan)[1])
-        if self.plan
-        else 0
-    )
+    events = getattr(self, "events", None)
+    if events is None:
+        events = expand(self.plan)[1] if self.plan else []
+    campaign_rows = [row for row in rows if row["kind"] == "campaign"]
+    campaign = campaign_delivery_counts(campaign_rows, events, self.j.get("start"))
     counts = {}
     for row in rows:
         label = row["kind"] + ":" + row["state"]
@@ -575,10 +575,11 @@ def build_controller_report(self, rows):
         "signer_sha256": self.config.get("signer_sha256"),
         "counts": counts,
         "submitted_to_reconciled_seconds": latency("submitted"),
-        "nominal_campaign_offers": nominal,
+        "nominal_campaign_offers": len(events),
+        "campaign_payments": campaign,
         "targets": list(self.targets.values()) if hasattr(self, "targets") else None,
         "infrastructure_end": self.config.get("infrastructure_end"),
-        "not_yet_offered": nominal - sum(r["kind"] == "campaign" for r in rows),
+        "not_yet_offered": campaign["missing"],
         "offered_to_reconciled_seconds": latency("offered"),
         "signed_fees": sum(r["fee"] for r in rows if r["prepared"]),
         "faucet_fees": sum(
@@ -625,6 +626,27 @@ def build_controller_report(self, rows):
     return report
 
 
+def campaign_delivery_counts(rows, events, start):
+    """Compare journaled campaign offers to their immutable slots and payment terms."""
+    counts = {"missing": len(events), "unexpected": 0, "changed": 0, "unfinished": 0}
+    if not rows:
+        return counts
+    expected = {event["intent"]: event for event in events}
+    for row in rows:
+        event = expected.get(row["id"])
+        if event is None:
+            counts["unexpected"] += 1
+            continue
+        counts["missing"] -= 1
+        if start is None or (row["offered"], row["sender"], row["recipient"], row["amount"]) != (
+            start + event["offset_seconds"], *payment_terms(event),
+        ):
+            counts["changed"] += 1
+        if row["state"] != "reconciled":
+            counts["unfinished"] += 1
+    return counts
+
+
 def workload_complete(journal, events, phases, degrade_steps=()):
     """A delivered schedule cannot erase a safety hold or a missing phase gate.
 
@@ -633,13 +655,11 @@ def workload_complete(journal, events, phases, degrade_steps=()):
     A campaign that received more V2 awards than its pinned threshold but
     spent none fails the #1681 expectation and is not complete either.
     """
-    rows = journal.rows("kind='campaign'")
     accounting = journal.get("accounting", {})
     gates = journal.get("phase_gates", {})
     return (
         journal.get("status") == "draining"
-        and len(rows) == len(events)
-        and all(row["state"] == "reconciled" for row in rows)
+        and not any(campaign_delivery_counts(journal.campaign_offers(), events, journal.get("start")).values())
         and all(gates.get(phase["id"]) is True for phase in phases)
         and accounting.get("difference") == 0
         and award_spend_expectation(journal)["status"] != "fail"

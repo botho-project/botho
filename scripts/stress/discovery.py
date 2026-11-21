@@ -5,6 +5,7 @@ import json
 import math
 import time
 from controller import Controller
+from plan import payment_terms
 from lottery import AWARD_SPEND_POLICY, lottery_rows, spend_expectation_threshold
 from runtime import Gate, HOSTS, Quota, atomic, digest
 from selection import choose
@@ -601,17 +602,8 @@ class DiscoveryController(Controller):
             if at > now:
                 self.next_offer_at = at
                 break
-            sender = int(event["sender"].split("-")[-1]) - 1
-            recipient = int(event["recipient"].split("-")[-1]) - 1
             with self.j.transaction():
-                self.j.offer(
-                    event["intent"],
-                    kind,
-                    at,
-                    sender,
-                    recipient,
-                    int(event["amount_picocredits"]),
-                )
+                self.j.offer(event["intent"], kind, at, *payment_terms(event))
                 cursor += 1
                 self.j.set("offer_cursor:" + kind, cursor)
         # Expiry is measured from the slot anchor (#1627): rows of a phase
@@ -792,6 +784,9 @@ class DiscoveryController(Controller):
             # Only the correctness phase needs the signed input counts. Capture
             # those counts before yielding to sync, as with the delivery states.
             shapes = None
+            prior = self.campaign_delivery_between(start, boundary)
+            if any(prior.values()):
+                raise Gate("generator_limited: previous payments differ from the frozen schedule")
             if self.j.get("active_phase") == "correctness":
                 shapes = {
                     json.loads(row[0]).get("input_count")
@@ -899,15 +894,12 @@ class DiscoveryController(Controller):
             self.j, self.plan, report["artifact_evidence"]
         )
         report["seed"] = self.plan["seed"]
-        campaign_rows = [r for r in rows if r["kind"] == "campaign"]
-        delivered = len(campaign_rows) == len(self.events) and all(
-            r["state"] == "reconciled" for r in campaign_rows
-        )
+        delivered = not any(report["campaign_payments"].values())
         delivery = (
             "completed"
             if delivered
             else "failed"
-            if status in ("held", "incomplete")
+            if status in ("held", "incomplete", "complete")
             else "in_progress"
         )
         if self.plan.get("execution_mode") == "rehearsal_only":

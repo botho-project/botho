@@ -305,6 +305,7 @@ class Journal:
             CREATE INDEX IF NOT EXISTS requests_window ON requests(host,at);
             CREATE INDEX IF NOT EXISTS intents_unreconciled ON intents(state,kind,offered)
                 WHERE state!='reconciled';
+            CREATE INDEX IF NOT EXISTS intents_campaign_offered ON intents(offered) WHERE kind='campaign';
             CREATE INDEX IF NOT EXISTS intents_offer_queue ON intents(offered,id)
                 WHERE state IN ('planned','eligible');
         ''')
@@ -395,6 +396,17 @@ class Journal:
             "SELECT 1 FROM intents WHERE state!='reconciled' AND state IN ("
             + ','.join('?' for _ in PENDING) + ') LIMIT 1', PENDING
         ).fetchone() is not None
+
+    def campaign_offers(self, *, before=None, since=None):
+        query = "SELECT id,offered,sender,recipient,amount,state FROM intents WHERE kind='campaign'"
+        args = []
+        if since is not None:
+            query += " AND offered>=?"
+            args.append(since)
+        if before is not None:
+            query += " AND offered<?"
+            args.append(before)
+        return self.db.execute(query, args)
 
     def prior_campaign_states(self, boundary):
         """Only unfinished states from before the boundary affect the phase gate."""

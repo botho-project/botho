@@ -458,6 +458,36 @@ class VerdictTests(Base):
             await self.c.degrade_evidence(self.now, statuses, self.c.statuses)
         self.assertEqual(self.verdict("D1"), "fail")
 
+    async def test_window_waits_for_scheduled_offer_missing_from_journal(self):
+        self.quiescent_accounting()
+        begin, end = at("D1", "fault_start"), at("D1", "window_end")
+        self.c.events = [base.scheduled_payment("first", begin),
+                         base.scheduled_payment("last", end - 1),
+                         base.scheduled_payment("next", end)]
+        self.c.j.offer("first", "campaign", begin, 0, 1, 1000)
+        self.c.j.transition("first", "reconciled")
+        await self.run_d1()
+        self.assertIsNone(self.verdict("D1"))
+        self.assertEqual(self.record("D1")["campaign_payments"]["missing"], 1)
+        self.assertIn("payments", self.record("D1")["awaiting"])
+        self.c.j.offer("last", "campaign", end - 1, 0, 1, 1000)
+        self.c.j.transition("last", "reconciled")
+        self.c.settle_degrade_verdicts(self.now)
+        self.assertEqual(self.verdict("D1"), "pass")
+
+    async def test_restart_reopens_old_pass_without_scheduled_payment(self):
+        self.quiescent_accounting()
+        await self.run_d1()
+        old = self.record("D1")
+        old.pop("campaign_payments", None)
+        self.c.j.set("degrade:D1", old)
+        self.c.events = [base.scheduled_payment("missing", at("D1", "restore_at"))]
+        self.c.settle_degrade_verdicts(self.now)
+        current = self.record("D1")
+        self.assertIsNone(current["verdict"])
+        self.assertEqual(current["previous_verdict"], old["verdict"])
+        self.assertEqual(current["campaign_payments"]["missing"], 1)
+
     async def test_skipped_in_window_offer_fails(self):
         self.quiescent_accounting()
         offered = at("D1", "restore_at") + 10
@@ -473,6 +503,7 @@ class VerdictTests(Base):
     async def test_in_window_payment_unresolved_after_window_end_fails(self):
         # Accounting is exact (nothing pending) but the open verdict still
         # owes the in-window payment; it then goes unresolved.
+        self.c.events = [base.scheduled_payment("pay", at("D1", "restore_at"))]
         self.quiescent_accounting()
         self.c.j.offer("pay", "campaign", at("D1", "restore_at"), 0, 1, 1000)
         await self.run_d1()
@@ -543,6 +574,7 @@ class VerdictTests(Base):
         await self.check_restart_holds_open(at("D1", "window_end") - 30)
 
     async def test_unverified_deferred_receipt_never_passes(self):
+        self.c.events = [base.scheduled_payment("pay", at("D1", "fault_start") + 60)]
         self.quiescent_accounting()
 
         def deferred():
@@ -562,6 +594,7 @@ class VerdictTests(Base):
 
     async def test_unreconciled_in_window_payment_keeps_the_verdict_open(self):
         self.quiescent_accounting()
+        self.c.events = [base.scheduled_payment("pay", at("D1", "restore_at"))]
         self.c.j.offer("pay", "campaign", at("D1", "restore_at"), 0, 1, 1000)
         await self.run_d1()
         # A planned row has spent nothing, so accounting is exact; the

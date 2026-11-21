@@ -2,6 +2,7 @@
 """Bounded native testnet campaign; launch config and secrets stay outside the repo."""
 import argparse
 import asyncio
+from bisect import bisect_left
 import fcntl
 import hashlib
 import json
@@ -13,8 +14,8 @@ import subprocess
 import time
 from discovery_plan import degrade_opt_in
 from fee_quote import sign_priced
-from plan import expand
-from reporting import legacy_lottery_evidence
+from plan import expand, payment_terms
+from reporting import campaign_delivery_counts, legacy_lottery_evidence
 from lottery import (check_lottery_rules, decoy_row, lottery_context, lottery_rows,
                      v2_award_evidence)
 from signer_history import (SCAN_OPERATIONS, age_band, history_duplicate, merge_scans,
@@ -485,7 +486,7 @@ class Controller:
                 record = self.degrade_unobserved(window, now)
             if record is None:
                 record = await self.degrade_open(window, now, status, prior or {}, metrics)
-            if record.get('verdict') is not None:
+            if self.degrade_verdict_recorded(record, window):
                 continue
             if record.get('closed_at') is None:
                 await self.degrade_track(record, window, now, status, metrics)
@@ -746,6 +747,15 @@ class Controller:
                            + ','.join('?' for _ in MISSED)+") ORDER BY offered, id",
                            (window['fault_start'], window['window_end'], *MISSED))
 
+    def campaign_delivery_between(self, start, before, since=None):
+        # Both the materializer and the journal use absolute timestamps at the slot boundary.
+        def offered(event):
+            return start + event['offset_seconds']
+        first = 0 if since is None else bisect_left(self.events, since, key=offered)
+        last = bisect_left(self.events, before, lo=first, key=offered)
+        rows = self.j.campaign_offers(since=since, before=before)
+        return campaign_delivery_counts(rows, self.events[first:last], start)
+
     def degrade_settle(self, record, window, now):
         """Close an open verdict once its after-window evidence exists.
 
@@ -757,8 +767,10 @@ class Controller:
         missed = self.missed_offers(window)
         if missed:
             return self.degrade_verdict(record, ['missed payment '+missed[0]['id']], now)
-        unfinished = self.j.rows("kind='campaign' AND offered>=? AND offered<? AND state!='reconciled'",
-                                 (window['fault_start'], window['window_end']))
+        payments = self.campaign_delivery_between(self.j.get('start'), window['window_end'], window['fault_start'])
+        record['campaign_payments'] = payments
+        if payments['changed'] or payments['unexpected']:
+            return self.degrade_verdict(record, ['campaign payments differ from the frozen schedule'], now)
         deferred = [r for r in self.deferred_rows()
                     if json.loads(r['info']).get('deferred_step') == window['step']]
         snapshot = self.j.get('accounting')
@@ -777,7 +789,7 @@ class Controller:
                 and snapshot.get('difference') != 0:
             return self.degrade_verdict(
                 record, ['accounting difference '+str(snapshot.get('difference'))], now)
-        record['awaiting'] = [*(['payments'] if unfinished else []),
+        record['awaiting'] = [*(['payments'] if payments['missing'] or payments['unfinished'] else []),
                               *(['deferred receipts'] if deferred else []),
                               *(['accounting'] if snapshot is None
                                 or snapshot.get('at', 0) < window['window_end'] else [])]
@@ -798,12 +810,25 @@ class Controller:
         self.j.event(None, 'degrade_verdict', {'step': step, **record['verdict']})
         return record['verdict']
 
+    def degrade_verdict_recorded(self, record, window):
+        verdict = record.get('verdict')
+        if verdict and verdict['status'] == 'pass' and 'campaign_payments' not in record:
+            # Older controllers counted only rows that already existed. Verify their
+            # saved pass on resume, preserving the original verdict if it has to reopen.
+            payments = self.campaign_delivery_between(self.j.get('start'), window['window_end'], window['fault_start'])
+            record['campaign_payments'] = payments
+            if any(payments.values()):
+                record['previous_verdict'] = verdict
+                record['verdict'] = None
+            self.j.set('degrade:'+window['step'], record)
+        return record.get('verdict') is not None
+
     def settle_degrade_verdicts(self, now=None):
         """Settle open verdicts outside the monitor (final drain)."""
         now = time.time() if now is None else now
         for window in self.degrade_windows():
             record = self.j.get('degrade:'+window['step'])
-            if record and record.get('closed_at') is not None and record.get('verdict') is None:
+            if record and record.get('closed_at') is not None and not self.degrade_verdict_recorded(record, window):
                 self.degrade_settle(record, window, now)
 
     def gate(self):
@@ -2024,9 +2049,8 @@ class Controller:
             offered=start+event['offset_seconds']
             if offered>now:
                 break
-            sender=int(event['sender'].split('-')[-1])-1
-            recipient=int(event['recipient'].split('-')[-1])-1
-            self.j.offer(event['intent'],'campaign',offered,sender,recipient,int(event['amount_picocredits']))
+            sender, recipient, amount = payment_terms(event)
+            self.j.offer(event['intent'],'campaign',offered,sender,recipient,amount)
             row=self.j.intent(event['intent'])
             if row['state'] in ('planned','eligible') and now>offered+120:
                 self.j.transition(event['intent'],'skipped','slot expired; no catch-up',finished=now)
@@ -2059,9 +2083,8 @@ class Controller:
             offered=start+event['offset_seconds']
             if offered>now:
                 break
-            sender=int(event['sender'].split('-')[-1])-1
-            recipient=int(event['recipient'].split('-')[-1])-1
-            self.j.offer(event['intent'],'campaign',offered,sender,recipient,int(event['amount_picocredits']))
+            sender, recipient, amount = payment_terms(event)
+            self.j.offer(event['intent'],'campaign',offered,sender,recipient,amount)
             row=self.j.intent(event['intent'])
             if row['state'] not in ('planned','eligible'):
                 continue
