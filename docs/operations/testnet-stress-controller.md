@@ -1026,6 +1026,11 @@ are passed as `reserved`. For each batch, the prefunder:
 3. creates the exclusive `grants/batch-NNNN.submit` marker;
 4. calls `tx_submit` exactly once, on the producer.
 
+On restart, the prefunder checks each marker's transaction hash and timestamp
+before opening the journal, including after funding has completed. Only a
+batch still in `prepared` state can lack a marker. If a check fails, compare
+the batch and its marker with the retained backup before resuming.
+
 A batch with a marker is **never prepared or submitted again**. An uncertain
 reply marks the batch `unknown` and holds the run. A batch left unconfirmed for
 15 minutes after its submission also holds. Pacing follows the plan's

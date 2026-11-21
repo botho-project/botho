@@ -1204,6 +1204,37 @@ class ReconcileTests(PrefundBase):
         with self.assertRaisesRegex(Gate, 'spent-input height differs'):
             self.prefunder()
 
+    def test_completed_restart_checks_each_submit_marker_before_reusing_grants(self):
+        p = self.prefunder()
+        for _ in range(100):
+            if self.tick(p):
+                break
+            self.advance()
+        else:
+            self.fail('funding did not finish')
+        marker = p.marker_path(0)
+        original = marker.read_bytes()
+        submissions = list(self.fleet.submits)
+        self.fleet.requests.clear()
+        for case, replacement in (
+                ('missing', None),
+                ('different batch', p.marker_path(1).read_bytes()),
+                ('truncated', original[:8]),
+                ('invalid time', json.dumps({**json.loads(original), 'at': False}).encode())):
+            with self.subTest(case=case):
+                if replacement is None:
+                    marker.unlink()
+                else:
+                    marker.write_bytes(replacement)
+                try:
+                    with self.assertRaisesRegex(Gate, 'submit marker'):
+                        self.tick(self.prefunder())
+                finally:
+                    marker.write_bytes(original)
+        self.assertTrue(self.tick(self.prefunder()))
+        self.assertEqual(self.fleet.submits, submissions)
+        self.assertFalse(self.fleet.requests)
+
     def test_completed_legacy_funding_upgrades_by_reads_preserving_handoff(self):
         p = self.prefunder()
         for _ in range(100):

@@ -47,6 +47,7 @@ from pathlib import Path
 import re
 import socket
 import stat
+import sys
 import time
 from urllib.parse import urlsplit
 
@@ -368,6 +369,23 @@ class Prefunder(Controller):
     def marker_path(self, index):
         return self.grants_dir / f'batch-{index:04d}.submit'
 
+    def read_submit_time(self, row):
+        """A prepared batch may still be unsent. Every later state needs its own marker."""
+        path = self.marker_path(row['index'])
+        try:
+            marker = json.loads(path.read_bytes())
+        except FileNotFoundError:
+            need(row['state'] == 'prepared', f'grant batch {row["index"]} lost its submit marker')
+            return None
+        except ValueError as error:
+            raise Gate(f'invalid submit marker: {path.name}') from error
+        need(isinstance(marker, dict) and marker.get('hash') == row['hash'],
+             f'submit marker hash differs from grant batch: {path.name}')
+        at = marker.get('at')
+        need(type(at) in (int, float) and 0 <= at <= sys.float_info.max,
+             f'invalid submit marker time: {path.name}')
+        return at
+
     def artifact_path(self, index):
         return self.artifacts / f'batch-{index:04d}.bin'
 
@@ -400,6 +418,7 @@ class Prefunder(Controller):
                  'grant record identity changed')
             need(self.artifact_path(index).exists() and sha256_file(row['artifact']) == row['artifact_sha256'],
                  'saved grant artifact missing or altered: ' + name)
+            self.read_submit_time(row)
             # Every batch covers the next grants in order, exactly as offer() made them.
             grants = row.get('grants')
             need(isinstance(grants, list) and 0 < len(grants) <= GRANTS_PER_BATCH
@@ -726,18 +745,11 @@ class Prefunder(Controller):
         # Persisted inventory is never trusted (controller.py): restore-scan everything.
         await self.sync(full=True)
         for row in self.records:
-            marker = self.marker_path(row['index']).exists()
-            if row['state'] == 'prepared' and not marker:
-                # A crash or quota deferral between the record and its marker.
-                # tick() retries it through send_unsent() on every tick.
-                continue
-            elif row['state'] == 'prepared':
-                # Crash after the marker: the one attempt may have been sent. Never resend.
-                row.update(state='submitting', submitted_at=json.loads(
-                    self.marker_path(row['index']).read_text())['at'])
+            submitted_at = self.read_submit_time(row)
+            if row['state'] == 'prepared' and submitted_at is not None:
+                # A crash after the marker can precede dispatch. Never resend it.
+                row.update(state='submitting', submitted_at=submitted_at)
                 self.save(row)
-            else:
-                need(marker, 'grant batch %d lost its submit marker' % row['index'])
         self.reserve_inputs()
         await self.reconcile(force=True)
         self.resumed = True
