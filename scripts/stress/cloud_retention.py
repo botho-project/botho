@@ -7,6 +7,10 @@ Only qualification fleets are eligible: the legacy Project=botho-qualification
 tag, or project=botho with Purpose=qualification. No snapshots,
 public nodes, build machines, or untagged resources are removed.
 An undeployed fleet needs complete remote retirement proof instead of archives.
+
+The plan's volume_count and gib describe disks selected for retirement.
+tagged_storage also counts available and in-use qualification disks across
+the region, including detached disks and disks on protected fleets.
 """
 import argparse
 import collections
@@ -402,6 +406,14 @@ def make_plan(instances, volumes, candidates, now, min_age_hours):
             plan['retained'].append({'run': run, 'reason': reason})
     plan['volume_count'] = sum(len(f['volumes']) for f in plan['fleets'])
     plan['gib'] = sum(v['gib'] for f in plan['fleets'] for v in f['volumes'])
+    allocated = {v['VolumeId']: v for v in volumes
+                 if qualification(tags(v)) and v['State'] in ('available', 'in-use')}
+    allocated_gib = sum(v['Size'] for v in allocated.values())
+    unattached = [v for v in allocated.values() if not v['Attachments']]
+    plan['tagged_storage'] = {
+        'allocated_volumes': len(allocated), 'allocated_gib': allocated_gib,
+        'retained_volumes': len(allocated) - plan['volume_count'], 'retained_gib': allocated_gib - plan['gib'],
+        'unattached_volumes': len(unattached), 'unattached_gib': sum(v['Size'] for v in unattached)}
     return plan
 
 
@@ -600,7 +612,8 @@ def main():
     plan = make_plan(nodes, volumes, candidates, time.time(), args.min_age_hours)
     plan.update(account_id=args.account_id, region=args.region, invalid_archives=errors)
     save(args.output / 'plan.json', plan)
-    print(json.dumps({k: plan[k] for k in ('volume_count', 'gib', 'protected_latest_run', 'retained')}), flush=True)
+    summary = ('volume_count', 'gib', 'tagged_storage', 'protected_latest_run', 'retained')
+    print(json.dumps({k: plan[k] for k in summary}), flush=True)
     if args.apply:
         print(json.dumps(apply_plan(plan, aws, args.backup_root, args.output)), flush=True)
 

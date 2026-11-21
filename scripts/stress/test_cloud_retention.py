@@ -71,7 +71,24 @@ class RetentionTests(unittest.TestCase):
 
     def test_newest_fleet_retained_even_with_valid_archive(self):
         self.nodes.pop()
-        self.assertEqual(self.plan()['volume_count'], 0)
+        plan = self.plan()
+        self.assertEqual(plan['volume_count'], 0)
+        self.assertEqual(plan['tagged_storage'], {
+            'allocated_volumes': 6, 'allocated_gib': 240, 'retained_volumes': 6,
+            'retained_gib': 240, 'unattached_volumes': 0, 'unattached_gib': 0})
+
+    def test_storage_report_includes_unattached_qualification_disks(self):
+        # A detached volume can outlive its fleet. Its run tag can also be missing.
+        orphan = {'VolumeId': 'vol-orphan', 'Size': 80, 'State': 'available', 'Attachments': [],
+                  'Tags': tagged(project='botho', Purpose='qualification')}
+        self.volumes.extend([orphan, dict(orphan, VolumeId='vol-unrelated', Tags=[]),
+                             dict(orphan, VolumeId='vol-deleted', State='deleted')])
+        plan = self.plan()
+        self.assertEqual((plan['volume_count'], plan['gib']), (6, 240))
+        self.assertEqual(plan['tagged_storage'], {
+            'allocated_volumes': 7, 'allocated_gib': 320, 'retained_volumes': 1,
+            'retained_gib': 80, 'unattached_volumes': 1, 'unattached_gib': 80})
+        self.assertEqual([f['run'] for f in plan['fleets']], ['q20261001-a'])
 
     def retag(self, **values):
         for row in self.nodes[:-1] + self.volumes:
