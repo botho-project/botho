@@ -1157,6 +1157,82 @@ class ReconcileTests(PrefundBase):
         with self.assertRaisesRegex(Gate, 'receipt disagreement'):
             self.tick(p)
 
+    def test_grant_receipt_must_name_the_signed_transaction(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        call = self.fleet.call
+
+        async def missing_hash(host, method, *args, **kwargs):
+            value = await call(host, method, *args, **kwargs)
+            if host == HOSTS[-1] and method == 'getTransaction':
+                del value['txHash']
+            return value
+
+        self.fleet.call = missing_hash
+        with self.assertRaisesRegex(Gate, 'receipt hash mismatch'):
+            self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'accepted')
+        self.assertEqual(len(self.fleet.submits), 1)
+
+    def test_grant_inputs_must_be_spent_at_the_receipt_height_on_every_host(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        call = self.fleet.call
+
+        async def spent_earlier(host, method, *args, **kwargs):
+            value = await call(host, method, *args, **kwargs)
+            if host == HOSTS[-1] and method == 'chain_areKeyImagesSpent':
+                value[0]['spentHeight'] -= 1
+            return value
+
+        self.fleet.call = spent_earlier
+        with self.assertRaisesRegex(Gate, 'spent-input height differs'):
+            self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'accepted')
+
+    def test_saved_grant_evidence_is_checked_before_reuse(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        self.tick(p)
+        row = p.records[0]
+        self.assertEqual(set(row['spent_receipts']), set(HOSTS))
+        row['spent_receipts'][HOSTS[-1]][0]['spentHeight'] += 1
+        p.save(row)
+        with self.assertRaisesRegex(Gate, 'spent-input height differs'):
+            self.prefunder()
+
+    def test_completed_legacy_funding_upgrades_by_reads_preserving_handoff(self):
+        p = self.prefunder()
+        for _ in range(100):
+            if self.tick(p):
+                break
+            self.advance()
+        else:
+            self.fail('funding did not finish')
+        before = list(self.fleet.submits)
+        files = [p.state / name for name in ('opening_balances.json', 'funding-health.json')]
+        handoff = [f.read_bytes() for f in files]
+        original_time = p.records[0]['confirmed_at']
+        del p.records[0]['spent_receipts']
+        del p.records[0]['receipts'][HOSTS[-1]]['txHash']
+        p.save(p.records[0])
+        self.fleet.requests.clear()
+        p = self.prefunder()
+        self.assertEqual(len(p.unconfirmed()), 1)
+        self.assertTrue(self.tick(p))
+        self.assertEqual(self.fleet.submits, before)
+        self.assertEqual([f.read_bytes() for f in files], handoff)
+        self.assertEqual(p.records[0]['confirmed_at'], original_time)
+        self.assertEqual(p.records[0]['block_height'], p.records[0]['spent_receipts'][HOSTS[-1]][0]['spentHeight'])
+        self.assertEqual(p.records[0]['receipts'][HOSTS[-1]]['txHash'], p.records[0]['hash'])
+        self.assertEqual([h for h, method in self.fleet.requests if method == 'getTransaction'], list(HOSTS))
+        self.fleet.requests.clear()
+        self.assertTrue(self.tick(self.prefunder()))
+        self.assertFalse(self.fleet.requests)
+
     def test_funding_accounting_mismatch_holds(self):
         p = self.prefunder()
         self.offer_one(p)

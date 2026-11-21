@@ -50,7 +50,7 @@ import stat
 import time
 from urllib.parse import urlsplit
 
-from controller import Controller
+from controller import Controller, check_spent_inputs, check_transaction_receipts
 from fee_evidence import floor_quote_summary
 from lottery import lottery_rows
 from plan import expand
@@ -295,6 +295,15 @@ def sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def grant_receipt_height(row, receipts):
+    """Grant batches are locally signed transfers with fixed outputs and fees."""
+    need(isinstance(receipts, dict) and set(receipts) == set(HOSTS)
+         and all(isinstance(r, dict) for r in receipts.values()), 'incomplete grant receipts')
+    signed = {'kind': 'prefund', 'hash': row['hash'], 'fee': row['fee']}
+    check_transaction_receipts(signed, row, receipts.values())
+    return receipts[HOSTS[0]]['blockHeight']
+
+
 class Prefunder(Controller):
     """Reuses Controller.sync()/canonical_inventory() and selection.choose().
 
@@ -398,6 +407,13 @@ class Prefunder(Controller):
                  and row.get('amount') == sum(g['amount'] for g in grants),
                  'grant batch coverage changed: ' + name)
             granted += len(grants)
+            if row['state'] == 'confirmed' and 'spent_receipts' in row:
+                height = grant_receipt_height(row, row.get('receipts'))
+                need(type(row.get('block_height')) is int and row['block_height'] == height,
+                     'saved grant inclusion height differs from receipt')
+                spent = row['spent_receipts']
+                need(isinstance(spent, dict) and set(spent) == set(HOSTS), 'incomplete grant spent receipts')
+                check_spent_inputs(row['key_images'], height, spent.values())
             records.append(row)
         expected = {f'batch-{i:04d}.json' for i in range(len(records))}
         expected |= {f'batch-{i:04d}.submit' for i in range(len(records))}
@@ -414,7 +430,7 @@ class Prefunder(Controller):
         atomic(self.record_path(row['index']), row)
 
     def unconfirmed(self):
-        return [r for r in self.records if r['state'] != 'confirmed']
+        return [r for r in self.records if r['state'] != 'confirmed' or 'spent_receipts' not in r]
 
     def reserve_inputs(self):
         """Mirror every unconfirmed grant's inputs into the selector's reservations."""
@@ -720,7 +736,7 @@ class Prefunder(Controller):
                 row.update(state='submitting', submitted_at=json.loads(
                     self.marker_path(row['index']).read_text())['at'])
                 self.save(row)
-            elif row['state'] != 'confirmed':
+            else:
                 need(marker, 'grant batch %d lost its submit marker' % row['index'])
         self.reserve_inputs()
         await self.reconcile(force=True)
@@ -745,17 +761,13 @@ class Prefunder(Controller):
                 need(self.clock() - row.get('submitted_at', row['prepared_at']) <= UNRESOLVED_SECONDS,
                      'grant batch %d unresolved after fifteen minutes; never resubmitted' % row['index'])
                 continue
-            receipts = await self.all_hosts('getTransaction', {'hash': row['hash']})
-            shapes = {(r.get('blockHeight'), r.get('fee'), r.get('outputCount'), r.get('totalOutput'))
-                      for r in receipts}
-            need(len(shapes) == 1, 'fleet grant receipt disagreement: batch %d' % row['index'])
-            need(all(r.get('txHash', row['hash']) == row['hash'] for r in receipts), 'fleet receipt hash mismatch')
-            block, fee, outputs, total = shapes.pop()
-            need(type(block) is int and fee == row['fee'] and outputs == len(row['outputs'])
-                 and total == sum(o['amount'] for o in row['outputs']), 'grant receipt differs from signed grant')
+            replies = await self.all_hosts('getTransaction', {'hash': row['hash']})
+            receipts = dict(zip(HOSTS, replies, strict=True))
+            block = grant_receipt_height(row, receipts)
+            if row['state'] == 'confirmed':
+                need(row.get('block_height') == block, 'prior grant inclusion height changed')
             spent = await self.all_hosts('chain_areKeyImagesSpent', {'keyImages': row['key_images']})
-            need(all([s.get('keyImage') for s in host] == row['key_images'] and all(s.get('spent') is True for s in host)
-                     for host in spent), 'grant inputs not spent on every node')
+            check_spent_inputs(row['key_images'], block, spent)
             if min(s['chainHeight'] for s in self.statuses.values()) < block:
                 continue
             if not scanned:
@@ -768,8 +780,8 @@ class Prefunder(Controller):
                 need(len(found) == 1 and found[0]['utxo']['amount'] == expected['amount']
                      and bytes(found[0]['utxo']['target_key']).hex() == expected['target_key'],
                      'grant batch %d recipient/change scan mismatch' % row['index'])
-            row.update(state='confirmed', block_height=block, confirmed_at=self.clock(),
-                       receipts=dict(zip(HOSTS, receipts)))
+            row.update(state='confirmed', block_height=block, confirmed_at=row.get('confirmed_at', self.clock()),
+                       receipts=receipts, spent_receipts=dict(zip(HOSTS, spent, strict=True)))
             self.save(row)
         self.reserve_inputs()
 
@@ -867,8 +879,12 @@ class Prefunder(Controller):
     async def tick(self):
         """One bounded step. Returns True once the outputs are written."""
         self.gate()
-        if (self.state / 'opening_balances.json').exists() and self.granted() == self.total:
-            return True
+        completed = (self.state / 'opening_balances.json').exists()
+        if completed:
+            need(self.granted() == self.total and all(r['state'] == 'confirmed' for r in self.records)
+                 and (self.state / 'funding-health.json').is_file(), 'opening balances without completed funding')
+            if not self.unconfirmed():
+                return True
         await self.lottery_preflight()
         await self.health(force=not self.statuses)
         if self.opening is None:
@@ -879,6 +895,10 @@ class Prefunder(Controller):
         if not self.resumed:
             await self.resume()
         await self.reconcile()
+        if completed:
+            # Upgrade old confirmed records using reads only. Keep the exact
+            # health and balances bytes consumed by a staged controller.
+            return not self.unconfirmed()
         if self.granted() == self.total and not self.unconfirmed():
             await self.complete()
             return True

@@ -1047,13 +1047,19 @@ no marker. Nothing was sent, so every later tick retries it, as
 `unknown`, it is submitted once. A deferred, unsent grant is not subject to the
 15-minute hold. Only the write deadline bounds it.
 
-A grant is `confirmed` only when:
+The prefunder confirms a signed grant batch when all three checks pass.
 
-- all five nodes report it confirmed, with agreeing
-  `(blockHeight, fee, outputCount, totalOutput)`;
-- all five report its key images spent;
-- a scan finds every grant output in its recipient wallet and the change in
+- Each validator names the signed transaction hash and agrees on the inclusion
+  height, signed fee, output count and total output value.
+- Each validator locates every signed key image at that inclusion height.
+- A scan finds every grant output in its recipient wallet and the change in
   the funding wallet.
+
+The batch record retains the transaction and input-spend replies from all
+five validators. On restart the prefunder checks these records. Older batches
+that lack the spend replies are checked again with read-only RPC calls. A
+completed run keeps its original funding-health and opening-balance files
+so the staged controller can still verify their digests.
 
 The funding wallet must account exactly:
 `opening + coinbase/lottery inflow − remaining − principal − fees == 0`.
