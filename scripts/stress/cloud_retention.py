@@ -335,7 +335,7 @@ def workload_terminal(root, names, identities, manifest):
     for name in ('inventory.json', 'fleet-final-state.json'):
         files[name] = digest(checked_path(root, name))
     # The runner keeps its execution receipts outside the six host archives.
-    for name in ('campaign-plan.json', 'faults.jsonl'):
+    for name in ('campaign-plan.json', 'campaign-start.json', 'faults.jsonl'):
         if (root / name).exists():
             files[name] = digest(checked_path(root, name))
     return dict(kind='terminal_workload', run=run, verified_at=verified_at, proof_sha256=files,

@@ -8,10 +8,12 @@ import math
 from pathlib import Path
 import sys
 
-from faults import Refusal, commands, load_inventory
+from faults import DEFAULT_DEV, PRECHECK_LEAD, Refusal, commands, load_inventory
 from fleet_nodes import paths
 from fleet_provision import validate_run_id
 from plan import expand
+from review_netem import runner_evidence
+from runtime import Gate
 
 
 def require(condition, message):
@@ -48,8 +50,10 @@ def inspect_step(step, controller, rows, expected, start):
     if any(r['action'] != 'minting_check' or r['role'] not in step['targets'] or
            r.get('minting_active') is not False or r['planned_at'] != fault_at for r in checks):
         reasons.append('Invalid target precheck')
-    if operations and {r['role'] for r in checks if r['at'] <= operations[0]['at']} != set(step['targets']):
-        reasons.append('Missing target precheck before the first operation')
+    if operations:
+        recent = {r['role'] for r in checks if fault_at - PRECHECK_LEAD <= r['at'] <= operations[0]['at']}
+        if recent != set(step['targets']):
+            reasons.append('Missing target precheck near the start of the step')
     if any(b['at'] < a['at'] for a, b in zip(operations, operations[1:])):
         reasons.append('Operator clock moved backwards within the step')
     identities = {(r['phase'], r['role'], r['action'], r['at']) for r in operations}
@@ -88,7 +92,7 @@ def inspect_step(step, controller, rows, expected, start):
                 recovery_supported=state == 'complete' and observed and controller_pass)
 
 
-def inspect_fleet(root, report_path=None):
+def inspect_fleet(root, report_path=None, dev=DEFAULT_DEV):
     hashes = {}
 
     def read_bytes(name, path):
@@ -105,8 +109,10 @@ def inspect_fleet(root, report_path=None):
         require(len(finals) <= 1, 'Several final reports are present. Select an attempt with --report')
         report_path = finals[0] if finals else root / 'result.json'
     report = json.loads(read_bytes('controller_report', report_path))
+    activation = json.loads(read_bytes('campaign_start', root / 'campaign-start.json'))
     summary, _ = expand(plan)
-    require(report['plan_sha256'] == summary['plan_sha256'], 'Controller report refers to a different plan')
+    require(report['plan_sha256'] == summary['plan_sha256'] == activation['plan_sha256'],
+            'Controller report or activation refers to a different plan')
     attempt = report['run_id']
     require(isinstance(attempt, str) and len(attempt) == len(run) + 2 and attempt[:-2] == run
             and attempt[-2] == '-' and attempt[-1] in 'abcdefghijklmnopqrstuvwxyz',
@@ -114,7 +120,8 @@ def inspect_fleet(root, report_path=None):
     if report_path.name.startswith('final-report-'):
         require(report_path.name == 'final-report-' + attempt + '.json', 'Final report filename names another attempt')
     start = report.get('start')
-    require(timestamp(start), 'Controller has no campaign start time')
+    require(activation['run_id'] == attempt and timestamp(start) and activation['start'] == start,
+            'Controller and activation disagree on the campaign start or attempt')
     require(timestamp(infra.get('created_at')) and timestamp(infra.get('host_end'))
             and infra['created_at'] <= start < infra['host_end'], 'Campaign start falls outside the fleet lifetime')
     steps = summary.get('degrade_steps')
@@ -122,21 +129,38 @@ def inspect_fleet(root, report_path=None):
     observed = report['degrade']
     require([r['step'] for r in observed] == [s['id'] for s in steps], 'Missing or unexpected controller steps')
 
-    ids = {s['id'] for s in steps}
+    actions = {s['id']: s['action'] for s in steps}
     journal = defaultdict(list)
     warnings = []
     for line in read_bytes('operator_journal', root / 'faults.jsonl').splitlines():
         row = json.loads(line)
         require(isinstance(row, dict) and timestamp(row.get('at')) and type(row.get('ok')) is bool,
                 'Invalid operator receipt')
-        if row['phase'] == 'warn' and row['role'] == 'laptop' and row['step'] in ids | {'preflight'}:
+        if row['phase'] == 'warn' and row['role'] == 'laptop' and (row['step'] == 'preflight' or row['step'] in actions):
             warnings.append({'step': row['step'], 'action': row['action'], 'at': row['at']})
             continue
-        require(row['phase'] != 'warn' and row['step'] in ids, 'Unexpected operator receipt')
+        require(row['step'] in actions and (row['phase'] != 'warn' or
+                (row['action'] == 'qdisc_counters' and actions[row['step']] == 'netem')), 'Unexpected operator receipt')
         journal[row['step']].append(row)
     unit = paths(run)['node_unit']
-    results = [inspect_step(s, c, journal[s['id']], expected_receipts(s, inventory, unit), start)
-               for s, c in zip(steps, observed)]
+    results = []
+    for step, controller in zip(steps, observed):
+        rows = journal[step['id']]
+        operations = [r for r in rows if r['action'] != 'qdisc_counters'] if step['action'] == 'netem' else rows
+        result = inspect_step(step, controller, operations, expected_receipts(step, inventory, unit), start)
+        if step['action'] == 'netem' and result['operator_receipts'] == 'complete':
+            try:
+                result['network_queue'] = runner_evidence(rows, step, start, dev)
+            except (KeyError, TypeError, ValueError, Refusal) as error:
+                result['operator_receipts'] = 'incomplete'
+                result['recovery_supported'] = False
+                result['operator_clock'] = {}
+                result['reasons'].append(str(error))
+        if controller['verdict'] == 'pass' and not (
+                timestamp(report.get('at')) and report['at'] >= start + step['window_end_offset']):
+            result['recovery_supported'] = False
+            result['reasons'].append('Controller pass predates the end of its recovery window')
+        results.append(result)
     return dict(run=run, attempt=attempt, campaign_status=report['status'], input_sha256=hashes, steps=results,
                 operator_warnings=warnings, all_recoveries_supported=all(s['recovery_supported'] for s in results))
 
@@ -145,10 +169,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('fleet', type=Path, help='directory containing the frozen plan, inventory and faults.jsonl')
     parser.add_argument('--report', type=Path, help='controller report (defaults to the final report, then result.json)')
+    parser.add_argument('--dev', default=DEFAULT_DEV, help='archived interface name for the D4 command hash check')
     args = parser.parse_args()
     try:
-        result = inspect_fleet(args.fleet, args.report)
-    except (ValueError, KeyError, TypeError, OSError, Refusal) as error:
+        result = inspect_fleet(args.fleet, args.report, args.dev)
+    except (ValueError, KeyError, TypeError, OSError, Refusal, Gate) as error:
         parser.exit(2, f'Invalid recovery evidence: {error}\n')
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
     return 0 if result['all_recoveries_supported'] else 1

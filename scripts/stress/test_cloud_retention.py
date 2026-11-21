@@ -296,12 +296,13 @@ class RetentionTests(unittest.TestCase):
         self.infrastructure()
         self.put('result.json', {'run_id': self.run + '-a', 'at': self.started, 'status': 'incomplete'})
         self.put('campaign-plan.json', {'profile': 'test'})
+        self.put('campaign-start.json', {'start': self.started, 'run_id': self.run + '-a'})
         log = self.root / 'faults.jsonl'
         log.write_text('{"step":"D4","phase":"verify","ok":true}\n')
         fleet = self.refresh()['fleets'][0]
         destination = Path(self.tmp.name) / 'secondary'
         retained = Path(backup(fleet, destination))
-        for name in ('faults.jsonl', 'campaign-plan.json'):
+        for name in ('faults.jsonl', 'campaign-plan.json', 'campaign-start.json'):
             self.assertEqual((retained / name).read_bytes(), (self.root / name).read_bytes())
         log.write_text('')
         with self.assertRaisesRegex(RuntimeError, 'proof changed'):

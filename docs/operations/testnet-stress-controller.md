@@ -1455,13 +1455,14 @@ the counters unavailable. Restoration follows the original deadline.
 
 From the repository root, run `python3 scripts/stress/recovery_receipts.py FLEET_DIR`
 on the saved fleet directory. It reads the frozen campaign and infrastructure
-plans, inventory, operator journal and controller report. If several final
+plans, campaign activation, inventory, operator journal and controller report. If several final
 reports exist, use `--report PATH` to select the attempt.
 
 Each step shows the controller verdict, the completeness of the operator
 receipts and the elapsed time between apply and restore receipts on the
-operator clock. D4's receipts document successful command execution. Measuring
-the packet loss or latency actually experienced requires network observations.
+operator clock. D4 includes the command hash check and any recorded kernel
+queue counters. Legacy journals retain action names and times. Measuring
+packet loss or latency experienced by a peer requires network observations.
 The controller's rejoin milestones retain their original clock and resolution.
 Historical operator journals identify steps by role and scheduled time and
 depend on the fleet archive for run identity. Exit status 0 means all scheduled

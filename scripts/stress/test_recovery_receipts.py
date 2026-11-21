@@ -84,7 +84,7 @@ class RecoveryReceiptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name, data in [('infrastructure-plan.json', {'run_id':run, 'created_at':90, 'host_end':300000}), ('inventory.json', inventory),
-                               ('campaign-plan.json', plan), ('result.json', {})]:
+                               ('campaign-plan.json', plan), ('campaign-start.json', report), ('result.json', {})]:
                 (root/name).write_text(json.dumps(data))
             (root/'faults.jsonl').write_bytes(b'')
             final = root/('final-report-'+run+'-a.json')
@@ -94,7 +94,9 @@ class RecoveryReceiptTests(unittest.TestCase):
             second.write_text(json.dumps(dict(report, run_id=run+'-b')))
             with self.assertRaisesRegex(ValueError, 'Several final reports'):
                 inspect_fleet(root)
-            self.assertEqual(inspect_fleet(root, second)['attempt'], run+'-b')
+            with self.assertRaisesRegex(ValueError, 'activation disagree'):
+                inspect_fleet(root, second)
+            self.assertEqual(inspect_fleet(root, final)['attempt'], run+'-a')
             final.write_text(json.dumps(dict(report, plan_sha256='0'*64)))
             with self.assertRaisesRegex(ValueError, 'different plan'):
                 inspect_fleet(root, final)
