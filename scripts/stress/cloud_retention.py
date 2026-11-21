@@ -274,6 +274,70 @@ def record_disposition(root, state, decided_by, reason, disk_contents, preserve)
         tmp.unlink(missing_ok=True)
 
 
+def workload_terminal(root, names, identities, manifest):
+    """Tie saved controller and supervisor reports to the fleet and its last observed attempts."""
+    files = {}
+
+    def load(name):
+        raw = checked_path(root, name).read_bytes()
+        files[name] = hashlib.sha256(raw).hexdigest()
+        record = json.loads(raw)
+        need(isinstance(record, dict), 'Invalid report object: ' + name)
+        return record
+
+    infra = load('infrastructure-plan.json')
+    run, created = infra['run_id'], infra['created_at']
+    need(isinstance(run, str) and re.fullmatch(r'q[0-9]{8}-[a-z0-9-]+', run) and timestamp(created),
+         'Invalid terminal report infrastructure plan')
+    # The x-series operator appends one attempt letter. Earlier drivers also
+    # appended the execution mode to the infrastructure run ID.
+    suffix = r'(?:-[a-z])?' if re.match(r'q[0-9]{8}-x[1-9][0-9]*-', run) else r'(?:-(?:[a-z]|campaign|rehearsal))?'
+    attempt_pattern = re.compile(re.escape(run) + suffix)
+    latest = {}
+    held_at = None
+    for name in names:
+        record = load(name)
+        at = record.get('at')
+        need(timestamp(at) and at >= created, 'Invalid terminal report time: ' + name)
+        if name == 'supervisor-held.json':
+            need(record.get('no_restart') is True and record.get('original_shutdown_deadlines_retained') is True
+                 and isinstance(record.get('error'), str) and record['error'].strip(), 'Invalid supervisor hold')
+            held_at = at
+            continue
+        attempt = record.get('run_id')
+        need(isinstance(attempt, str) and attempt_pattern.fullmatch(attempt)
+             and name in ('result.json', 'final-report-' + attempt + '.json'), 'Report fleet or attempt mismatch: ' + name)
+        report = record.get('report', record)
+        need(isinstance(report, dict) and report.get('run_id') == attempt and timestamp(report.get('at'))
+             and created <= report['at'] <= at, 'Invalid controller report identity or time: ' + name)
+        status = report.get('status')
+        need(isinstance(status, str) and status.strip(), 'Missing controller report status: ' + name)
+        if status == 'held_pre_funding':
+            need(report.get('rehearsal_started') is False and type(report.get('funding_writes')) is int
+                 and report['funding_writes'] == 0, 'Invalid pre-funding hold')
+        observed = report['at']
+        if attempt in latest and observed == latest[attempt][0]:
+            need(status == latest[attempt][1], 'Controllers reported conflicting states at the same time')
+        if attempt not in latest or observed > latest[attempt][0]:
+            latest[attempt] = (observed, status)
+    terminal = {'complete', 'incomplete', 'held', 'rehearsal_complete', 'held_pre_funding'}
+    need(all(status in terminal for _, status in latest.values()), 'No terminal controller report for an observed attempt')
+    checkpoint_name = '.evidence-collection/checkpoint.json'
+    if (root / checkpoint_name).exists():
+        checkpoint = load(checkpoint_name)
+        selection = checkpoint['selection']
+        attempts = selection['attempts']
+        need(selection['run'] == run and selection['instances'] == {role: i for i, role in identities.items()}
+             and checkpoint['hashes'] == manifest, 'Collection checkpoint differs from the fleet or host archives')
+        need(isinstance(attempts, list) and attempts and len(attempts) == len(set(attempts))
+             and set(attempts) <= latest.keys(), 'Missing terminal report for a collected attempt')
+    verified_at = max([t for t, _ in latest.values()] + ([held_at] if held_at is not None else []))
+    for name in ('inventory.json', 'fleet-final-state.json'):
+        files[name] = digest(checked_path(root, name))
+    return dict(kind='terminal_workload', run=run, verified_at=verified_at, proof_sha256=files,
+                archived_at=max(verified_at, *(checked_path(root, name).stat().st_mtime for name in names)))
+
+
 def evidence(root):
     root = Path(root)
     identities = fleet_identities(root)
@@ -285,7 +349,8 @@ def evidence(root):
     retired = read(checked_path(root, 'retirement.json')) if retirement_path.is_file() else {}
     need(isinstance(retired, dict), 'Invalid operator disposition')
     memory = any((root / name).exists() for name in ('analysis.json', 'outcome', 'final-receipt.json'))
-    terminal = any((root / name).is_file() for name in ('result.json', 'supervisor-held.json'))
+    reports = sorted(p.name for p in root.glob('final-report-*.json'))
+    reports.extend(name for name in ('result.json', 'supervisor-held.json') if (root / name).is_file())
     extra = {}
     if retired.get('state') in DISPOSITIONS:
         if retired['state'] == 'held_before_t0':
@@ -308,7 +373,7 @@ def evidence(root):
             extra['proof_sha256'][name] = digest(root / name)
         if not manifest_path.exists():
             return dict(root=str(root), identities=identities, sha256={}, **extra)
-    elif not manifest_path.exists() or (retired.get('state') == 'aborted_before_deployment' and not terminal):
+    elif not manifest_path.exists() or (retired.get('state') == 'aborted_before_deployment' and not reports):
         need(retirement_path.is_file(), 'No terminal evidence')
         retirement = retired
         need(retirement.get('state') == 'aborted_before_deployment', 'Missing workload archives')
@@ -330,7 +395,9 @@ def evidence(root):
         if not manifest_path.exists():
             return dict(root=str(root), identities=identities, sha256={}, **extra)
     manifest = host_manifest(root)
-    if not extra and not terminal:
+    if not extra and reports:
+        extra = workload_terminal(root, reports, identities, manifest)
+    elif not extra:
         need(not retirement_path.exists(), 'Unrecognized operator disposition')
         need((root / 'infrastructure-plan.json').is_file(), 'No terminal evidence')
         run = read(checked_path(root, 'infrastructure-plan.json'))['run_id']

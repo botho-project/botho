@@ -49,7 +49,9 @@ class RetentionTests(unittest.TestCase):
             (self.root / 'final-evidence' / (role + '.tar.gz')).write_bytes(raw)
             manifests[role] = hashlib.sha256(raw).hexdigest()
         self.put('inventory.json', identities)
-        self.put('supervisor-held.json', {'error': 'test failed'})
+        self.put('infrastructure-plan.json', {'run_id': 'q20261001-a', 'created_at': 1790812800})
+        self.put('supervisor-held.json', {'at': 1790816400, 'error': 'test failed',
+                                          'no_restart': True, 'original_shutdown_deadlines_retained': True})
         self.put('fleet-final-state.json', {n['id']: 'stopped' for n in identities})
         self.put('final-evidence-manifest.json', manifests)
         self.e = evidence(self.root)
@@ -105,7 +107,9 @@ class RetentionTests(unittest.TestCase):
         run = fleet_provision.run_id('20261101', 1, 'endurance')
         for row in self.nodes[:-1] + self.volumes:
             row['Tags'] = fleet_provision.tags(run, tags_of(row)['Role'], 1793786400)
-        plan = self.plan()
+        self.assertEqual(self.plan()['volume_count'], 0)
+        self.put('infrastructure-plan.json', {'run_id': run, 'created_at': 1790812800})
+        plan = self.refresh()
         self.assertEqual(plan['volume_count'], 6)
         self.assertEqual(plan['protected_latest_run'], 'q20261002-b')
         fleet = plan['fleets'][0]
@@ -217,8 +221,119 @@ class RetentionTests(unittest.TestCase):
 
     def test_missing_terminal_evidence_blocks_deletion(self):
         (self.root / 'supervisor-held.json').unlink()
+        (self.root / 'infrastructure-plan.json').unlink()
         with self.assertRaisesRegex(RuntimeError, 'terminal'):
             evidence(self.root)
+
+    def test_ongoing_controller_report_does_not_release_disks(self):
+        self.infrastructure()
+        for status in ('setup', 'running', 'draining', 'unknown'):
+            with self.subTest(status=status):
+                self.put('result.json', {'run_id': self.run + '-a', 'at': self.started, 'status': status})
+                with self.assertRaisesRegex(RuntimeError, 'terminal'):
+                    evidence(self.root)
+
+    def test_final_report_supersedes_snapshot_and_survives_backup(self):
+        self.infrastructure()
+        attempt = self.run + '-a'
+        name = 'final-report-' + attempt + '.json'
+        first = {'run_id': attempt, 'at': self.started, 'status': 'running'}
+        final = dict(first, at=self.started + 10, status='complete')
+        self.put('result.json', first)
+        self.put(name, final)
+        plan = self.refresh()
+        dest = Path(backup(plan['fleets'][0], Path(self.tmp.name) / 'secondary'))
+        self.assertEqual(json.loads((dest / name).read_bytes()), final)
+        self.assertEqual(json.loads((dest / 'result.json').read_bytes()), first)
+        self.assertEqual(evidence(dest)['verified_at'], final['at'])
+        self.put('result.json', dict(first, at=final['at'] + 1))
+        with self.assertRaisesRegex(RuntimeError, 'terminal'):
+            evidence(self.root)
+        self.put('result.json', dict(first, at=final['at']))
+        with self.assertRaisesRegex(RuntimeError, 'conflicting'):
+            evidence(self.root)
+        self.put('result.json', dict(first, run_id=self.run + '-b'))
+        with self.assertRaisesRegex(RuntimeError, 'terminal'):
+            evidence(self.root)
+
+    def test_terminal_proof_matches_fleet_attempt_and_time(self):
+        self.infrastructure()
+        name = 'final-report-' + self.run + '-a.json'
+        row = {'run_id': self.run + '-a', 'at': self.started, 'status': 'incomplete'}
+        self.put(name, row)
+        self.assertEqual(evidence(self.root)['verified_at'], self.started)
+        for bad in (dict(row, run_id=self.run + '-b'), dict(row, run_id='q20261009-other-a'),
+                    dict(row, at=self.started - 4000), dict(row, at=True)):
+            with self.subTest(bad=bad):
+                self.put(name, bad)
+                with self.assertRaises(RuntimeError):
+                    evidence(self.root)
+
+    def test_changed_terminal_report_invalidates_an_existing_plan(self):
+        self.infrastructure()
+        report = {'run_id': self.run + '-a', 'at': self.started, 'status': 'complete'}
+        self.put('result.json', report)
+        plan = self.refresh()
+        self.put('result.json', dict(report, status='incomplete'))
+        with patch('cloud_retention.inventory', return_value=(self.nodes, self.volumes)), \
+                patch('cloud_retention.time.time', return_value=self.now):
+            with self.assertRaisesRegex(RuntimeError, 'changed since planning'):
+                apply_plan(plan, lambda *a: self.fail('Unexpected provider call'), Path(self.tmp.name) / 'secondary', self.tmp.name)
+
+    def test_pre_funding_hold_requires_zero_writes_and_an_unstarted_rehearsal(self):
+        self.infrastructure()
+        report = {'run_id': self.run, 'at': self.started, 'status': 'held_pre_funding',
+                  'funding_writes': 0, 'rehearsal_started': False}
+        self.put('result.json', report)
+        self.assertEqual(self.refresh()['volume_count'], 6)
+        for change in ({'funding_writes': 1}, {'funding_writes': False}, {'rehearsal_started': True}):
+            with self.subTest(change=change):
+                self.put('result.json', dict(report, **change))
+                with self.assertRaisesRegex(RuntimeError, 'pre-funding'):
+                    evidence(self.root)
+
+    def test_historical_supervisor_and_nested_reports(self):
+        self.infrastructure()
+        attempt = self.run + '-campaign'
+        report = {'run_id': attempt, 'status': 'incomplete', 'at': self.started}
+        self.put('result.json', {'run_id': attempt, 'report': report, 'at': self.started + 1})
+        self.assertEqual(self.refresh()['volume_count'], 6)
+        self.put('result.json', {'run_id': self.run, 'report': report, 'at': self.started + 1})
+        with self.assertRaises(RuntimeError):
+            evidence(self.root)
+        self.put('result.json', dict(report, status='setup'))
+        held = {'at': self.started + 5, 'error': 'stopped', 'no_restart': True,
+                'original_shutdown_deadlines_retained': True}
+        self.put('supervisor-held.json', held)
+        with self.assertRaisesRegex(RuntimeError, 'terminal'):
+            evidence(self.root)
+        (self.root / 'result.json').unlink()
+        self.assertEqual(self.refresh()['volume_count'], 6)
+        for change in ({'no_restart': False}, {'at': 0}, {'error': ''}):
+            with self.subTest(change=change):
+                self.put('supervisor-held.json', dict(held, **change))
+                with self.assertRaises(RuntimeError):
+                    evidence(self.root)
+
+    def test_collection_checkpoint_binds_every_attempt_to_the_host_archives(self):
+        self.infrastructure()
+        attempt = self.run + '-a'
+        self.put('result.json', {'run_id': attempt, 'at': self.started, 'status': 'rehearsal_complete'})
+        (self.root / '.evidence-collection').mkdir()
+        name = '.evidence-collection/checkpoint.json'
+        inventory = json.loads((self.root / 'inventory.json').read_bytes())
+        selection = {'run': self.run, 'instances': {n['role']: n['id'] for n in inventory}, 'attempts': [attempt]}
+        manifest = json.loads((self.root / 'final-evidence-manifest.json').read_bytes())
+        self.put(name, {'selection': selection, 'hashes': manifest})
+        plan = self.refresh()
+        dest = Path(backup(plan['fleets'][0], Path(self.tmp.name) / 'secondary'))
+        self.assertEqual((dest / name).read_bytes(), (self.root / name).read_bytes())
+        for updated, hashes in ((dict(selection, attempts=[attempt, self.run + '-b']), manifest),
+                                (dict(selection, instances={}), manifest), (selection, {})):
+            with self.subTest(updated=updated, hashes=hashes):
+                self.put(name, {'selection': updated, 'hashes': hashes})
+                with self.assertRaises(RuntimeError):
+                    evidence(self.root)
 
     def test_backup_verified_and_existing_corruption_not_overwritten(self):
         fleet = self.plan()['fleets'][0]
