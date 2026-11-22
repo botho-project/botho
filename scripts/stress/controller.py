@@ -2,6 +2,7 @@
 """Bounded native testnet campaign; launch config and secrets stay outside the repo."""
 import argparse
 import asyncio
+from bisect import bisect_left
 import fcntl
 import hashlib
 import json
@@ -13,8 +14,8 @@ import subprocess
 import time
 from discovery_plan import degrade_opt_in
 from fee_quote import sign_priced
-from plan import expand
-from reporting import legacy_lottery_evidence
+from plan import expand, payment_terms
+from reporting import campaign_delivery_counts, legacy_lottery_evidence
 from lottery import (check_lottery_rules, decoy_row, lottery_context, lottery_rows,
                      v2_award_evidence)
 from signer_history import (SCAN_OPERATIONS, age_band, history_duplicate, merge_scans,
@@ -102,7 +103,8 @@ def cgroup_cpu_limit(root='/sys/fs/cgroup', self_cgroup='/proc/self/cgroup'):
     """The tightest ``cpu.max`` on this process's cgroup v2 path, or ``None``.
 
     systemd's ``CPUQuota=`` lands in the unit's own ``cpu.max``; a parent
-    slice may be tighter, so every ancestor below the root is read too.
+    slice may be tighter. A container can expose its own limit at the mount
+    root, including when its membership is simply `/`.
     """
     try:
         lines = Path(self_cgroup).read_text().splitlines()
@@ -119,7 +121,7 @@ def cgroup_cpu_limit(root='/sys/fs/cgroup', self_cgroup='/proc/self/cgroup'):
         return None
     parts = [p for p in path.split('/') if p]
     limits = []
-    for depth in range(len(parts), 0, -1):
+    for depth in range(len(parts), -1, -1):
         try:
             text = (Path(root).joinpath(*parts[:depth]) / 'cpu.max').read_text()
         except OSError:
@@ -177,6 +179,91 @@ DEGRADE_START_SLACK = 60
 # the next step stops at the same instant still has an end sample.
 DEGRADE_END_LEAD = 45
 MILESTONES = ('first_reachable_at', 'synced_at_tip_at', 'first_ballot_at', 'first_coinbase_at')
+
+
+def check_transaction_receipts(row, info, receipts):
+    """Check fleet agreement and the amounts recorded before submission."""
+    shapes = {(r.get('blockHeight'), r.get('fee'), r.get('outputCount'), r.get('totalOutput'))
+              for r in receipts}
+    if len(shapes) != 1:
+        raise Gate('fleet transaction receipt disagreement')
+    # Legacy public-faucet receipts may omit the hash. A signed payment
+    # receipt must independently identify the transaction being reconciled.
+    missing_hash = row['hash'] if row['kind'] == 'funding' else None
+    if any(r.get('txHash', missing_hash) != row['hash'] for r in receipts):
+        raise Gate('fleet transaction receipt hash mismatch')
+    if row['kind'] == 'funding':
+        # The public faucet signs these grants outside the controller.
+        return
+    if any(type(r.get(k)) is not int for r in receipts
+           for k in ('blockHeight', 'fee', 'outputCount', 'totalOutput')):
+        raise Gate('signed payment receipt must report integer height, fee, count and total')
+    height, fee, count, total = shapes.pop()
+    if not 0 <= height < 2**64:
+        raise Gate('signed payment receipt block height outside uint64 range')
+    if fee != row['fee']:
+        raise Gate('node receipt fee differs from signed fee')
+    outputs = info['outputs']
+    if count != len(outputs) or total != sum(o['amount'] for o in outputs):
+        raise Gate('node receipt count or total differs from signed outputs')
+
+
+def check_spent_inputs(key_images, block_height, responses):
+    """Require every validator to locate every signed input at the receipt height."""
+    if not key_images or not responses:
+        raise Gate('spent-input state disagreement: missing input evidence')
+    for results in responses:
+        if not isinstance(results, list) or len(results) != len(key_images):
+            raise Gate('spent-input state disagreement: incomplete response')
+        for image, result in zip(key_images, results):
+            if (not isinstance(result, dict) or 'error' in result
+                    or result.get('keyImage') != image or result.get('spent') is not True):
+                raise Gate('spent-input state disagreement')
+            height = result.get('spentHeight')
+            if type(height) is not int or height != block_height:
+                raise Gate('spent-input height differs from transaction receipt')
+
+
+class SelectionHistory:
+    """First supported row per target, and one creation height per eligible decoy.
+
+    The controller only extends this index across a successful sync that
+    preserved the preceding blocks. A restart builds it from checked history.
+    """
+    def __init__(self, blocks):
+        self.blocks = blocks
+        self.indexed = 0
+        self.by_target = {}
+        self.decoy_heights = []
+
+    def read(self):
+        if self.indexed == len(self.blocks):
+            return self.by_target, self.decoy_heights
+
+        # Stage the suffix: a malformed payout must fail on every retry, with
+        # no partially indexed rows or duplicate heights. The initial sort
+        # also preserves chronological selection for standalone callers.
+        additions = {}
+        heights = []
+        for block in sorted(self.blocks[self.indexed:], key=lambda b: b['height']):
+            for output in block['outputs']:
+                key = output['targetKey'].lower()
+                if key in self.by_target or key in additions:
+                    continue
+                is_decoy = decoy_row(output)
+                if not is_decoy and lottery_context(output) is None:
+                    continue
+                additions[key] = (block['height'], output)
+                if is_decoy and key != '0' * 64:
+                    heights.append(block['height'])
+
+        if self.by_target:
+            self.by_target.update(additions)
+        else:
+            self.by_target = additions
+        self.decoy_heights.extend(heights)
+        self.indexed = len(self.blocks)
+        return self.by_target, self.decoy_heights
 
 
 class Controller:
@@ -283,7 +370,7 @@ class Controller:
 
     def deferred_rows(self):
         """Rows confirmed on the live hosts whose down hosts are not yet verified."""
-        return self.j.rows("json_extract(info,'$.deferred_hosts') IS NOT NULL ORDER BY offered, id")
+        return self.j.deferred_receipts()
 
     async def tolerate(self, host, hosts, awaitable, step=None):
         """Await a read; only a host in ``hosts`` (named by a step) may fail."""
@@ -308,6 +395,11 @@ class Controller:
             raise Gate(view['step']+': second node restart in one degrade step: '+host)
         with self.j.transaction():
             self.j.set('baseline:'+host, {**rebased, 'rebased_step': view['step']})
+            checked = self.j.get('checkpoint_hosts', [])
+            if host in checked:
+                self.j.set('checkpoint_hosts', [h for h in checked if h != host])
+            self.j.set('verified_genesis_hash', None)
+            self.j.set('genesis_verified', False)
             self.j.event(None, 'rebaseline', {'step': view['step'], 'host': host,
                                               'pid': rebased['pid'], 'start': rebased['start']})
 
@@ -394,7 +486,7 @@ class Controller:
                 record = self.degrade_unobserved(window, now)
             if record is None:
                 record = await self.degrade_open(window, now, status, prior or {}, metrics)
-            if record.get('verdict') is not None:
+            if self.degrade_verdict_recorded(record, window):
                 continue
             if record.get('closed_at') is None:
                 await self.degrade_track(record, window, now, status, metrics)
@@ -440,6 +532,12 @@ class Controller:
                       for h in named},
             'closed_at': None, 'verdict': None,
         }
+        if window['expect'] == 'safe_halt':
+            # A block already at a validator before the outage cannot prove recovery.
+            record['resume_height_floor'] = max(
+                (s['chainHeight'] for s in prior.values()
+                 if s and type(s.get('chainHeight')) is int and s['chainHeight'] >= 0),
+                default=None)
         self.j.set('degrade:'+window['step'], record)
         return record
 
@@ -447,10 +545,24 @@ class Controller:
         named = window['expected_down']
         tip = self.live_tip(status, named)
         if window['expect'] == 'safe_halt':
+            if 'resume_height_floor' not in record:
+                # Older journals combined heights from both sides of restore.
+                # Require a fresh advance beyond everything already recorded.
+                known_heights = [int(height) for height in record['tips']]
+                if record['tip_restore'] is not None:
+                    known_heights.append(record['tip_restore'])
+                record['resume_height_floor'] = max(known_heights, default=None)
+                record['tip_resumed_at'] = None
             for s in status.values():
-                if s is None or type(s.get('chainHeight')) is not int or not s.get('tipHash'):
+                if s is None or type(s.get('chainHeight')) is not int or s['chainHeight'] < 0:
                     continue
-                seen = record['tips'].setdefault(str(s['chainHeight']), s['tipHash'])
+                height = s['chainHeight']
+                floor = record['resume_height_floor']
+                if record['tip_restore'] is None and (floor is None or height > floor):
+                    record['resume_height_floor'] = height
+                if not s.get('tipHash'):
+                    continue
+                seen = record['tips'].setdefault(str(height), s['tipHash'])
                 if seen != s['tipHash'] and record['conflict'] is None:
                     record['conflict'] = {'height': s['chainHeight'], 'hashes': [seen, s['tipHash']]}
         if now < window['restore_at']:
@@ -460,9 +572,10 @@ class Controller:
                     record['metrics_start'][host] = await metrics(host, True, window['step'])
         elif record['tip_restore'] is None:
             record['tip_restore'] = tip
-        elif (record['tip_resumed_at'] is None and tip is not None
-                and tip > record['tip_restore']):
-            record['tip_resumed_at'] = now
+        elif record['tip_resumed_at'] is None and tip is not None:
+            floor = record.get('resume_height_floor', record['tip_restore'])
+            if floor is not None and tip > floor:
+                record['tip_resumed_at'] = now
         for host in named:
             s, track = status.get(host), record['hosts'][host]
             if now < window['restore_at']:
@@ -508,6 +621,105 @@ class Controller:
             return all(record['hosts'][h]['peer_zero'] for h in window['expected_down'])
         return 'unknown'  # netem: operator reconciles faults.jsonl post-run
 
+    async def recovery_tip(self, status, down, step):
+        """Read the same block from each reachable validator at window end."""
+        reachable = {host: status[host] for host in HOSTS if status.get(host) is not None}
+        missing = [host for host in HOSTS if host not in reachable and host not in down]
+        if missing:
+            return None, ['one tip: no status from '+', '.join(missing)]
+        if not reachable:
+            return None, ['one tip: no reachable validators']
+        invalid = [host for host, s in reachable.items()
+                   if type(s.get('chainHeight')) is not int or s['chainHeight'] < 0]
+        if invalid:
+            return None, ['one tip: invalid chain height from '+', '.join(invalid)]
+
+        height = min(s['chainHeight'] for s in reachable.values())
+        return await self.common_block(reachable, height, down, step)
+
+    async def common_block(self, reachable, height, down, step):
+        """Read the requested finalized height and compare every required response."""
+        blocks = await asyncio.gather(*(self.tolerate(host, down, self.rpc.call(
+            host, 'getBlockByHeight', {'height': height}), step) for host in reachable))
+        hashes = {}
+        failures = []
+        for host, block in zip(reachable, blocks):
+            if block is None and host in down:
+                continue
+            if (not isinstance(block, dict) or type(block.get('height')) is not int
+                    or block['height'] != height or not isinstance(block.get('hash'), str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', block['hash'])):
+                failures.append(f'one tip: invalid block at height {height} from {host}')
+                continue
+            hashes[host] = block['hash']
+
+        if len(set(hashes.values())) > 1:
+            failures.append('one tip: conflicting hashes at height '+str(height))
+        elif not hashes and not failures:
+            failures.append('one tip: no block at height '+str(height))
+        else:
+            for host, digest in hashes.items():
+                if reachable[host]['chainHeight'] == height and reachable[host].get('tipHash') != digest:
+                    failures.append(f'one tip: block differs from reported tip at height {height} on {host}')
+        return {'height': height, 'hosts': list(hashes), 'hashes': hashes}, failures
+
+    async def monitor_checkpoint(self, statuses, down, step):
+        reachable = {h: s for h, s in zip(HOSTS, statuses) if s is not None}
+        if not reachable or any(h not in reachable and h not in down for h in HOSTS):
+            raise Gate('checkpoint missing required validator status')
+        previous_height = self.j.get('checkpoint_height')
+        previous_hash = self.j.get('checkpoint_hash')
+        checked_hosts = self.j.get('checkpoint_hosts')
+        # Rows from earlier controllers lack per-host evidence. Read them again.
+        tips = {previous_height: previous_hash} if checked_hosts is not None else {}
+        observed_tips = {}
+        for host, status in reachable.items():
+            height, tip = status.get('chainHeight'), status.get('tipHash')
+            if (type(height) is not int or height < 0 or not isinstance(tip, str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', tip)):
+                raise Gate('invalid chain height or tip hash from '+host)
+            if tips.setdefault(height, tip) != tip:
+                raise Gate(f'conflicting hash at height {height} on {host}')
+            observed_tips[host] = [height, tip]
+        minimum = min(s['chainHeight'] for s in reachable.values())
+
+        # A reachable validator can miss a block read during its named fault.
+        # Retry it even when the surviving validators stay at the same height.
+        checkpoint = None
+        if (previous_height != minimum or checked_hosts != list(reachable)
+                or self.j.get('checkpoint_tips') != observed_tips):
+            checkpoint, failures = await self.common_block(reachable, minimum, down, step)
+            if failures:
+                raise Gate('checkpoint: '+'; '.join(failures))
+            if any(value != tips[minimum] for value in checkpoint['hashes'].values()):
+                raise Gate(f'checkpoint disagrees with reported tip at height {minimum}')
+
+        genesis = self.plan['genesis']
+        verify_genesis = self.j.get('verified_genesis_hash') != genesis
+        if verify_genesis:
+            if minimum == 0 and checkpoint is not None:
+                genesis_block = checkpoint
+            else:
+                genesis_block, failures = await self.common_block(reachable, 0, down, step)
+                if failures:
+                    raise Gate('genesis: '+'; '.join(failures))
+            if any(value != genesis for value in genesis_block['hashes'].values()):
+                raise Gate('genesis differs from manifest')
+
+        if checkpoint is not None or verify_genesis:
+            with self.j.transaction():
+                if checkpoint is not None:
+                    self.j.set('checkpoint_height', minimum)
+                    self.j.set('checkpoint_hash', tips[minimum])
+                    self.j.set('checkpoint_hosts', checkpoint['hosts'])
+                    self.j.set('checkpoint_tips', observed_tips)
+                if verify_genesis:
+                    complete = len(genesis_block['hosts']) == len(HOSTS)
+                    self.j.set('genesis_verified', complete)
+                    if complete:
+                        self.j.set('verified_genesis_hash', genesis)
+        return minimum
+
     async def degrade_close(self, record, window, now, status, down, metrics):
         """The window_end verdict: every criterion observable at this tick."""
         step, named = window['step'], window['expected_down']
@@ -518,18 +730,8 @@ class Controller:
             failures.append('fault not exercised')
         # One tip: every reachable host agrees at the common minimum height.
         # Only a host a later, active step names may be absent here.
-        reachable = [h for h in HOSTS if status.get(h) is not None]
-        missing = [h for h in HOSTS if h not in reachable and h not in down]
-        if missing:
-            failures.append('one tip: no status from '+', '.join(missing))
-        elif reachable:
-            height = min(status[h]['chainHeight'] for h in reachable)
-            blocks = await asyncio.gather(*(self.tolerate(h, down, self.rpc.call(
-                h, 'getBlockByHeight', {'height': height}), step) for h in reachable))
-            hashes = {b.get('hash') for b in blocks if b is not None}
-            record['tip_check'] = {'height': height, 'hosts': [h for h,b in zip(reachable,blocks) if b is not None]}
-            if len(hashes) != 1:
-                failures.append('one tip: conflicting hashes at height '+str(height))
+        record['tip_check'], tip_failures = await self.recovery_tip(status, down, step)
+        failures.extend(tip_failures)
         # Loop stalls: over-1 s recorded only; any >= 5 s delta fails.
         loops = {}
         for host in HOSTS:
@@ -553,6 +755,8 @@ class Controller:
                 failures.append('conflicting hash at height '+str(record['conflict']['height']))
             if record['tip_resumed_at'] is None:
                 failures.append('tip did not advance after restore')
+            elif not tip_failures and record['tip_check']['height'] <= record['resume_height_floor']:
+                failures.append('common block at window end did not advance past the restore height')
         record['closed_at'] = now
         # Missed payments, deferred receipts and accounting are checked by
         # degrade_settle(), which runs straight after this in the same tick.
@@ -566,6 +770,15 @@ class Controller:
                            + ','.join('?' for _ in MISSED)+") ORDER BY offered, id",
                            (window['fault_start'], window['window_end'], *MISSED))
 
+    def campaign_delivery_between(self, start, before, since=None):
+        # Both the materializer and the journal use absolute timestamps at the slot boundary.
+        def offered(event):
+            return start + event['offset_seconds']
+        first = 0 if since is None else bisect_left(self.events, since, key=offered)
+        last = bisect_left(self.events, before, lo=first, key=offered)
+        rows = self.j.campaign_offers(since=since, before=before)
+        return campaign_delivery_counts(rows, self.events[first:last], start)
+
     def degrade_settle(self, record, window, now):
         """Close an open verdict once its after-window evidence exists.
 
@@ -574,11 +787,15 @@ class Controller:
         deferred receipts verify (#1587), and the first accounting snapshot
         at or after window_end show difference 0. Until then it stays open.
         """
+        if window['expect'] == 'safe_halt' and record.get('resume_height_floor') is None:
+            return self.degrade_verdict(record, ['restore height unavailable in legacy recovery evidence'], now)
         missed = self.missed_offers(window)
         if missed:
             return self.degrade_verdict(record, ['missed payment '+missed[0]['id']], now)
-        unfinished = self.j.rows("kind='campaign' AND offered>=? AND offered<? AND state!='reconciled'",
-                                 (window['fault_start'], window['window_end']))
+        payments = self.campaign_delivery_between(self.j.get('start'), window['window_end'], window['fault_start'])
+        record['campaign_payments'] = payments
+        if payments['changed'] or payments['unexpected']:
+            return self.degrade_verdict(record, ['campaign payments differ from the frozen schedule'], now)
         deferred = [r for r in self.deferred_rows()
                     if json.loads(r['info']).get('deferred_step') == window['step']]
         snapshot = self.j.get('accounting')
@@ -597,7 +814,7 @@ class Controller:
                 and snapshot.get('difference') != 0:
             return self.degrade_verdict(
                 record, ['accounting difference '+str(snapshot.get('difference'))], now)
-        record['awaiting'] = [*(['payments'] if unfinished else []),
+        record['awaiting'] = [*(['payments'] if payments['missing'] or payments['unfinished'] else []),
                               *(['deferred receipts'] if deferred else []),
                               *(['accounting'] if snapshot is None
                                 or snapshot.get('at', 0) < window['window_end'] else [])]
@@ -618,12 +835,25 @@ class Controller:
         self.j.event(None, 'degrade_verdict', {'step': step, **record['verdict']})
         return record['verdict']
 
+    def degrade_verdict_recorded(self, record, window):
+        verdict = record.get('verdict')
+        if verdict and verdict['status'] == 'pass' and 'campaign_payments' not in record:
+            # Older controllers counted only rows that already existed. Verify their
+            # saved pass on resume, preserving the original verdict if it has to reopen.
+            payments = self.campaign_delivery_between(self.j.get('start'), window['window_end'], window['fault_start'])
+            record['campaign_payments'] = payments
+            if any(payments.values()):
+                record['previous_verdict'] = verdict
+                record['verdict'] = None
+            self.j.set('degrade:'+window['step'], record)
+        return record.get('verdict') is not None
+
     def settle_degrade_verdicts(self, now=None):
         """Settle open verdicts outside the monitor (final drain)."""
         now = time.time() if now is None else now
         for window in self.degrade_windows():
             record = self.j.get('degrade:'+window['step'])
-            if record and record.get('closed_at') is not None and record.get('verdict') is None:
+            if record and record.get('closed_at') is not None and not self.degrade_verdict_recorded(record, window):
                 self.degrade_settle(record, window, now)
 
     def gate(self):
@@ -700,19 +930,86 @@ class Controller:
         return await asyncio.to_thread(run)
 
     async def observer(self, host):
-        proc = await asyncio.create_subprocess_exec('ssh','-F','/dev/null','-i',self.config['observer_key'],
-            '-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',
-            '-o','UserKnownHostsFile='+self.config['known_hosts'],self.targets[host]['observer_ssh_target'],
-            stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        command = ('ssh', '-F', '/dev/null', '-i', self.config['observer_key'],
+                   '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+                   '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5',
+                   '-o', 'UserKnownHostsFile='+self.config['known_hosts'],
+                   self.targets[host]['observer_ssh_target'])
+        for attempt in range(1, 4):
+            proc = await asyncio.create_subprocess_exec(
+                *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), 10)
+            except BaseException:
+                if proc.returncode is None:
+                    proc.kill()
+                await proc.wait()
+                raise
+            if proc.returncode == 0:
+                break
+            # Only a fresh setup can race the first atomic latest.json write.
+            retry = (proc.returncode == os.EX_TEMPFAIL and attempt < 3
+                     and self.j.get('status') == 'setup'
+                     and self.j.get('baseline:'+host) is None)
+            tail = err[-512:].decode('utf-8', errors='replace').strip()
+            self.j.event(None, 'observer_export_failed', {
+                'host': host, 'attempt': attempt, 'returncode': proc.returncode,
+                'stderr_tail': tail, 'retry': retry,
+            })
+            if not retry:
+                raise Gate(f'restricted observer export failed: {host}, attempt {attempt}, '
+                           f'rc={proc.returncode}, stderr={ascii(tail)}')
+            await asyncio.sleep(10)
+        if len(out) > 128*1024:
+            raise Gate('oversized observer export: '+host)
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(),10)
-        except BaseException:
-            proc.kill()
-            await proc.wait()
-            raise
-        if proc.returncode or len(out)>128*1024:
-            raise Gate('restricted observer export failed: '+host)
-        return json.loads(out)
+            records = json.loads(out)
+        except ValueError as error:
+            raise Gate('invalid observer JSON: '+host) from error
+        if not isinstance(records, list) or not records or not all(isinstance(row, dict) for row in records):
+            raise Gate('invalid observer sample list: '+host)
+        return records
+
+    def check_validator_sample(self, host, status, observed, view, down, quorum_gated):
+        if not isinstance(status, dict) and not (status is None and host in down):
+            raise Gate('invalid validator status from '+host)
+        if status is not None:
+            check_identity(status,self.plan)
+            # Degrade-phase (x-series) plans need the installed
+            # 4-of-5, f=1 quorum on every reachable validator; a
+            # silent 4-of-4 would void D1-D5 (#1605).
+            if quorum_gated:
+                # A host the active restart step names may serve
+                # RPC before its gate's first evaluation (#1608);
+                # isolate/netem never restart, rejoining is strict.
+                unevaluated = (view is not None and host in down
+                               and view['action'] in RESTART_ACTIONS)
+                check_quorum(status,allow_unevaluated=unevaluated)
+                if unevaluated and all(status.get(k,0) is None for k in QUORUM_GATE_KEYS):
+                    self.j.event(None,'quorum_unevaluated',{'step':view['step'],'host':host})
+        baseline = self.j.get('baseline:'+host)
+        if baseline is None:
+            if not observed or observed[-1].get('error'):
+                raise Gate('observer baseline unavailable')
+            baseline = self.config.get('resource_baselines',{}).get(host,observed[-1])
+            if baseline['binary'] != self.config['node_sha256']:
+                raise Gate('deployed binary differs from launch pin')
+            self.j.set('baseline:'+host,baseline)
+        if observed is not None:
+            rebased = check_resources(observed,baseline,time.time(),self.resource_window(view,host))
+            if rebased is not None:
+                self.rebaseline(host,view,baseline,rebased)
+        # No progress is expected from a named host until window
+        # end, nor from anyone while quorum is lost (safe_halt).
+        if host in down or (view and view['expect'] == 'safe_halt'):
+            self.j.set('unsynced:'+host,None)
+        elif not status.get('synced'):
+            since = self.j.get('unsynced:'+host) or time.time()
+            self.j.set('unsynced:'+host,since)
+            if time.time()-since > 120:
+                raise Gate('node unsynced for two minutes: '+host)
+        else:
+            self.j.set('unsynced:'+host,None)
 
     async def monitor(self):
         while not self.closed:
@@ -733,66 +1030,30 @@ class Controller:
                 statuses = await asyncio.gather(*(self.tolerate(h,{*down,*rejoining},self.rpc.call(h,'node_getStatus'),step) for h in HOSTS))
                 records = await asyncio.gather(*(self.tolerate(h,down,self.observer(h),step) for h in HOSTS))
                 self.check_rejoin(now,dict(zip(HOSTS,statuses)),down,quorum_gated)
-                for host,status,observed in zip(HOSTS,statuses,records):
-                    if status is not None:
-                        check_identity(status,self.plan)
-                        # Degrade-phase (x-series) plans need the installed
-                        # 4-of-5, f=1 quorum on every reachable validator; a
-                        # silent 4-of-4 would void D1-D5 (#1605).
-                        if quorum_gated:
-                            # A host the active restart step names may serve
-                            # RPC before its gate's first evaluation (#1608);
-                            # isolate/netem never restart, rejoining is strict.
-                            unevaluated = (view is not None and host in down
-                                           and view['action'] in RESTART_ACTIONS)
-                            check_quorum(status,allow_unevaluated=unevaluated)
-                            if unevaluated and all(status.get(k,0) is None for k in QUORUM_GATE_KEYS):
-                                self.j.event(None,'quorum_unevaluated',{'step':step,'host':host})
-                    baseline = self.j.get('baseline:'+host)
-                    if baseline is None:
-                        if not observed or observed[-1].get('error'):
-                            raise Gate('observer baseline unavailable')
-                        baseline = self.config.get('resource_baselines',{}).get(host,observed[-1])
-                        if baseline['binary'] != self.config['node_sha256']:
-                            raise Gate('deployed binary differs from launch pin')
-                        self.j.set('baseline:'+host,baseline)
-                    if observed is not None:
-                        rebased = check_resources(observed,baseline,time.time(),self.resource_window(view,host))
-                        if rebased is not None:
-                            self.rebaseline(host,view,baseline,rebased)
-                    # No progress is expected from a named host until window
-                    # end, nor from anyone while quorum is lost (safe_halt).
-                    if host in down or (view and view['expect'] == 'safe_halt'):
-                        self.j.set('unsynced:'+host,None)
-                    elif not status.get('synced'):
-                        since = self.j.get('unsynced:'+host) or time.time()
-                        self.j.set('unsynced:'+host,since)
-                        if time.time()-since > 120:
-                            raise Gate('node unsynced for two minutes: '+host)
-                    else:
-                        self.j.set('unsynced:'+host,None)
-                    # Post-idle memory is evaluated once per completed active cycle.
-                    # A stopped node's error row carries no memory sample.
-                    if observed and not observed[-1].get('error'):
-                        self.j.set('latest:'+host,observed[-1])
+                latest = {}
+                try:
+                    for host,status,observed in zip(HOSTS,statuses,records):
+                        self.check_validator_sample(host,status,observed,view,down,quorum_gated)
+                        if observed and not observed[-1].get('error'):
+                            latest[host] = observed[-1]
+                finally:
+                    # Keep the validated prefix for diagnosis if a later host fails.
+                    # Commit available samples together before any further network read.
+                    if latest:
+                        with self.j.transaction():
+                            for host,sample in latest.items():
+                                self.j.set('latest:'+host,sample)
                 # Hash agreement covers every reachable host, including a named
                 # host that is isolated or delayed and therefore behind.
-                reachable = [(h,s) for h,s in zip(HOSTS,statuses) if s is not None]
-                minimum = min(s['chainHeight'] for _,s in reachable)
-                if self.j.get('checkpoint_height') != minimum:
-                    checkpoints = await asyncio.gather(*(self.tolerate(h,down,self.rpc.call(h,'getBlockByHeight',{'height':minimum}),step) for h,_ in reachable))
-                    checkpoints = [b for b in checkpoints if b is not None]
-                    if len({b['hash'] for b in checkpoints}) != 1:
-                        raise Gate('conflicting block hashes at the same finalized height')
-                    self.j.set('checkpoint_height',minimum)
-                    self.j.set('checkpoint_hash',checkpoints[0]['hash'])
-                if not self.j.get('genesis_verified'):
-                    genesis = await asyncio.gather(*(self.tolerate(h,down,self.rpc.call(h,'getBlockByHeight',{'height':0}),step) for h,_ in reachable))
-                    if any(b.get('hash') != self.plan['genesis'] for b in genesis if b is not None):
-                        raise Gate('genesis differs from manifest')
-                    # Verified only once every host has answered.
-                    if None not in genesis and len(genesis) == len(HOSTS):
-                        self.j.set('genesis_verified',True)
+                try:
+                    minimum = await self.monitor_checkpoint(statuses,down,step)
+                except Gate as error:
+                    if view:
+                        record = self.j.get('degrade:'+step, {'step': step, 'restore_at': view['restore_at']})
+                        if not record.get('verdict'):
+                            record['closed_at'] = now
+                            self.degrade_verdict(record, [str(error)], now)
+                    raise
                 # Per-step recovery evidence and window_end verdicts (#1591).
                 await self.degrade_evidence(now,statuses,self.statuses)
                 previous_height = self.fleet_height(default=-1)
@@ -1078,6 +1339,14 @@ class Controller:
             if full or new:
                 self.history_log().persist(previous, blocks)
             self.checkpoint_inventory(height, scans, spent, force=full)
+            # A verified suffix can extend the old selection index. Any other
+            # source, including the history loaded by a fresh process, starts
+            # with an empty index. Only selection needs to populate it.
+            index = getattr(self, 'selection_index', None)
+            if index is None or index.blocks is not previous:
+                self.selection_index = SelectionHistory(blocks)
+            else:
+                index.blocks = blocks
             self.blocks, self.inventory, self.spent = blocks, scans, spent
             self.spent_audit_offset = audit_next
             self.inventory_initialized = True
@@ -1114,24 +1383,18 @@ class Controller:
         atomic_stream(self.state/'inventory.json', inventory_chunks(time.time(), height, owned, spent))
         self.inventory_checkpoint_at = now
 
+    def selection_history(self):
+        index = getattr(self, 'selection_index', None)
+        if index is None or index.blocks is not self.blocks:
+            # A history supplied outside sync has no verified append lineage.
+            index = SelectionHistory(self.blocks)
+        return index.read()
+
     def canonical_history(self):
-        # Match target-only ledger resolution before any maturity/age filtering.
-        # History and inventory retain unsupported receipts for accounting.
-        # A V2 lottery payout has its own one-time key and is canonical
-        # (spendable) history; a legacy, context-less payout reuses its
-        # winner's key and never is (#1643). Decoy pools still exclude every
-        # lottery row; see ``decoy_row``.
-        canonical = {}
-        for block in sorted(self.blocks, key=lambda block: block['height']):
-            for output in block['outputs']:
-                key = output['targetKey'].lower()
-                if key in canonical:
-                    continue
-                if output.get('lottery', False) or output.get('lotteryContext') is not None:
-                    if lottery_context(output) is None:
-                        continue
-                canonical[key] = (block['height'], output)
-        return canonical
+        # Existing callers receive an independent dict, including callers
+        # that retain it while the controller advances to another block.
+        canonical, _ = self.selection_history()
+        return canonical.copy()
 
     def canonical_inventory(self, wallet, canonical=None):
         canonical = self.canonical_history() if canonical is None else canonical
@@ -1293,8 +1556,18 @@ class Controller:
         # (#1618). Inputs signed earlier in the pass are already reserved,
         # and an older height only delays maturity, so reuse never widens
         # selection; every gate below still runs per intent.
+        # Record the successful rehearsal attempt with the signed intent. A shared
+        # scan measures only the wait this particular payment actually experienced.
+        observe = row['kind'] == 'rehearsal'
+        if observe:
+            scan_requested_at = time.time()
+            scan_started = time.perf_counter()
         height = await (scan or self.sync)()
+        if observe:
+            scan_returned = time.perf_counter()
         selected = self.spendable(row['sender'],height,row['amount'],count)
+        if observe:
+            selection_finished = time.perf_counter()
         if not selected:
             self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height,
                 **self.j.get('selection_latest',{})})
@@ -1357,6 +1630,17 @@ class Controller:
             from fee_evidence import signed_fee_evidence
             info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
                         fee_quote=fee_rate, ingress_role=ingress)
+        if observe:
+            info['preparation_timing'] = {
+                'scan_requested_at': scan_requested_at,
+                'scan_wait_seconds': scan_returned - scan_started,
+                'input_selection_seconds': selection_finished - scan_returned,
+            }
+            wait = getattr(self, 'last_admission_wait', None)
+            if wait is not None:
+                info['preparation_timing']['admission_wait'] = {
+                    **wait, 'tick_started_at': self.admission_started,
+                }
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
                     scan_height=height,eligible_at=eligible_at,prepared_at=time.time())
         self.gate()
@@ -1440,7 +1724,6 @@ class Controller:
         self.j.begin_submit(identifier,host,wire,info['burst'],self.commit_deadline(row,info))
         # Retain the durable marker's byte charge through receipt transitions.
         info = json.loads(self.j.intent(identifier)['info'])
-        self.j.set('last_write',time.time())
         if info.get('crash')=='submitting' and not self.j.get('crash:submitting'):
             # Crash after the durable marker. No retry is possible on recovery;
             # this intentionally ambiguous intent must become unresolved if absent.
@@ -1485,8 +1768,9 @@ class Controller:
             attempted = self.j.db.execute("SELECT COUNT(*) FROM intents WHERE submitted IS NOT NULL OR prepared IS NOT NULL").fetchone()[0]
             if attempted>=800:
                 raise Gate('chain write budget')
-            self.j.transition(identifier,'submitting',submitted=time.time(),ingress='faucet.botho.io')
-        self.j.set('last_write',time.time())
+            submitted = time.time()
+            self.j.transition(identifier,'submitting',submitted=submitted,ingress='faucet.botho.io')
+            self.j.set('last_write',submitted)
         try:
             result = await self.rpc.call('faucet.botho.io','faucet_request',
                 {'address':self.wallets[row['recipient']]['address']},timeout=90,write=True)
@@ -1556,10 +1840,7 @@ class Controller:
                     if not set(deferred) <= set(HOSTS) or set(saved) != set(HOSTS)-set(deferred):
                         raise Gate('incomplete saved confirmation receipts')
                     receipts = [saved[h] for h in HOSTS if h in saved]
-                    if len({(r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput')) for r in receipts}) != 1:
-                        raise Gate('fleet transaction receipt disagreement')
-                    if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
-                        raise Gate('fleet transaction receipt hash mismatch')
+                    check_transaction_receipts(row, info, receipts)
                     if fetch_receipts:
                         info.update(all_confirmed_at=time.time(),block_height=receipts[0]['blockHeight'],
                                     confirmed_receipts=saved)
@@ -1581,8 +1862,6 @@ class Controller:
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
                         raise Gate('recipient ownership/value reconciliation failed')
                     if row['kind'] != 'funding':
-                        if receipts[0]['fee'] != row['fee']:
-                            raise Gate('node receipt fee differs from signed fee')
                         for expected in info['outputs']:
                             owner = row['recipient'] if expected['index']==0 else row['sender']
                             found = [o for o in self.inventory[owner] if bytes(o['utxo']['tx_hash']).hex()==row['hash']
@@ -1592,8 +1871,7 @@ class Controller:
                         view = self.fault_view()
                         checked = self.live_hosts(view=view)
                         states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in checked))
-                        if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
-                            raise Gate('spent-input state disagreement')
+                        check_spent_inputs(info['key_images'], receipts[0]['blockHeight'], states)
                         if len(checked) != len(HOSTS):
                             # Spent state not yet seen on the named hosts:
                             # they join the post-window re-verification.
@@ -1635,6 +1913,10 @@ class Controller:
             window = windows.get(info.get('deferred_step'))
             if window is None or not hosts or not set(hosts) <= set(HOSTS):
                 raise Gate('deferred confirmation names no scheduled step')
+            saved = info.get('confirmed_receipts')
+            # A host with a saved receipt can still owe a spend-height check.
+            if not isinstance(saved, dict) or set(saved).union(hosts) != set(HOSTS):
+                raise Gate('incomplete saved confirmation receipts')
             if now < window['window_end'] or any(h in down for h in hosts):
                 continue
             if time.time()-self.fresh > 60 or any(
@@ -1642,16 +1924,12 @@ class Controller:
                     or self.statuses[h].get('chainHeight',-1) < info['block_height'] for h in hosts):
                 continue  # not caught up yet; the rejoin gate bounds this wait
             receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in hosts))
-            saved = info['confirmed_receipts']
-            shape = lambda r: (r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput'))
-            if len({shape(r) for r in [*saved.values(),*receipts]}) != 1:
-                raise Gate('fleet transaction receipt disagreement')
-            if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
-                raise Gate('fleet transaction receipt hash mismatch')
+            check_transaction_receipts(row, info, [*saved.values(), *receipts])
+            if type(info['block_height']) is not int or info['block_height'] != receipts[0]['blockHeight']:
+                raise Gate('saved confirmation height mismatch')
             if row['kind'] != 'funding':
                 states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in hosts))
-                if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
-                    raise Gate('spent-input state disagreement')
+                check_spent_inputs(info['key_images'], receipts[0]['blockHeight'], states)
             saved.update(zip(hosts,receipts))
             del info['deferred_hosts']
             info['deferred_verified'] = {'step': window['step'], 'hosts': hosts, 'at': time.time()}
@@ -1811,9 +2089,8 @@ class Controller:
             offered=start+event['offset_seconds']
             if offered>now:
                 break
-            sender=int(event['sender'].split('-')[-1])-1
-            recipient=int(event['recipient'].split('-')[-1])-1
-            self.j.offer(event['intent'],'campaign',offered,sender,recipient,int(event['amount_picocredits']))
+            sender, recipient, amount = payment_terms(event)
+            self.j.offer(event['intent'],'campaign',offered,sender,recipient,amount)
             row=self.j.intent(event['intent'])
             if row['state'] in ('planned','eligible') and now>offered+120:
                 self.j.transition(event['intent'],'skipped','slot expired; no catch-up',finished=now)
@@ -1846,9 +2123,8 @@ class Controller:
             offered=start+event['offset_seconds']
             if offered>now:
                 break
-            sender=int(event['sender'].split('-')[-1])-1
-            recipient=int(event['recipient'].split('-')[-1])-1
-            self.j.offer(event['intent'],'campaign',offered,sender,recipient,int(event['amount_picocredits']))
+            sender, recipient, amount = payment_terms(event)
+            self.j.offer(event['intent'],'campaign',offered,sender,recipient,amount)
             row=self.j.intent(event['intent'])
             if row['state'] not in ('planned','eligible'):
                 continue
@@ -1896,6 +2172,27 @@ class Controller:
         self.wallets[wallet]['key']=str(restored)
         self.j.set('wallet_paths',[w['key'] for w in self.wallets])
         self.j.event(None,'wallet_restored',{'wallet':wallet})
+
+    def admission_delay(self, started):
+        # Keep the usual monitor/reconciliation yield when a pass ran long.
+        # For scheduled offers, wake on the offer clock even if the last pass
+        # began partway through a second.
+        delay = 1 - (time.monotonic() - started)
+        if self.next_offer_at is not None:
+            delay = min(delay, self.next_offer_at - time.time())
+        return max(.2, delay)
+
+    async def wait_for_admission(self, started, status):
+        delay = self.admission_delay(started)
+        if status == 'setup':
+            requested_at = time.time()
+            before = time.perf_counter()
+        await asyncio.sleep(delay)
+        if status == 'setup':
+            self.last_admission_wait = {
+                'requested_at': requested_at, 'requested_seconds': delay,
+                'elapsed_seconds': time.perf_counter() - before, 'resumed_at': time.time(),
+            }
 
     async def admission_tick(self):
         async with self.admission_lock:
@@ -1963,8 +2260,10 @@ class Controller:
             if self.fresh:
                 await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
+            self.last_admission_wait = None
             while True:
                 started=time.monotonic()
+                self.next_offer_at = None
                 status=self.j.get('status')
                 if status in ('complete','incomplete','rehearsal_complete'):
                     break
@@ -1989,7 +2288,7 @@ class Controller:
                     self.j.set('last_summary_at',time.time())
                 # Include admission/report work in the cadence, but always
                 # yield so monitoring and reconciliation can make progress.
-                await asyncio.sleep(max(.2,1-(time.monotonic()-started)))
+                await self.wait_for_admission(started, status)
             if self.j.get('status') == 'rehearsal_complete':
                 return
             if self.fresh and not self.j.pending():

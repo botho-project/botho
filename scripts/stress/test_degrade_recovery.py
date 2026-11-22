@@ -168,7 +168,7 @@ class RpcMetricsTests(unittest.IsolatedAsyncioTestCase):
 
 def status(height, synced=True, **extra):
     return {"network": "botho-testnet", "gitCommit": "commit", "version": "0.6.0",
-            "synced": synced, "chainHeight": height, "tipHash": "block-%d" % height,
+            "synced": synced, "chainHeight": height, "tipHash": f"{height:064x}",
             "peerCount": 4, "scpPeerCount": 4, **extra}
 
 
@@ -272,6 +272,9 @@ class VerdictTests(Base):
         self.assertEqual(record["loops"][A]["reset"], True)  # restart reset the counters
         self.assertEqual({h: record["loops"][h]["delayed"] for h in HOSTS}, dict.fromkeys(HOSTS, 0))
         self.assertEqual(set(record["tip_check"]["hosts"]), set(HOSTS))
+        tip = record["tip_check"]
+        self.assertEqual(tip["hashes"], {h: f"{tip['height']:064x}" for h in HOSTS})
+        self.assertEqual(degrade_report(self.c.j, self.c.degrade_steps)[0]["tip_check"], tip)
 
     async def test_over_one_second_iterations_alone_do_not_fail(self):
         self.quiescent_accounting()
@@ -354,7 +357,7 @@ class VerdictTests(Base):
         async def forked(host, method, params=None, **kw):
             result = await rpc(host, method, params, **kw)
             if method == "getBlockByHeight" and host == N4 and verdict_tick:
-                result = {**result, "hash": "fork"}
+                result = {**result, "hash": "f" * 64}
             return result
         self.c.rpc.call.side_effect = forked
         self.c.closed = False
@@ -365,6 +368,38 @@ class VerdictTests(Base):
                 Gate, "D1: recovery check failed: one tip: conflicting hashes"):
             await self.c.degrade_evidence(self.now, statuses, self.c.statuses)
         self.assertEqual(self.verdict("D1"), "fail")
+
+    async def test_common_tip_requires_an_identified_block_from_every_required_peer(self):
+        height = 250
+        digest = f"{height:064x}"
+        statuses = {host: status(height) for host in HOSTS}
+        # Ahead peers must still serve the common height and have a different live tip.
+        statuses[N4] = status(height + 1)
+        good = {"height": height, "hash": digest}
+        reply = good
+
+        async def block(host, method, params):
+            self.assertEqual((method, params), ("getBlockByHeight", {"height": height}))
+            return reply if host == N5 else good
+
+        self.c.rpc.call.side_effect = block
+        for reply in (None, [], {}, {"height": height}, {"height": height, "hash": ""},
+                      {"height": height, "hash": "x" * 64}, {"height": height, "hash": []},
+                      {"height": height - 1, "hash": digest}, {"height": float(height), "hash": digest}):
+            with self.subTest(reply=reply):
+                tip, failures = await self.c.recovery_tip(statuses, (), "D5")
+                self.assertEqual(failures, [f"one tip: invalid block at height {height} from {N5}"])
+                self.assertEqual(set(tip["hashes"]), set(HOSTS) - {N5})
+
+        reply = None
+        tip, failures = await self.c.recovery_tip(statuses, (N5,), "D5")
+        self.assertEqual(failures, [])
+        self.assertEqual(tip["hosts"], list(HOSTS[:-1]))
+
+        reply = good
+        statuses[N5] = status(height, tipHash="f"*64)
+        _, failures = await self.c.recovery_tip(statuses, (), "D5")
+        self.assertEqual(failures, [f"one tip: block differs from reported tip at height {height} on {N5}"])
 
     async def test_accounting_mismatch_fails(self):
         self.quiescent_accounting(difference=1)
@@ -423,6 +458,36 @@ class VerdictTests(Base):
             await self.c.degrade_evidence(self.now, statuses, self.c.statuses)
         self.assertEqual(self.verdict("D1"), "fail")
 
+    async def test_window_waits_for_scheduled_offer_missing_from_journal(self):
+        self.quiescent_accounting()
+        begin, end = at("D1", "fault_start"), at("D1", "window_end")
+        self.c.events = [base.scheduled_payment("first", begin),
+                         base.scheduled_payment("last", end - 1),
+                         base.scheduled_payment("next", end)]
+        self.c.j.offer("first", "campaign", begin, 0, 1, 1000)
+        self.c.j.transition("first", "reconciled")
+        await self.run_d1()
+        self.assertIsNone(self.verdict("D1"))
+        self.assertEqual(self.record("D1")["campaign_payments"]["missing"], 1)
+        self.assertIn("payments", self.record("D1")["awaiting"])
+        self.c.j.offer("last", "campaign", end - 1, 0, 1, 1000)
+        self.c.j.transition("last", "reconciled")
+        self.c.settle_degrade_verdicts(self.now)
+        self.assertEqual(self.verdict("D1"), "pass")
+
+    async def test_restart_reopens_old_pass_without_scheduled_payment(self):
+        self.quiescent_accounting()
+        await self.run_d1()
+        old = self.record("D1")
+        old.pop("campaign_payments", None)
+        self.c.j.set("degrade:D1", old)
+        self.c.events = [base.scheduled_payment("missing", at("D1", "restore_at"))]
+        self.c.settle_degrade_verdicts(self.now)
+        current = self.record("D1")
+        self.assertIsNone(current["verdict"])
+        self.assertEqual(current["previous_verdict"], old["verdict"])
+        self.assertEqual(current["campaign_payments"]["missing"], 1)
+
     async def test_skipped_in_window_offer_fails(self):
         self.quiescent_accounting()
         offered = at("D1", "restore_at") + 10
@@ -438,6 +503,7 @@ class VerdictTests(Base):
     async def test_in_window_payment_unresolved_after_window_end_fails(self):
         # Accounting is exact (nothing pending) but the open verdict still
         # owes the in-window payment; it then goes unresolved.
+        self.c.events = [base.scheduled_payment("pay", at("D1", "restore_at"))]
         self.quiescent_accounting()
         self.c.j.offer("pay", "campaign", at("D1", "restore_at"), 0, 1, 1000)
         await self.run_d1()
@@ -508,6 +574,7 @@ class VerdictTests(Base):
         await self.check_restart_holds_open(at("D1", "window_end") - 30)
 
     async def test_unverified_deferred_receipt_never_passes(self):
+        self.c.events = [base.scheduled_payment("pay", at("D1", "fault_start") + 60)]
         self.quiescent_accounting()
 
         def deferred():
@@ -527,6 +594,7 @@ class VerdictTests(Base):
 
     async def test_unreconciled_in_window_payment_keeps_the_verdict_open(self):
         self.quiescent_accounting()
+        self.c.events = [base.scheduled_payment("pay", at("D1", "restore_at"))]
         self.c.j.offer("pay", "campaign", at("D1", "restore_at"), 0, 1, 1000)
         await self.run_d1()
         # A planned row has spent nothing, so accounting is exact; the
@@ -571,6 +639,87 @@ class VerdictTests(Base):
         self.assertTrue(self.held())
         self.assertEqual(self.reason(), "D5: recovery check failed: tip did not advance after restore")
 
+    async def test_d5_catchup_to_a_known_block_does_not_prove_resumption(self):
+        original = self.fleet.rpc
+        start, restore = at("D5", "fault_start"), at("D5", "restore_at")
+
+        async def catchup(host, method, params=None, **kwargs):
+            reply = await original(host, method, params, **kwargs)
+            if method == "node_getStatus" and (self.now > restore or (self.now >= start and host == N4)):
+                # One survivor already has this block. Everyone else learns it after restore.
+                height = reply["chainHeight"] + 1
+                reply = {**reply, "chainHeight": height, "tipHash": f"{height:064x}"}
+            return reply
+
+        self.c.rpc.call.side_effect = catchup
+        await self.run_d5(resume=False)
+        self.assertEqual(self.verdict("D5"), "fail")
+        row = degrade_report(self.c.j, [STEPS["D5"]])[0]
+        self.assertEqual(row["resume_height_floor"], row["tip_check"]["height"])
+        self.assertIsNone(self.record("D5")["tip_resumed_at"])
+
+    async def test_d5_recovery_requires_a_new_block_on_the_returning_validators(self):
+        original = self.fleet.rpc
+        first_tip = None
+
+        async def lagging_target(host, method, params=None, **kwargs):
+            nonlocal first_tip
+            reply = await original(host, method, params, **kwargs)
+            if host == A and method == "node_getStatus" and self.now >= at("D5", "restore_at"):
+                if first_tip is None:
+                    first_tip = reply["chainHeight"]
+                reply = {**reply, "chainHeight": first_tip, "tipHash": f"{first_tip:064x}"}
+            return reply
+
+        # This test exercises the window verdict directly. The monitor's earlier
+        # rejoin gate also detects a lagging target in a running campaign.
+        self.c.check_rejoin = Mock()
+        self.c.rpc.call.side_effect = lagging_target
+        await self.run_d5()
+        self.assertEqual(self.verdict("D5"), "fail")
+        self.assertIsNotNone(self.record("D5")["tip_resumed_at"])
+        self.assertIn("common block at window end", self.reason())
+
+    async def test_d5_includes_the_last_tip_from_a_validator_that_stopped(self):
+        c = self.c
+        window = next(w for w in c.degrade_windows() if w["step"] == "D5")
+        restore = window["restore_at"]
+        async def metrics(*_):
+            return None
+        stopped = {h: None if h in (A, B) else status(100) for h in HOSTS}
+        prior = {A: status(108)}
+        record = await c.degrade_open(window, window["fault_start"], stopped, prior, metrics)
+        await c.degrade_track(record, window, restore, stopped, metrics)
+        await c.degrade_track(record, window, restore+15, {h: status(108) for h in HOSTS}, metrics)
+        self.assertEqual(record["resume_height_floor"], 108)
+        self.assertIsNone(record["tip_resumed_at"])
+        await c.degrade_track(record, window, restore+30, {h: status(109) for h in HOSTS}, metrics)
+        self.assertEqual(record["tip_resumed_at"], restore+30)
+
+    async def test_d5_legacy_open_window_requires_fresh_progress(self):
+        c = self.c
+        step = next(w for w in c.degrade_windows() if w["step"] == "D5")
+        restore = step["restore_at"]
+        async def metrics(*_):
+            return None
+        states = {h: status(105) for h in HOSTS}
+        record = await c.degrade_open(step, step["fault_start"], states, {}, metrics)
+        record.pop("resume_height_floor")
+        record.update(tip_restore=100, tip_resumed_at=restore+15, tips={"100": "block-100", "105": "block-105"})
+        await c.degrade_track(record, step, restore+30, states, metrics)
+        self.assertEqual(record["resume_height_floor"], 105)
+        self.assertIsNone(record["tip_resumed_at"])
+        await c.degrade_track(record, step, restore+45, {h: status(106) for h in HOSTS}, metrics)
+        self.assertEqual(record["tip_resumed_at"], restore+45)
+
+    async def test_d5_legacy_window_awaiting_settlement_lacks_a_restore_height(self):
+        step = next(w for w in self.c.degrade_windows() if w["step"] == "D5")
+        record = {"step": "D5", "closed_at": step["window_end"], "verdict": None}
+        self.c.j.set("degrade:D5", record)
+        with self.assertRaisesRegex(Gate, "restore height unavailable"):
+            self.c.settle_degrade_verdicts(step["window_end"] + 15)
+        self.assertEqual(self.verdict("D5"), "fail")
+
     async def test_d5_conflicting_hash_fails(self):
         rpc = self.fleet.rpc
 
@@ -578,12 +727,13 @@ class VerdictTests(Base):
             result = await rpc(host, method, params, **kw)
             if (method == "node_getStatus" and host == N5
                     and at("D5", "fault_start") <= self.now < at("D5", "restore_at")):
-                result = {**result, "tipHash": "other"}
+                result = {**result, "tipHash": "f" * 64}
             return result
         self.c.rpc.call.side_effect = conflicting
         await self.run_d5()
         self.assertTrue(self.held())
         self.assertIn("D5: recovery check failed: conflicting hash at height", self.reason())
+        self.assertEqual(self.verdict("D5"), "fail")
 
     async def test_metrics_unavailable_on_a_live_host_is_not_a_pass(self):
         self.quiescent_accounting()

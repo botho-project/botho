@@ -42,7 +42,7 @@ from pathlib import Path
 
 import observer
 from fleet_provision import GOSSIP_PORT, RPC_PORT
-from runtime import HOSTS
+from runtime import HOSTS, digest
 
 ROLES = ('controller', 'n1', 'n2', 'n3', 'n4', 'n5')
 NODE_ROLES = ROLES[1:]
@@ -333,6 +333,21 @@ def stop_argv(path):
     return ['sudo', '-n', 'touch', path.rstrip('/') + '/STOP']
 
 
+def netem_counters(stdout):
+    """Read the packet and drop counters of the runner's D4 child queue."""
+    queues = json.loads(stdout)
+    if not isinstance(queues, list):
+        raise ValueError('expected a list of qdiscs')
+    matching = [q for q in queues if isinstance(q, dict) and q.get('kind') == 'netem'
+                and q.get('handle') == '40:' and q.get('parent') == '1:4']
+    if len(matching) != 1:
+        raise ValueError('expected one D4 netem queue')
+    counters = {key: matching[0].get(key) for key in ('packets', 'drops')}
+    if any(type(v) is not int or v < 0 for v in counters.values()):
+        raise ValueError('invalid netem packet counters')
+    return counters
+
+
 def verified(entry, rc, stdout):
     if 'one_of' in entry['expect']:
         # `systemctl is-active` exits non-zero for every state but active.
@@ -456,6 +471,8 @@ class Runner:
             rc, stdout, stderr = self.call(entry['role'], entry['argv'])
             ok = rc == 0
             extra = {}
+            if entry['action'] == 'netem':
+                extra['command_sha256'] = digest(entry['argv'])
             if entry['action'] == 'result':
                 extra['unit_result'] = stdout.strip()
             if 'expect' in entry:
@@ -532,6 +549,25 @@ class Runner:
             ok_all = ok_all and ok
         return ok_all
 
+    def observe_netem(self, step, fault_at, restore_at):
+        # Leave the full transport timeout and the existing restore margin.
+        # A short step or a late wake can still complete without telemetry.
+        midpoint = (fault_at + restore_at) / 2
+        self.wait_until(midpoint)
+        if self.clock() + SSH_TIMEOUT + STOP_MARGIN >= restore_at:
+            return
+        role, = step['targets']
+        rc, stdout, error = self.call(role, ['tc', '-j', '-s', 'qdisc', 'show', 'dev', self.dev])
+        counters = None
+        if rc == 0:
+            try:
+                counters = netem_counters(stdout)
+            except ValueError as invalid:
+                error = str(invalid)
+        phase = 'observe' if counters is not None else 'warn'
+        self.record(step['id'], role, 'qdisc_counters', phase, midpoint,
+                    counters is not None, error, counters=counters)
+
     def run_step(self, step):
         fault_at = self.start + step['fault_start_offset']
         restore_at = self.start + step['restore_offset']
@@ -563,6 +599,11 @@ class Runner:
         if applied:
             self.execute(rendered.get('result', []), step, 'apply', fault_at, stop_on_failure=False)
             try:
+                if step['action'] == 'netem':
+                    try:
+                        self.observe_netem(step, fault_at, restore_at)
+                    except OSError as error:
+                        print('netem observation could not be recorded: %s' % error, file=self.out)
                 self.wait_until(restore_at)
             except KeyboardInterrupt:
                 print('interrupted: restoring step %s now' % step['id'], file=self.out)

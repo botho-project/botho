@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -24,6 +25,76 @@ class JournalTests(unittest.TestCase):
     def tearDown(self):
         self.j.db.close()
         self.tmp.cleanup()
+
+    def test_identical_metadata_does_not_commit_another_wal_change(self):
+        key = 'quota:' + HOSTS[0]
+        self.j.set(key, 600)
+        with closing(sqlite3.connect(self.path)) as reader:
+            def version():
+                return reader.execute('PRAGMA data_version').fetchone()[0]
+
+            initial = version()
+            self.j.set(key, 600)
+            self.assertEqual(version(), initial)
+            self.j.set(key, 60)
+            self.assertNotEqual(version(), initial)
+            self.assertEqual(reader.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone(), ('60',))
+
+    def test_failed_event_keeps_previous_state_inside_and_outside_a_transaction(self):
+        self.offered()
+        self.j.db.execute("""CREATE TEMP TRIGGER reject_event BEFORE INSERT ON events
+            WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT,'event storage failed'); END""")
+
+        def check_failure():
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'event storage failed'):
+                self.j.transition('a', 'accepted', info={'response_at': self.now})
+            self.assertEqual(self.j.intent('a')['state'], 'eligible')
+            self.assertEqual(self.j.intent('a')['info'], '{}')
+
+        check_failure()
+        with self.j.transaction():
+            self.j.set('outer_write', 1)
+            check_failure()
+        self.assertEqual(self.j.get('outer_write'), 1)
+
+    def test_deferred_receipts_migrate_and_follow_the_journal_transaction(self):
+        for trigger in ('insert', 'update', 'delete'):
+            self.j.db.execute('DROP TRIGGER receipt_candidate_'+trigger)
+        self.j.db.execute('DROP TABLE receipt_candidates')
+        for identifier in ('b', 'a', 'cleared', 'invalid'):
+            self.offered(identifier)
+        for identifier in ('b', 'a'):
+            self.j.transition(identifier, 'reconciled', info={'deferred_hosts': [HOSTS[0]]})
+        self.j.transition('cleared', 'reconciled', info={'deferred_hosts': None})
+        self.j.db.execute("UPDATE intents SET info='invalid' WHERE id='invalid'")
+        self.j.db.close()
+        self.j = Journal(self.path)
+        with self.assertRaisesRegex(sqlite3.OperationalError, 'malformed JSON'):
+            self.j.deferred_receipts()
+        self.j.transition('invalid', 'reconciled', info={})
+        self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a', 'b'])
+        with self.assertRaises(Gate):
+            with self.j.transaction():
+                self.j.transition('a', 'reconciled', info={})
+                self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['b'])
+                raise Gate('cancel')
+        self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a', 'b'])
+        self.j.transition('b', 'reconciled', info={})
+        self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a'])
+        with closing(sqlite3.connect(self.path)) as legacy, legacy:
+            legacy.execute('PRAGMA trusted_schema=OFF')
+            legacy.execute("UPDATE intents SET info=? WHERE id='b'", (json.dumps({'deferred_hosts':[HOSTS[1]]}),))
+            self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a'])
+        self.assertEqual([r['id'] for r in self.j.deferred_receipts()], ['a', 'b'])
+
+    def test_readonly_receipt_poll_with_unpruned_entries(self):
+        self.offered('ordinary')
+        self.j.transition('ordinary', 'reconciled', info={'height': 99})
+        self.j.db.execute('PRAGMA query_only=ON')
+        self.assertEqual(self.j.deferred_receipts(), [])
+        self.j.db.execute('PRAGMA query_only=OFF')
+        self.assertEqual(self.j.deferred_receipts(), [])
+        self.assertEqual(self.j.db.execute('SELECT count(*) FROM receipt_candidates').fetchone()[0], 0)
 
     def offered(self,identifier='a',sender=0):
         self.j.offer(identifier,'campaign',self.now,sender,(sender+1)%8,10_000_000_000)
@@ -51,7 +122,24 @@ class JournalTests(unittest.TestCase):
         with self.assertRaises(Gate):
             self.j.begin_submit('a',HOSTS[0],10000,False,1120)
         self.assertEqual(self.j.intent('a')['state'],'submitting')
+        self.assertEqual(self.j.get('last_write'), self.j.intent('a')['submitted'])
         self.assertEqual(len(self.j.pending()),1)
+
+    def test_failed_activity_write_preserves_prepared_payment_and_input_reservation(self):
+        self.j.prepare('a', self.offered(), 1, 1120)
+        self.j.db.execute("""CREATE TEMP TRIGGER reject_activity BEFORE INSERT ON meta
+            WHEN NEW.key='last_write' BEGIN SELECT RAISE(ABORT,'activity storage failed'); END""")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'activity storage failed'):
+            self.j.begin_submit('a', HOSTS[0], 10000, False, 1120)
+        self.j.db.close()
+        self.j = Journal(self.path, lambda: self.now)
+        self.assertEqual(self.j.intent('a')['state'], 'prepared')
+        self.assertIsNone(self.j.intent('a')['submitted'])
+        self.assertEqual(self.j.db.execute('SELECT COUNT(*) FROM reservations WHERE intent=?',
+                                           ('a',)).fetchone()[0], 1)
+        self.j.begin_submit('a', HOSTS[0], 10000, False, 1120)
+        with self.assertRaises(Gate):
+            self.j.begin_submit('a', HOSTS[0], 10000, False, 1120)
 
     def test_conflicting_input_wallet_and_phase_reservations_are_atomic(self):
         a=self.offered(); self.j.prepare('a',a,8,1120)

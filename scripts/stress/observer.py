@@ -52,12 +52,27 @@ def kib(value):
         return None
 
 
+def service_peak(fields):
+    """Keep peak bytes as a decimal string on systemd versions without MemoryPeak."""
+    peak = fields.get('MemoryPeak')
+    if peak and peak != '[not set]':
+        return peak
+    group = Path(fields.get('ControlGroup', ''))
+    if not group.is_absolute() or group == Path('/') or '..' in group.parts:
+        return None
+    try:
+        value = (Path('/sys/fs/cgroup') / group.relative_to('/') / 'memory.peak').read_text().strip()
+    except OSError:
+        return None
+    return value if value.isdecimal() else None
+
+
 def sample(binary, node=None):
     at = time.time()
     node = DEFAULT_NODE if node is None else node
     try:
         unit = subprocess.check_output(['systemctl','show',node['node_unit'],'-p','MainPID',
-            '-p','NRestarts','-p','ExecMainStartTimestampMonotonic','-p','MemoryPeak'],
+            '-p','NRestarts','-p','ExecMainStartTimestampMonotonic','-p','MemoryPeak','-p','ControlGroup'],
             text=True, timeout=3)
         fields = dict(line.split('=',1) for line in unit.strip().splitlines())
         pid = int(fields['MainPID'])
@@ -73,7 +88,7 @@ def sample(binary, node=None):
                 # Heap vs mapped files (LMDB ledger): optional, never an error row (#1835).
                 'rss_anon':kib(process.get('RssAnon')),
                 'rss_file':kib(process.get('RssFile')),
-                'service_peak':fields['MemoryPeak'],
+                'service_peak':service_peak(fields),
                 'mem_available':int(mem['MemAvailable'].split()[0])*1024,
                 'mem_total':int(mem['MemTotal'].split()[0])*1024,
                 'disk_free':disk.free, 'disk_total':disk.total,
@@ -119,7 +134,12 @@ if __name__ == '__main__':
     state = Path(args.state)
     if args.mode == 'export':
         # No caller-controlled paths, command parsing, arbitrary arguments or shell.
-        data = (state/'latest.json').read_bytes()
+        try:
+            with (state/'latest.json').open('rb') as latest:
+                data = latest.read(128*1024 + 1)
+        except FileNotFoundError:
+            print('observer latest.json missing', file=sys.stderr)
+            sys.exit(os.EX_TEMPFAIL)
         if len(data) > 128*1024:
             raise SystemExit('oversized observer export')
         sys.stdout.buffer.write(data)

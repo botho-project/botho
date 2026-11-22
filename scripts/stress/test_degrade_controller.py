@@ -8,6 +8,7 @@ still halts. Fake RPC/observer coroutines; no network traffic.
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
@@ -50,6 +51,11 @@ def at(step, key):
     return START + STEPS[step][{"restore_at": "restore"}.get(key, key) + "_offset"]
 
 
+def scheduled_payment(identifier, offered):
+    return {"intent": identifier, "offset_seconds": offered - START,
+            "sender": "wallet-1", "recipient": "wallet-2", "amount_picocredits": "1000"}
+
+
 class Fleet:
     """Five fake validators: RPC, observer export and a ~150 s observer ring."""
 
@@ -67,6 +73,7 @@ class Fleet:
         self.unsubmitted = set()
         self.unconfirmed = set()
         self.unspent = set()  # chain_areKeyImagesSpent reports spent: False
+        self.spend_height = {h: 100 for h in HOSTS}
         self.metrics_down = set()  # metrics server unreachable (#1591)
         # Metrics-server loop counters (#1591); a restart resets them.
         self.loop = {h: {"iterations": 1000, "within_1s": 1000, "delayed": 0} for h in HOSTS}
@@ -102,13 +109,13 @@ class Fleet:
             return {"network": "botho-testnet", "gitCommit": "commit",
                     "version": "0.6.0", "synced": self.synced[host],
                     "chainHeight": self.height[host],
-                    "tipHash": "block-%d" % self.height[host],
+                    "tipHash": f"{self.height[host]:064x}",
                     "peerCount": 0 if host in self.frozen else 4,
                     "scpPeerCount": 0 if host in self.frozen else 4,
                     **self.quorum[host]}
         if method == "getBlockByHeight":
             h = params["height"]
-            return {"hash": "genesis" if h == 0 else "block-%d" % h,
+            return {"height": h, "hash": f"{h:064x}",
                     "timestamp": h, "txCount": 0}
         if method == "fee_getRate":
             return {"baseRate": 2, "baseMin": 1, "baseMax": 4,
@@ -122,7 +129,8 @@ class Fleet:
             return {"txHash": params["hash"], "blockHeight": 100,
                     "fee": self.receipt_fee[host], "outputCount": 1, "totalOutput": 1000}
         if method == "chain_areKeyImagesSpent":
-            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False}
+            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False,
+                     "spentHeight": self.spend_height[host] if host not in self.unspent else None}
                     for k in params["keyImages"]]
         if method == "chain_getOutputs":
             return [{"height": i, "outputs": []}
@@ -164,9 +172,10 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         c.config = {"node_sha256": "hash", "infrastructure_end": START + 82 * 3600,
                     "resource_baselines": {h: dict(REFERENCE) for h in HOSTS}}
         c.plan = {"network": "botho-testnet", "node_commit": "commit",
-                  "genesis": "genesis", "schema_version": 2, "seed": 7,
+                  "genesis": f"{0:064x}", "schema_version": 2, "seed": 7,
                   "faults": {"validator_degrade_phase": steps}}
         c.degrade_steps = SUMMARY["degrade_steps"] if steps else []
+        c.events = []
         c.j.set("status", "running")
         c.j.set("setup_start", START - 8 * 3600)
         c.j.set("start", START)
@@ -250,6 +259,103 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
     def calls_to(self, host, method=None):
         return [c for c in self.fleet.calls if c[0] == host and method in (None, c[1])]
 
+    async def test_monitor_requires_the_requested_block_from_every_live_validator(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        for bad in (None, {"height": 99, "hash": "a" * 64}, {"height": True, "hash": "b" * 64},
+                    {"height": 100, "hash": None}, {"height": 100, "hash": "short"}):
+            async def reply(host, method, params):
+                if host == N5 and params["height"] == 100:
+                    return bad
+                return await self.fleet.rpc(host, method, params)
+            self.c.rpc.call.side_effect = reply
+            with self.subTest(bad=bad), self.assertRaisesRegex(Gate, "invalid block at height 100"):
+                await self.c.monitor_checkpoint(statuses, (), None)
+            self.assertIsNone(self.c.j.get("checkpoint_height"))
+
+    async def test_stable_checkpoint_validates_tips_without_another_block_read(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.c.rpc.call.reset_mock()
+        await self.c.monitor_checkpoint(statuses, (), None)
+        # All nodes changing their answer together still contradicts the saved final block.
+        changed = [dict(s, tipHash="a" * 64) for s in statuses]
+        with self.assertRaisesRegex(Gate, "conflicting hash at height 100"):
+            await self.c.monitor_checkpoint(changed, (), None)
+        self.c.rpc.call.assert_not_awaited()
+        self.assertEqual(self.c.j.get("checkpoint_hash"), f"{100:064x}")
+
+    async def test_named_host_must_supply_its_block_upon_return_at_the_same_height(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        async def unavailable(host, method, params):
+            return None if host == N5 else await self.fleet.rpc(host, method, params)
+        self.c.rpc.call.side_effect = unavailable
+        await self.c.monitor_checkpoint(statuses, (N5,), "D1")
+        self.assertEqual(self.c.j.get("checkpoint_hosts"), list(HOSTS[:-1]))
+        self.assertIs(self.c.j.get("genesis_verified"), False)
+        with self.assertRaisesRegex(Gate, "invalid block at height 100"):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.c.rpc.call.side_effect = self.fleet.rpc
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_hosts"), list(HOSTS))
+        self.assertEqual(self.c.j.get("verified_genesis_hash"), self.c.plan["genesis"])
+
+    async def test_advancing_peer_still_has_to_serve_the_lagging_peers_block(self):
+        self.fleet.height[N5] += 1
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.fleet.height[N5] += 1
+        statuses[-1] = await self.fleet.rpc(N5, "node_getStatus")
+        async def changed_block(host, method, params):
+            answer = await self.fleet.rpc(host, method, params)
+            return {**answer, "hash": "e" * 64} if host == N5 else answer
+        self.c.rpc.call.side_effect = changed_block
+        with self.assertRaisesRegex(Gate, "conflicting hashes at height 100"):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_tips")[N5], [101, f"{101:064x}"])
+
+    async def test_legacy_journal_rechecks_checkpoint_and_genesis_before_publishing(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        self.c.j.set("checkpoint_height", 100)
+        self.c.j.set("checkpoint_hash", "old unverified value")
+        self.c.j.set("genesis_verified", True)
+        async def wrong_height(host, method, params):
+            answer = await self.fleet.rpc(host, method, params)
+            return {**answer, "height": 1} if params["height"] == 0 else answer
+        self.c.rpc.call.side_effect = wrong_height
+        with self.assertRaisesRegex(Gate, "genesis: .*invalid block at height 0"):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertIsNone(self.c.j.get("checkpoint_hosts"))
+        self.c.rpc.call.side_effect = self.fleet.rpc
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_hash"), f"{100:064x}")
+        self.assertEqual(self.c.j.get("checkpoint_hosts"), list(HOSTS))
+
+    async def test_restarted_process_is_rechecked_at_an_unchanged_height(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.c.rebaseline(N5, {"step": "D1"}, {}, {"pid": 3, "start": "new"})
+        self.assertNotIn(N5, self.c.j.get("checkpoint_hosts"))
+        self.assertIsNone(self.c.j.get("verified_genesis_hash"))
+        self.c.rpc.call.reset_mock()
+        await self.c.monitor_checkpoint(statuses, (), None)
+        queries = [c.args[2]["height"] for c in self.c.rpc.call.await_args_list if c.args[0] == N5]
+        self.assertEqual(queries, [100, 0])
+
+    async def test_failed_checkpoint_write_preserves_the_previous_complete_record(self):
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        await self.c.monitor_checkpoint(statuses, (), None)
+        self.fleet.advance()
+        statuses = [await self.fleet.rpc(h, "node_getStatus") for h in HOSTS]
+        save = self.c.j.set
+        def interrupted(key, value):
+            if key == "checkpoint_hosts":
+                raise OSError("interrupted write")
+            save(key, value)
+        with patch.object(self.c.j, "set", side_effect=interrupted), self.assertRaises(OSError):
+            await self.c.monitor_checkpoint(statuses, (), None)
+        self.assertEqual(self.c.j.get("checkpoint_height"), 100)
+        self.assertEqual(self.c.j.get("checkpoint_hash"), f"{100:064x}")
+
     # -- helpers ------------------------------------------------------------
 
     def test_live_hosts_is_hosts_without_an_active_step(self):
@@ -319,6 +425,39 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.now = at("D1", "fault_start") - 600
         await self.monitor(self.now + 60)
         self.assertFalse(self.held(), self.reason())
+
+    async def test_resource_poll_becomes_visible_to_another_reader_in_one_commit(self):
+        self.now = START + 60
+        for host in HOSTS:
+            self.c.j.set("latest:" + host, {"at": START})
+        reader = sqlite3.connect(self.c.state / "journal.sqlite", isolation_level=None)
+        self.addCleanup(reader.close)
+
+        def timestamps():
+            return [json.loads(row[0])["at"] for row in reader.execute(
+                "SELECT value FROM meta WHERE key LIKE 'latest:%' ORDER BY key")]
+
+        snapshots = []
+        write = self.c.j.set
+
+        def observe(key, value):
+            write(key, value)
+            if key == "latest:" + N3:
+                snapshots.append(timestamps())
+
+        with patch.object(self.c.j, "set", side_effect=observe):
+            await self.monitor(self.now + 15)
+        self.assertFalse(self.held(), self.reason())
+        self.assertEqual(snapshots, [[START] * len(HOSTS)])
+        self.assertEqual(timestamps(), [START + 60] * len(HOSTS))
+
+    async def test_resource_gate_retains_earlier_valid_samples_for_diagnosis(self):
+        self.now = START
+        await self.monitor(START + 30, {START + 15: lambda: self.fleet.stopped.add(N3)})
+        self.assertTrue(self.held())
+        self.assertIn("observer cannot read required metrics", self.reason())
+        times = [self.c.j.get("latest:" + host)["at"] for host in HOSTS]
+        self.assertEqual(times, [START + 15, START + 15, START, START, START])
 
     async def test_quorum_checked_on_every_tick_not_only_launch(self):
         self.now = at("D1", "fault_start") - 600
@@ -666,6 +805,38 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
                          ["getTransaction", "chain_areKeyImagesSpent"])
         self.assertEqual(self.c.deferred_rows(), [])
 
+    async def test_deferred_verification_preserves_incomplete_or_inconsistent_saved_evidence(self):
+        self.now = at("D1", "fault_start") + 60
+        self.fleet.stop(A)
+        self.accepted_row()
+        await self.reconcile(2)
+        original = self.c.j.intent("pay")["info"]
+        self.now = at("D1", "window_end") + 1
+        self.fleet.start(A)
+        self.settle()
+        for change, reason in (("missing host", "incomplete saved confirmation receipts"),
+                               ("unknown host", "incomplete saved confirmation receipts"),
+                               ("changed height", "saved confirmation height mismatch")):
+            with self.subTest(change=change):
+                info = json.loads(original)
+                if change == "missing host":
+                    del info["confirmed_receipts"][HOSTS[1]]
+                elif change == "unknown host":
+                    info["confirmed_receipts"]["unknown"] = info["confirmed_receipts"][HOSTS[1]]
+                else:
+                    info["block_height"] -= 1
+                encoded = json.dumps(info)
+                self.c.j.db.execute("UPDATE intents SET info=? WHERE id='pay'", (encoded,))
+                with self.clock(), self.assertRaisesRegex(Gate, reason):
+                    await self.c.verify_deferred()
+                self.assertEqual(self.c.j.intent("pay")["info"], encoded)
+        self.c.j.db.execute("UPDATE intents SET info=? WHERE id='pay'", (original,))
+        with self.clock():
+            await self.c.verify_deferred()
+        verified = json.loads(self.c.j.intent("pay")["info"])
+        self.assertEqual(set(verified["confirmed_receipts"]), set(HOSTS))
+        self.assertEqual(verified["deferred_verified"]["hosts"], [A])
+
     async def test_disagreeing_receipt_from_rejoined_host_halts(self):
         self.now = at("D1", "fault_start") + 60
         self.fleet.stop(A)
@@ -710,6 +881,24 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.held())
         self.assertIn("spent-input state disagreement", self.reason())
         self.assertIn("deferred_hosts", json.loads(self.c.j.intent("pay")["info"]))
+
+    async def test_wrong_spend_height_on_rejoined_host_keeps_deferred_evidence(self):
+        self.now = at("D1", "fault_start") + 60
+        self.fleet.stop(A)
+        self.accepted_row()
+        await self.reconcile(2)
+        self.assertEqual(self.c.j.intent("pay")["state"], "reconciled")
+        self.now = at("D1", "window_end") + 1
+        self.fleet.start(A)
+        self.settle()
+        self.fleet.spend_height[A] = 101
+        self.c.closed = False
+        await self.reconcile(1)
+        self.assertTrue(self.held())
+        self.assertIn("spent-input height", self.reason())
+        info = json.loads(self.c.j.intent("pay")["info"])
+        self.assertEqual(info["deferred_hosts"], [A])
+        self.assertNotIn("deferred_verified", info)
 
     async def test_spent_check_during_step_defers_the_named_host(self):
         # Confirmed on all five before D1, scanned during it: the spent
@@ -857,6 +1046,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
     # -- phase boundary -----------------------------------------------------
 
     def deferred(self, step):
+        self.c.events.append(scheduled_payment("late", self.now - 10))
         self.c.j.offer("late", "campaign", self.now - 10, 0, 1, 1000)
         self.c.j.transition("late", "reconciled", info={
             "deferred_hosts": list(STEPS[step]["target_hosts"]), "deferred_step": step})
@@ -866,7 +1056,6 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
             {"id": "recovery", "start_hour": 42, "end_hour": 48},
             {"id": "degrade", "start_hour": 48, "end_hour": 54},
             {"id": "repeat", "start_hour": 54, "end_hour": 72}])
-        self.c.events = []
         self.c.j.set("active_phase", active)
         self.c.sync = AsyncMock()
         self.c.accounting = Mock()
@@ -910,7 +1099,7 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c[:2] for c in self.fleet.calls], expected)
         self.assertEqual(self.c.statuses[A], {"network": "botho-testnet",
             "gitCommit": "commit", "version": "0.6.0", "synced": True, "chainHeight": 101,
-            "tipHash": "block-101", "peerCount": 4, "scpPeerCount": 4})
+            "tipHash": f"{101:064x}", "peerCount": 4, "scpPeerCount": 4})
 
         self.fleet.calls.clear()
         self.c.closed = False

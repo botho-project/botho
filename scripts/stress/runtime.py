@@ -34,6 +34,8 @@ PENDING = ('prepared', 'submitting', 'accepted', 'unknown', 'confirmed', 'recipi
 INFLIGHT = ('prepared', 'submitting', 'accepted', 'unknown')
 assert set(INFLIGHT) < set(PENDING)
 
+_DEFERRED_HOSTS = "json_extract(info,'$.deferred_hosts')"
+
 
 class Gate(Exception):
     """A fail-closed admission decision, retained for explicit operator review."""
@@ -301,6 +303,11 @@ class Journal:
                 id INTEGER PRIMARY KEY, at REAL NOT NULL, host TEXT NOT NULL,
                 method TEXT NOT NULL, bytes INTEGER NOT NULL, latency REAL, status TEXT);
             CREATE INDEX IF NOT EXISTS requests_window ON requests(host,at);
+            CREATE INDEX IF NOT EXISTS intents_unreconciled ON intents(state,kind,offered)
+                WHERE state!='reconciled';
+            CREATE INDEX IF NOT EXISTS intents_campaign_offered ON intents(offered) WHERE kind='campaign';
+            CREATE INDEX IF NOT EXISTS intents_offer_queue ON intents(offered,id)
+                WHERE state IN ('planned','eligible');
         ''')
         if limits is not None:
             existing = self.get('limits_digest')
@@ -311,22 +318,55 @@ class Journal:
                 self.db.close()
                 raise Gate('journal limits changed')
             self.set('limits_digest', digest(self.limits))
+        self._install_receipt_candidates()
+
+    def _install_receipt_candidates(self):
+        # Keep JSON functions out of the database schema. Older SQLite builds
+        # refuse to open expression indexes using JSON with trusted_schema off.
+        with self.transaction():
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                               "AND name='receipt_candidates'").fetchone():
+                return
+            self.db.execute('CREATE TABLE receipt_candidates(intent TEXT PRIMARY KEY) WITHOUT ROWID')
+            # Include malformed legacy records so the normal receipt query
+            # still raises its JSON error. New or changed info is checked on read.
+            self.db.execute('INSERT INTO receipt_candidates SELECT id FROM intents '
+                            f'WHERE CASE WHEN json_valid(info) THEN {_DEFERRED_HOSTS} IS NOT NULL ELSE 1 END')
+            self.db.execute('''CREATE TRIGGER receipt_candidate_insert AFTER INSERT ON intents
+                WHEN NEW.info != '{}' BEGIN
+                INSERT OR IGNORE INTO receipt_candidates VALUES(NEW.id); END''')
+            self.db.execute('''CREATE TRIGGER receipt_candidate_update AFTER UPDATE OF info,id ON intents
+                WHEN OLD.info != NEW.info OR OLD.id != NEW.id BEGIN
+                DELETE FROM receipt_candidates WHERE intent=OLD.id AND OLD.id != NEW.id;
+                INSERT OR IGNORE INTO receipt_candidates VALUES(NEW.id); END''')
+            self.db.execute('''CREATE TRIGGER receipt_candidate_delete AFTER DELETE ON intents BEGIN
+                DELETE FROM receipt_candidates WHERE intent=OLD.id; END''')
 
     def get(self, key, default=None):
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
         return json.loads(row[0]) if row else default
 
     def set(self, key, value):
-        self.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', (key, json.dumps(value)))
+        # Repeated endpoint limits should not append frames to the durable WAL.
+        self.db.execute('''INSERT INTO meta(key,value) VALUES(?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            WHERE meta.value != excluded.value''', (key, json.dumps(value)))
 
     @contextlib.contextmanager
     def transaction(self):
-        self.db.execute('BEGIN IMMEDIATE')
+        # A transition can run alone or inside a larger reservation transaction.
+        nested = self.db.in_transaction
+        self.db.execute('SAVEPOINT journal_write' if nested else 'BEGIN IMMEDIATE')
         try:
             yield
-            self.db.execute('COMMIT')
+            self.db.execute('RELEASE journal_write' if nested else 'COMMIT')
         except BaseException:
-            self.db.execute('ROLLBACK')
+            if self.db.in_transaction:
+                if nested:
+                    self.db.execute('ROLLBACK TO journal_write')
+                    self.db.execute('RELEASE journal_write')
+                else:
+                    self.db.execute('ROLLBACK')
             raise
 
     def event(self, intent, state, detail):
@@ -351,12 +391,56 @@ class Journal:
         if 'info' in fields:
             fields['info'] = json.dumps(fields['info'])
         fields.update(state=state, reason=reason)
-        self.db.execute('UPDATE intents SET ' + ','.join(k+'=?' for k in fields) + ' WHERE id=?',
-                        (*fields.values(), identifier))
-        self.event(identifier, state, reason or {})
+        with self.transaction():
+            self.db.execute('UPDATE intents SET ' + ','.join(k+'=?' for k in fields) + ' WHERE id=?',
+                            (*fields.values(), identifier))
+            self.event(identifier, state, reason or {})
 
     def pending(self):
         return self.rows('state IN (' + ','.join('?' for _ in PENDING) + ')', PENDING)
+
+    def has_pending(self):
+        return self.db.execute(
+            "SELECT 1 FROM intents WHERE state!='reconciled' AND state IN ("
+            + ','.join('?' for _ in PENDING) + ') LIMIT 1', PENDING
+        ).fetchone() is not None
+
+    def campaign_offers(self, *, before=None, since=None):
+        query = "SELECT id,offered,sender,recipient,amount,state FROM intents WHERE kind='campaign'"
+        args = []
+        if since is not None:
+            query += " AND offered>=?"
+            args.append(since)
+        if before is not None:
+            query += " AND offered<?"
+            args.append(before)
+        return self.db.execute(query, args)
+
+    def prior_campaign_states(self, boundary):
+        """Only unfinished states from before the boundary affect the phase gate."""
+        return {row[0] for row in self.db.execute(
+            "SELECT DISTINCT state FROM intents WHERE state!='reconciled' "
+            "AND kind='campaign' AND offered<?", (boundary,)
+        )}
+
+    def deferred_receipts(self):
+        rows = self.rows('id IN (SELECT intent FROM receipt_candidates) '
+                         f'AND {_DEFERRED_HOSTS} IS NOT NULL ORDER BY offered,id')
+        count = self.db.execute('SELECT COUNT(*) FROM receipt_candidates').fetchone()[0]
+        if count > len(rows):
+            # A concurrent writer can create a deferral after the read. Recheck
+            # the current intent in the deletion statement before pruning it.
+            try:
+                self.db.execute('DELETE FROM receipt_candidates WHERE NOT EXISTS '
+                                f'(SELECT 1 FROM intents WHERE id=intent AND {_DEFERRED_HOSTS} IS NOT NULL)')
+            except sqlite3.OperationalError as error:
+                # The selected rows are authoritative. A read-only observer
+                # or another journal writer may leave pruning to a later poll.
+                if (getattr(error, 'sqlite_errorcode', 0) & 255) not in (
+                    sqlite3.SQLITE_READONLY, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED
+                ):
+                    raise
+        return rows
 
     def inflight(self):
         """Rows counted against max_inflight; see INFLIGHT. Sender reuse and
@@ -410,7 +494,9 @@ class Journal:
                 raise Quota('wire byte budget')
             info = json.loads(row['info'])
             info['wire_bytes'] = wire_bytes
-            self.transition(identifier, 'submitting', submitted=self.clock(), ingress=host, info=info)
+            submitted = self.clock()
+            self.transition(identifier, 'submitting', submitted=submitted, ingress=host, info=info)
+            self.set('last_write', submitted)
 
     def finish(self, identifier, info):
         with self.transaction():

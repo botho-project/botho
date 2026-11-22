@@ -241,7 +241,7 @@ class IdleMemoryTests(unittest.TestCase):
 
 
 class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
-    async def monitor_once(self, changed_pid=False):
+    async def monitor_once(self, changed_pid=False, controller_free=2*1024**3, expected_halt=None):
         with tempfile.TemporaryDirectory() as name:
             reference = {'at':900,'pid':1,'start':'fixed','restarts':0,'binary':'hash',
                          'config':'config-digest','node_key':'peer-key-digest',
@@ -252,30 +252,38 @@ class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
             c.j = Journal(Path(name)/'journal.sqlite')
             try:
                 c.config = {'node_sha256':'hash','resource_baselines':{h:reference for h in HOSTS}}
-                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':'block','faults':{'validator_degrade_phase':False}}
+                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':f'{0:064x}','faults':{'validator_degrade_phase':False}}
                 c.closed = False
                 c.reconcile_wakeup = asyncio.Event()
                 c.fresh = 0
                 c.statuses = {}
                 c.state = Path(name)
                 status = {'network':'botho-testnet','gitCommit':'commit','version':'0.6.0',
-                          'synced':True,'chainHeight':100}
+                          'synced':True,'chainHeight':100,'tipHash':f'{100:064x}'}
                 # A persisted fleet height is not fresh in-memory state after restart.
                 c.j.set('fleet_latest', {'at': 900, 'nodes': {h: status for h in HOSTS}})
                 async def rpc(host, method, params=None):
-                    return status if method=='node_getStatus' else {'hash':'block'}
+                    if method == 'node_getStatus':
+                        return status
+                    self.assertEqual(method, 'getBlockByHeight')
+                    return {'height': params['height'], 'hash': f"{params['height']:064x}"}
                 c.rpc = Mock(call=AsyncMock(side_effect=rpc))
                 c.observer = AsyncMock(return_value=[observed])
                 def finish(*args):c.closed=True
                 c.memory_cycle = Mock(side_effect=finish)
                 c.halt = Mock(side_effect=finish)
-                with patch('controller.time.time',return_value=1000), patch('controller.asyncio.sleep',new_callable=AsyncMock):
+                with (
+                    patch('controller.time.time', return_value=1000),
+                    patch('controller.asyncio.sleep', new_callable=AsyncMock),
+                    patch('controller.shutil.disk_usage', return_value=Mock(free=controller_free)),
+                ):
                     await c.monitor()
-                if changed_pid:
+                if expected_halt is not None:
                     c.halt.assert_called_once()
-                    self.assertIn('unexpected node restart',str(c.halt.call_args.args[0]))
-                    c.memory_cycle.assert_not_called()
+                    self.assertIn(expected_halt, str(c.halt.call_args.args[0]))
                     self.assertFalse(c.reconcile_wakeup.is_set())
+                    if changed_pid:
+                        c.memory_cycle.assert_not_called()
                 else:
                     c.halt.assert_not_called()
                     self.assertTrue(c.reconcile_wakeup.is_set())
@@ -289,7 +297,10 @@ class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
         await self.monitor_once()
 
     async def test_supplied_reference_rejects_changed_pid_instead_of_rebasing(self):
-        await self.monitor_once(changed_pid=True)
+        await self.monitor_once(changed_pid=True, expected_halt='unexpected node restart')
+
+    async def test_controller_holds_below_two_gib_of_disk_headroom(self):
+        await self.monitor_once(controller_free=2*1024**3-1, expected_halt='controller disk headroom')
 
 
 if __name__ == '__main__':

@@ -47,14 +47,16 @@ from pathlib import Path
 import re
 import socket
 import stat
+import sys
 import time
 from urllib.parse import urlsplit
 
-from controller import Controller
+from controller import Controller, check_spent_inputs, check_transaction_receipts
+from fee_evidence import floor_quote_summary
 from lottery import lottery_rows
 from plan import expand
 from runtime import (Gate, HOSTS, Journal, Quota, Rpc, atomic, campaign_targets,
-                     campaign_tls_context, check_identity, parse_hosts, pinned_file)
+                     campaign_tls_context, check_identity, fsync_directory, parse_hosts, pinned_file)
 from selection import choose
 from fee_quote import sign_priced
 
@@ -294,6 +296,15 @@ def sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def grant_receipt_height(row, receipts):
+    """Grant batches are locally signed transfers with fixed outputs and fees."""
+    need(isinstance(receipts, dict) and set(receipts) == set(HOSTS)
+         and all(isinstance(r, dict) for r in receipts.values()), 'incomplete grant receipts')
+    signed = {'kind': 'prefund', 'hash': row['hash'], 'fee': row['fee']}
+    check_transaction_receipts(signed, row, receipts.values())
+    return receipts[HOSTS[0]]['blockHeight']
+
+
 class Prefunder(Controller):
     """Reuses Controller.sync()/canonical_inventory() and selection.choose().
 
@@ -309,7 +320,8 @@ class Prefunder(Controller):
         # Drafts the producer quoted below its fee floor (#2001): never
         # submitted, kept for audit outside ``artifacts`` (no orphan there).
         self.underpaid = self.state / 'underpaid'
-        for directory in (self.grants_dir, self.artifacts, self.underpaid):
+        self.unquoted = self.state / 'unquoted'
+        for directory in (self.grants_dir, self.artifacts, self.underpaid, self.unquoted):
             directory.mkdir(mode=0o700, exist_ok=True)
             # An existing directory is re-checked: exist_ok keeps its old mode.
             owner_only_dir(directory, 'state_dir/' + directory.name)
@@ -357,6 +369,23 @@ class Prefunder(Controller):
     def marker_path(self, index):
         return self.grants_dir / f'batch-{index:04d}.submit'
 
+    def read_submit_time(self, row):
+        """A prepared batch may still be unsent. Every later state needs its own marker."""
+        path = self.marker_path(row['index'])
+        try:
+            marker = json.loads(path.read_bytes())
+        except FileNotFoundError:
+            need(row['state'] == 'prepared', f'grant batch {row["index"]} lost its submit marker')
+            return None
+        except ValueError as error:
+            raise Gate(f'invalid submit marker: {path.name}') from error
+        need(isinstance(marker, dict) and marker.get('hash') == row['hash'],
+             f'submit marker hash differs from grant batch: {path.name}')
+        at = marker.get('at')
+        need(type(at) in (int, float) and 0 <= at <= sys.float_info.max,
+             f'invalid submit marker time: {path.name}')
+        return at
+
     def artifact_path(self, index):
         return self.artifacts / f'batch-{index:04d}.bin'
 
@@ -389,6 +418,7 @@ class Prefunder(Controller):
                  'grant record identity changed')
             need(self.artifact_path(index).exists() and sha256_file(row['artifact']) == row['artifact_sha256'],
                  'saved grant artifact missing or altered: ' + name)
+            self.read_submit_time(row)
             # Every batch covers the next grants in order, exactly as offer() made them.
             grants = row.get('grants')
             need(isinstance(grants, list) and 0 < len(grants) <= GRANTS_PER_BATCH
@@ -396,6 +426,13 @@ class Prefunder(Controller):
                  and row.get('amount') == sum(g['amount'] for g in grants),
                  'grant batch coverage changed: ' + name)
             granted += len(grants)
+            if row['state'] == 'confirmed' and 'spent_receipts' in row:
+                height = grant_receipt_height(row, row.get('receipts'))
+                need(type(row.get('block_height')) is int and row['block_height'] == height,
+                     'saved grant inclusion height differs from receipt')
+                spent = row['spent_receipts']
+                need(isinstance(spent, dict) and set(spent) == set(HOSTS), 'incomplete grant spent receipts')
+                check_spent_inputs(row['key_images'], height, spent.values())
             records.append(row)
         expected = {f'batch-{i:04d}.json' for i in range(len(records))}
         expected |= {f'batch-{i:04d}.submit' for i in range(len(records))}
@@ -412,7 +449,7 @@ class Prefunder(Controller):
         atomic(self.record_path(row['index']), row)
 
     def unconfirmed(self):
-        return [r for r in self.records if r['state'] != 'confirmed']
+        return [r for r in self.records if r['state'] != 'confirmed' or 'spent_receipts' not in r]
 
     def reserve_inputs(self):
         """Mirror every unconfirmed grant's inputs into the selector's reservations."""
@@ -588,9 +625,13 @@ class Prefunder(Controller):
             return False
         self.gate(write=True)
         limits = self.j.limits
-        if len(self.unconfirmed()) >= limits['max_inflight']:
+        # A finalized setup transfer can change the cluster wealth used to quote
+        # the next transfer. Pinned funding plans budget one batch per block.
+        pending = self.unconfirmed()
+        max_batches = 1 if 'prefund' in self.plan else limits['max_inflight']
+        if len(pending) >= max_batches:
             return False
-        if any(r['state'] != 'accepted' for r in self.unconfirmed()):
+        if any(r['state'] != 'accepted' for r in pending):
             return False  # Resolve every uncertain grant before signing another.
         recent = [r for r in self.records if r.get('submitted_at', -1e18) > self.clock() - 60]
         if len(recent) >= limits['max_normal_submissions_per_minute']:
@@ -627,24 +668,29 @@ class Prefunder(Controller):
         # Price against the producer's own fee floor (#2001): sign, quote the
         # draft with estimateFee, re-sign at the quote. An underpaying draft
         # moves to ``underpaid/`` (kept, never submitted) before the re-sign.
-        quotes = [0]
-
         async def sign(min_fee):
+            if min_fee:
+                self.producer_budget(2, 'producer request budget before re-signing')
             return await self.native({**request, **({'min_fee': min_fee} if min_fee else {})})
 
         async def quote_draft(tx_hex):
-            if quotes[0]:
-                self.producer_budget(2, 'producer request budget before re-signing')
-            quotes[0] += 1
-            return await self.rpc.call(self.m['producer_role'], 'estimateFee', {'tx_hex': tx_hex})
+            try:
+                return await self.rpc.call(self.m['producer_role'], 'estimateFee', {'tx_hex': tx_hex})
+            except Quota:
+                # Only the read-only quote was attempted. Preserve these signed bytes
+                # before the run loop retries this still-unrecorded batch.
+                retain_draft(self.unquoted)
+                raise
 
-        def discard():
-            target, n = self.underpaid / artifact.name, 1
+        def retain_draft(directory):
+            target, n = directory / artifact.name, 1
             while target.exists():
-                target, n = self.underpaid / f'{artifact.stem}.{n}{artifact.suffix}', n + 1
+                target, n = directory / f'{artifact.stem}.{n}{artifact.suffix}', n + 1
             os.replace(artifact, target)
+            fsync_directory(directory)
+            fsync_directory(self.artifacts)
 
-        info = await sign_priced(sign, quote_draft, discard, artifact)
+        info = await sign_priced(sign, quote_draft, lambda: retain_draft(self.underpaid), artifact)
         # From here a signed artifact exists. Any refusal leaves it as an orphan,
         # which holds every later start until an operator reviews it.
         need(0 < info['fee'] <= self.max_fee, 'signed grant fee exceeds max_single_signed_fee '
@@ -699,18 +745,11 @@ class Prefunder(Controller):
         # Persisted inventory is never trusted (controller.py): restore-scan everything.
         await self.sync(full=True)
         for row in self.records:
-            marker = self.marker_path(row['index']).exists()
-            if row['state'] == 'prepared' and not marker:
-                # A crash or quota deferral between the record and its marker.
-                # tick() retries it through send_unsent() on every tick.
-                continue
-            elif row['state'] == 'prepared':
-                # Crash after the marker: the one attempt may have been sent. Never resend.
-                row.update(state='submitting', submitted_at=json.loads(
-                    self.marker_path(row['index']).read_text())['at'])
+            submitted_at = self.read_submit_time(row)
+            if row['state'] == 'prepared' and submitted_at is not None:
+                # A crash after the marker can precede dispatch. Never resend it.
+                row.update(state='submitting', submitted_at=submitted_at)
                 self.save(row)
-            elif row['state'] != 'confirmed':
-                need(marker, 'grant batch %d lost its submit marker' % row['index'])
         self.reserve_inputs()
         await self.reconcile(force=True)
         self.resumed = True
@@ -734,17 +773,13 @@ class Prefunder(Controller):
                 need(self.clock() - row.get('submitted_at', row['prepared_at']) <= UNRESOLVED_SECONDS,
                      'grant batch %d unresolved after fifteen minutes; never resubmitted' % row['index'])
                 continue
-            receipts = await self.all_hosts('getTransaction', {'hash': row['hash']})
-            shapes = {(r.get('blockHeight'), r.get('fee'), r.get('outputCount'), r.get('totalOutput'))
-                      for r in receipts}
-            need(len(shapes) == 1, 'fleet grant receipt disagreement: batch %d' % row['index'])
-            need(all(r.get('txHash', row['hash']) == row['hash'] for r in receipts), 'fleet receipt hash mismatch')
-            block, fee, outputs, total = shapes.pop()
-            need(type(block) is int and fee == row['fee'] and outputs == len(row['outputs'])
-                 and total == sum(o['amount'] for o in row['outputs']), 'grant receipt differs from signed grant')
+            replies = await self.all_hosts('getTransaction', {'hash': row['hash']})
+            receipts = dict(zip(HOSTS, replies, strict=True))
+            block = grant_receipt_height(row, receipts)
+            if row['state'] == 'confirmed':
+                need(row.get('block_height') == block, 'prior grant inclusion height changed')
             spent = await self.all_hosts('chain_areKeyImagesSpent', {'keyImages': row['key_images']})
-            need(all([s.get('keyImage') for s in host] == row['key_images'] and all(s.get('spent') is True for s in host)
-                     for host in spent), 'grant inputs not spent on every node')
+            check_spent_inputs(row['key_images'], block, spent)
             if min(s['chainHeight'] for s in self.statuses.values()) < block:
                 continue
             if not scanned:
@@ -757,8 +792,8 @@ class Prefunder(Controller):
                 need(len(found) == 1 and found[0]['utxo']['amount'] == expected['amount']
                      and bytes(found[0]['utxo']['target_key']).hex() == expected['target_key'],
                      'grant batch %d recipient/change scan mismatch' % row['index'])
-            row.update(state='confirmed', block_height=block, confirmed_at=self.clock(),
-                       receipts=dict(zip(HOSTS, receipts)))
+            row.update(state='confirmed', block_height=block, confirmed_at=row.get('confirmed_at', self.clock()),
+                       receipts=receipts, spent_receipts=dict(zip(HOSTS, spent, strict=True)))
             self.save(row)
         self.reserve_inputs()
 
@@ -838,6 +873,7 @@ class Prefunder(Controller):
                   'grant_picocredits': self.m['grant_picocredits'],
                   'principal': report['principal'], 'fees': report['fees'],
                   'max_fee': max(r['fee'] for r in self.records), 'accounting': report,
+                  'fee_floor_quotes': floor_quote_summary(self.records, per_input_value=False),
                   'opening_balances': balances, 'opening_lottery_balances': lottery_balances,
                   'completed_before_deadline': self.clock() < self.m['deadline'],
                   'inventory_readiness': {'status': 'ready' if all(r['ready'] for r in readiness) else
@@ -855,8 +891,12 @@ class Prefunder(Controller):
     async def tick(self):
         """One bounded step. Returns True once the outputs are written."""
         self.gate()
-        if (self.state / 'opening_balances.json').exists() and self.granted() == self.total:
-            return True
+        completed = (self.state / 'opening_balances.json').exists()
+        if completed:
+            need(self.granted() == self.total and all(r['state'] == 'confirmed' for r in self.records)
+                 and (self.state / 'funding-health.json').is_file(), 'opening balances without completed funding')
+            if not self.unconfirmed():
+                return True
         await self.lottery_preflight()
         await self.health(force=not self.statuses)
         if self.opening is None:
@@ -867,6 +907,10 @@ class Prefunder(Controller):
         if not self.resumed:
             await self.resume()
         await self.reconcile()
+        if completed:
+            # Upgrade old confirmed records using reads only. Keep the exact
+            # health and balances bytes consumed by a staged controller.
+            return not self.unconfirmed()
         if self.granted() == self.total and not self.unconfirmed():
             await self.complete()
             return True

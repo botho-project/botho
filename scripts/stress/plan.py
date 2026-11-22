@@ -27,6 +27,13 @@ def pico(value, name):
     return int(value)
 
 
+def payment_terms(event):
+    """Journal wallet indices and picocredits for an expanded payment slot."""
+    return (int(event["sender"].split("-")[-1]) - 1,
+            int(event["recipient"].split("-")[-1]) - 1,
+            int(event["amount_picocredits"]))
+
+
 def expand(plan):
     from discovery_plan import execution_mode
     execution_mode(plan)

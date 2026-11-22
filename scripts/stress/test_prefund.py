@@ -340,7 +340,8 @@ class SignerContractTests(unittest.TestCase):
         source = Path(prefund.__file__).read_text()
         imported = set(re.findall(r'^(?:from|import) (\w+)', source, re.M))
         local = {p.stem for p in Path(prefund.__file__).parent.glob('*.py')}
-        self.assertLessEqual(imported & local, {'controller', 'fee_quote', 'lottery', 'plan', 'runtime', 'selection'})
+        self.assertLessEqual(imported & local, {'controller', 'fee_evidence', 'fee_quote', 'lottery',
+                                                'plan', 'runtime', 'selection'})
         self.assertFalse({'qualification', 'fast_timing', 'manifest_limits'} & imported)
         for module in imported - local:
             __import__(module)  # standard library only
@@ -642,6 +643,9 @@ class EndToEndTests(PrefundBase):
         self.assertEqual(health['accounting']['difference'], 0)
         self.assertEqual(health['grants'], 512)
         self.assertEqual(health['batches'], 35)
+        quotes = sorted(r['fee_floor_quote']['resignFee'] for r in p.records)
+        self.assertEqual(health['fee_floor_quotes'], {'samples': 35, 'signed': 35,
+                         'p99': {'resign_fee_picocredits': quotes[-1]}})
         self.assertEqual(health['fees'], sum(self.fleet.batch_fees))
         self.assertGreater(health['accounting']['coinbase_lottery_inflow'], 0)
         self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [16] * 32)
@@ -864,7 +868,7 @@ class DeadlineFitTests(PrefundBase):
     TOTAL = 64 * X2_GRANTS
     BATCHES = -(-TOTAL // 15)
 
-    def run_fresh_chain(self, tick_seconds):
+    def run_fresh_chain(self, tick_seconds, funding_coinbase_interval=1):
         """Prefund the plan's grants from height 0; returns the prefunder and first/last batch heights."""
         self.fleet = Fleet(self.plan, self.fleet.addresses)
         self.fleet.coinbase_to = self.m['funding_wallet']['address']
@@ -891,6 +895,9 @@ class DeadlineFitTests(PrefundBase):
         with contextlib.redirect_stdout(io.StringIO()), \
                 patch.object(prefund, 'choose', watched):  # funding-wait lines
             while not done:
+                self.fleet.coinbase_to = (self.m['funding_wallet']['address']
+                                          if (self.fleet.height + 1) % funding_coinbase_interval == 0
+                                          else 'other-miner')
                 self.fleet.mine(1)
                 for _ in range(self.BLOCK_SECONDS // tick_seconds):
                     self.now += tick_seconds
@@ -949,12 +956,13 @@ class DeadlineFitTests(PrefundBase):
             self.assertGreaterEqual(len(ready), wallets['min_mature_utxos_per_wallet'], evidence)
             self.assertTrue(probe, w)
 
-    def test_x_series_change_recycling_finishes_sooner(self):
-        # Ticking every 4 s, a batch's change (in a 16-output block) is
-        # itself spendable ~20 blocks later, so several batches land per block.
-        p, first, last = self.run_fresh_chain(4)
+    def test_x_series_recycles_change_when_funding_coinbases_are_sparse(self):
+        # Only every third coinbase belongs to the funding wallet. Mature
+        # change must cover the gaps even when ticks arrive faster than blocks.
+        p, first, last = self.run_fresh_chain(4, funding_coinbase_interval=3)
         self.assertEqual((p.granted(), len(p.records)), (self.TOTAL, self.BATCHES))
-        self.assertLess(last - first, self.BATCHES)
+        self.assertEqual(len({r['block_height'] for r in p.records}), self.BATCHES)
+        self.assertGreaterEqual(last - first, self.BATCHES - 1)
         # #2023 review: change is spent only when no mature coinbase is
         # eligible, and never past MAX_FUNDING_DEPTH, so each funding
         # cluster's wealth stays within payment_shape.ring_bound_bth.
@@ -1031,6 +1039,29 @@ class PinnedShapeTests(PrefundBase):
         plan = json.loads(Path(__file__).with_name('testnet-discovery-v2.json').read_text())
         self.assertEqual(prefund.batch_fee_cap(plan),
                          int(plan['limits']['max_single_signed_fee_picocredits']))
+
+    def test_pinned_funding_waits_for_all_receipts_before_pricing_the_next_batch(self):
+        pinned = self.plan['prefund']
+        self.m.update(grants_per_wallet=pinned['grants_per_wallet'],
+                      grant_picocredits=int(pinned['grant_picocredits']))
+        for _ in range(20):
+            self.fleet.output(1, self.m['funding_wallet']['address'], 16 * 10**11, coinbase=True)
+        p = self.prefunder()
+        self.offer_one(p)
+        first = p.records[0]['hash']
+        self.fleet.mine()
+        self.fleet.known_override[(HOSTS[-1], first)] = 'unknown'
+        self.now += 61
+        self.tick(p)
+        self.assertEqual(self.fleet.submits, [first])
+        self.assertEqual(len(p.records), 1)
+        self.fleet.known_override.clear()
+        self.advance()
+        self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        self.assertEqual(len(p.records[0]['receipts']), 5)
+        self.assertEqual(len(p.records), 2)
+        self.assertEqual(self.fleet.submits, [r['hash'] for r in p.records])
 
 
 class ReconcileTests(PrefundBase):
@@ -1126,6 +1157,113 @@ class ReconcileTests(PrefundBase):
         with self.assertRaisesRegex(Gate, 'receipt disagreement'):
             self.tick(p)
 
+    def test_grant_receipt_must_name_the_signed_transaction(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        call = self.fleet.call
+
+        async def missing_hash(host, method, *args, **kwargs):
+            value = await call(host, method, *args, **kwargs)
+            if host == HOSTS[-1] and method == 'getTransaction':
+                del value['txHash']
+            return value
+
+        self.fleet.call = missing_hash
+        with self.assertRaisesRegex(Gate, 'receipt hash mismatch'):
+            self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'accepted')
+        self.assertEqual(len(self.fleet.submits), 1)
+
+    def test_grant_inputs_must_be_spent_at_the_receipt_height_on_every_host(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        call = self.fleet.call
+
+        async def spent_earlier(host, method, *args, **kwargs):
+            value = await call(host, method, *args, **kwargs)
+            if host == HOSTS[-1] and method == 'chain_areKeyImagesSpent':
+                value[0]['spentHeight'] -= 1
+            return value
+
+        self.fleet.call = spent_earlier
+        with self.assertRaisesRegex(Gate, 'spent-input height differs'):
+            self.tick(p)
+        self.assertEqual(p.records[0]['state'], 'accepted')
+
+    def test_saved_grant_evidence_is_checked_before_reuse(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        self.advance()
+        self.tick(p)
+        row = p.records[0]
+        self.assertEqual(set(row['spent_receipts']), set(HOSTS))
+        row['spent_receipts'][HOSTS[-1]][0]['spentHeight'] += 1
+        p.save(row)
+        with self.assertRaisesRegex(Gate, 'spent-input height differs'):
+            self.prefunder()
+
+    def test_completed_restart_checks_each_submit_marker_before_reusing_grants(self):
+        p = self.prefunder()
+        for _ in range(100):
+            if self.tick(p):
+                break
+            self.advance()
+        else:
+            self.fail('funding did not finish')
+        marker = p.marker_path(0)
+        original = marker.read_bytes()
+        submissions = list(self.fleet.submits)
+        self.fleet.requests.clear()
+        for case, replacement in (
+                ('missing', None),
+                ('different batch', p.marker_path(1).read_bytes()),
+                ('truncated', original[:8]),
+                ('invalid time', json.dumps({**json.loads(original), 'at': False}).encode())):
+            with self.subTest(case=case):
+                if replacement is None:
+                    marker.unlink()
+                else:
+                    marker.write_bytes(replacement)
+                try:
+                    with self.assertRaisesRegex(Gate, 'submit marker'):
+                        self.tick(self.prefunder())
+                finally:
+                    marker.write_bytes(original)
+        self.assertTrue(self.tick(self.prefunder()))
+        self.assertEqual(self.fleet.submits, submissions)
+        self.assertFalse(self.fleet.requests)
+
+    def test_completed_legacy_funding_upgrades_by_reads_preserving_handoff(self):
+        p = self.prefunder()
+        for _ in range(100):
+            if self.tick(p):
+                break
+            self.advance()
+        else:
+            self.fail('funding did not finish')
+        before = list(self.fleet.submits)
+        files = [p.state / name for name in ('opening_balances.json', 'funding-health.json')]
+        handoff = [f.read_bytes() for f in files]
+        original_time = p.records[0]['confirmed_at']
+        del p.records[0]['spent_receipts']
+        del p.records[0]['receipts'][HOSTS[-1]]['txHash']
+        p.save(p.records[0])
+        self.fleet.requests.clear()
+        p = self.prefunder()
+        self.assertEqual(len(p.unconfirmed()), 1)
+        self.assertTrue(self.tick(p))
+        self.assertEqual(self.fleet.submits, before)
+        self.assertEqual([f.read_bytes() for f in files], handoff)
+        self.assertEqual(p.records[0]['confirmed_at'], original_time)
+        self.assertEqual(p.records[0]['block_height'], p.records[0]['spent_receipts'][HOSTS[-1]][0]['spentHeight'])
+        self.assertEqual(p.records[0]['receipts'][HOSTS[-1]]['txHash'], p.records[0]['hash'])
+        self.assertEqual([h for h, method in self.fleet.requests if method == 'getTransaction'], list(HOSTS))
+        self.fleet.requests.clear()
+        self.assertTrue(self.tick(self.prefunder()))
+        self.assertFalse(self.fleet.requests)
+
     def test_funding_accounting_mismatch_holds(self):
         p = self.prefunder()
         self.offer_one(p)
@@ -1218,6 +1356,48 @@ class QuotaDeferralTests(PrefundBase):
         self.assertEqual(sorted(self.fleet.submits), sorted(r['hash'] for r in p.records if
                                                             p.marker_path(r['index']).exists()))
         self.assertEqual(len(self.fleet.submits), len(set(self.fleet.submits)))
+
+    def test_reprice_defers_before_signing_the_next_draft(self):
+        p = self.reserving()
+        floor = 500_000_000
+
+        def quote(fee):
+            self.fill(p)
+            return {**settling_quote(floor), 'txFee': fee}
+
+        self.fleet.quote_hook = quote
+        with self.assertRaisesRegex(Quota, 'before re-signing'):
+            self.tick(p)
+        self.assertEqual(len(self.fleet.batch_fees), 1)
+        self.assertFalse(p.artifact_path(0).exists())
+        self.assertFalse(p.marker_path(0).exists())
+        self.assertFalse(self.fleet.submits)
+        self.fleet.quote_hook = None
+        self.advance()
+        self.tick(p)
+        self.assertEqual(len(p.records), 1)
+        self.assertSubmittedOnce(p)
+
+    def test_deferred_quote_preserves_each_unsubmitted_draft_across_restart(self):
+        def deferred(fee):
+            raise Quota('endpoint Retry-After')
+
+        self.fleet.quote_hook = deferred
+        for _ in range(2):
+            p = self.prefunder()
+            with self.assertRaisesRegex(Quota, 'Retry-After'):
+                self.tick(p)
+            self.assertFalse(p.artifact_path(0).exists())
+            self.assertFalse(p.marker_path(0).exists())
+            self.assertFalse(p.records)
+        drafts = [json.loads(path.read_bytes())['hash'] for path in p.unquoted.iterdir()]
+        self.assertEqual(len(set(drafts)), 2)
+        self.fleet.quote_hook = None
+        p = self.prefunder()
+        self.offer_one(p)
+        self.assertEqual(len(p.records), 1)
+        self.assertTrue(set(drafts).isdisjoint(self.fleet.submits))
+        self.assertSubmittedOnce(p)
 
     def test_judge_repro_budget_too_small_never_strands_a_grant(self):
         # The Judge's repro on PR #1596: the budget refuses the submit pre-check.

@@ -7,9 +7,11 @@ import math
 import os
 import resource
 import stat
+import statistics
 import time
+from fee_evidence import floor_quote_summary, payment_consensus_summary
 from lottery import award_spend_expectation
-from plan import expand
+from plan import expand, payment_terms
 from runtime import HOSTS, atomic, digest
 
 
@@ -279,6 +281,59 @@ def offer_deferrals(journal, kind):
     }
 
 
+def rehearsal_preparation_timing(submitted, lag_limit):
+    """Summarize elapsed times for the attempt that actually produced each signature.
+
+    The interval before scan request includes any earlier attempts or deferrals.
+    Scan wait includes lock contention or reuse of the current admission pass's
+    shared scan. The node and signer may both be idle during either interval.
+    """
+    def finite(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    def summarize(records):
+        samples = []
+        missing = invalid = 0
+        for row, info in records:
+            timing = info.get("preparation_timing")
+            if "preparation_timing" not in info:
+                missing += 1
+                continue
+            if not isinstance(timing, dict):
+                invalid += 1
+                continue
+            clocks = (row["offered"], timing.get("scan_requested_at"), info.get("eligible_at"),
+                      row["prepared"], row["submitted"])
+            scan = timing.get("scan_wait_seconds")
+            selection = timing.get("input_selection_seconds")
+            if (not all(finite(t) for t in clocks) or list(clocks) != sorted(clocks)
+                    or not finite(scan) or scan < 0 or not finite(selection) or selection < 0):
+                invalid += 1
+                continue
+            samples.append({
+                "offer_to_scan_request": clocks[1] - clocks[0],
+                "scan_wait": scan,
+                "input_selection": selection,
+                "eligibility_to_prepared": clocks[3] - clocks[2],
+                "prepared_to_submit": clocks[4] - clocks[3],
+            })
+        return {
+            "submitted": len(records), "measured": len(samples),
+            "missing": missing, "invalid": invalid,
+            "median_seconds": {key: statistics.median(sample[key] for sample in samples)
+                               for key in samples[0]} if samples else None,
+        }
+
+    # Use the original run's evaluated cadence threshold when it is available.
+    # An in-progress or older report can still give measurements for all submissions.
+    late = None
+    if finite(lag_limit) and lag_limit >= 0:
+        late = summarize([(row, info) for row, info in submitted
+                          if finite(row["offered"]) and finite(row["submitted"])
+                          and row["submitted"] - row["offered"] > lag_limit])
+    return {"all": summarize(submitted), "late": late, "lag_limit_seconds": lag_limit}
+
+
 def rehearsal_summary(journal, plan, artifacts=None):
     settings = plan["rehearsal"]
     expected = (settings["duration_seconds"] - 120) // settings["interval_seconds"]
@@ -299,9 +354,18 @@ def rehearsal_summary(journal, plan, artifacts=None):
     # Present only under the plan opt-in (#1613): never readable as a pass.
     acceptance = journal.get("rehearsal_acceptance")
     accepted = {"accepted_as": acceptance["accepted_as"]} if acceptance else {}
+    written = [(r, json.loads(r["info"])) for r in rows
+               if r["prepared"] is not None or r["submitted"] is not None]
+    signed = [info for r, info in written if r["prepared"] is not None]
     return {
         **result,
         **accepted,
+        "preparation_timing": rehearsal_preparation_timing(
+            [(r, info) for r, info in written if r["submitted"] is not None],
+            result.get("timing_tolerance", {}).get("max_offer_lag_seconds"),
+        ),
+        "fee_floor_quotes": floor_quote_summary(signed, per_input_value=True),
+        "payment_consensus_floors": payment_consensus_summary(signed),
         "expected": expected,
         "offered": len(rows),
         "not_yet_offered": max(0, expected - len(rows)),
@@ -372,7 +436,13 @@ def degrade_report(journal, steps):
             )
             row["failures"] = list(verdict.get("failures") or []) if verdict else []
             row["awaiting"] = list(record.get("awaiting") or [])
+            if "campaign_payments" in record:
+                row["campaign_payments"] = record["campaign_payments"]
             row["fault_observed"] = record.get("fault_observed")
+            if "resume_height_floor" in record:
+                row["resume_height_floor"] = record["resume_height_floor"]
+            if record.get("tip_check") is not None:
+                row["tip_check"] = record["tip_check"]
             for host, track in (record.get("hosts") or {}).items():
                 row["milestones"][host] = {
                     name: None if track.get(name) is None else track[name] - restore
@@ -461,17 +531,20 @@ def heap_evidence(hosts, window_s=86400):
 
 
 def controller_report(self):
-    rows = self.j.rows()
+    report = build_controller_report(self, self.j.rows())
+    atomic(self.state / "report.json", report)
+    return report
+
+
+def build_controller_report(self, rows):
     artifacts = artifact_evidence(
         self.state, rows, self.j.limits["max_signed_transaction_bytes"]
     )
-    nominal = (
-        len(self.events)
-        if hasattr(self, "events")
-        else len(expand(self.plan)[1])
-        if self.plan
-        else 0
-    )
+    events = getattr(self, "events", None)
+    if events is None:
+        events = expand(self.plan)[1] if self.plan else []
+    campaign_rows = [row for row in rows if row["kind"] == "campaign"]
+    campaign = campaign_delivery_counts(campaign_rows, events, self.j.get("start"))
     counts = {}
     for row in rows:
         label = row["kind"] + ":" + row["state"]
@@ -500,12 +573,15 @@ def controller_report(self):
         "start": self.j.get("start"),
         "end": self.j.get("end"),
         "plan_sha256": digest(self.plan),
+        "node_sha256": self.config.get("node_sha256"),
+        "signer_sha256": self.config.get("signer_sha256"),
         "counts": counts,
         "submitted_to_reconciled_seconds": latency("submitted"),
-        "nominal_campaign_offers": nominal,
+        "nominal_campaign_offers": len(events),
+        "campaign_payments": campaign,
         "targets": list(self.targets.values()) if hasattr(self, "targets") else None,
         "infrastructure_end": self.config.get("infrastructure_end"),
-        "not_yet_offered": nominal - sum(r["kind"] == "campaign" for r in rows),
+        "not_yet_offered": campaign["missing"],
         "offered_to_reconciled_seconds": latency("offered"),
         "signed_fees": sum(r["fee"] for r in rows if r["prepared"]),
         "faucet_fees": sum(
@@ -547,8 +623,30 @@ def controller_report(self):
             "lottery_v2_spend": award_spend_expectation(self.j)["status"] == "pass",
         },
     }
-    atomic(self.state / "report.json", report)
+    if "prefund_evidence" in self.config:
+        report["prefund_health_sha256"] = self.config["prefund_evidence"].get("health_sha256")
     return report
+
+
+def campaign_delivery_counts(rows, events, start):
+    """Compare journaled campaign offers to their immutable slots and payment terms."""
+    counts = {"missing": len(events), "unexpected": 0, "changed": 0, "unfinished": 0}
+    if not rows:
+        return counts
+    expected = {event["intent"]: event for event in events}
+    for row in rows:
+        event = expected.get(row["id"])
+        if event is None:
+            counts["unexpected"] += 1
+            continue
+        counts["missing"] -= 1
+        if start is None or (row["offered"], row["sender"], row["recipient"], row["amount"]) != (
+            start + event["offset_seconds"], *payment_terms(event),
+        ):
+            counts["changed"] += 1
+        if row["state"] != "reconciled":
+            counts["unfinished"] += 1
+    return counts
 
 
 def workload_complete(journal, events, phases, degrade_steps=()):
@@ -559,13 +657,11 @@ def workload_complete(journal, events, phases, degrade_steps=()):
     A campaign that received more V2 awards than its pinned threshold but
     spent none fails the #1681 expectation and is not complete either.
     """
-    rows = journal.rows("kind='campaign'")
     accounting = journal.get("accounting", {})
     gates = journal.get("phase_gates", {})
     return (
         journal.get("status") == "draining"
-        and len(rows) == len(events)
-        and all(row["state"] == "reconciled" for row in rows)
+        and not any(campaign_delivery_counts(journal.campaign_offers(), events, journal.get("start")).values())
         and all(gates.get(phase["id"]) is True for phase in phases)
         and accounting.get("difference") == 0
         and award_spend_expectation(journal)["status"] != "fail"
