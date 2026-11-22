@@ -5290,6 +5290,8 @@ mod tests {
             .proposed_values
             .iter()
             .any(|v| v.tx_hash == mint.hash()));
+        // Measure the healthy slot after proposal setup, which hashes the mint.
+        owner.started_at = Instant::now();
         assert!(
             owner.stalled_proposed_mint().is_none(),
             "healthy nomination"
@@ -5307,6 +5309,7 @@ mod tests {
         assert_eq!(retry.hash(), mint.hash());
         TransactionValidator::validate_minting_tx_intrinsic(&retry).unwrap();
         peer.register_minting_tx(retry.hash(), bincode::serialize(&retry).unwrap());
+        peer.last_externalized_at = owner.last_externalized_at;
         assert!(
             peer.stalled_proposed_mint().is_none(),
             "registration does not nominate"
