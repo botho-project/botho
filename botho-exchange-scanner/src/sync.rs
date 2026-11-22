@@ -149,8 +149,8 @@ impl SyncState {
     /// Format a human-readable summary.
     pub fn summary(&self) -> String {
         let last_sync = if self.last_sync_timestamp > 0 {
-            chrono::DateTime::from_timestamp(self.last_sync_timestamp as i64, 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            bth_util_utc::UtcTimestamp::from_unix_seconds(self.last_sync_timestamp as i64)
+                .map(bth_util_utc::UtcTimestamp::export_label)
                 .unwrap_or_else(|| "unknown".to_string())
         } else {
             "never".to_string()

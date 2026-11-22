@@ -144,7 +144,7 @@ rcgen = { version = "0.13", default-features = false, features = ["crypto", "rin
 ring = "0.17"
 webpki-roots = "0.26"
 x509-parser = "0.18"
-time = "0.3"
+time.workspace = true
 
 # Async (for future networking)
 tokio = { version = "1", features = ["full"] }
@@ -182,13 +182,13 @@ if-addrs = "0.15"
 getrandom = { workspace = true }
 
 # For botho-testnet harness
-chrono = "0.4"
+bth-util-utc.workspace = true
 nix = { version = "0.31", features = ["signal"] }
 which = "8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 [build-dependencies]
-chrono = "0.4"
+bth-util-utc.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

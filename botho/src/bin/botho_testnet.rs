@@ -411,7 +411,7 @@ fn cmd_start(
         node_count,
         base_port,
         nodes: nodes.clone(),
-        started_at: chrono::Utc::now().to_rfc3339(),
+        started_at: bth_util_utc::UtcTimestamp::now().to_rfc3339(),
     };
     state.save()?;
 

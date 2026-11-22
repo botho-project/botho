@@ -7,11 +7,12 @@ license = "Apache-2.0"
 rust-version = { workspace = true }
 
 [features]
+# Kept for callers that selected the former optional clock dependency.
+chrono = []
 std = ["displaydoc/std", "bth-util-serial/std"]
 # Enable tracing-based logging
 log = [
     "backtrace",
-    "chrono/clock",
     "bth-util-logger-macros",
     "tracing",
     "tracing-subscriber",
@@ -38,7 +39,6 @@ bth-util-serial = { workspace = true }
 
 backtrace = { workspace = true, optional = true }
 cfg-if = { workspace = true }
-chrono = { workspace = true, optional = true }
 displaydoc = { workspace = true }
 # HashMap/HashSet use the global allocator and do not need nightly specialization.
 hashbrown = { workspace = true, features = ["serde"] }

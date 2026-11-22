@@ -76,7 +76,6 @@ use alloy::{
 use bth_bridge_core::{
     attestation::AttestationKind, BridgeConfig, BridgeOrder, Chain, GasPriceStrategy, OrderStatus,
 };
-use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
@@ -387,7 +386,7 @@ async fn fork_eth_mint_and_burn_round_trip() {
         source_tx: order.source_tx.clone().unwrap(),
         safe_nonce: Some(0),
     };
-    let now = Utc::now().timestamp().max(0) as u64;
+    let now = time::Timestamp::now().as_seconds().max(0) as u64;
     let envelope = sign_attestation_secp256k1(
         &kind,
         &owner2,

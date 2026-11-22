@@ -512,7 +512,9 @@ impl SolMinter {
                     {
                         return Err(invalid("proposal approval set mismatch"));
                     }
-                    if chrono::Utc::now().timestamp() < unlock_at(p.timestamp, state.time_lock)? {
+                    if time::Timestamp::now().as_seconds()
+                        < unlock_at(p.timestamp, state.time_lock)?
+                    {
                         return Ok(pending());
                     }
                     ("execute", vec![ctx.build_vault_transaction_execute()])
@@ -587,7 +589,7 @@ impl SolMinter {
                             row,
                             &member,
                             action,
-                            chrono::Utc::now().timestamp_millis(),
+                            time::Timestamp::now().as_milliseconds(),
                         )
                         .map_err(invalid)?
                 {
@@ -611,7 +613,7 @@ impl SolMinter {
                 &row.order_id,
                 &member,
                 0,
-                chrono::Utc::now().timestamp_millis(),
+                time::Timestamp::now().as_milliseconds(),
             )
             .map_err(invalid)?
         {
@@ -647,7 +649,7 @@ impl SolMinter {
                 &row.order_id,
                 &member.to_base58(),
                 fee,
-                chrono::Utc::now().timestamp_millis(),
+                time::Timestamp::now().as_milliseconds(),
             )
             .map_err(invalid)?
         {
@@ -672,7 +674,7 @@ impl SolMinter {
                 &self.config.squads.as_ref().unwrap().retry,
                 &action,
                 fee,
-                chrono::Utc::now().timestamp_millis(),
+                time::Timestamp::now().as_milliseconds(),
             )
             .map_err(invalid)?
             && db.is_paused().map_err(invalid)?.is_none()

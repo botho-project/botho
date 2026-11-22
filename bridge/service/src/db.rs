@@ -9,8 +9,9 @@ mod solana_budget;
 mod solana_intents;
 pub use solana_intents::{SolanaAction, SolanaIntent};
 
-use bth_bridge_core::{BridgeOrder, Chain, MintAuthorization, OrderStatus, OrderType};
-use chrono::{DateTime, TimeZone, Utc};
+use bth_bridge_core::{
+    BridgeOrder, Chain, MintAuthorization, OrderStatus, OrderType, UtcTimestamp,
+};
 use rusqlite::{params, Connection, Result as SqliteResult, TransactionBehavior};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -33,9 +34,9 @@ pub struct MintRecord {
     /// Destination-chain transaction id (ETH tx hash / Solana signature).
     pub dest_tx: String,
     /// When the transaction was persisted (always before first broadcast).
-    pub submitted_at: DateTime<Utc>,
+    pub submitted_at: UtcTimestamp,
     /// When the transaction reached the required confirmation depth.
-    pub confirmed_at: Option<DateTime<Utc>>,
+    pub confirmed_at: Option<UtcTimestamp>,
 }
 
 /// A row in the `release_claims` exactly-once table.
@@ -63,13 +64,13 @@ pub struct ReleaseClaim {
     /// resume after restart re-broadcasts the SAME transaction.
     pub release_tx_raw: Option<Vec<u8>>,
     /// When the claim was taken (always before signing).
-    pub claimed_at: DateTime<Utc>,
+    pub claimed_at: UtcTimestamp,
     /// When the signed transaction was recorded (always before first
     /// broadcast).
-    pub submitted_at: Option<DateTime<Utc>>,
+    pub submitted_at: Option<UtcTimestamp>,
     /// When the transaction reached the required confirmation depth
     /// (SCP finality by default).
-    pub confirmed_at: Option<DateTime<Utc>>,
+    pub confirmed_at: Option<UtcTimestamp>,
 }
 
 /// Persisted scan progress for a chain watcher.
@@ -878,7 +879,7 @@ impl Database {
     /// number of pruned rows.
     pub fn prune_expired_mint_orders(&self, retain_secs: i64) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let cutoff = Utc::now().timestamp() - retain_secs;
+        let cutoff = time::Timestamp::now().as_seconds() - retain_secs;
         conn.execute(
             r#"
             DELETE FROM bridge_orders
@@ -898,7 +899,7 @@ impl Database {
     /// release. Returns the number of pruned rows.
     pub fn prune_expired_release_intents(&self, retain_secs: i64) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let cutoff = Utc::now().timestamp() - retain_secs;
+        let cutoff = time::Timestamp::now().as_seconds() - retain_secs;
         conn.execute(
             "DELETE FROM release_intents WHERE expires_at < ?1",
             params![cutoff],
@@ -981,7 +982,7 @@ impl Database {
             ));
         }
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let status_str = status.to_string();
         let error_msg = match status {
             OrderStatus::Failed { reason } => Some(reason.clone()),
@@ -1044,7 +1045,11 @@ impl Database {
             INSERT OR IGNORE INTO processed_deposits (tx_hash, order_id, processed_at)
             VALUES (?1, ?2, ?3)
             "#,
-            params![tx_hash, order_id.to_string(), Utc::now().timestamp()],
+            params![
+                tx_hash,
+                order_id.to_string(),
+                time::Timestamp::now().as_seconds()
+            ],
         )
         .map_err(|e| format!("Insert failed: {}", e))?;
 
@@ -1077,7 +1082,7 @@ impl Database {
                 params![
                     source_tx,
                     amount as i64,
-                    Utc::now().timestamp(),
+                    time::Timestamp::now().as_seconds(),
                     order_id.to_string()
                 ],
             )
@@ -1129,7 +1134,7 @@ impl Database {
                 chain.to_string(),
                 last_height as i64,
                 last_block_hash,
-                Utc::now().timestamp()
+                time::Timestamp::now().as_seconds()
             ],
         )
         .map_err(|e| format!("Insert failed: {}", e))?;
@@ -1184,7 +1189,7 @@ impl Database {
                     order.source_chain.to_string(),
                     block_number as i64,
                     block_hash,
-                    Utc::now().timestamp()
+                    time::Timestamp::now().as_seconds()
                 ],
             )
             .map_err(|e| format!("Insert failed: {}", e))?;
@@ -1337,7 +1342,7 @@ impl Database {
                     order_id_hash,
                     chain.to_string(),
                     dest_tx,
-                    Utc::now().timestamp(),
+                    time::Timestamp::now().as_seconds(),
                 ],
             )
             .map_err(|e| format!("Insert failed: {}", e))?;
@@ -1373,7 +1378,7 @@ impl Database {
     /// gating) before calling.
     pub fn mark_mint_confirmed(&self, order_id: &Uuid) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
 
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1426,7 +1431,7 @@ impl Database {
     /// order id. Confirmed mints are never rolled back.
     pub fn rollback_mint(&self, order_id: &Uuid) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
 
         let tx = conn
             .transaction()
@@ -1484,7 +1489,11 @@ impl Database {
                     claimed_at, submitted_at, confirmed_at
                 ) VALUES (?1, ?2, NULL, NULL, ?3, NULL, NULL)
                 "#,
-                params![order_id.to_string(), order_id_hash, Utc::now().timestamp(),],
+                params![
+                    order_id.to_string(),
+                    order_id_hash,
+                    time::Timestamp::now().as_seconds(),
+                ],
             )
             .map_err(|e| format!("Insert failed: {}", e))?;
 
@@ -1524,7 +1533,7 @@ impl Database {
                 params![
                     tx_hash,
                     tx_raw,
-                    Utc::now().timestamp(),
+                    time::Timestamp::now().as_seconds(),
                     order_id.to_string()
                 ],
             )
@@ -1563,7 +1572,7 @@ impl Database {
     /// gating) before calling.
     pub fn mark_release_confirmed(&self, order_id: &Uuid) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
 
         let tx = conn
             .transaction()
@@ -1604,7 +1613,7 @@ impl Database {
     /// the old transaction could still land would risk a double release.
     pub fn rollback_release(&self, order_id: &Uuid) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
 
         let tx = conn
             .transaction()
@@ -1630,13 +1639,18 @@ impl Database {
         tx.commit().map_err(|e| format!("Commit failed: {}", e))
     }
 
+    fn required_timestamp(row: &rusqlite::Row<'_>, index: usize) -> SqliteResult<UtcTimestamp> {
+        let seconds = row.get(index)?;
+        UtcTimestamp::from_unix_seconds(seconds)
+            .ok_or(rusqlite::Error::IntegralValueOutOfRange(index, seconds))
+    }
+
     /// Convert a database row to a ReleaseClaim.
     fn row_to_release(row: &rusqlite::Row<'_>) -> SqliteResult<ReleaseClaim> {
         let order_id_str: String = row.get(0)?;
         let order_id_hash: String = row.get(1)?;
         let release_tx_hash: Option<String> = row.get(2)?;
         let release_tx_raw: Option<Vec<u8>> = row.get(3)?;
-        let claimed_at: i64 = row.get(4)?;
         let submitted_at: Option<i64> = row.get(5)?;
         let confirmed_at: Option<i64> = row.get(6)?;
 
@@ -1645,9 +1659,9 @@ impl Database {
             order_id_hash,
             release_tx_hash,
             release_tx_raw,
-            claimed_at: Utc.timestamp_opt(claimed_at, 0).unwrap(),
-            submitted_at: submitted_at.and_then(|t| Utc.timestamp_opt(t, 0).single()),
-            confirmed_at: confirmed_at.and_then(|t| Utc.timestamp_opt(t, 0).single()),
+            claimed_at: Self::required_timestamp(row, 4)?,
+            submitted_at: submitted_at.and_then(UtcTimestamp::from_unix_seconds),
+            confirmed_at: confirmed_at.and_then(UtcTimestamp::from_unix_seconds),
         })
     }
 
@@ -1657,7 +1671,6 @@ impl Database {
         let order_id_hash: String = row.get(1)?;
         let chain_str: String = row.get(2)?;
         let dest_tx: String = row.get(3)?;
-        let submitted_at: i64 = row.get(4)?;
         let confirmed_at: Option<i64> = row.get(5)?;
 
         Ok(MintRecord {
@@ -1665,8 +1678,8 @@ impl Database {
             order_id_hash,
             chain: chain_str.parse().unwrap_or(Chain::Ethereum),
             dest_tx,
-            submitted_at: Utc.timestamp_opt(submitted_at, 0).unwrap(),
-            confirmed_at: confirmed_at.and_then(|t| Utc.timestamp_opt(t, 0).single()),
+            submitted_at: Self::required_timestamp(row, 4)?,
+            confirmed_at: confirmed_at.and_then(UtcTimestamp::from_unix_seconds),
         })
     }
 
@@ -1699,7 +1712,7 @@ impl Database {
                     chain.to_string(),
                     amount as i64,
                     order_id.to_string(),
-                    Utc::now().timestamp(),
+                    time::Timestamp::now().as_seconds(),
                 ],
             )
             .map_err(|e| format!("Insert failed: {}", e))?;
@@ -1731,7 +1744,7 @@ impl Database {
             "#,
             params![
                 spent_order_id.to_string(),
-                Utc::now().timestamp(),
+                time::Timestamp::now().as_seconds(),
                 bridge_output_id
             ],
         )
@@ -1779,7 +1792,7 @@ impl Database {
             return Ok(false);
         }
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let mut remaining = net_amount as u128;
 
         // Pass 1: the order's own locked outputs (the common case — the
@@ -1951,7 +1964,7 @@ impl Database {
             mapped
         };
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let mut remaining = amount as u128;
         for (output_id, output_amount) in rows {
             if remaining == 0 {
@@ -2151,7 +2164,7 @@ impl Database {
     /// cadence). Returns the number of pruned rows.
     pub fn prune_reserve_snapshots(&self, retain_secs: i64) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let cutoff = Utc::now().timestamp() - retain_secs;
+        let cutoff = time::Timestamp::now().as_seconds() - retain_secs;
 
         conn.execute(
             r#"
@@ -2234,7 +2247,7 @@ impl Database {
                     paused as i64,
                     if paused { reason } else { None },
                     if paused {
-                        Some(Utc::now().timestamp())
+                        Some(time::Timestamp::now().as_seconds())
                     } else {
                         None
                     },
@@ -2413,7 +2426,7 @@ impl Database {
     /// instead: no funds have moved yet).
     pub fn stuck_orders(&self, older_than_secs: i64) -> Result<Vec<BridgeOrder>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let cutoff = Utc::now().timestamp() - older_than_secs;
+        let cutoff = time::Timestamp::now().as_seconds() - older_than_secs;
 
         let mut stmt = conn
             .prepare(
@@ -2470,7 +2483,12 @@ impl Database {
             INSERT OR REPLACE INTO component_health (component, healthy, detail, updated_at)
             VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![component, healthy as i64, detail, Utc::now().timestamp()],
+            params![
+                component,
+                healthy as i64,
+                detail,
+                time::Timestamp::now().as_seconds()
+            ],
         )
         .map_err(|e| format!("Insert failed: {}", e))?;
 
@@ -2517,7 +2535,7 @@ impl Database {
                 order_id.map(|id| id.to_string()),
                 action,
                 details,
-                Utc::now().timestamp()
+                time::Timestamp::now().as_seconds()
             ],
         )
         .map_err(|e| format!("Insert failed: {}", e))?;
@@ -2542,8 +2560,6 @@ impl Database {
         let memo_bytes: Option<Vec<u8>> = row.get(12)?;
         let mint_auth_json: Option<String> = row.get(13)?;
         let dest_confirmed_at: Option<i64> = row.get(14)?;
-        let created_at: i64 = row.get(15)?;
-        let updated_at: i64 = row.get(16)?;
 
         let memo = memo_bytes.and_then(|b| {
             if b.len() == 64 {
@@ -2576,9 +2592,9 @@ impl Database {
             error_message,
             memo,
             mint_authorization,
-            dest_confirmed_at: dest_confirmed_at.and_then(|t| Utc.timestamp_opt(t, 0).single()),
-            created_at: Utc.timestamp_opt(created_at, 0).unwrap(),
-            updated_at: Utc.timestamp_opt(updated_at, 0).unwrap(),
+            dest_confirmed_at: dest_confirmed_at.and_then(UtcTimestamp::from_unix_seconds),
+            created_at: Self::required_timestamp(row, 15)?,
+            updated_at: Self::required_timestamp(row, 16)?,
         })
     }
 }
@@ -2622,6 +2638,45 @@ impl<T> OptionalExt<T> for SqliteResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_order_epoch_seconds_survive_the_utc_migration() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            10,
+            1,
+            "deposit".into(),
+            "destination".into(),
+        );
+        db.insert_order(&order).unwrap();
+        let id = order.id.to_string();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE bridge_orders SET created_at = -1, updated_at = 253402300800,
+             dest_confirmed_at = NULL WHERE id = ?1",
+                [&id],
+            )
+            .unwrap();
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        let encoded = serde_json::to_value(&stored).unwrap();
+        assert_eq!(encoded["created_at"], "1969-12-31T23:59:59Z");
+        assert_eq!(encoded["updated_at"], "+10000-01-01T00:00:00Z");
+        assert!(encoded["dest_confirmed_at"].is_null());
+
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE bridge_orders SET created_at = ?1 WHERE id = ?2",
+                params![i64::MAX, id],
+            )
+            .unwrap();
+        assert!(db.get_order(&order.id).is_err());
+    }
 
     #[test]
     fn test_database_operations() {
@@ -3497,7 +3552,9 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
         );
         stale.set_status(OrderStatus::MintPending);
-        stale.updated_at = Utc::now() - chrono::Duration::hours(3);
+        stale.updated_at =
+            UtcTimestamp::from_unix_seconds(time::Timestamp::now().as_seconds() - 3 * 3_600)
+                .unwrap();
         db.insert_order(&stale).unwrap();
 
         let counts = db.order_status_counts().unwrap();
@@ -3693,7 +3750,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let live = ReleaseIntent {
             id: Uuid::new_v4(),
             source_chain: Chain::Ethereum,
@@ -3739,7 +3796,7 @@ mod tests {
             "0xdest".to_string(),
         );
         o.status = status;
-        o.created_at = Utc.timestamp_opt(created, 0).unwrap();
+        o.created_at = UtcTimestamp::from_unix_seconds(created).unwrap();
         o
     }
 
@@ -3755,7 +3812,7 @@ mod tests {
             0,
         );
         o.status = status;
-        o.created_at = Utc.timestamp_opt(created, 0).unwrap();
+        o.created_at = UtcTimestamp::from_unix_seconds(created).unwrap();
         o
     }
 
@@ -3766,7 +3823,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let cutoff = now - 86_400;
 
         // In-window: one of each bucket.
@@ -3820,7 +3877,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let cutoff = now - 86_400;
 
         db.insert_order(&burn_at(700, OrderStatus::Released, now - 10))
@@ -3871,7 +3928,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         // Each row carries the largest amount a single order can store
         // (amount is persisted as i64). Two of them sum past i64::MAX.
         let big = i64::MAX as u64;
@@ -3902,7 +3959,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         let big = i64::MAX as u64;
         // Three rows of i64::MAX sum to 3 * i64::MAX ≈ 2.77e19 > u64::MAX.
         db.insert_order(&mint_at(big, OrderStatus::Completed, now - 30))
@@ -3935,7 +3992,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         db.insert_order(&mint_at(i64::MAX as u64, OrderStatus::Completed, now - 10))
             .unwrap();
 
