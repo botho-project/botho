@@ -1,0 +1,21 @@
+[package]
+name = "bth-util-utc"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.88"
+description = "UTC timestamps for Botho's persisted records and operator tools"
+
+[features]
+serde = ["dep:serde", "dep:regex"]
+
+[dependencies]
+time = { workspace = true, features = ["large-dates"] }
+serde = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+
+[target.'cfg(all(target_family = "wasm", not(any(target_os = "emscripten", target_os = "wasi"))))'.dependencies]
+time = { workspace = true, features = ["wasm-bindgen"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }

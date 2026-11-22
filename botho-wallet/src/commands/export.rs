@@ -44,7 +44,7 @@ pub async fn run(wallet_path: &Path, output: Option<String>) -> Result<()> {
              #\n\
              \n\
              {}\n",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            bth_util_utc::UtcTimestamp::now().export_label(),
             keys.address_string(),
             mnemonic.as_str()
         );

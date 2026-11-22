@@ -55,7 +55,7 @@ reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 # CLI
 clap = { workspace = true, features = ["derive"] }
 rpassword = "7"
-chrono = { workspace = true, features = ["std", "clock"] }
+bth-util-utc.workspace = true
 sha2 = { workspace = true }
 
 # Serialization

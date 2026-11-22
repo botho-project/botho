@@ -41,7 +41,7 @@ fn main() {
     //
     // For reproducible release builds we must NOT embed the wall-clock time:
     // two builds of the same commit happen at different instants, so a
-    // `chrono::Utc::now()` timestamp bakes a different string into the binary
+    // wall-clock timestamp bakes a different string into the binary
     // and breaks byte-for-byte reproducibility (the Reproducibility Check job
     // in release.yml compares the original build against a rebuild — see #996).
     //
@@ -52,9 +52,9 @@ fn main() {
     let build_time = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|epoch| epoch.trim().parse::<i64>().ok())
-        .and_then(|secs| chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0))
-        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        .and_then(bth_util_utc::UtcTimestamp::from_unix_seconds)
+        .unwrap_or_else(bth_util_utc::UtcTimestamp::now)
+        .build_label();
 
     println!("cargo:rustc-env=GIT_HASH={}", git_hash);
     println!("cargo:rustc-env=GIT_HASH_SHORT={}", git_hash_display);
