@@ -2,7 +2,7 @@
 
 //! Bridge order types and state machine.
 
-use chrono::{DateTime, Utc};
+use crate::UtcTimestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -330,13 +330,13 @@ pub struct BridgeOrder {
     /// confirmation waits are reorg-aware: `dest_tx` may be set and later
     /// cleared again if the tx is orphaned before this is set.
     #[serde(default)]
-    pub dest_confirmed_at: Option<DateTime<Utc>>,
+    pub dest_confirmed_at: Option<UtcTimestamp>,
 
     /// Order creation timestamp
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcTimestamp,
 
     /// Last update timestamp
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: UtcTimestamp,
 }
 
 impl BridgeOrder {
@@ -348,7 +348,7 @@ impl BridgeOrder {
         bth_deposit_address: String,
         dest_address: String,
     ) -> Self {
-        let now = Utc::now();
+        let now = UtcTimestamp::now();
         Self {
             id: Uuid::new_v4(),
             order_type: OrderType::Mint,
@@ -388,7 +388,7 @@ impl BridgeOrder {
         source_tx: String,
         ordinal: u32,
     ) -> Self {
-        let now = Utc::now();
+        let now = UtcTimestamp::now();
         let id = derive_burn_order_uuid(source_chain, &source_tx, ordinal);
         Self {
             id,
@@ -442,7 +442,7 @@ impl BridgeOrder {
     /// Update the order status.
     pub fn set_status(&mut self, status: OrderStatus) {
         self.status = status;
-        self.updated_at = Utc::now();
+        self.updated_at = UtcTimestamp::now();
     }
 
     /// Guarded status transition. Returns an error (and leaves the order
@@ -477,7 +477,7 @@ impl BridgeOrder {
         let reason = reason.into();
         self.error_message = Some(reason.clone());
         self.status = OrderStatus::Failed { reason };
-        self.updated_at = Utc::now();
+        self.updated_at = UtcTimestamp::now();
     }
 
     /// Check if the order has expired.
@@ -486,8 +486,8 @@ impl BridgeOrder {
             return false;
         }
 
-        let age = Utc::now() - self.created_at;
-        age.num_minutes() > max_age_minutes
+        let age = self.created_at.elapsed();
+        age.whole_minutes() > max_age_minutes
     }
 }
 

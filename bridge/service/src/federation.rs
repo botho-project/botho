@@ -1191,7 +1191,7 @@ mod federation_transport_tests {
         // An envelope from a non-member key: rejected pre-signature.
         let byz = ed_key(99);
         let kind = FederationAttestationProvider::release_kind_for_test(&order);
-        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let env =
             bth_bridge_core::sign_attestation_ed25519(&kind, &byz, "adv-unknown", now, now + 120)
                 .unwrap();
@@ -1224,7 +1224,7 @@ mod federation_transport_tests {
         ));
 
         let kind = FederationAttestationProvider::release_kind_for_test(&order);
-        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let env =
             bth_bridge_core::sign_attestation_ed25519(&kind, &ka, "adv-wrong", now, now + 120)
                 .unwrap();
@@ -1272,7 +1272,7 @@ mod federation_transport_tests {
         let (url, provider, sd, srv, ka, _kb) = single_node_endpoint(&order).await;
 
         let kind = FederationAttestationProvider::release_kind_for_test(&order);
-        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let env =
             bth_bridge_core::sign_attestation_ed25519(&kind, &ka, "adv-replay", now, now + 120)
                 .unwrap();
@@ -1307,7 +1307,7 @@ mod federation_transport_tests {
         let (url, provider, sd, srv, ka, _kb) = single_node_endpoint(&order).await;
 
         let kind = FederationAttestationProvider::release_kind_for_test(&order);
-        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let env = bth_bridge_core::sign_attestation_ed25519(&kind, &ka, "adv-auth", now, now + 120)
             .unwrap();
         let body = serde_json::to_string(&env).unwrap();
@@ -1379,7 +1379,7 @@ mod federation_transport_tests {
         let audit_db = db.clone();
         let (url, sd, srv) = spawn_endpoint(provider.clone(), db).await;
 
-        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let sign = |safe_nonce: u64, replay_nonce: &str| {
             let kind = eth_mint_kind(&order, safe_nonce);
             sign_attestation_secp256k1(
@@ -1903,7 +1903,7 @@ mod federation_transport_tests {
         let mut confirmed = order.clone();
         confirmed.source_tx = Some("bth_deposit_tx".to_string());
         let kind = eth_mint_kind(&confirmed, NONCE);
-        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let now = time::Timestamp::now().as_seconds().max(0) as u64;
         let env = sign_attestation_secp256k1(
             &kind,
             &oa,

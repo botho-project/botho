@@ -90,7 +90,6 @@ use bth_bridge_core::{
     sign_order_record_ed25519, BridgeConfig, BridgeOrder, Chain, ChainAddress, OrderStatus,
     OrderType,
 };
-use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -824,7 +823,7 @@ async fn create_release_order(
         );
     }
 
-    let now = Utc::now().timestamp();
+    let now = time::Timestamp::now().as_seconds();
 
     // GLOBAL create ceiling (#1042), mirroring the mint path: unexpired
     // intents are counted; expired ones stop counting immediately and are
@@ -947,7 +946,7 @@ async fn get_release_order(
         Ok(None) => {
             // No matching burn detected yet: still awaiting the user's burn,
             // or expired if the tracking window elapsed.
-            let status = if Utc::now().timestamp() >= intent.expires_at {
+            let status = if time::Timestamp::now().as_seconds() >= intent.expires_at {
                 "expired"
             } else {
                 "awaiting_burn"
@@ -1004,7 +1003,7 @@ async fn get_bridge_stats(
         }
     }
 
-    let now = Utc::now().timestamp();
+    let now = time::Timestamp::now().as_seconds();
     let day_ago = now - 24 * 3600;
     let compute = || -> Result<BridgeStatsResponse, String> {
         Ok(BridgeStatsResponse {
@@ -1756,7 +1755,10 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
         );
         old.status = OrderStatus::Completed;
-        old.created_at = Utc::now() - chrono::Duration::days(2);
+        old.created_at = bth_bridge_core::UtcTimestamp::from_unix_seconds(
+            time::Timestamp::now().as_seconds() - 2 * 86_400,
+        )
+        .unwrap();
         db.insert_order(&old).unwrap();
 
         // Unwrap side: one released burn order.

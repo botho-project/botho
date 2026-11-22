@@ -9,7 +9,7 @@
 //! - Daily aggregates: 1 year
 
 use anyhow::Result;
-use chrono::{Duration, Timelike, Utc};
+use time::{Duration, UtcDateTime};
 use tracing::{debug, info};
 
 use crate::db::MetricsDb;
@@ -21,7 +21,7 @@ const RETENTION_DAILY: i64 = 365 * 24 * 3600; // 1 year
 
 /// Run the complete rollup process
 pub fn run_rollup(db: &mut MetricsDb) -> Result<()> {
-    let now = Utc::now();
+    let now = UtcDateTime::now();
 
     // Aggregate to hourly
     aggregate_hourly(db, now)?;
@@ -36,16 +36,12 @@ pub fn run_rollup(db: &mut MetricsDb) -> Result<()> {
 }
 
 /// Aggregate 5min samples from the last 2 hours into hourly buckets
-fn aggregate_hourly(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()> {
+fn aggregate_hourly(db: &mut MetricsDb, now: UtcDateTime) -> Result<()> {
     // Process last 2 hours to ensure we catch any late data
-    let current_hour = now
-        .with_minute(0)
-        .and_then(|t| t.with_second(0))
-        .and_then(|t| t.with_nanosecond(0))
-        .unwrap_or(now);
+    let current_hour = now.truncate_to_hour();
 
     for hours_ago in 1..=2 {
-        let hour_start = (current_hour - Duration::hours(hours_ago)).timestamp();
+        let hour_start = (current_hour - Duration::hours(hours_ago)).unix_timestamp();
         db.aggregate_to_hourly(hour_start)?;
         debug!("Aggregated hour starting at {}", hour_start);
     }
@@ -55,16 +51,11 @@ fn aggregate_hourly(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()
 }
 
 /// Aggregate hourly samples from yesterday into daily buckets
-fn aggregate_daily(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()> {
+fn aggregate_daily(db: &mut MetricsDb, now: UtcDateTime) -> Result<()> {
     // Process yesterday's data
-    let today_start = now
-        .with_hour(0)
-        .and_then(|t| t.with_minute(0))
-        .and_then(|t| t.with_second(0))
-        .and_then(|t| t.with_nanosecond(0))
-        .unwrap_or(now);
+    let today_start = now.truncate_to_day();
 
-    let yesterday_start = (today_start - Duration::days(1)).timestamp();
+    let yesterday_start = (today_start - Duration::days(1)).unix_timestamp();
 
     db.aggregate_to_daily(yesterday_start)?;
     debug!("Aggregated day starting at {}", yesterday_start);
@@ -74,8 +65,8 @@ fn aggregate_daily(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()>
 }
 
 /// Clean up data older than retention period
-fn cleanup_old_data(db: &mut MetricsDb, now: chrono::DateTime<Utc>) -> Result<()> {
-    let now_ts = now.timestamp();
+fn cleanup_old_data(db: &mut MetricsDb, now: UtcDateTime) -> Result<()> {
+    let now_ts = now.unix_timestamp();
 
     // Cleanup 5min samples older than 24h
     let cleanup_5min_before = now_ts - RETENTION_5MIN;
@@ -110,14 +101,10 @@ mod tests {
     fn test_rollup_aggregation_per_node() {
         let mut db = MetricsDb::open_in_memory().unwrap();
 
-        // Use current time rounded to start of hour
-        let now = Utc::now();
-        let base_time = now
-            .with_minute(0)
-            .and_then(|t| t.with_second(0))
-            .and_then(|t| t.with_nanosecond(0))
-            .unwrap_or(now)
-            .timestamp();
+        // Five minutes into 1970, the preceding hour and day both start
+        // before the Unix epoch. Include the fractional current second.
+        let now = UtcDateTime::from_unix_timestamp_nanos(300_123_456_789).unwrap();
+        let base_time = -3_600;
 
         // Insert 12 samples per node (one per 5 minutes = 1 hour of data)
         for node in ["seed", "eu"] {
@@ -137,8 +124,8 @@ mod tests {
             }
         }
 
-        // Aggregate to hourly
-        db.aggregate_to_hourly(base_time).unwrap();
+        aggregate_hourly(&mut db, now).unwrap();
+        aggregate_daily(&mut db, now).unwrap();
 
         // Each node keeps its own raw samples and its own hourly bucket
         for node in ["seed", "eu"] {
@@ -151,8 +138,15 @@ mod tests {
                 .query_node_history(node, Resolution::Hourly, base_time)
                 .unwrap();
             assert_eq!(hourly.len(), 1);
+            assert_eq!(hourly[0].timestamp, base_time);
             assert_eq!(hourly[0].height, 1011);
             assert_eq!(hourly[0].tx_total, 120);
+            let daily = db
+                .query_node_history(node, Resolution::Daily, -86_400)
+                .unwrap();
+            assert_eq!(daily.len(), 1);
+            assert_eq!(daily[0].timestamp, -86_400);
+            assert_eq!(daily[0].tx_total, 120);
         }
     }
 }

@@ -190,7 +190,7 @@ fn processor_with_rpc(
     let provider = FederationAttestationProvider::from_config(config)
         .unwrap()
         .unwrap();
-    let now = chrono::Utc::now().timestamp() as u64;
+    let now = time::Timestamp::now().as_seconds() as u64;
     for order in orders {
         for n in [1, 2] {
             let kind = AttestationKind::MintWbth {

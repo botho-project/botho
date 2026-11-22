@@ -50,7 +50,7 @@
 //! rejects unknown/duplicate keys so one signed byte string can never carry a
 //! second logical record.
 
-use chrono::{TimeZone, Utc};
+use crate::UtcTimestamp;
 use ed25519_dalek::{Signature as Ed25519Signature, Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -136,10 +136,8 @@ impl MintOrderShell {
     /// are all `None` (via [`BridgeOrder::new_mint`]). The peer's own watcher
     /// must independently confirm the deposit before the order can advance.
     pub fn into_awaiting_deposit_order(self) -> BridgeOrder {
-        let created_at = Utc
-            .timestamp_opt(self.created_at_unix, 0)
-            .single()
-            .unwrap_or_else(Utc::now);
+        let created_at =
+            UtcTimestamp::from_unix_seconds(self.created_at_unix).unwrap_or_else(UtcTimestamp::now);
         let mut order = BridgeOrder::new_mint(
             self.dest_chain,
             self.amount,
@@ -606,7 +604,7 @@ mod tests {
         order.fee = 1;
         order.source_address = "deposit".to_string();
         order.dest_address = "dest".to_string();
-        order.created_at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        order.created_at = UtcTimestamp::from_unix_seconds(1_700_000_000).unwrap();
         order.generate_memo();
         let shell = MintOrderShell::from_order(&order).unwrap();
         let expected = format!(

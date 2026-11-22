@@ -646,7 +646,10 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
         );
         stuck.set_status(OrderStatus::MintPending);
-        stuck.updated_at = chrono::Utc::now() - chrono::Duration::hours(3);
+        stuck.updated_at = bth_bridge_core::UtcTimestamp::from_unix_seconds(
+            time::Timestamp::now().as_seconds() - 3 * 3_600,
+        )
+        .unwrap();
         db.insert_order(&stuck).unwrap();
 
         db.set_component_health("attestation", false, "federation misconfigured")
