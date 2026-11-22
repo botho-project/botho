@@ -85,7 +85,6 @@ use bth_bridge_core::{
     attestation::{sign_attestation_ed25519, AttestationKind},
     BridgeConfig, BridgeOrder, BthConfig, Chain, GasPriceStrategy, OrderStatus,
 };
-use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use uuid::Uuid;
@@ -426,7 +425,7 @@ async fn full_loop_wrap_mint_burn_release() {
 
     // Peer (owner 2) submits its EIP-712 envelope, bound to the fresh Safe
     // nonce (0) — the same #858 transport, injected directly here.
-    let now = Utc::now().timestamp().max(0) as u64;
+    let now = time::Timestamp::now().as_seconds().max(0) as u64;
     let mint_kind = AttestationKind::MintWbth {
         dest_chain: Chain::Ethereum,
         dest_address: mint_order.dest_address.clone(),

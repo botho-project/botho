@@ -107,7 +107,7 @@ axum = { version = "0.8", features = ["json"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Utilities
-chrono = { workspace = true, features = ["serde"] }
+time.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 hex = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive", "std"] }

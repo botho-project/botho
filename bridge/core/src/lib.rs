@@ -10,6 +10,9 @@
 //! - Configuration structures
 //! - Rate limiting logic
 
+/// UTC representation used by persisted bridge orders.
+pub use bth_util_utc::UtcTimestamp;
+
 pub mod attestation;
 pub mod chains;
 pub mod config;

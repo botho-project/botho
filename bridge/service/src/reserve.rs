@@ -94,7 +94,6 @@ use alloy::{
 };
 use async_trait::async_trait;
 use bth_bridge_core::{BridgeConfig, BthConfig, Chain, EthereumConfig, SolanaConfig};
-use chrono::Utc;
 use serde::Serialize;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::broadcast;
@@ -816,7 +815,7 @@ impl Reconciler {
     /// One reconciliation pass: compute, persist, and (on violation)
     /// alert. Returns the proof snapshot.
     pub async fn reconcile_once(&self) -> Result<ReserveProof, String> {
-        let taken_at = Utc::now().timestamp();
+        let taken_at = time::Timestamp::now().as_seconds();
 
         // --- Gather per-chain figures (DB + RPC). No verdict math here: the
         //     drift/tolerance/aggregation lives in the pure `reserve_verdict`

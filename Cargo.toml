@@ -35,6 +35,7 @@ members = [
     "transaction/signer",
     "transaction/types",
     "util/from-random",
+    "util/utc",
     "util/host-cert",
     "util/logger-macros",
     "util/repr-bytes",
@@ -89,7 +90,8 @@ cargo_metadata = "0.18"
 cc = "1"
 cfg-if = "1"
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["std"] }
-chrono = { version = "0.4", default-features = false }
+bth-util-utc = { path = "util/utc" }
+time = "0.3.55"
 clap = "4.5"
 crc = { version = "3", default-features = false }
 criterion = "0.5"

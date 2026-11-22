@@ -109,7 +109,7 @@ impl Database {
             return Err("historical journal byte capacity exhausted".into());
         }
         if tx.execute("UPDATE solana_history SET progress=?1,revision=revision+1 WHERE order_id=?2 AND revision=?3 AND policy=?4",params![progress,order.id.to_string(),history.revision,history.policy]).map_err(|e|e.to_string())?!=1{return Err("historical evidence CAS failed".into());}
-        let now = Utc::now().timestamp();
+        let now = time::Timestamp::now().as_seconds();
         if tx.execute("UPDATE mints SET dest_tx=?1,confirmed_at=?2 WHERE order_id=?3 AND confirmed_at IS NULL",params![signature,now,order.id.to_string()]).map_err(|e|e.to_string())?!=1{return Err("historical completion missing pending mint".into());}
         if tx.execute("UPDATE bridge_orders SET status='completed',dest_tx=?1,dest_confirmed_at=?2,updated_at=?2 WHERE id=?3 AND status='mint_pending'",params![signature,now,order.id.to_string()]).map_err(|e|e.to_string())?!=1{return Err("historical order CAS failed".into());}
         tx.execute("INSERT INTO audit_log(order_id,action,details,created_at) VALUES (?1,'solana_history_completed',?2,?3)",params![order.id.to_string(),evidence,now]).map_err(|e|e.to_string())?;

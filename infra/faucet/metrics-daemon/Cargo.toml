@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Time handling
-chrono = { version = "0.4", features = ["serde"] }
+time.workspace = true
 
 # Logging
 tracing = "0.1"
