@@ -187,18 +187,43 @@ fn main() -> Result<()> {
     // Validate network is enabled
     config::validate_network(network)?;
 
-    // Determine config path (network-specific by default)
+    let custom_path = cli.config.is_some();
     let config_path = cli
         .config
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| config::config_path(network));
+    let uses_config = !matches!(
+        &cli.command,
+        Commands::Init { .. }
+            | Commands::Snapshot {
+                action: SnapshotAction::Info { .. }
+            }
+            | Commands::Operator {
+                action: OperatorAction::Keygen { .. }
+            }
+    );
+    let existing_config = if uses_config {
+        config::Config::load(&config_path).ok()
+    } else {
+        None
+    };
+    let network = if let Some(config) = &existing_config {
+        let configured = config.network_type();
+        if cli.testnet || cli.mainnet || !custom_path {
+            anyhow::ensure!(
+                configured == network,
+                "Configuration selects {configured}, but the CLI selected {network}"
+            );
+        }
+        config::validate_network(configured)?;
+        configured
+    } else {
+        network
+    };
 
-    // For commands that run with an existing config, try to use telemetry settings.
-    // For init command (no config yet), use basic logging.
     let _telemetry_guard = match &cli.command {
         Commands::Run { .. } => {
-            // Try to load config for telemetry settings
-            if let Ok(config) = config::Config::load(&config_path) {
+            if let Some(config) = &existing_config {
                 let telemetry_config = telemetry::TelemetryConfig {
                     enabled: config.telemetry.enabled,
                     endpoint: config.telemetry.endpoint.clone(),

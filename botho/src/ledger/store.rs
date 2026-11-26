@@ -853,10 +853,53 @@ impl Ledger {
             info!(path = %path.display(), "Initialized botho.ledger.2 ledger store");
         }
 
+        // Check the persisted block before committing any changes. Initialize a
+        // new store under the same writer so concurrent openers cannot replace
+        // a genesis block selected by the other process.
+        let genesis = Block::genesis_for_network(network);
+        match blocks_db
+            .get(&wtxn, &0u64)
+            .map_err(|e| LedgerError::Database(format!("read genesis: {e}")))?
+        {
+            Some(bytes) => {
+                let stored: Block = super::experimental::decode(bytes)?;
+                if stored.hash() != genesis.hash() {
+                    return Err(LedgerError::InconsistentRecord(format!(
+                        "ledger genesis {} differs from {} genesis {}",
+                        hex::encode(stored.hash()),
+                        network,
+                        hex::encode(genesis.hash())
+                    )));
+                }
+            }
+            None => {
+                // A previous version could commit the schema before genesis.
+                // Recover that empty store, but never reset an existing chain.
+                if !blocks_db
+                    .is_empty(&wtxn)
+                    .map_err(|e| LedgerError::Database(format!("check empty block table: {e}")))?
+                    || meta_db
+                        .get(&wtxn, META_HEIGHT)
+                        .map_err(|e| LedgerError::Database(format!("check ledger height: {e}")))?
+                        .is_some()
+                    || meta_db
+                        .get(&wtxn, META_TIP_HASH)
+                        .map_err(|e| LedgerError::Database(format!("check ledger tip: {e}")))?
+                        .is_some()
+                {
+                    return Err(LedgerError::InconsistentRecord(
+                        "missing genesis block".into(),
+                    ));
+                }
+                info!(network = %network, "Initializing ledger with genesis block");
+                Self::init_genesis(&mut wtxn, blocks_db, meta_db, &genesis)?;
+            }
+        }
+
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
 
-        let ledger = Self {
+        Ok(Self {
             env,
             network,
             blocks_db,
@@ -869,18 +912,7 @@ impl Ledger {
             bridge_import_clusters_db,
             contexts_db,
             map_full: std::sync::atomic::AtomicBool::new(false),
-        };
-
-        // Initialize with genesis if empty
-        if ledger.get_chain_state()?.height == 0 {
-            let state = ledger.get_chain_state()?;
-            if state.tip_hash == [0u8; 32] {
-                info!(network = %network, "Initializing ledger with genesis block");
-                ledger.init_genesis()?;
-            }
-        }
-
-        Ok(ledger)
+        })
     }
 
     /// Get the network this ledger belongs to.
@@ -888,45 +920,41 @@ impl Ledger {
         self.network
     }
 
-    /// Initialize the ledger with the genesis block for this network.
-    fn init_genesis(&self) -> Result<(), LedgerError> {
-        let genesis = Block::genesis_for_network(self.network);
-        let mut wtxn = self
-            .env
-            .write_txn()
-            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
-
+    fn init_genesis(
+        wtxn: &mut RwTxn<'_>,
+        blocks_db: Database<U64<heed::byteorder::LE>, Bytes>,
+        meta_db: Database<Bytes, Bytes>,
+        genesis: &Block,
+    ) -> Result<(), LedgerError> {
         // Store genesis block
         let block_bytes =
-            bincode::serialize(&genesis).map_err(|e| LedgerError::Serialization(e.to_string()))?;
-        self.blocks_db
-            .put(&mut wtxn, &0u64, &block_bytes)
+            bincode::serialize(genesis).map_err(|e| LedgerError::Serialization(e.to_string()))?;
+        blocks_db
+            .put(wtxn, &0u64, &block_bytes)
             .map_err(|e| LedgerError::Database(format!("Failed to put block: {}", e)))?;
 
         // Initialize metadata
         let genesis_hash = genesis.hash();
-        self.meta_db
-            .put(&mut wtxn, META_HEIGHT, &0u64.to_le_bytes())
+        meta_db
+            .put(wtxn, META_HEIGHT, &0u64.to_le_bytes())
             .map_err(|e| LedgerError::Database(format!("Failed to put height: {}", e)))?;
-        self.meta_db
-            .put(&mut wtxn, META_TIP_HASH, &genesis_hash)
+        meta_db
+            .put(wtxn, META_TIP_HASH, &genesis_hash)
             .map_err(|e| LedgerError::Database(format!("Failed to put tip_hash: {}", e)))?;
-        self.meta_db
-            .put(&mut wtxn, META_TOTAL_MINED, &0u64.to_le_bytes())
+        meta_db
+            .put(wtxn, META_TOTAL_MINED, &0u64.to_le_bytes())
             .map_err(|e| LedgerError::Database(format!("Failed to put total_mined: {}", e)))?;
-        self.meta_db
-            .put(&mut wtxn, META_FEES_BURNED, &0u64.to_le_bytes())
+        meta_db
+            .put(wtxn, META_FEES_BURNED, &0u64.to_le_bytes())
             .map_err(|e| LedgerError::Database(format!("Failed to put fees_burned: {}", e)))?;
-        self.meta_db
+        meta_db
             .put(
-                &mut wtxn,
+                wtxn,
                 META_DIFFICULTY,
                 &crate::node::minter::INITIAL_DIFFICULTY.to_le_bytes(),
             )
             .map_err(|e| LedgerError::Database(format!("Failed to put difficulty: {}", e)))?;
 
-        wtxn.commit()
-            .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
         Ok(())
     }
 
@@ -3363,6 +3391,43 @@ mod tests {
 
         let genesis = ledger.get_block(0).unwrap();
         assert_eq!(genesis.height(), 0);
+    }
+
+    #[test]
+    fn configured_network_genesis_survives_reopen() {
+        for network in [Network::Testnet, Network::Mainnet] {
+            let dir = tempdir().unwrap();
+            let config_path = dir.path().join("config.toml");
+            let other = if network == Network::Testnet {
+                Network::Mainnet
+            } else {
+                Network::Testnet
+            };
+            let expected = Block::genesis_for_network(network).hash();
+            for _ in 0..2 {
+                let node =
+                    crate::node::Node::new(crate::config::Config::new_relay(network), &config_path)
+                        .unwrap();
+                let database = node.shared_ledger();
+                let ledger = database.read().unwrap();
+                assert_eq!(ledger.network(), network);
+                assert_eq!(ledger.get_block(0).unwrap().hash(), expected);
+                assert_eq!(ledger.get_chain_state().unwrap().tip_hash, expected);
+            }
+            let db = crate::config::ledger_db_path_from_config(&config_path);
+            assert!(matches!(
+                Ledger::open_for_network(&db, other),
+                Err(LedgerError::InconsistentRecord(_))
+            ));
+            assert_eq!(
+                Ledger::open_for_network(&db, network)
+                    .unwrap()
+                    .get_tip()
+                    .unwrap()
+                    .hash(),
+                expected
+            );
+        }
     }
 
     #[test]
